@@ -12,6 +12,7 @@ import {
   History,
   Loader2,
   Monitor,
+  MoreHorizontal,
   Redo2,
   RefreshCw,
   Save,
@@ -67,6 +68,7 @@ import {
 import { ContentPreview } from "@/domains/content-editor/ContentPreview";
 import {
   EntryFieldsForm,
+  entryFieldAnchorId,
   validateEntryFields,
 } from "@/domains/content-editor/EntryForm";
 import {
@@ -151,7 +153,7 @@ function SaveStateBadge({
 }) {
   if (status === "saving") {
     return (
-      <Badge variant="warning">
+      <Badge variant="warning" role="status" aria-live="polite">
         <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
         Сохранение
       </Badge>
@@ -159,7 +161,7 @@ function SaveStateBadge({
   }
   if (status === "conflict") {
     return (
-      <Badge variant="destructive">
+      <Badge variant="destructive" role="status" aria-live="polite">
         <AlertTriangle className="h-3 w-3" aria-hidden="true" />
         Конфликт версий
       </Badge>
@@ -167,7 +169,7 @@ function SaveStateBadge({
   }
   if (status === "error") {
     return (
-      <Badge variant="destructive">
+      <Badge variant="destructive" role="status" aria-live="polite">
         <AlertTriangle className="h-3 w-3" aria-hidden="true" />
         Ошибка сохранения
       </Badge>
@@ -175,24 +177,24 @@ function SaveStateBadge({
   }
   if (dirty) {
     return (
-      <Badge variant="warning">
+      <Badge variant="warning" role="status" aria-live="polite">
         <CloudUpload className="h-3 w-3" aria-hidden="true" />
         Есть изменения
       </Badge>
     );
   }
   return hasSavedDraft ? (
-    <Badge variant="success">
+    <Badge variant="success" role="status" aria-live="polite">
       <Check className="h-3 w-3" aria-hidden="true" />
       Сохранено
     </Badge>
   ) : hasPublished ? (
-    <Badge variant="success">
+    <Badge variant="success" role="status" aria-live="polite">
       <Check className="h-3 w-3" aria-hidden="true" />
       Опубликовано
     </Badge>
   ) : (
-    <Badge variant="muted">Черновик отсутствует</Badge>
+    <Badge variant="muted" role="status" aria-live="polite">Черновик отсутствует</Badge>
   );
 }
 
@@ -397,6 +399,20 @@ export default function ContentEditorPage() {
     () => validateEntryFields(fields, editorState.metadata),
     [fields, editorState.metadata],
   );
+  const focusField = useCallback((path: string) => {
+    let topLevelKey = path.split(".")[0] ?? path;
+    for (const field of fields) {
+      if (
+        (path === field.key || path.startsWith(`${field.key}.`)) &&
+        field.key.length > topLevelKey.length
+      ) {
+        topLevelKey = field.key;
+      }
+    }
+    const section = document.getElementById(entryFieldAnchorId(topLevelKey));
+    section?.scrollIntoView({ block: "center" });
+    section?.focus({ preventScroll: true });
+  }, [fields]);
   const preservedBlocks = editorState.blocks;
   const editableFields = useMemo(() => {
     const titleKey = titleField?.key ?? null;
@@ -557,13 +573,39 @@ export default function ContentEditorPage() {
         if (parsed.length === 0 || parsed.some((item) => !isRecord(item))) {
           throw new Error("Массив должен содержать хотя бы один объект записи.");
         }
+        if (dirty) {
+          const confirmed = await confirm({
+            title: "Импортировать записи и закрыть редактор?",
+            description: "Импорт создаст записи и вернёт вас к списку. Текущие несохранённые изменения этой записи будут отброшены.",
+            confirmLabel: "Импортировать и закрыть",
+            destructive: true,
+          });
+          if (!confirmed) return;
+        }
         const result = await api.entries.import(feature.id, parsed as JsonObject[]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.entries.list(feature.id) });
         toast.success(`Создано черновиков: ${result.imported}`);
+        guardBypassRef.current = true;
         navigate(`/features/${feature.id}/content`, { replace: true });
         return;
       }
       if (!isRecord(parsed)) throw new Error("Файл должен содержать JSON-объект или массив объектов.");
+      if (entryId || dirty) {
+        const currentDraftExists = Boolean(entryQuery.data?.draft);
+        const confirmed = await confirm({
+          title: entryId ? "Заменить содержимое записи?" : "Заменить несохранённые изменения?",
+          description: entryId
+            ? dirty
+              ? "JSON заменит сохранённый черновик и текущие несохранённые изменения. Опубликованные версии не изменятся."
+              : currentDraftExists
+                ? "JSON полностью заменит данные текущего черновика. Опубликованные версии не изменятся."
+                : "JSON создаст черновик из файла. Опубликованные версии не изменятся."
+            : "JSON создаст запись из файла и заменит текущие несохранённые изменения.",
+          confirmLabel: entryId && currentDraftExists ? "Заменить черновик" : "Импортировать",
+          destructive: true,
+        });
+        if (!confirmed) return;
+      }
       const result = await api.entries.import(
         feature.id,
         parsed as JsonObject,
@@ -575,10 +617,10 @@ export default function ContentEditorPage() {
       queryClient.setQueryData(queryKeys.entries.detail(imported.id), imported);
       void queryClient.invalidateQueries({ queryKey: queryKeys.entries.list(feature.id) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.overview });
-      guardBypassRef.current = true;
       if (entryId) {
         applySeed(stateFromData(imported.draft?.data ?? null), imported.id, imported.revision);
       } else {
+        guardBypassRef.current = true;
         navigate(`/features/${feature.id}/content/${imported.id}`, { replace: true });
       }
       toast.success("JSON проверен и загружен в черновик");
@@ -754,25 +796,36 @@ export default function ContentEditorPage() {
   const pendingDraft = Boolean(
     entry?.draft && (!entry.dev || entry.draft.version > entry.dev.version),
   );
+  const previewHasDraft = dirty || hasDraft;
+  const previewStatus = previewHasDraft
+    ? dirty
+      ? "Есть несохранённые изменения"
+      : "Черновик"
+    : entry?.prod
+      ? "Опубликовано в prod"
+      : entry?.dev
+        ? "Опубликовано в dev"
+        : "Не опубликовано";
+  const previewStatusVariant = previewHasDraft
+    ? "warning"
+    : entry?.prod || entry?.dev
+      ? "success"
+      : "muted";
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-border bg-card">
-        <div className="flex flex-col gap-3 border-b border-border p-3 sm:p-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Link
-                to={`/features/${feature.id}/content`}
-                className="inline-flex items-center gap-1 hover:text-foreground"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                {feature.name}
-              </Link>
-              <span aria-hidden="true">/</span>
-              <span className="truncate">{isNew ? "Новая запись" : title}</span>
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-base font-semibold">
+    <div className="space-y-5">
+      <header className="space-y-4 border-b border-border pb-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0 space-y-2">
+            <Link
+              to={`/features/${feature.id}/content`}
+              className="inline-flex min-h-8 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+              К списку записей
+            </Link>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h1 className="min-w-0 break-words text-xl font-semibold tracking-tight sm:text-2xl">
                 {isNew ? "Новая запись" : title}
               </h1>
               <SaveStateBadge
@@ -781,35 +834,27 @@ export default function ContentEditorPage() {
                 hasSavedDraft={hasDraft}
                 hasPublished={Boolean(entry?.dev || entry?.prod)}
               />
-              {entry?.dev && (
-                <Badge variant="secondary">dev v{entry.dev.version}</Badge>
-              )}
-              {hasPublished && entry?.prod && (
-                <Badge variant="success">
-                  prod v{entry.prod.version}
-                </Badge>
-              )}
-              {hasDraft && entry?.draft && (
-                <Badge variant="warning">Черновик v{entry.draft.version}</Badge>
-              )}
               {entry?.archived_at && <Badge variant="muted">В архиве</Badge>}
             </div>
-            <p className="mt-1 text-2xs text-muted-foreground">
-              {dirty
-                ? "Есть несохранённые изменения"
-                : hasDraft
-                  ? autosave.lastSavedAt
-                    ? `Черновик сохранён ${formatDateTime(
-                        autosave.lastSavedAt.toISOString(),
-                      )}`
-                    : "Черновик сохранён на сервере"
-                  : entry?.dev
-                    ? `Текущая версия опубликована в dev: v${entry.dev.version}`
-                    : "Черновик ещё не сохранялся на сервере"}
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {entry?.draft && <Badge variant="warning">Черновик v{entry.draft.version}</Badge>}
+              {entry?.dev && <Badge variant="secondary">dev v{entry.dev.version}</Badge>}
+              {entry?.prod && <Badge variant="success">prod v{entry.prod.version}</Badge>}
+              <span className="text-2xs text-muted-foreground" aria-live="polite">
+                {dirty
+                  ? "Изменения ещё не сохранены"
+                  : autosave.lastSavedAt
+                    ? `Сохранено ${formatDateTime(autosave.lastSavedAt.toISOString())}`
+                    : hasDraft
+                      ? "Черновик сохранён"
+                      : isNew
+                        ? "Сохранение начнётся после первого изменения"
+                        : "Нет несохранённых изменений"}
+              </span>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
             <input
               ref={importInput}
               type="file"
@@ -821,30 +866,23 @@ export default function ContentEditorPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => importInput.current?.click()}
-              loading={importing}
-              disabled={archived || importing}
+              onClick={() => void handleSaveNow()}
+              loading={autosave.status === "saving"}
+              disabled={
+                archived || !dirty || importing || autosave.status === "saving" || autosave.status === "conflict"
+              }
             >
-              <FileUp />
-              Импорт JSON
+              <Save />
+              Сохранить
             </Button>
             <Button
               variant={preview ? "secondary" : "outline"}
               size="sm"
               onClick={() => setPreview((current) => !current)}
+              aria-pressed={preview}
             >
               {preview ? <X /> : <Eye />}
-              {preview ? "Закрыть предпросмотр" : "Предпросмотр"}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleSaveNow()}
-              loading={autosave.status === "saving"}
-              disabled={archived}
-            >
-              <Save />
-              Сохранить сейчас
+              {preview ? "К редактору" : "Предпросмотр"}
             </Button>
             <Button
               size="sm"
@@ -852,6 +890,7 @@ export default function ContentEditorPage() {
               loading={publishMutation.isPending}
               disabled={
                 archived ||
+                importing ||
                 blockingIssues.length > 0 ||
                 !hasPublishableContent ||
                 publishMutation.isPending
@@ -865,11 +904,7 @@ export default function ContentEditorPage() {
               }
             >
               <Send />
-              {blockingIssues.length > 0
-                ? `Опубликовать (${blockingIssues.length})`
-                : hasPublishableContent
-                  ? "Опубликовать"
-                  : "Нет изменений"}
+              Опубликовать в dev
             </Button>
             {canPromote && (
               <Button
@@ -877,7 +912,7 @@ export default function ContentEditorPage() {
                 variant="outline"
                 onClick={() => promoteMutation.mutate()}
                 loading={promoteMutation.isPending}
-                disabled={archived || !entry?.dev || pendingDraft || dirty}
+                disabled={archived || importing || !entry?.dev || pendingDraft || dirty}
                 title={
                   !entry?.dev
                     ? "Сначала опубликуйте запись в dev"
@@ -886,7 +921,7 @@ export default function ContentEditorPage() {
                       : "Продвинуть текущую dev-версию в prod"
                 }
               >
-                В prod
+                Продвинуть в prod
               </Button>
             )}
             <DropdownMenu>
@@ -896,10 +931,17 @@ export default function ContentEditorPage() {
                   size="icon-sm"
                   aria-label="Дополнительные действия"
                 >
-                  <RefreshCw />
+                  <MoreHorizontal aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem
+                  onSelect={() => importInput.current?.click()}
+                  disabled={archived || importing}
+                >
+                  <FileUp className="h-4 w-4" />
+                  Импорт JSON
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => setHistoryOpen(true)}
                   disabled={!entryId}
@@ -907,17 +949,12 @@ export default function ContentEditorPage() {
                   <History className="h-4 w-4" />
                   История версий
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => undo()}
-                  disabled={!canUndo}
-                >
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => undo()} disabled={!canUndo || importing}>
                   <Undo2 className="h-4 w-4" />
                   Отменить изменение
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => redo()}
-                  disabled={!canRedo}
-                >
+                <DropdownMenuItem onSelect={() => redo()} disabled={!canRedo || importing}>
                   <Redo2 className="h-4 w-4" />
                   Повторить изменение
                 </DropdownMenuItem>
@@ -928,117 +965,90 @@ export default function ContentEditorPage() {
                   <FileClock className="h-4 w-4" />
                   Отменить черновик
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link to={`/features/${feature.id}/content`}>
-                    <FileClock className="h-4 w-4" />
-                    К списку записей
-                  </Link>
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
+      </header>
 
-        {feature.type === "form" && (
-          <div className="border-b border-border p-3 sm:p-4">
-            <InlineAlert tone="info" title="Редактируются тексты формы">
-              Схема отправки задаётся сборкой. Заявки посетителей находятся в разделе «Заявки».
-            </InlineAlert>
-          </div>
-        )}
+      {feature.type === "form" && (
+        <p className="text-xs text-muted-foreground">
+          Здесь редактируются тексты формы. Заявки находятся в разделе «Заявки».
+        </p>
+      )}
 
-        {promotionError && (
-          <div className="border-b border-border p-3 sm:p-4">
-            <InlineAlert tone="danger" title="Контент не подходит для активной prod-схемы">
-              <p>{promotionError.message}</p>
-              <ul className="mt-2 list-disc space-y-1 pl-5">
-                {promotionError.details.map((detail, index) => (
-                  <li key={`${detail.path ?? "field"}-${index}`}>
-                    {detail.path && <code className="font-medium">{detail.path}: </code>}
-                    {detail.message}
-                  </li>
-                ))}
-              </ul>
-            </InlineAlert>
-          </div>
-        )}
+      {promotionError && (
+        <InlineAlert tone="danger" title="Контент не подходит для активной prod-схемы">
+          <p>{promotionError.message}</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {promotionError.details.map((detail, index) => (
+              <li key={`${detail.path ?? "field"}-${index}`}>
+                {detail.path && <code className="font-medium">{detail.path}: </code>}
+                {detail.message}
+              </li>
+            ))}
+          </ul>
+        </InlineAlert>
+      )}
 
-        {autosave.conflict && (
-          <div className="border-b border-border p-3 sm:p-4">
-            <InlineAlert
-              tone="danger"
-              title="Конфликт версий"
-              actions={
-                <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleReloadFromServer()}
-                  >
-                    <RefreshCw />
-                    Обновить из сервера
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleKeepLocal()}
-                  >
-                    <Save />
-                    Оставить мой вариант
-                  </Button>
-                </>
-              }
-            >
-              {autosave.conflict} Локальные изменения остались в редакторе и не были
-              отправлены повторно, пока вы не выберете один из вариантов.
-            </InlineAlert>
-          </div>
-        )}
+      {autosave.conflict && (
+        <InlineAlert
+          tone="danger"
+          title="Конфликт версий"
+          actions={
+            <>
+              <Button size="sm" variant="outline" onClick={() => void handleReloadFromServer()}>
+                <RefreshCw />
+                Обновить из сервера
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void handleKeepLocal()}>
+                <Save />
+                Оставить мой вариант
+              </Button>
+            </>
+          }
+        >
+          {autosave.conflict} Локальные изменения остались в редакторе и не были отправлены повторно.
+        </InlineAlert>
+      )}
 
-        {autosave.status === "error" && Boolean(autosave.error) && (
-          <div className="border-b border-border p-3 sm:p-4">
-            <InlineAlert
-              tone="danger"
-              title="Не удалось сохранить черновик"
-              actions={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleSaveNow()}
-                >
-                  <RefreshCw />
-                  Повторить
-                </Button>
-              }
-            >
-              {errorMessage(autosave.error)} Изменения остались в редакторе.
-            </InlineAlert>
-          </div>
-        )}
+      {autosave.status === "error" && Boolean(autosave.error) && (
+        <InlineAlert
+          tone="danger"
+          title="Не удалось сохранить черновик"
+          actions={
+            <Button size="sm" variant="outline" onClick={() => void handleSaveNow()}>
+              <RefreshCw />
+              Повторить
+            </Button>
+          }
+        >
+          {errorMessage(autosave.error)} Изменения остались в редакторе.
+        </InlineAlert>
+      )}
 
-        {archived && (
-          <div className="border-b border-border p-3 sm:p-4">
-            <InlineAlert tone="warning" title="Редактирование заблокировано">
-              {entry?.archived_at
-                ? "Запись в архиве. Снимите её с архива, чтобы продолжить редактирование."
-                : "Раздел в архиве. Снимите его с архива в настройках, чтобы продолжить работу."}
-            </InlineAlert>
-          </div>
-        )}
-      </div>
+      {archived && (
+        <InlineAlert tone="warning" title="Редактирование заблокировано">
+          {entry?.archived_at
+            ? "Запись в архиве. Снимите её с архива, чтобы продолжить редактирование."
+            : "Раздел в архиве. Снимите его с архива в настройках, чтобы продолжить работу."}
+        </InlineAlert>
+      )}
 
       {preview ? (
-        <div className="rounded-lg border border-border bg-card p-3 sm:p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="warning">Предпросмотр черновика</Badge>
-              <p className="text-xs text-muted-foreground">
-                Это не опубликованная версия. Публичный API отдаёт только явно
-                опубликованные данные.
-              </p>
+              <h2 className="text-sm font-medium">
+                {previewHasDraft ? "Предпросмотр черновика" : "Предпросмотр записи"}
+              </h2>
+              <Badge variant={previewStatusVariant}>{previewStatus}</Badge>
             </div>
-            <div className="flex items-center gap-1 rounded-md border border-border p-1">
+            <div
+              role="group"
+              aria-label="Ширина предпросмотра"
+              className="flex items-center gap-1 rounded-full bg-muted p-1"
+            >
               {widthOptions.map((option) => {
                 const Icon = option.icon;
                 return (
@@ -1047,11 +1057,11 @@ export default function ContentEditorPage() {
                     type="button"
                     onClick={() => setPreviewWidth(option.value)}
                     aria-pressed={previewWidth === option.value}
+                    aria-label={option.label}
                     className={cn(
-                      "flex h-8 w-9 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                      previewWidth === option.value && "bg-accent text-foreground",
+                      "flex h-8 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
+                      previewWidth === option.value && "bg-background text-foreground shadow-sm",
                     )}
-                    title={option.label}
                   >
                     <Icon className="h-4 w-4" />
                     <span className="sr-only">{option.label}</span>
@@ -1060,7 +1070,7 @@ export default function ContentEditorPage() {
               })}
             </div>
           </div>
-          <div className="rounded-md border border-border bg-background p-3 sm:p-6">
+          <div className="min-h-48 overflow-hidden rounded-xl bg-card p-3 sm:p-6">
             <ContentPreview
               metadata={editorState.metadata}
               blocks={editorState.blocks}
@@ -1070,77 +1080,99 @@ export default function ContentEditorPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-border bg-card p-3 sm:p-4">
-            <Label htmlFor="entry-title" className="text-xs text-muted-foreground">
-              Название записи
-              {titleField?.required && <span className="ml-0.5 text-destructive">*</span>}
-            </Label>
-            {titleField &&
-              blockingIssues.some((issue) => issue.path === titleField.key) && (
-                <p className="mt-1.5 text-xs text-destructive">
-                  {blockingIssues.find((issue) => issue.path === titleField.key)
-                    ?.message}
+        <div className="mx-auto w-full max-w-4xl space-y-8">
+          {titleField ? (
+            <section
+              id={entryFieldAnchorId(titleField.key)}
+              tabIndex={-1}
+              role="group"
+              aria-labelledby="entry-title-label"
+              aria-describedby={blockingIssues.some((issue) => issue.path === titleField.key) ? "entry-title-error" : undefined}
+              className="scroll-mt-8 space-y-2 border-b border-border pb-7 focus-visible:rounded-md"
+            >
+              <Label
+                id="entry-title-label"
+                htmlFor="entry-title"
+                className="text-sm font-medium"
+              >
+                Название записи
+                {titleField.required && <span className="ml-0.5 text-destructive">*</span>}
+              </Label>
+              {blockingIssues.some((issue) => issue.path === titleField.key) && (
+                <p id="entry-title-error" className="flex items-center gap-1.5 text-xs text-destructive">
+                  <span aria-hidden="true">!</span>
+                  {blockingIssues.find((issue) => issue.path === titleField.key)?.message}
                 </p>
               )}
-            {titleField ? (
               <Input
                 id="entry-title"
-                className="mt-1.5 h-auto py-2 text-lg font-semibold"
+                aria-invalid={blockingIssues.some((issue) => issue.path === titleField.key)}
+                aria-describedby={blockingIssues.some((issue) => issue.path === titleField.key) ? "entry-title-error" : undefined}
+                className="h-auto rounded-lg px-4 py-3 text-lg font-semibold sm:text-xl"
                 value={
                   typeof editorState.metadata[titleField.key] === "string"
                     ? (editorState.metadata[titleField.key] as string)
                     : ""
                 }
                 placeholder={titleField.placeholder || "Без названия"}
-                disabled={archived}
+                disabled={archived || importing}
                 maxLength={titleField.maxLength}
                 onChange={(event) =>
                   updateMetadata(titleField.key, event.target.value)
                 }
               />
-            ) : (
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                В схеме нет строкового поля для названия.
-              </p>
-            )}
-          </div>
+            </section>
+          ) : (
+            <p className="text-sm text-muted-foreground">В схеме нет строкового поля для названия.</p>
+          )}
 
           {blocksKey && (
-            <div className="rounded-lg border border-border bg-card p-3 sm:p-4">
-              <h2 className="text-sm font-semibold">Блочные данные (legacy)</h2>
+            <section className="space-y-2 border-b border-border pb-6">
+              <h2 className="text-sm font-medium">Устаревшие блоки</h2>
               {blockWarnings.length > 0 && (
-                <div className="mt-2">
-                  <InlineAlert tone="warning" title="Часть блочных данных не загружена">
-                    <ul className="list-disc pl-4">
-                      {blockWarnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
-                  </InlineAlert>
-                </div>
+                <InlineAlert tone="warning" title="Часть блочных данных не загружена">
+                  <ul className="list-disc pl-4">
+                    {blockWarnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </InlineAlert>
               )}
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                Тип поля «Блоки» удалён из редактора. Сохранённые блочные данные
-                ({preservedBlocks.length} блок(ов)) не изменяются и не удаляются:
-                при сохранении черновика они переносятся как есть.
+              <p className="text-xs leading-5 text-muted-foreground">
+                {preservedBlocks.length} сохранённых блоков останутся без изменений.
               </p>
-            </div>
+            </section>
           )}
 
           {blockingIssues.length > 0 && (
-            <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 sm:p-4">
-              <h2 className="text-sm font-semibold text-destructive">
-                Исправьте ошибки перед публикацией
-              </h2>
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+            <div
+              className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3"
+              aria-live="polite"
+            >
+              <p className="flex items-center gap-2 text-sm font-medium text-destructive">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {blockingIssues.length} {blockingIssues.length === 1 ? "ошибка" : blockingIssues.length < 5 ? "ошибки" : "ошибок"} · публикация недоступна
+              </p>
+              <ul className="flex flex-wrap gap-2 text-xs">
                 {blockingIssues.slice(0, 8).map((issue) => (
-                  <li key={issue.path + issue.message} className="flex gap-1.5">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-                    {issue.message}
-                    <code className="text-2xs">{issue.path}</code>
+                  <li key={issue.path + issue.message}>
+                    <button
+                      type="button"
+                      className="rounded-full border border-border bg-background px-2.5 py-1.5 text-left text-muted-foreground hover:text-foreground"
+                      aria-label={`${issue.path}: ${issue.message}`}
+                      onClick={() => focusField(issue.path)}
+                    >
+                      <span className="font-medium text-foreground">{issue.path}</span>
+                      <span className="px-1" aria-hidden="true">·</span>
+                      {issue.message}
+                    </button>
                   </li>
                 ))}
+                {blockingIssues.length > 8 && (
+                  <li className="self-center text-muted-foreground">
+                    Ещё {blockingIssues.length - 8}
+                  </li>
+                )}
               </ul>
             </div>
           )}
@@ -1149,7 +1181,7 @@ export default function ContentEditorPage() {
             fields={editableFields}
             metadata={editorState.metadata}
             onChange={updateMetadata}
-            disabled={archived}
+            disabled={archived || importing}
             issues={blockingIssues}
             featureKey={activeContentFeature.key}
             buildDigest={activeContentFeature.buildDigest}

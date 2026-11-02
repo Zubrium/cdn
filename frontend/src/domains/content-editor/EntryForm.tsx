@@ -243,23 +243,41 @@ function validateField(
 // Controls
 // ---------------------------------------------------------------------------
 
+export function entryFieldAnchorId(path: string): string {
+  return `entry-field-${encodeURIComponent(path)}`;
+}
+
 function FieldCard({
   field,
+  anchorId,
   error,
   action,
   children,
 }: {
   field: SchemaFieldNode;
+  anchorId: string;
   error?: string;
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const labelId = `${anchorId}-label`;
+  const descriptionId = field.description ? `${anchorId}-description` : undefined;
+  const errorId = error ? `${anchorId}-error` : undefined;
   return (
-    <div
-      className={error ? "rounded-lg border border-destructive/50 bg-card p-4" : "rounded-lg border border-border bg-card p-4"}
+    <section
+      id={anchorId}
+      tabIndex={-1}
+      role="group"
+      aria-labelledby={labelId}
+      aria-describedby={[descriptionId, errorId].filter(Boolean).join(" ") || undefined}
+      className="scroll-mt-8 space-y-2 border-b border-border pb-7 pt-7 first:border-0 first:pt-0 last:border-0 last:pb-0 focus-visible:rounded-md"
     >
       <div className="flex items-start justify-between gap-2">
-        <Label className="text-sm leading-5">
+        <Label
+          id={labelId}
+          htmlFor={field.type !== "object" && field.type !== "array" && field.type !== "media" && field.type !== "file" ? `${anchorId}-control` : undefined}
+          className="text-sm leading-5"
+        >
           {field.label || field.key}
           {field.required && <span className="ml-0.5 text-destructive">*</span>}
         </Label>
@@ -274,15 +292,17 @@ function FieldCard({
         </div>
       </div>
       {field.description && (
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        <p id={descriptionId} className="text-xs leading-5 text-muted-foreground">
           {field.description}
         </p>
       )}
-      <div className="mt-2">{children}</div>
+      <div>{children}</div>
       {error && (
-        <p className="mt-2 text-xs text-destructive">{error}</p>
+        <p id={errorId} className="flex items-center gap-1.5 text-xs text-destructive">
+          <span aria-hidden="true">!</span>{error}
+        </p>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -440,6 +460,10 @@ function ScalarControl({
   onPickMedia,
   disabled,
   compact,
+  controlId,
+  labelId,
+  errorId,
+  accessibleLabel,
 }: {
   field: SchemaFieldNode;
   fieldPath: string;
@@ -448,12 +472,24 @@ function ScalarControl({
   onPickMedia: (target: MediaPickTarget) => void;
   disabled?: boolean;
   compact?: boolean;
+  controlId?: string;
+  labelId?: string;
+  errorId?: string;
+  accessibleLabel?: string;
 }) {
+  const accessibilityProps = {
+    id: controlId,
+    "aria-labelledby": labelId,
+    "aria-label": accessibleLabel,
+    "aria-invalid": errorId ? true : undefined,
+    "aria-describedby": errorId,
+  };
   switch (field.type) {
     case "text":
       return (
         <Textarea
           rows={4}
+          {...accessibilityProps}
           value={typeof value === "string" ? value : ""}
           disabled={disabled}
           maxLength={field.maxLength}
@@ -466,6 +502,7 @@ function ScalarControl({
         <div>
           <Textarea
             rows={compact ? 3 : 6}
+            {...accessibilityProps}
             value={typeof value === "string" ? value : ""}
             disabled={disabled}
             maxLength={field.maxLength}
@@ -486,6 +523,7 @@ function ScalarControl({
       return (
         <Input
           type="number"
+          {...accessibilityProps}
           className={compact ? "h-8" : "h-10"}
           step={field.type === "integer" ? 1 : field.step ?? "any"}
           min={field.min}
@@ -508,6 +546,7 @@ function ScalarControl({
       return (
         <div className="flex items-center gap-2">
           <Switch
+            {...accessibilityProps}
             checked={value === true}
             disabled={disabled}
             onCheckedChange={(checked) => onChange(checked)}
@@ -521,6 +560,7 @@ function ScalarControl({
       return (
         <Input
           type="date"
+          {...accessibilityProps}
           value={typeof value === "string" ? value.slice(0, 10) : ""}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
@@ -530,6 +570,7 @@ function ScalarControl({
       return (
         <Input
           type="datetime-local"
+          {...accessibilityProps}
           value={isoToLocalInput(typeof value === "string" ? value : "")}
           disabled={disabled}
           onChange={(event) => {
@@ -550,7 +591,7 @@ function ScalarControl({
           onValueChange={(next) => onChange(next)}
           disabled={disabled}
         >
-          <SelectTrigger className={compact ? "h-8" : undefined}>
+          <SelectTrigger {...accessibilityProps} className={compact ? "h-8" : undefined}>
             <SelectValue placeholder="Выберите значение" />
           </SelectTrigger>
           <SelectContent>
@@ -591,6 +632,7 @@ function ScalarControl({
     default:
       return (
         <Input
+          {...accessibilityProps}
           className={compact ? "h-8" : undefined}
           value={typeof value === "string" ? value : ""}
           disabled={disabled}
@@ -678,27 +720,32 @@ function ArrayTable({
     cellPath: string,
     cellSchemaPath: string,
   ): ReactNode => {
+    const error = errorsByPath.get(cellPath);
+    const errorId = error ? `${entryFieldAnchorId(cellPath)}-error` : undefined;
     if (child.type === "media" || child.type === "file") {
       return (
-        <MediaValue
-          mediaId={typeof cellValue === "string" ? cellValue : ""}
-          fieldPath={cellSchemaPath}
-          variant={child.type === "file" ? "file" : "image"}
-          disabled={disabled}
-          onPick={() =>
-            onPickMedia({
-              label: `${field.label || field.key} · ${child.label || child.key}`,
-              single: true,
-              accept: child.type === "file" ? "all" : mediaAccept(child.mediaProfile),
-              fieldPath: cellSchemaPath,
-              apply: (media) => {
-                const first = media[0];
-                if (first) setCell(first.id);
-              },
-            })
-          }
-          onClear={() => setCell("")}
-        />
+        <div key={cellPath}>
+          <MediaValue
+            mediaId={typeof cellValue === "string" ? cellValue : ""}
+            fieldPath={cellSchemaPath}
+            variant={child.type === "file" ? "file" : "image"}
+            disabled={disabled}
+            onPick={() =>
+              onPickMedia({
+                label: `${field.label || field.key} · ${child.label || child.key}`,
+                single: true,
+                accept: child.type === "file" ? "all" : mediaAccept(child.mediaProfile),
+                fieldPath: cellSchemaPath,
+                apply: (media) => {
+                  const first = media[0];
+                  if (first) setCell(first.id);
+                },
+              })
+            }
+            onClear={() => setCell("")}
+          />
+          {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
+        </div>
       );
     }
     if (child.type === "object") {
@@ -717,12 +764,11 @@ function ArrayTable({
           disabled={disabled}
           compact
           fieldPath={cellSchemaPath}
+          controlId={entryFieldAnchorId(cellPath)}
+          errorId={errorId}
+          accessibleLabel={`${field.label || field.key}, ${child.label || child.key}, строка ${cellPath.split(".")[1] ?? ""}`}
         />
-        {errorsByPath.get(cellPath) && (
-          <p className="mt-1 text-2xs text-destructive">
-            {errorsByPath.get(cellPath)}
-          </p>
-        )}
+        {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
       </div>
     );
   };
@@ -744,6 +790,7 @@ function ArrayTable({
               {children.map((child) => (
                 <th
                   key={child.id}
+                  id={`${entryFieldAnchorId(path)}-column-${child.id}`}
                   className="px-2 py-2 text-xs font-medium text-muted-foreground"
                 >
                   {child.label || child.key}
@@ -778,7 +825,11 @@ function ArrayTable({
                         )
                       );
                     return (
-                      <td key={child.id} className="align-top px-2 py-2">
+                      <td
+                        key={child.id}
+                        headers={`${entryFieldAnchorId(path)}-column-${child.id}`}
+                        className="align-top px-2 py-2"
+                      >
                         {cell}
                       </td>
                     );
@@ -904,6 +955,8 @@ function ScalarArrayList({
     <div className="space-y-2">
       {value.map((item, index) => {
         const itemPath = `${path}.${index}`;
+        const error = errorsByPath.get(itemPath);
+        const errorId = error ? `${entryFieldAnchorId(itemPath)}-error` : undefined;
         if (field.itemType === "media" || field.itemType === "file") {
           return (
             <div key={index} className="flex items-start gap-2">
@@ -932,6 +985,7 @@ function ScalarArrayList({
                   }
                   onClear={() => onChange(value.filter((_, i) => i !== index))}
                 />
+                {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
               </div>
               <Button
                 type="button"
@@ -962,12 +1016,11 @@ function ScalarArrayList({
                   onChange(copy);
                 }}
                 onPickMedia={onPickMedia}
+                controlId={entryFieldAnchorId(itemPath)}
+                errorId={errorId}
+                accessibleLabel={`${field.label || field.key}, элемент ${index + 1}`}
               />
-              {errorsByPath.get(itemPath) && (
-                <p className="mt-1 text-2xs text-destructive">
-                  {errorsByPath.get(itemPath)}
-                </p>
-              )}
+              {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
             </div>
             <div className="flex items-center gap-0.5">
               <Button
@@ -1075,10 +1128,12 @@ function ObjectFields({
         const childPath = `${path}.${child.key}`;
         const childSchemaPath = `${schemaPath}/${pointerPart(child.key)}`;
         const error = errorsByPath.get(childPath);
+        const labelId = `${entryFieldAnchorId(childPath)}-label`;
+        const errorId = error ? `${entryFieldAnchorId(childPath)}-error` : undefined;
         return (
           <div key={child.id}>
             <div className="flex items-center justify-between gap-2">
-              <Label className="text-xs text-muted-foreground">
+              <Label id={labelId} className="text-xs text-muted-foreground">
                 {child.label || child.key}
                 {child.required && <span className="ml-0.5 text-destructive">*</span>}
               </Label>
@@ -1125,10 +1180,12 @@ function ObjectFields({
                   onPickMedia={onPickMedia}
                   compact={child.type === "enum" || child.type === "boolean"}
                   fieldPath={childSchemaPath}
+                  labelId={labelId}
+                  errorId={errorId}
                 />
               </div>
             )}
-            {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+            {error && <p id={errorId} className="mt-1 text-xs text-destructive">{error}</p>}
           </div>
         );
       })}
@@ -1306,15 +1363,18 @@ export function EntryFieldsForm({
 
   return (
     <MediaRenditionScope.Provider value={scope}>
-    <div className="space-y-3">
+    <div className="space-y-0">
       {fields.map((field) => {
+        const anchorId = entryFieldAnchorId(field.key);
         const error = errorsByPath.get(field.key);
+        const errorId = error ? `${anchorId}-error` : undefined;
         const value = metadata[field.key];
         const isStructured = field.type === "object" || field.type === "array";
         return (
           <FieldCard
             key={field.id}
             field={field}
+            anchorId={anchorId}
             error={error}
             action={
               isStructured ? (
@@ -1362,6 +1422,9 @@ export function EntryFieldsForm({
                 onChange={(next) => onChange(field.key, next)}
                 onPickMedia={openMediaPick}
                 fieldPath={`/${pointerPart(field.key)}`}
+                controlId={`${anchorId}-control`}
+                labelId={`${anchorId}-label`}
+                errorId={errorId}
               />
             )}
           </FieldCard>
