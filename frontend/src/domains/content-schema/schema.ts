@@ -429,6 +429,8 @@ function parseField(
     isPrivate: raw["x-private"] === true,
     mediaProfile: isRecord(raw["x-media"]) ? raw["x-media"] : undefined,
     placeholder: stringValue(ui.placeholder),
+    stringFormat: format || undefined,
+    pattern: typeof raw.pattern === "string" ? raw.pattern : undefined,
     defaultValue:
       typeof raw.default === "string"
         ? raw.default
@@ -463,10 +465,10 @@ function parseField(
     return createField("enum", { ...base, enumValues: parseEnumValues(raw, nullable) });
   }
   if (type === "string") {
-    if (format === "date") return createField("date", base);
-    if (format === "date-time") return createField("dateTime", base);
-    if (format === "media" || widget === "media") return createField("media", base);
-    if (format === "file" || widget === "file") return createField("file", base);
+    if (format === "date") return createField("date", { ...base, stringFormat: undefined });
+    if (format === "date-time") return createField("dateTime", { ...base, stringFormat: undefined });
+    if (format === "media" || widget === "media") return createField("media", { ...base, stringFormat: undefined });
+    if (format === "file" || widget === "file") return createField("file", { ...base, stringFormat: undefined });
     if (widget === "richText") return createField("richText", base);
     if (widget === "textarea" || widget === "text") return createField("text", base);
     return createField("string", base);

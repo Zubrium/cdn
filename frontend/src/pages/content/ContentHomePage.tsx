@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, FileUp, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CircleAlert, Copy, FileUp, Plus, Search, Trash2 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, ApiError } from "@/api";
@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { EntryFieldsForm, validateEntryFields } from "@/domains/content-editor/EntryForm";
+import { EntryFieldsForm, fieldLabelForPath, scrollToEntryField, validateEntryFields } from "@/domains/content-editor/EntryForm";
 import { starterMetadata } from "@/domains/content-editor/blocks";
 import type { EntryFormIssue } from "@/domains/content-editor/EntryForm";
 import { parsedSchema } from "@/domains/content-schema/schema";
@@ -25,6 +25,9 @@ import type { ContentFeature, JsonObject, JsonValue, SiteSnapshot, SnapshotConte
 import { serializeSnapshotContentItems, unsupportedSchemaKeywords } from "./content-workspace";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error" | "conflict" | "invalid";
+
+/** Validation issue attributed to the draft record it belongs to. */
+type DraftIssue = EntryFormIssue & { recordId: string; itemTitle: string; itemFields: SchemaFieldNode[] };
 
 const UNGROUPED = "Без категории";
 
@@ -47,6 +50,10 @@ function newItem(fields: SchemaFieldNode[], sortOrder: number, singleSlot: boole
   };
 }
 
+function cloneData(data: JsonObject): JsonObject {
+  return JSON.parse(JSON.stringify(data)) as JsonObject;
+}
+
 function displaySnapshot(snapshot: SiteSnapshot): string {
   return `#${snapshot.sequence} · ${snapshot.name}`;
 }
@@ -64,6 +71,11 @@ export default function ContentHomePage() {
   const localItemsRef = useRef<SnapshotContentDraftItem[]>([]);
   const [localIdentity, setLocalIdentity] = useState("");
   const [revision, setRevision] = useState(0);
+  const revisionRef = useRef(0);
+  const syncRevision = useCallback((value: number) => {
+    revisionRef.current = value;
+    setRevision(value);
+  }, []);
   const [dirty, setDirty] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
@@ -130,7 +142,8 @@ export default function ContentHomePage() {
   );
   const allIssues = useMemo(() => localItems.flatMap((item) => {
     const fields = item.singleSlot && selectedFeature?.settingsSchema ? settingsFields : collectionFields;
-    return validateEntryFields(fields, item.data).map((issue) => ({ ...issue, recordId: item.entryId }));
+    const itemTitle = item.singleSlot ? "Настройки списка" : (deriveEntryTitle(item.data, fields) || "Без названия");
+    return validateEntryFields(fields, item.data).map((issue) => ({ ...issue, recordId: item.entryId, itemTitle, itemFields: fields }));
   }), [collectionFields, localItems, selectedFeature?.settingsSchema, settingsFields]);
   const hasDraft = features.some((item) => (item.draftRevision ?? 0) > 0) || revision > 0;
 
@@ -165,7 +178,7 @@ export default function ContentHomePage() {
       const saved = await saveMutation.mutateAsync({
         snapshotId,
         key: selectedFeature.key,
-        revision,
+        revision: revisionRef.current,
         items: serializeSnapshotContentItems(sourceItems),
       });
       // A response only describes the submitted revision. Never replace edits
@@ -176,7 +189,7 @@ export default function ContentHomePage() {
         setLocalItems(saved.items);
       }
       queryClient.setQueryData(queryKeys.content.snapshotWorkspace(snapshotId, selectedFeature.key), saved);
-      setRevision(saved.revision);
+      syncRevision(saved.revision);
       setDirty(changedDuringSave);
       setSaveStatus(changedDuringSave ? "idle" : "saved");
       setSaveError("");
@@ -191,7 +204,7 @@ export default function ContentHomePage() {
     } finally {
       saveLock.current = false;
     }
-  }, [allIssues.length, queryClient, revision, saveMutation, selectedFeature, snapshotId, unsupported.length, workspaceIdentity]);
+  }, [allIssues.length, queryClient, saveMutation, selectedFeature, snapshotId, syncRevision, unsupported.length, workspaceIdentity]);
 
   useEffect(() => {
     const workspace = workspaceQuery.data;
@@ -200,13 +213,13 @@ export default function ContentHomePage() {
       missingSeedIdentity.current = "";
       localItemsRef.current = workspace.items;
       setLocalItems(workspace.items);
-      setRevision(workspace.revision);
+      syncRevision(workspace.revision);
       setDirty(false);
       setSaveStatus("idle");
       setSaveError("");
       setLocalIdentity(workspaceIdentity);
     }
-  }, [localIdentity, workspaceIdentity, workspaceQuery.data]);
+  }, [localIdentity, syncRevision, workspaceIdentity, workspaceQuery.data]);
 
   useEffect(() => {
     if (!selectedFeature || unsupported.length > 0 || selectedFeature.mode === "collection" || !workspaceQuery.data || localIdentity !== workspaceIdentity || localItems.length > 0 || missingSeedIdentity.current === workspaceIdentity) return;
@@ -264,7 +277,7 @@ export default function ContentHomePage() {
     missingSeedIdentity.current = "";
     localItemsRef.current = [];
     setLocalItems([]);
-    setRevision(0);
+    syncRevision(0);
     setDirty(false);
     setSaveStatus("idle");
     setSaveError("");
@@ -304,10 +317,27 @@ export default function ContentHomePage() {
     if (!result.data) return;
     localItemsRef.current = result.data.items;
     setLocalItems(result.data.items);
-    setRevision(result.data.revision);
+    syncRevision(result.data.revision);
     setDirty(false);
     setSaveStatus("idle");
     setSaveError("");
+  };
+
+  /** Keep local edits and save them over the newest server revision. */
+  const overrideConflict = async () => {
+    const accepted = await confirm({
+      title: "Сохранить поверх последний вариант?",
+      description: "Ваши текущие правки заменят изменения, которые кто-то сохранил в черновик после вас.",
+      confirmLabel: "Перезаписать черновик",
+      destructive: true,
+    });
+    if (!accepted) return;
+    const result = await workspaceQuery.refetch();
+    if (!result.data) return;
+    syncRevision(result.data.revision);
+    setSaveStatus("idle");
+    const saved = await saveWorkspace(localItemsRef.current);
+    if (saved) toast.success("Правки перезаписали сохранённую версию");
   };
 
   const addCollectionRecord = (singleSlot = false) => {
@@ -325,6 +355,35 @@ export default function ContentHomePage() {
       : item));
   };
 
+  /** Navigate to a draft record and scroll its field into view. */
+  const jumpToIssue = (issue: DraftIssue) => {
+    if (!selectedFeature) return;
+    if (selectedFeature.mode === "collection") {
+      const targetItem = localItems.find((item) => item.entryId === issue.recordId) ?? null;
+      const settings = targetItem?.singleSlot ?? false;
+      setParams({ record: targetItem && !settings ? targetItem.entryId : null, settings: settings ? "1" : null });
+    }
+    // Wait for the record form to mount before revealing the field.
+    window.setTimeout(() => scrollToEntryField(issue.path), 80);
+  };
+
+  /** Insert a copy of a record right after it and open the copy. */
+  const duplicateRecord = async (item: SnapshotContentDraftItem) => {
+    const copy: SnapshotContentDraftItem = { ...item, entryId: crypto.randomUUID(), data: cloneData(item.data) };
+    updateItems((current) => {
+      const regular = current.filter((candidate) => !candidate.singleSlot).sort((a, b) => a.sortOrder - b.sortOrder);
+      const index = regular.findIndex((candidate) => candidate.entryId === item.entryId);
+      if (index < 0) return [...current, copy];
+      regular.splice(index + 1, 0, copy);
+      const orders = new Map(regular.map((candidate, i) => [candidate.entryId, i]));
+      return current.map((candidate) => candidate.singleSlot
+        ? candidate
+        : { ...candidate, sortOrder: orders.get(candidate.entryId) ?? candidate.sortOrder });
+    });
+    setParams({ record: copy.entryId, settings: null });
+    toast.success("Запись продублирована");
+  };
+
   const createSnapshot = async () => {
     if (dirty && !(await saveWorkspace())) return;
     try {
@@ -336,7 +395,7 @@ export default function ContentHomePage() {
       missingSeedIdentity.current = "";
       setLocalItems([]);
       localItemsRef.current = [];
-      setRevision(0);
+      syncRevision(0);
       setDirty(false);
       setSaveStatus("idle");
       setSaveError("");
@@ -389,6 +448,17 @@ export default function ContentHomePage() {
       const fields = importingSettings && selectedFeature.settingsSchema ? settingsFields : collectionFields;
       const invalidIndex = values.findIndex((value) => validateEntryFields(fields, value as JsonObject).length > 0);
       if (invalidIndex >= 0) throw new Error(`Запись ${invalidIndex + 1} не соответствует схеме фичи.`);
+      // Replacing the active record discards its current field values.
+      const replacesActive = Boolean(activeItem) && !(Array.isArray(parsed) && selectedFeature.mode === "collection");
+      if (replacesActive) {
+        const accepted = await confirm({
+          title: "Заменить данные записи?",
+          description: "Текущие значения полей записи будут заменены данными из JSON-файла. Отменить замену после сохранения будет нельзя.",
+          confirmLabel: "Заменить данные",
+          destructive: true,
+        });
+        if (!accepted) return;
+      }
       if (selectedFeature.mode === "collection" && Array.isArray(parsed)) {
         updateItems((current) => [
           ...current,
@@ -429,8 +499,30 @@ export default function ContentHomePage() {
   }, [category, features, search]);
   const categories = useMemo(() => ["Все категории", ...Array.from(new Set(features.map(categoryFor))).sort((a, b) => a.localeCompare(b, "ru"))], [features]);
   const regularItems = useMemo(() => localItems.filter((item) => !item.singleSlot).sort((a, b) => a.sortOrder - b.sortOrder), [localItems]);
+  const [recordSearch, setRecordSearch] = useState("");
+  const visibleRecords = useMemo(() => {
+    const needle = recordSearch.trim().toLocaleLowerCase("ru");
+    if (!needle) return regularItems;
+    return regularItems.filter((item) => `${deriveEntryTitle(item.data, collectionFields)} ${item.entryId}`.toLocaleLowerCase("ru").includes(needle));
+  }, [collectionFields, recordSearch, regularItems]);
+  const issuesByRecord = useMemo(() => {
+    const counts = new Map<string, number>();
+    allIssues.forEach((issue) => counts.set(issue.recordId, (counts.get(issue.recordId) ?? 0) + 1));
+    return counts;
+  }, [allIssues]);
   const singleSettings = localItems.find((item) => item.singleSlot) ?? null;
   const selectedSnapshotLabel = selectedSnapshot ? displaySnapshot(selectedSnapshot) : "";
+  const moreIssues = Math.max(0, allIssues.length - 12);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== "s") return;
+      event.preventDefault();
+      if (dirty && allIssues.length === 0 && selectedFeature && unsupported.length === 0) void saveWorkspace();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [allIssues.length, dirty, saveWorkspace, selectedFeature, unsupported.length]);
 
   if (snapshotQuery.isLoading) return <LoadingPage label="Загружаем снапшоты…" />;
   if (snapshotQuery.error) return <div className="page-grid"><ErrorState error={snapshotQuery.error} title="Не удалось загрузить снапшоты" onRetry={() => void snapshotQuery.refetch()} /></div>;
@@ -540,7 +632,33 @@ export default function ContentHomePage() {
           {saveError && (
             <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between" role="alert">
               <p className="min-w-0 break-words">{saveError}{saveStatus === "conflict" ? " Локальные правки сохранены в редакторе." : ""}</p>
-              {saveStatus === "conflict" && <Button variant="outline" size="sm" onClick={() => void reloadWorkspace()}>Загрузить сохранённую версию</Button>}
+              {saveStatus === "conflict" && (
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void overrideConflict()}>Сохранить поверх</Button>
+                  <Button variant="ghost" size="sm" onClick={() => void reloadWorkspace()}>Загрузить сохранённую</Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {unsupported.length === 0 && allIssues.length > 0 && workspaceQuery.data && (
+            <div role="alert" className="min-w-0 space-y-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+              <p className="flex items-center gap-1.5 font-medium"><CircleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />Сохранение приостановлено: не все поля заполнены верно ({allIssues.length}).</p>
+              <ul className="max-h-44 space-y-0.5 overflow-y-auto pr-1 text-xs">
+                {allIssues.slice(0, 12).map((issue, index) => (
+                  <li key={`${issue.recordId}-${issue.path}-${index}`} className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                    <button
+                      type="button"
+                      className="min-w-0 text-left underline decoration-dotted underline-offset-2 hover:text-foreground hover:decoration-solid"
+                      onClick={() => jumpToIssue(issue)}
+                    >
+                      {issue.itemTitle} · {fieldLabelForPath(issue.itemFields, issue.path)}
+                    </button>
+                    <span className="text-destructive">{issue.message}</span>
+                  </li>
+                ))}
+                {moreIssues > 0 && <li className="text-muted-foreground">…и ещё {moreIssues}</li>}
+              </ul>
             </div>
           )}
 
@@ -560,25 +678,48 @@ export default function ContentHomePage() {
                   }}>{singleSettings ? "Редактировать" : "Добавить настройки"}</Button>
                 </div>
               )}
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-medium">Записи ({regularItems.length})</h3>
-                <Button size="sm" onClick={() => addCollectionRecord(false)}><Plus />Добавить запись</Button>
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                <h3 className="text-sm font-medium">Записи: {recordSearch.trim() ? `${visibleRecords.length} из ${regularItems.length}` : regularItems.length}</h3>
+                <div className="flex items-center gap-2">
+                  {regularItems.length > 6 && (
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                      <Input value={recordSearch} onChange={(event) => setRecordSearch(event.target.value)} placeholder="Найти запись" className="h-8 w-48 pl-9 text-xs" aria-label="Найти запись" />
+                    </div>
+                  )}
+                  <Button size="sm" onClick={() => addCollectionRecord(false)}><Plus />Добавить запись</Button>
+                </div>
               </div>
               {regularItems.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">В черновике пока нет записей каталога.</div>
+              ) : visibleRecords.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">Записи по запросу «{recordSearch}» не найдены.</div>
               ) : (
                 <ol className="min-w-0 divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
-                  {regularItems.map((item, index) => (
-                    <li key={item.entryId} className="flex min-w-0 items-center gap-2 p-3 sm:gap-3">
-                      <span className="w-7 shrink-0 text-center text-xs text-muted-foreground">{index + 1}</span>
-                      <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium hover:text-primary" onClick={() => setParams({ record: item.entryId, settings: null })}>{deriveEntryTitle(item.data, collectionFields)}</button>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button variant="ghost" size="icon-sm" aria-label="Переместить вверх" disabled={index === 0 || saveStatus === "saving"} onClick={() => moveRecord(item.entryId, -1)}><ArrowUp /></Button>
-                        <Button variant="ghost" size="icon-sm" aria-label="Переместить вниз" disabled={index === regularItems.length - 1 || saveStatus === "saving"} onClick={() => moveRecord(item.entryId, 1)}><ArrowDown /></Button>
-                        <Button variant="ghost" size="icon-sm" aria-label="Удалить запись" onClick={() => void deleteRecord(item)}><Trash2 /></Button>
-                      </div>
-                    </li>
-                  ))}
+                  {visibleRecords.map((item) => {
+                    const issueCount = issuesByRecord.get(item.entryId) ?? 0;
+                    return (
+                      <li key={item.entryId} className="flex min-w-0 items-center gap-2 p-3 sm:gap-3">
+                        <span className="w-7 shrink-0 text-center text-xs text-muted-foreground">{regularItems.indexOf(item) + 1}</span>
+                        <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium hover:text-primary" onClick={() => setParams({ record: item.entryId, settings: null })}>{deriveEntryTitle(item.data, collectionFields)}</button>
+                        {issueCount > 0 && allIssues.some((issue) => issue.recordId === item.entryId) && (
+                          <button type="button" className="shrink-0" onClick={() => {
+                            const firstIssue = allIssues.find((issue) => issue.recordId === item.entryId);
+                            if (firstIssue) jumpToIssue(firstIssue);
+                          }}>
+                            <Badge variant="destructive" className="gap-1"><CircleAlert className="h-3 w-3" />{issueCount}</Badge>
+                            <span className="sr-only"> — есть ошибки, перейдите к полям</span>
+                          </button>
+                        )}
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button variant="ghost" size="icon-sm" aria-label="Переместить вверх" disabled={item.sortOrder === 0 || saveStatus === "saving"} onClick={() => moveRecord(item.entryId, -1)}><ArrowUp /></Button>
+                          <Button variant="ghost" size="icon-sm" aria-label="Переместить вниз" disabled={item.sortOrder === regularItems.length - 1 || saveStatus === "saving"} onClick={() => moveRecord(item.entryId, 1)}><ArrowDown /></Button>
+                          <Button variant="ghost" size="icon-sm" aria-label="Дублировать запись" disabled={saveStatus === "saving"} onClick={() => void duplicateRecord(item)}><Copy /></Button>
+                          <Button variant="ghost" size="icon-sm" aria-label="Удалить запись" onClick={() => void deleteRecord(item)}><Trash2 /></Button>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
             </div>
@@ -611,7 +752,12 @@ export default function ContentHomePage() {
         </section>
       )}
 
-      {selectedFeature && !workspaceQuery.isLoading && !workspaceQuery.error && !workspaceQuery.data && <p className="sr-only">Содержимое не найдено.</p>}
+      {selectedFeature && !workspaceQuery.isLoading && !workspaceQuery.error && !workspaceQuery.data && (
+        <section className="rounded-xl border border-dashed border-border p-8 text-center">
+          <h2 className="font-medium">Черновик пока недоступен</h2>
+          <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">Не удалось получить содержимое этой фичи. Попробуйте вернуться к списку фич или перезагрузить снапшот.</p>
+        </section>
+      )}
     </div>
   );
 }

@@ -53,7 +53,10 @@ export default function FeatureRegistryPage() {
     queryFn: ({ signal }) => api.siteBuilder.snapshotContentFeatures(activeSnapshotId, signal),
     enabled: Boolean(activeSnapshotId),
   });
-  const contentFeatures = contentFeaturesQuery.data?.items ?? [];
+  const contentFeatures = useMemo(
+    () => contentFeaturesQuery.data?.items ?? [],
+    [contentFeaturesQuery.data?.items],
+  );
   const workspaceQueries = useQueries({
     queries: contentFeatures.map((feature) => ({
       queryKey: ["site", "snapshot-content-workspace", activeSnapshotId, feature.key],

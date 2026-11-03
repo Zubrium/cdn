@@ -59,6 +59,9 @@ export interface SchemaFieldNode {
   itemMediaProfile?: JsonObject;
   placeholder: string;
   defaultValue: string;
+  /** JSON Schema `format` for string fields (`email`, `uri`, `uuid`, `color`, …). */
+  stringFormat?: string;
+  pattern?: string;
   minLength?: number;
   maxLength?: number;
   min?: number;

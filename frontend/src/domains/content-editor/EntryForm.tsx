@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
+  Copy,
   File as FileIcon,
   ImagePlus,
   Lock,
@@ -10,6 +11,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { parseCssColor } from "@/lib/css-color";
+import { cn } from "@/lib/utils";
 import type { JsonObject, JsonValue, MediaRenditionContext } from "@/types";
 import type { SchemaFieldNode } from "@/domains/content-schema/types";
 import { api, publicMediaPath } from "@/api";
@@ -71,6 +74,114 @@ function cloneOriginal<T extends JsonValue>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function scrollToEntryField(path: string): void {
+  const candidates: string[] = [];
+  const parts = path.split(".");
+  for (let index = parts.length; index > 0; index -= 1) {
+    candidates.push(entryFieldAnchorId(parts.slice(0, index).join(".")));
+  }
+  for (const id of candidates) {
+    const section = document.getElementById(id);
+    if (!section) continue;
+    section.scrollIntoView({ block: "center" });
+    const control = document.getElementById(`${id}-control`);
+    (control ?? section).focus({ preventScroll: true });
+    return;
+  }
+}
+
+export function fieldLabelForPath(fields: SchemaFieldNode[], path: string): string {
+  const parts = path.split(".");
+  const labels: string[] = [];
+  let nodes = fields;
+  for (const part of parts) {
+    if (/^\d+$/.test(part)) {
+      labels.push(`элемент ${Number(part) + 1}`);
+      continue;
+    }
+    const field = nodes.find((candidate) => candidate.key === part);
+    if (!field) {
+      labels.push(part);
+      break;
+    }
+    labels.push(field.label || field.key);
+    nodes = field.children;
+  }
+  return labels.join(" · ");
+}
+
+function compiledPattern(pattern: string | undefined): RegExp | null {
+  if (!pattern) return null;
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return null;
+  }
+}
+
+function stringFormatIssue(format: string | undefined, value: string): string | null {
+  if (!format || value === "") return null;
+  switch (format) {
+    case "email":
+      return EMAIL_PATTERN.test(value) ? null : "Введите адрес электронной почты";
+    case "uri":
+    case "url":
+      try {
+        const parsed = new URL(value);
+        return parsed.protocol === "http:" || parsed.protocol === "https:" ? null : "Введите ссылку с http или https";
+      } catch {
+        return "Введите полный адрес ссылки";
+      }
+    case "uuid":
+      return UUID_PATTERN.test(value) ? null : "Введите UUID";
+    case "color":
+      return parseCssColor(value) ? null : "Введите CSS-цвет";
+    default:
+      return null;
+  }
+}
+
+function codePointLength(value: string): number {
+  return [...value].length;
+}
+
+/**
+ * Choose a card layout when object rows would not fit a compact table:
+ * long text controls, nested structures, media pickers, or many columns.
+ */
+function arrayUsesCards(field: SchemaFieldNode): boolean {
+  if (field.itemType !== "object") return false;
+  const children = field.children.filter((child) => child.key.trim());
+  if (children.length > 4) return true;
+  return children.some((child) =>
+    child.type === "object"
+    || child.type === "array"
+    || child.type === "media"
+    || child.type === "file"
+    || child.type === "text"
+    || child.type === "richText",
+  );
+}
+
+function stringControlType(field: SchemaFieldNode): string {
+  switch (field.stringFormat) {
+    case "email":
+      return "email";
+    case "uri":
+    case "url":
+      return "url";
+    case "tel":
+      return "tel";
+    case "password":
+      return "password";
+    default:
+      return "text";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -126,7 +237,7 @@ function validateField(
         issues.push({ path, message: "Введите текст" });
         return;
       }
-      const length = [...value].length;
+      const length = codePointLength(value);
       if (field.minLength !== undefined && length < field.minLength) {
         issues.push({
           path,
@@ -138,6 +249,12 @@ function validateField(
           path,
           message: `Не больше ${field.maxLength} символов`,
         });
+      }
+      const formatIssue = stringFormatIssue(field.stringFormat, value);
+      if (formatIssue) issues.push({ path, message: formatIssue });
+      const pattern = compiledPattern(field.pattern);
+      if (pattern && value !== "" && !pattern.test(value)) {
+        issues.push({ path, message: "Значение не соответствует заданному шаблону" });
       }
       break;
     }
@@ -259,9 +376,13 @@ function FieldCard({
       role="group"
       aria-labelledby={labelId}
       aria-describedby={[descriptionId, errorId].filter(Boolean).join(" ") || undefined}
-      className={compact
-        ? "scroll-mt-8 space-y-1.5 border-b border-border py-3 first:border-0 first:pt-0 last:border-0 last:pb-0 focus-visible:rounded-md"
-        : "scroll-mt-8 space-y-2 border-b border-border pb-7 pt-7 first:border-0 first:pt-0 last:border-0 last:pb-0 focus-visible:rounded-md"}
+      className={cn(
+        "scroll-mt-24 focus-visible:rounded-md",
+        compact
+          ? "space-y-1.5 border-b border-border py-3 first:pt-0 last:border-0 last:pb-0"
+          : "space-y-2 border-b border-border pb-7 pt-7 first:pt-0 last:border-0 last:pb-0",
+        error && "rounded-md bg-destructive/5 px-3",
+      )}
     >
       <div className="flex items-start justify-between gap-2">
         <Label
@@ -395,7 +516,14 @@ function MediaValue({
         <div className="overflow-hidden rounded-md border border-border">
           {variant === "image" ? (
             <div className={compact ? "flex h-16 items-center bg-muted/20 px-2" : "flex max-h-56 items-center justify-center bg-muted/20"}>
-              <img src={publicMediaPath(mediaId)} alt="" className={compact ? "max-h-14 max-w-full object-contain" : "max-h-56 max-w-full object-contain"} />
+              <img
+                src={publicMediaPath(mediaId)}
+                alt={mediaQuery.data?.original_filename ? `Выбрано: ${mediaQuery.data.original_filename}` : "Выбранный файл"}
+                width={compact ? 112 : 448}
+                height={compact ? 56 : 224}
+                loading="lazy"
+                className={compact ? "max-h-14 w-auto max-w-full object-contain" : "max-h-56 w-auto max-w-full object-contain"}
+              />
             </div>
           ) : (
             <a href={publicMediaPath(mediaId)} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/30">
@@ -488,41 +616,41 @@ function ScalarControl({
   };
   switch (field.type) {
     case "text":
-      return (
-        <Textarea
-          rows={4}
-          {...accessibilityProps}
-          value={typeof value === "string" ? value : ""}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={field.placeholder}
-        />
-      );
-    case "richText":
+    case "richText": {
+      const text = typeof value === "string" ? value : "";
       return (
         <div>
           <Textarea
-            rows={compact ? 3 : 6}
+            rows={field.type === "richText" ? (compact ? 3 : 6) : 4}
+            autoComplete="off"
+            spellCheck={field.type !== "richText"}
             {...accessibilityProps}
-            value={typeof value === "string" ? value : ""}
+            value={text}
             disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
-            placeholder={field.placeholder}
-            className="font-mono text-xs leading-6"
+            placeholder={field.placeholder || (field.type === "richText" ? "Текст с разметкой…" : undefined)}
+            className={field.type === "richText" ? "font-mono text-xs leading-6" : undefined}
           />
-          {!compact && (
-            <p className="mt-1 text-2xs text-muted-foreground">
-              Markdown: **жирный**, *курсив*, списки «- », ссылки [текст](url),
-              заголовки «##».
-            </p>
-          )}
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-2xs text-muted-foreground">
+            {field.type === "richText" && !compact ? (
+              <p>Markdown: **жирный**, *курсив*, списки «- », ссылки [текст](url), заголовки «##».</p>
+            ) : <span />}
+            {field.maxLength !== undefined && (
+              <p className={codePointLength(text) > field.maxLength ? "text-destructive" : undefined}>
+                {codePointLength(text)}&nbsp;/&nbsp;{field.maxLength}
+              </p>
+            )}
+          </div>
         </div>
       );
+    }
     case "number":
     case "integer":
       return (
         <Input
           type="number"
+          inputMode={field.type === "integer" ? "numeric" : "decimal"}
+          autoComplete="off"
           {...accessibilityProps}
           className={compact ? "h-8" : "h-10"}
           step={field.type === "integer" ? 1 : field.step ?? "any"}
@@ -544,7 +672,7 @@ function ScalarControl({
       );
     case "boolean":
       return (
-        <div className="flex items-center gap-2">
+        <label className="flex min-h-9 w-fit cursor-pointer items-center gap-2">
           <Switch
             {...accessibilityProps}
             checked={value === true}
@@ -552,9 +680,9 @@ function ScalarControl({
             onCheckedChange={(checked) => onChange(checked)}
           />
           <span className="text-xs text-muted-foreground">
-            {value === true ? "да" : "нет"}
+            {value === true ? "Да" : "Нет"}
           </span>
-        </div>
+        </label>
       );
     case "date":
       return (
@@ -632,6 +760,8 @@ function ScalarControl({
     default:
       return (
         <Input
+          type={stringControlType(field)}
+          autoComplete="off"
           {...accessibilityProps}
           className={compact ? "h-8" : undefined}
           value={typeof value === "string" ? value : ""}
@@ -856,7 +986,7 @@ function ArrayTable({
                         disabled={disabled || !canAdd}
                         onClick={() => duplicateRow(index)}
                       >
-                        <Plus className="h-3.5 w-3.5" />
+                        <Copy className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         type="button"
@@ -933,6 +1063,12 @@ function ScalarArrayList({
   const canAdd = field.maxItems === undefined || value.length < field.maxItems;
   const minItemsAllowed = field.minItems ?? 0;
   const canRemove = value.length > minItemsAllowed;
+  const duplicateItem = (index: number) => {
+    if (!canAdd) return;
+    const copy = [...value];
+    copy.splice(index + 1, 0, cloneOriginal(value[index]));
+    onChange(copy);
+  };
   const itemField: SchemaFieldNode = {
     ...field,
     id: `${field.id}-item`,
@@ -1042,6 +1178,16 @@ function ScalarArrayList({
                 }}
               >
                 <ArrowDown className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Дублировать"
+                disabled={disabled || !canAdd}
+                onClick={() => duplicateItem(index)}
+              >
+                <Copy className="h-3.5 w-3.5" />
               </Button>
               <Button
                 type="button"
@@ -1185,6 +1331,190 @@ function ObjectFields({
   );
 }
 
+/** Card layout for object arrays that do not fit the compact table. */
+function ArrayCards({
+  field,
+  value,
+  onChange,
+  onPickMedia,
+  disabled,
+  errorsByPath,
+  path,
+  schemaPath,
+}: {
+  field: SchemaFieldNode;
+  value: JsonValue[];
+  onChange: (next: JsonValue[]) => void;
+  onPickMedia: (target: MediaPickTarget) => void;
+  disabled?: boolean;
+  errorsByPath: Map<string, string>;
+  path: string;
+  schemaPath: string;
+}) {
+  const rows = value;
+  const canAdd = field.maxItems === undefined || rows.length < field.maxItems;
+  const minRows = field.minItems ?? 0;
+  const canRemove = rows.length > minRows;
+
+  const rowField: SchemaFieldNode = {
+    ...field,
+    id: `${field.id}-row`,
+    key: "row",
+    label: field.label,
+    type: "object",
+    children: field.children.filter((child) => child.key.trim()),
+    description: "",
+    required: false,
+  };
+
+  const setRow = (index: number, next: JsonObject) => {
+    const copy = [...rows];
+    copy[index] = next;
+    onChange(copy);
+  };
+  const moveRow = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= rows.length) return;
+    const copy = [...rows];
+    [copy[index], copy[target]] = [copy[target], copy[index]];
+    onChange(copy);
+  };
+  const removeRow = (index: number) => {
+    onChange(rows.filter((_, i) => i !== index));
+  };
+  const duplicateRow = (index: number) => {
+    if (!canAdd) return;
+    const copy = [...rows];
+    copy.splice(index + 1, 0, cloneOriginal(rows[index] as JsonValue));
+    onChange(copy);
+  };
+  const addRow = () => {
+    if (!canAdd) return;
+    const row: JsonObject = {};
+    rowField.children.forEach((child) => {
+      row[child.key] = starterValue(child);
+    });
+    onChange([...rows, row]);
+  };
+
+  const rowTitle = (row: JsonValue, index: number): string => {
+    const record = isRecordValue(row) ? row as JsonObject : {};
+    for (const child of rowField.children) {
+      if (child.type !== "string" && child.type !== "text") continue;
+      const textValue = record[child.key];
+      if (typeof textValue === "string" && textValue.trim()) return textValue.trim();
+    }
+    return `Элемент ${index + 1}`;
+  };
+
+  return (
+    <div className="space-y-2">
+      {rows.map((row, index) => {
+        const rowPath = `${path}.${index}`;
+        const rowError = errorsByPath.has(rowPath);
+        const headingId = `${entryFieldAnchorId(rowPath)}-heading`;
+        return (
+          <section
+            key={index}
+            aria-labelledby={headingId}
+            className={cn(
+              "space-y-3 rounded-lg border p-3",
+              rowError ? "border-destructive/40 bg-destructive/5" : "border-border bg-muted/20",
+            )}
+          >
+            <header className="flex items-center gap-2">
+              <h4 id={headingId} className="min-w-0 flex-1 truncate text-sm font-medium">
+                {rowTitle(row, index)}
+              </h4>
+              {rowError && <Badge variant="destructive">Ошибки</Badge>}
+              <div className="flex shrink-0 items-center gap-0.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Выше"
+                  disabled={disabled || index === 0}
+                  onClick={() => moveRow(index, -1)}
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Ниже"
+                  disabled={disabled || index === rows.length - 1}
+                  onClick={() => moveRow(index, 1)}
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Дублировать"
+                  disabled={disabled || !canAdd}
+                  onClick={() => duplicateRow(index)}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={canRemove ? "Удалить" : `Минимум ${minRows} элементов`}
+                  className="text-destructive hover:text-destructive"
+                  disabled={disabled || !canRemove}
+                  onClick={() => removeRow(index)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </header>
+            <ObjectFields
+              field={rowField}
+              value={isRecordValue(row) ? row as JsonObject : {}}
+              onChange={(next) => setRow(index, next)}
+              onPickMedia={onPickMedia}
+              disabled={disabled}
+              errorsByPath={errorsByPath}
+              path={rowPath}
+              schemaPath={`${schemaPath}/items`}
+            />
+          </section>
+        );
+      })}
+      {rows.length === 0 && (
+        <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+          Пока нет элементов
+        </p>
+      )}
+      <div className="flex items-center justify-between gap-2">
+        {!canAdd && (
+          <p className="text-2xs text-muted-foreground">
+            Достигнут максимум: {field.maxItems} элемент(ов)
+          </p>
+        )}
+        {minRows > 0 && (
+          <p className="text-2xs text-muted-foreground">
+            Минимум элементов по схеме: {minRows}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={addRow}
+          disabled={disabled || !canAdd}
+        >
+          <Plus className="h-4 w-4" />
+          Добавить элемент
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ArrayEditorValue({
   field,
   value,
@@ -1205,6 +1535,20 @@ function ArrayEditorValue({
   schemaPath: string;
 }) {
   if (field.itemType === "object") {
+    if (arrayUsesCards(field)) {
+      return (
+        <ArrayCards
+          field={field}
+          value={value}
+          onChange={onChange}
+          onPickMedia={onPickMedia}
+          disabled={disabled}
+          errorsByPath={errorsByPath}
+          path={path}
+          schemaPath={schemaPath}
+        />
+      );
+    }
     return (
       <ArrayTable
         field={field}
