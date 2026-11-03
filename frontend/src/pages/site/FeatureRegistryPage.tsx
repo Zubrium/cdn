@@ -1,10 +1,38 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { Boxes, CloudUpload, FileCode2, Fingerprint } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/api";
+import { api, publicMediaPath } from "@/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, PageHeader } from "@/components/common/page";
+import { isRecord } from "@/lib/utils";
 import type { FeatureBuild } from "@/types";
+
+function firstMediaId(schema: unknown, value: unknown): string | null {
+  if (!isRecord(schema)) return null;
+  if (schema.format === "media" && typeof value === "string" && value) {
+    const mediaOptions = schema["x-media"];
+    const accept = isRecord(mediaOptions) && typeof mediaOptions.accept === "string"
+      ? mediaOptions.accept
+      : "image";
+    return accept === "image" || accept === "raster-image" ? value : null;
+  }
+
+  if (schema.type === "object" && isRecord(schema.properties) && isRecord(value)) {
+    for (const [key, childSchema] of Object.entries(schema.properties)) {
+      const mediaId = firstMediaId(childSchema, value[key]);
+      if (mediaId) return mediaId;
+    }
+  }
+
+  if (schema.type === "array" && isRecord(schema.items) && Array.isArray(value)) {
+    for (const item of value) {
+      const mediaId = firstMediaId(schema.items, item);
+      if (mediaId) return mediaId;
+    }
+  }
+  return null;
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Неизвестная ошибка";
@@ -15,6 +43,45 @@ export default function FeatureRegistryPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const snapshotsQuery = useQuery({
+    queryKey: ["site", "snapshots"],
+    queryFn: ({ signal }) => api.siteBuilder.snapshots(undefined, signal),
+  });
+  const activeSnapshotId = snapshotsQuery.data?.active.dev ?? "";
+  const contentFeaturesQuery = useQuery({
+    queryKey: ["site", "snapshot-content-features", activeSnapshotId],
+    queryFn: ({ signal }) => api.siteBuilder.snapshotContentFeatures(activeSnapshotId, signal),
+    enabled: Boolean(activeSnapshotId),
+  });
+  const contentFeatures = contentFeaturesQuery.data?.items ?? [];
+  const workspaceQueries = useQueries({
+    queries: contentFeatures.map((feature) => ({
+      queryKey: ["site", "snapshot-content-workspace", activeSnapshotId, feature.key],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api.siteBuilder.snapshotContentWorkspace(activeSnapshotId, feature.key, signal),
+      enabled: Boolean(activeSnapshotId),
+    })),
+  });
+  const previewByKey = useMemo(() => {
+    const previews = new Map<string, string>();
+    contentFeatures.forEach((feature, index) => {
+      const workspace = workspaceQueries[index]?.data;
+      if (!workspace) return;
+      const orderedItems = [...workspace.items].sort((a, b) => a.sortOrder - b.sortOrder);
+      for (const item of orderedItems) {
+        const mediaId = firstMediaId(feature.schema, item.data);
+        if (mediaId) {
+          previews.set(feature.key, mediaId);
+          break;
+        }
+      }
+    });
+    return previews;
+  }, [contentFeatures, workspaceQueries]);
+  const contentBuildByKey = useMemo(
+    () => new Map(contentFeatures.map((feature) => [feature.key, feature.buildDigest])),
+    [contentFeatures],
+  );
 
   const refresh = async () => {
     const result = await api.siteBuilder.featureBuilds();
@@ -71,7 +138,7 @@ export default function FeatureRegistryPage() {
             <div className="divide-y divide-border">
               {sorted.map((build) => <details className="group py-3 first:pt-0 last:pb-0" key={build.id}>
                 <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <span className="flex min-w-0 items-center gap-3"><span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted"><Boxes className="size-4" /></span><span className="min-w-0"><span className="block truncate text-sm font-medium">{build.name}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{build.key}@{build.version} · {build.manifest.content.mode}</span></span></span>
+                  <span className="flex min-w-0 items-center gap-3"><span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted">{contentBuildByKey.get(build.key) === build.digest && previewByKey.has(build.key) ? <img src={publicMediaPath(previewByKey.get(build.key)!)} alt="" aria-hidden="true" className="size-full object-cover" loading="lazy" /> : <Boxes className="size-4" />}</span><span className="min-w-0"><span className="block truncate text-sm font-medium">{build.name}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{build.key}@{build.version} · {build.manifest.content.mode}</span></span></span>
                   <span className="flex items-center gap-2 text-xs text-muted-foreground"><Fingerprint className="size-3.5" />{build.digest.slice(0, 16)}</span>
                 </summary>
                 <div className="mt-3 grid gap-4 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,.8fr)]">

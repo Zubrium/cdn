@@ -272,7 +272,46 @@ func (h *SnapshotsHandler) List(w http.ResponseWriter, r *http.Request) {
 		active[env.String()] = record.ID.String()
 		activeSnapshots[env.String()] = &record
 	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items, "active": active, "activeSnapshots": activeSnapshots, "nextCursor": nextCursor})
+	events, err := h.service.Events(r.Context(), 200)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items, "active": active, "activeSnapshots": activeSnapshots, "events": events, "nextCursor": nextCursor})
+}
+
+func (h *SnapshotsHandler) Events(w http.ResponseWriter, r *http.Request) {
+	env, err := environment.Parse(r.URL.Query().Get("environment"))
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_environment", err.Error())
+		return
+	}
+	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	var before *uuid.UUID
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		id, parseErr := uuid.Parse(raw)
+		if parseErr != nil {
+			response.Error(w, r, http.StatusBadRequest, "invalid_cursor", "Некорректный указатель истории")
+			return
+		}
+		before = &id
+	}
+	items, err := h.service.EventsPage(r.Context(), env, limit+1, before)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	var next *uuid.UUID
+	if len(items) > limit {
+		cursor := items[limit-1].ID
+		next = &cursor
+		items = items[:limit]
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items, "nextCursor": next})
 }
 
 func (h *SnapshotsHandler) Promote(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +413,90 @@ func (h *SnapshotsHandler) ContentCatalog(w http.ResponseWriter, r *http.Request
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// ContentSnapshots exposes immutable snapshot metadata to all authenticated
+// content editors. Environment deployment controls remain site-manager only.
+func (h *SnapshotsHandler) ContentSnapshots(w http.ResponseWriter, r *http.Request) {
+	items, err := h.service.ContentSnapshots(r.Context())
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *SnapshotsHandler) SnapshotContentCatalog(w http.ResponseWriter, r *http.Request) {
+	snapshotID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
+		return
+	}
+	items, err := h.service.ContentCatalogForSnapshot(r.Context(), snapshotID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *SnapshotsHandler) ContentWorkspace(w http.ResponseWriter, r *http.Request) {
+	snapshotID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
+		return
+	}
+	workspace, err := h.service.ContentWorkspace(r.Context(), snapshotID, r.PathValue("featureKey"))
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, workspace)
+}
+
+type saveContentWorkspaceRequest struct {
+	Revision int64                                   `json:"revision"`
+	Items    []sitebuilder.SnapshotContentDraftInput `json:"items"`
+}
+
+func (h *SnapshotsHandler) SaveContentWorkspace(w http.ResponseWriter, r *http.Request) {
+	snapshotID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
+		return
+	}
+	var req saveContentWorkspaceRequest
+	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
+		response.WriteDecodeError(w, r, err)
+		return
+	}
+	actor, _ := principal.FromContext(r.Context())
+	workspace, err := h.service.SaveContentWorkspace(r.Context(), actor.TokenID, snapshotID, r.PathValue("featureKey"), req.Revision, req.Items)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, workspace)
+}
+
+func (h *SnapshotsHandler) ForkSnapshotFromContent(w http.ResponseWriter, r *http.Request) {
+	snapshotID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
+		return
+	}
+	var req publishRequest
+	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
+		response.WriteDecodeError(w, r, err)
+		return
+	}
+	actor, _ := principal.FromContext(r.Context())
+	record, err := h.service.ForkSnapshotFromContentDraft(r.Context(), actor.TokenID, snapshotID, strings.TrimSpace(req.Name))
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, record)
 }
 
 func (h *SnapshotsHandler) Collection(w http.ResponseWriter, r *http.Request) {

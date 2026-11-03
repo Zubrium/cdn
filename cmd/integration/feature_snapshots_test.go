@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"websiteengine/features/forms"
+	"websiteengine/features/sitebuilder"
 	"websiteengine/pkg/environment"
 )
 
@@ -165,6 +168,48 @@ func runtimePlacement(t *testing.T, env *testEnv, serverURL, path string) map[st
 	return placements[0].(map[string]any)
 }
 
+func assertSnapshotDigestMatchesContent(t *testing.T, env *testEnv, snapshotID string) {
+	t.Helper()
+	var storedDigest string
+	var payloadRaw []byte
+	if err := env.pool.QueryRow(context.Background(), `SELECT digest,payload FROM site_snapshots WHERE id=$1`, uuid.MustParse(snapshotID)).Scan(&storedDigest, &payloadRaw); err != nil {
+		t.Fatal(err)
+	}
+	var payload sitebuilder.SnapshotPayload
+	if err := json.Unmarshal(payloadRaw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := env.pool.Query(context.Background(), `SELECT sc.entry_id,sc.version_id,v.version,sc.feature_key,sc.sort_order,e.single_slot,sc.data
+		FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id JOIN feature_entry_versions v ON v.id=sc.version_id
+		WHERE sc.snapshot_id=$1 ORDER BY sc.feature_key,sc.sort_order,sc.entry_id`, uuid.MustParse(snapshotID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	content := []sitebuilder.SnapshotContent{}
+	for rows.Next() {
+		var item sitebuilder.SnapshotContent
+		if err := rows.Scan(&item.EntryID, &item.VersionID, &item.Version, &item.FeatureKey, &item.SortOrder, &item.SingleSlot, &item.Data); err != nil {
+			t.Fatal(err)
+		}
+		content = append(content, item)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	checksumInput, err := json.Marshal(struct {
+		Payload sitebuilder.SnapshotPayload   `json:"payload"`
+		Content []sitebuilder.SnapshotContent `json:"content"`
+	}{Payload: payload, Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(checksumInput)
+	if got := hex.EncodeToString(sum[:]); got != storedDigest {
+		t.Fatalf("snapshot digest does not describe persisted immutable content: got %s, stored %s", got, storedDigest)
+	}
+}
+
 func TestFeatureBuildListReturnsEmptyArray(t *testing.T) {
 	env := newTestEnv(t)
 	status, body, _ := env.request(http.MethodGet, "/api/v2/admin/feature-builds", env.adminToken, nil)
@@ -177,6 +222,51 @@ func TestFeatureBuildListReturnsEmptyArray(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("expected empty feature build list, got %d items", len(items))
+	}
+}
+
+func TestSnapshotEventHistoryPagesAreIndependentAndStable(t *testing.T) {
+	env := newTestEnv(t)
+	key := "history-pagination"
+	manifest := manifestFor(key, "1.0.0", "single", objectSchema(map[string]any{"title": map[string]any{"type": "string"}}))
+	uploadFeatureBuild(t, env, manifest, "export default function Feature() {}")
+	snapshot := saveAndDeploySnapshot(t, env, singlePageConfig(key, "1.0.0"), "history")
+	id := snapshot["id"].(string)
+	assign := func(environment string) {
+		t.Helper()
+		status, body, _ := env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+id+"/deploy", env.adminToken, map[string]any{"environment": environment})
+		if status != http.StatusOK {
+			t.Fatalf("deploy %s: %d %v", environment, status, body)
+		}
+	}
+	assign("dev")
+	assign("prod")
+	status, first, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshot-events?environment=dev&limit=1", env.adminToken, nil)
+	if status != http.StatusOK || len(first["items"].([]any)) != 1 || first["nextCursor"] == nil {
+		t.Fatalf("first history page: %d %v", status, first)
+	}
+	firstID := first["items"].([]any)[0].(map[string]any)["id"].(string)
+	cursor := first["nextCursor"].(string)
+	assign("dev") // An intervening deployment must not shift the cursor.
+	status, second, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshot-events?environment=dev&limit=1&before="+cursor, env.adminToken, nil)
+	if status != http.StatusOK || len(second["items"].([]any)) != 1 || second["items"].([]any)[0].(map[string]any)["id"] == firstID {
+		t.Fatalf("stable second page: %d %v", status, second)
+	}
+	status, invalid, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshot-events?environment=prod&before="+cursor, env.adminToken, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("cursor from another environment must fail: %d %v", status, invalid)
+	}
+	status, production, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshot-events?environment=prod", env.adminToken, nil)
+	if status != http.StatusOK || len(production["items"].([]any)) != 1 || production["items"].([]any)[0].(map[string]any)["environment"] != "prod" {
+		t.Fatalf("production history: %d %v", status, production)
+	}
+	status, token, _ := env.request(http.MethodPost, "/api/v1/admin/tokens", env.adminToken, map[string]any{"name": "content user", "role": "user"})
+	if status != http.StatusCreated {
+		t.Fatalf("create user: %d %v", status, token)
+	}
+	status, forbidden, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshot-events?environment=dev", token["token"].(string), nil)
+	if status != http.StatusForbidden {
+		t.Fatalf("history requires site manager: %d %v", status, forbidden)
 	}
 }
 
@@ -205,6 +295,15 @@ func TestSnapshotPinsDraftEditorialContentAndDeploysIndependently(t *testing.T) 
 	status, deployed, _ := env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+duplicateID+"/deploy", env.adminToken, map[string]any{"environment": "prod"})
 	if status != http.StatusOK || deployed["id"] != duplicateID {
 		t.Fatalf("directly deploy a snapshot to prod: status=%d body=%v", status, deployed)
+	}
+	status, history, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshots", env.adminToken, nil)
+	events, ok := history["events"].([]any)
+	if status != http.StatusOK || !ok || len(events) != 3 {
+		t.Fatalf("history includes deployments but not snapshot creation: status=%d body=%v", status, history)
+	}
+	latest := events[0].(map[string]any)
+	if latest["snapshotId"] != duplicateID || latest["environment"] != "prod" || latest["action"] != "deploy" {
+		t.Fatalf("history identifies the independent production deployment: %v", latest)
 	}
 
 	status, currentEntry, _ := env.request(http.MethodGet, "/api/v1/admin/entries/"+entryID, env.adminToken, nil)
@@ -263,6 +362,267 @@ func TestSnapshotPinsDraftEditorialContentAndDeploysIndependently(t *testing.T) 
 		bytes.NewReader(featureArtifact(t, manifest, "export default function Feature() { return 'changed'; }")), "application/zip")
 	if status != http.StatusBadRequest || !strings.Contains(fmt.Sprint(changed), "immutable") {
 		t.Fatalf("same feature version with a different digest must be rejected: status=%d body=%v", status, changed)
+	}
+}
+
+func TestSnapshotScopedContentDraftIsIsolatedAndForksImmutably(t *testing.T) {
+	env := newTestEnv(t)
+	env.content.SetSchemaProvider(env.snapshots)
+	key := "snapshot-workspace"
+	manifest := manifestFor(key, "1.0.0", "single", objectSchema(map[string]any{
+		"title": map[string]any{"type": "string", "minLength": 1},
+	}, "title"))
+	manifest["category"] = "Главная"
+	build := uploadFeatureBuild(t, env, manifest, "export default function Feature() {}")
+	config := singlePageConfig(key, "1.0.0")
+	_ = saveAndDeploySnapshot(t, env, config, "empty parent")
+	entryID, _ := createAndPublishEntry(t, env, build["featureId"].(string), map[string]any{"title": "Исходный текст"})
+	parent := saveAndDeploySnapshot(t, env, config, "source snapshot")
+	parentID := parent["id"].(string)
+	other := saveAndDeploySnapshot(t, env, config, "other snapshot")
+	otherID := other["id"].(string)
+	status, _, _ := env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+parentID+"/deploy", env.adminToken, map[string]any{"environment": "dev"})
+	if status != http.StatusOK {
+		t.Fatalf("restore source snapshot before editing: status=%d", status)
+	}
+	otherWorkspacePath := "/api/v2/admin/content/snapshots/" + otherID + "/features/" + key
+	status, otherWorkspace, _ := env.request(http.MethodGet, otherWorkspacePath, env.adminToken, nil)
+	if status != http.StatusOK || otherWorkspace["revision"].(float64) != 0 {
+		t.Fatalf("another snapshot starts with its own revision-zero workspace: status=%d body=%v", status, otherWorkspace)
+	}
+	otherItems := otherWorkspace["items"].([]any)
+	status, _, _ = env.request(http.MethodPut, otherWorkspacePath, env.adminToken, map[string]any{
+		"revision": 0,
+		"items":    []any{map[string]any{"entryId": otherItems[0].(map[string]any)["entryId"], "singleSlot": true, "data": map[string]any{"title": "Черновик другого снапшота"}}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("save content draft to a different snapshot: status=%d", status)
+	}
+
+	status, snapshots, _ := env.request(http.MethodGet, "/api/v2/admin/content/snapshots", env.adminToken, nil)
+	if status != http.StatusOK || len(snapshots["items"].([]any)) < 2 {
+		t.Fatalf("content roles can read snapshot choices: status=%d body=%v", status, snapshots)
+	}
+	status, catalog, _ := env.request(http.MethodGet, "/api/v2/admin/content/snapshots/"+parentID+"/features", env.adminToken, nil)
+	if status != http.StatusOK || catalog["items"].([]any)[0].(map[string]any)["category"] != "Главная" {
+		t.Fatalf("selected snapshot must provide its pinned manifest category: status=%d body=%v", status, catalog)
+	}
+	workspacePath := "/api/v2/admin/content/snapshots/" + parentID + "/features/" + key
+	status, workspace, _ := env.request(http.MethodGet, workspacePath, env.adminToken, nil)
+	if status != http.StatusOK || workspace["revision"].(float64) != 0 {
+		t.Fatalf("new snapshot editor opens a revision-zero overlay: status=%d body=%v", status, workspace)
+	}
+	items := workspace["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["data"].(map[string]any)["title"] != "Исходный текст" {
+		t.Fatalf("editor starts from this snapshot's pinned content, independent of another overlay: %v", workspace)
+	}
+	status, invalid, _ := env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{
+		"revision": 0,
+		"items":    []any{map[string]any{"entryId": entryID, "sortOrder": 0, "singleSlot": true, "data": map[string]any{}}},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid content must fail schema validation: status=%d body=%v", status, invalid)
+	}
+
+	updatedItems := []any{map[string]any{
+		"entryId": entryID, "sortOrder": 0, "singleSlot": true,
+		"data": map[string]any{"title": "Текст новой редакции"},
+	}}
+	status, saved, _ := env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{"revision": 0, "items": updatedItems})
+	if status != http.StatusOK || saved["revision"].(float64) != 1 {
+		t.Fatalf("save snapshot-scoped draft: status=%d body=%v", status, saved)
+	}
+	status, stale, _ := env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{"revision": 0, "items": updatedItems})
+	if status != http.StatusConflict {
+		t.Fatalf("stale workspace revision must conflict: status=%d body=%v", status, stale)
+	}
+
+	if got := runtimePlacement(t, env, env.devServer.URL, "/")["content"].(map[string]any)["title"]; got != "Исходный текст" {
+		t.Fatalf("editing a content overlay must not alter the active source runtime, got %v", got)
+	}
+	status, source, _ := env.request(http.MethodGet, workspacePath, env.adminToken, nil)
+	if status != http.StatusOK || source["items"].([]any)[0].(map[string]any)["data"].(map[string]any)["title"] != "Текст новой редакции" {
+		t.Fatalf("saved overlay must reopen from the selected snapshot: status=%d body=%v", status, source)
+	}
+
+	status, child, _ := env.request(http.MethodPost, "/api/v2/admin/content/snapshots/"+parentID+"/fork", env.adminToken, map[string]any{})
+	if status != http.StatusCreated || child["parentSnapshotId"] != parentID || child["id"] == parentID {
+		t.Fatalf("saved content should create a child snapshot: status=%d body=%v", status, child)
+	}
+	assertSnapshotDigestMatchesContent(t, env, child["id"].(string))
+	status, active, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshots", env.adminToken, nil)
+	if status != http.StatusOK || active["active"].(map[string]any)["dev"] != parentID {
+		t.Fatalf("forking must not activate the child snapshot: status=%d body=%v", status, active)
+	}
+	if got := runtimePlacement(t, env, env.devServer.URL, "/")["content"].(map[string]any)["title"]; got != "Исходный текст" {
+		t.Fatalf("forking must preserve the source runtime until an explicit deployment, got %v", got)
+	}
+	childID := child["id"].(string)
+	status, _, _ = env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+childID+"/deploy", env.adminToken, map[string]any{"environment": "prod"})
+	if status != http.StatusOK {
+		t.Fatalf("deploy child snapshot explicitly: status=%d", status)
+	}
+	if got := runtimePlacement(t, env, env.prodServer.URL, "/")["content"].(map[string]any)["title"]; got != "Текст новой редакции" {
+		t.Fatalf("child runtime must use its content revision, got %v", got)
+	}
+	if got := runtimePlacement(t, env, env.devServer.URL, "/")["content"].(map[string]any)["title"]; got != "Исходный текст" {
+		t.Fatalf("prod deployment must not change dev, got %v", got)
+	}
+}
+
+func TestSnapshotScopedCollectionDraftPreservesOrderAndSettings(t *testing.T) {
+	env := newTestEnv(t)
+	key := "snapshot-workspace-collection"
+	manifest := manifestFor(key, "1.0.0", "collection", objectSchema(map[string]any{
+		"title": map[string]any{"type": "string", "minLength": 1},
+	}, "title"))
+	manifest["category"] = "Каталог"
+	manifest["content"] = map[string]any{
+		"mode":           "collection",
+		"schema":         manifest["content"].(map[string]any)["schema"],
+		"settingsSchema": objectSchema(map[string]any{"heading": map[string]any{"type": "string", "minLength": 1}}, "heading"),
+	}
+	uploadFeatureBuild(t, env, manifest, "export default function Feature() {}")
+	parent := saveAndDeploySnapshot(t, env, singlePageConfig(key, "1.0.0"), "collection parent")
+	parentID := parent["id"].(string)
+	status, token, _ := env.request(http.MethodPost, "/api/v1/admin/tokens", env.adminToken, map[string]any{"name": "content editor", "role": "user"})
+	if status != http.StatusCreated {
+		t.Fatalf("create content editor token: status=%d body=%v", status, token)
+	}
+	userToken := token["token"].(string)
+	workspacePath := "/api/v2/admin/content/snapshots/" + parentID + "/features/" + key
+	status, workspace, _ := env.request(http.MethodGet, workspacePath, userToken, nil)
+	if status != http.StatusOK || len(workspace["items"].([]any)) != 0 {
+		t.Fatalf("collection starts empty in selected snapshot: status=%d body=%v", status, workspace)
+	}
+	status, saved, _ := env.request(http.MethodPut, workspacePath, userToken, map[string]any{
+		"revision": 0,
+		"items": []any{
+			map[string]any{"data": map[string]any{"title": "Альфа"}},
+			map[string]any{"data": map[string]any{"title": "Бета"}},
+			map[string]any{"singleSlot": true, "data": map[string]any{"heading": "Каталог товаров"}},
+		},
+	})
+	if status != http.StatusOK || len(saved["items"].([]any)) != 3 {
+		t.Fatalf("save collection entries and list settings: status=%d body=%v", status, saved)
+	}
+	items := saved["items"].([]any)
+	alphaID := items[0].(map[string]any)["entryId"].(string)
+	betaID := items[1].(map[string]any)["entryId"].(string)
+	settingsID := items[2].(map[string]any)["entryId"].(string)
+	status, invalidSlot, _ := env.request(http.MethodPut, workspacePath, userToken, map[string]any{
+		"revision": 1,
+		"items":    []any{map[string]any{"entryId": settingsID, "data": map[string]any{"title": "Converted settings"}}},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("collection settings cannot be converted to a collection entry: status=%d body=%v", status, invalidSlot)
+	}
+	status, reordered, _ := env.request(http.MethodPut, workspacePath, userToken, map[string]any{
+		"revision": 1,
+		"items": []any{
+			map[string]any{"entryId": betaID, "data": map[string]any{"title": "Бета"}},
+			map[string]any{"entryId": alphaID, "data": map[string]any{"title": "Альфа"}},
+			map[string]any{"entryId": settingsID, "singleSlot": true, "data": map[string]any{"heading": "Каталог товаров"}},
+		},
+	})
+	if status != http.StatusOK || reordered["revision"].(float64) != 2 {
+		t.Fatalf("manual ordering saves in the snapshot draft (previous revision %v): status=%d body=%v", saved["revision"], status, reordered)
+	}
+	status, child, _ := env.request(http.MethodPost, "/api/v2/admin/content/snapshots/"+parentID+"/fork", env.adminToken, map[string]any{"name": "ordered collection"})
+	if status != http.StatusCreated {
+		t.Fatalf("fork snapshot with ordered collection: status=%d body=%v", status, child)
+	}
+	childID := child["id"].(string)
+	assertSnapshotDigestMatchesContent(t, env, childID)
+	status, deployed, _ := env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+childID+"/deploy", env.adminToken, map[string]any{"environment": "prod"})
+	if status != http.StatusOK || deployed["id"] != childID {
+		t.Fatalf("deploy collection snapshot to isolated prod: status=%d body=%v", status, deployed)
+	}
+	placement := runtimePlacement(t, env, env.prodServer.URL, "/")
+	if placement["content"].(map[string]any)["heading"] != "Каталог товаров" {
+		t.Fatalf("collection settings use their own schema and runtime slot: %v", placement["content"])
+	}
+	status, response, _ := env.public(environment.Prod, http.MethodGet, "/api/v2/content/"+key+"/records?snapshot="+childID+"&limit=20", nil)
+	if status != http.StatusOK {
+		t.Fatalf("read snapshot collection runtime: status=%d body=%v", status, response)
+	}
+	publicItems := response["items"].([]any)
+	if len(publicItems) != 2 || publicItems[0].(map[string]any)["data"].(map[string]any)["title"] != "Бета" || publicItems[1].(map[string]any)["data"].(map[string]any)["title"] != "Альфа" {
+		t.Fatalf("runtime should return the exact saved manual order and exclude collection settings: %v", publicItems)
+	}
+	status, deleted, _ := env.request(http.MethodPut, workspacePath, userToken, map[string]any{
+		"revision": 2,
+		"items": []any{
+			map[string]any{"entryId": betaID, "data": map[string]any{"title": "Бета"}},
+			map[string]any{"entryId": settingsID, "singleSlot": true, "data": map[string]any{"heading": "Каталог товаров"}},
+		},
+	})
+	if status != http.StatusOK || len(deleted["items"].([]any)) != 2 {
+		t.Fatalf("deleting a record from the selected snapshot draft: status=%d body=%v", status, deleted)
+	}
+	status, deletedSnapshot, _ := env.request(http.MethodPost, "/api/v2/admin/content/snapshots/"+parentID+"/fork", env.adminToken, map[string]any{"name": "deleted collection item"})
+	if status != http.StatusCreated {
+		t.Fatalf("fork snapshot after deleting a collection record: status=%d body=%v", status, deletedSnapshot)
+	}
+	deletedSnapshotID := deletedSnapshot["id"].(string)
+	status, _, _ = env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+deletedSnapshotID+"/deploy", env.adminToken, map[string]any{"environment": "prod"})
+	if status != http.StatusOK {
+		t.Fatalf("deploy snapshot after collection record deletion: status=%d", status)
+	}
+	status, deletedRuntime, _ := env.public(environment.Prod, http.MethodGet, "/api/v2/content/"+key+"/records?snapshot="+deletedSnapshotID+"&limit=20", nil)
+	deletedItems := deletedRuntime["items"].([]any)
+	if status != http.StatusOK || len(deletedItems) != 1 || deletedItems[0].(map[string]any)["data"].(map[string]any)["title"] != "Бета" {
+		t.Fatalf("new snapshot should omit the deleted record and preserve source history: status=%d body=%v", status, deletedRuntime)
+	}
+	status, _, _ = env.request(http.MethodPost, "/api/v2/admin/content/snapshots/"+parentID+"/fork", userToken, map[string]any{})
+	if status != http.StatusForbidden {
+		t.Fatal("user role must not be able to create a snapshot from content drafts")
+	}
+}
+
+func TestSnapshotScopedFormContentUsesEditorialSchema(t *testing.T) {
+	env := newTestEnv(t)
+	key := "snapshot-workspace-form"
+	manifest := manifestFor(key, "1.0.0", "form", objectSchema(map[string]any{
+		"submitLabel": map[string]any{"type": "string", "minLength": 1},
+	}, "submitLabel"))
+	manifest["form"] = map[string]any{"submissionSchema": objectSchema(map[string]any{
+		"email": map[string]any{"type": "string", "format": "email"},
+	}, "email")}
+	uploadFeatureBuild(t, env, manifest, "export default function Feature() {}")
+	parent := saveAndDeploySnapshot(t, env, singlePageConfig(key, "1.0.0"), "form parent")
+	parentID := parent["id"].(string)
+	workspacePath := "/api/v2/admin/content/snapshots/" + parentID + "/features/" + key
+	status, workspace, _ := env.request(http.MethodGet, workspacePath, env.adminToken, nil)
+	feature := workspace["feature"].(map[string]any)
+	if status != http.StatusOK || feature["schema"].(map[string]any)["required"].([]any)[0] != "submitLabel" || feature["submissionSchema"].(map[string]any)["required"].([]any)[0] != "email" {
+		t.Fatalf("form editor separates editorial and submission schemas: status=%d body=%v", status, workspace)
+	}
+	status, saved, _ := env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{
+		"revision": 0,
+		"items":    []any{map[string]any{"singleSlot": true, "data": map[string]any{"submitLabel": "Отправить"}}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("save form editorial content using content schema: status=%d body=%v", status, saved)
+	}
+	status, child, _ := env.request(http.MethodPost, "/api/v2/admin/content/snapshots/"+parentID+"/fork", env.adminToken, map[string]any{"name": "form content"})
+	if status != http.StatusCreated {
+		t.Fatalf("fork snapshot with form content: status=%d body=%v", status, child)
+	}
+	childID := child["id"].(string)
+	assertSnapshotDigestMatchesContent(t, env, childID)
+	status, _, _ = env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+childID+"/deploy", env.adminToken, map[string]any{"environment": "prod"})
+	if status != http.StatusOK {
+		t.Fatalf("deploy form content snapshot: status=%d", status)
+	}
+	placement := runtimePlacement(t, env, env.prodServer.URL, "/")
+	if placement["content"].(map[string]any)["submitLabel"] != "Отправить" {
+		t.Fatalf("public form receives editorial text from selected snapshot: %v", placement["content"])
+	}
+	env.forms.SetSnapshotSchemaProvider(env.snapshots)
+	status, submission, _ := env.public(environment.Prod, http.MethodPost, "/api/v2/forms/"+key+"/submissions", map[string]any{"data": map[string]any{"email": "editor@example.com"}})
+	if status != http.StatusCreated {
+		t.Fatalf("public submission validates against submissionSchema, not editorial content schema: status=%d body=%v", status, submission)
 	}
 }
 

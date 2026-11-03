@@ -122,6 +122,11 @@ func NewRouter(d Deps) http.Handler {
 	}
 	if d.SiteSnapshots != nil {
 		mux.Handle("GET /api/v2/admin/content/features", user(d.SiteSnapshots.ContentCatalog))
+		mux.Handle("GET /api/v2/admin/content/snapshots", user(d.SiteSnapshots.ContentSnapshots))
+		mux.Handle("GET /api/v2/admin/content/snapshots/{id}/features", user(d.SiteSnapshots.SnapshotContentCatalog))
+		mux.Handle("GET /api/v2/admin/content/snapshots/{id}/features/{featureKey}", user(d.SiteSnapshots.ContentWorkspace))
+		mux.Handle("PUT /api/v2/admin/content/snapshots/{id}/features/{featureKey}", jsonUser(d.SiteSnapshots.SaveContentWorkspace))
+		mux.Handle("POST /api/v2/admin/content/snapshots/{id}/fork", jsonSiteManager(d.SiteSnapshots.ForkSnapshotFromContent))
 		mux.Handle("GET /api/v2/admin/site/draft", siteManager(d.SiteSnapshots.Draft))
 		mux.Handle("PUT /api/v2/admin/site/draft", jsonSiteManager(d.SiteSnapshots.SaveDraft))
 		mux.Handle("GET /api/v2/admin/site/metadata", user(d.SiteSnapshots.Metadata))
@@ -132,6 +137,7 @@ func NewRouter(d Deps) http.Handler {
 		mux.Handle("PUT /api/v2/admin/site/design-system", jsonSiteManager(d.SiteSnapshots.SaveDesignSystem))
 		mux.Handle("POST /api/v2/admin/site/design-system/preview", jsonSiteManager(d.SiteSnapshots.PreviewDesignSystem))
 		mux.Handle("GET /api/v2/admin/site/snapshots", siteManager(d.SiteSnapshots.List))
+		mux.Handle("GET /api/v2/admin/site/snapshot-events", siteManager(d.SiteSnapshots.Events))
 		mux.Handle("POST /api/v2/admin/site/snapshots", jsonSiteManager(d.SiteSnapshots.Create))
 		mux.Handle("POST /api/v2/admin/site/snapshots/{id}/deploy", jsonSiteManager(d.SiteSnapshots.Deploy))
 		mux.Handle("POST /api/v2/admin/site/snapshots/{id}/promote", jsonSiteManager(d.SiteSnapshots.Promote))

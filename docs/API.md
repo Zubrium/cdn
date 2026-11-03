@@ -331,6 +331,7 @@ CSV-экспорт учитывает те же фильтры, значения
 | GET/PUT | `/api/v2/admin/site/draft` | user/staff | Читать и сохранять визуальную композицию по revision |
 | GET/PUT | `/api/v2/admin/site/design-system` | admin, moderator | Читать/сохранять типизированный черновик темы по revision |
 | GET | `/api/v2/admin/site/snapshots?limit=&beforeSequence=` | admin, moderator | Cursor-страницы истории и активные указатели dev/prod |
+| GET | `/api/v2/admin/site/snapshot-events?environment=dev\|prod&limit=&before=` | admin, moderator | Постраничная история назначений выбранной среды; `before` — `nextCursor` предыдущего ответа |
 | POST | `/api/v2/admin/site/snapshots` | admin, moderator | Создать новый immutable снапшот; активные среды не переключаются |
 | POST | `/api/v2/admin/site/snapshots/{id}/deploy` | admin, moderator | Развернуть любой снапшот напрямую в dev или production |
 | POST | `/api/v2/admin/site/snapshots/{id}/promote` | admin, moderator | Совместимое действие: prod только для текущего dev-снапшота |

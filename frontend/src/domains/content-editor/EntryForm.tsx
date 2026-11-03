@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
-  Braces,
   File as FileIcon,
   ImagePlus,
   Lock,
@@ -25,14 +24,8 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/misc";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { MediaPickerDialog } from "@/domains/media/MediaPickerDialog";
+import { queryKeys } from "@/lib/query-keys";
 import type { Media } from "@/types";
 import { starterValue } from "./blocks";
 
@@ -40,7 +33,7 @@ import { starterValue } from "./blocks";
  * Strict, schema-driven entry editor. Every visible field comes from the
  * published/draft schema; unknown keys stay untouched in the data. Structured
  * fields (object/array) are edited with nested widgets and a table instead of
- * raw JSON (JSON remains as an escape hatch behind a small button).
+ * dedicated graphical controls.
  */
 
 export interface EntryFormIssue {
@@ -78,17 +71,6 @@ function cloneOriginal<T extends JsonValue>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function isEmptyValue(field: SchemaFieldNode, value: JsonValue | undefined): boolean {
-  if (value === undefined || value === null) return true;
-  if (typeof value === "string") {
-    return field.type === "media" || field.type === "file" ? value.trim() === "" : !value.trim();
-  }
-  if (Array.isArray(value)) return value.length === 0;
-  if (isRecordValue(value)) return Object.keys(value).length === 0;
-  if (typeof value === "number") return false;
-  return false;
-}
-
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -111,12 +93,14 @@ function validateField(
   issues: EntryFormIssue[],
   perItem: boolean,
 ): void {
-  const missing = isEmptyValue(field, value);
-  if (field.required && missing && !field.nullable) {
-    issues.push({ path, message: "Обязательно для заполнения" });
+  if (value === undefined) {
+    if (field.required) issues.push({ path, message: "Обязательно для заполнения" });
     return;
   }
-  if (missing) return;
+  if (value === null) {
+    if (!field.nullable) issues.push({ path, message: "Значение не может быть пустым" });
+    return;
+  }
 
   switch (field.type) {
     case "number":
@@ -124,6 +108,9 @@ function validateField(
       if (typeof value !== "number") {
         issues.push({ path, message: "Введите число" });
         return;
+      }
+      if (field.type === "integer" && !Number.isInteger(value)) {
+        issues.push({ path, message: "Введите целое число" });
       }
       if (field.min !== undefined && value < field.min) {
         issues.push({ path, message: `Не меньше ${field.min}` });
@@ -139,14 +126,14 @@ function validateField(
         issues.push({ path, message: "Введите текст" });
         return;
       }
-      const trimmed = value;
-      if (field.minLength && trimmed.length < field.minLength) {
+      const length = [...value].length;
+      if (field.minLength !== undefined && length < field.minLength) {
         issues.push({
           path,
           message: `Минимум ${field.minLength} символов`,
         });
       }
-      if (field.maxLength && trimmed.length > field.maxLength) {
+      if (field.maxLength !== undefined && length > field.maxLength) {
         issues.push({
           path,
           message: `Не больше ${field.maxLength} символов`,
@@ -178,10 +165,10 @@ function validateField(
         return;
       }
       const items = value;
-      if (field.minItems && items.length < field.minItems) {
+      if (field.minItems !== undefined && items.length < field.minItems) {
         issues.push({ path, message: `Минимум ${field.minItems} элемент(ов)` });
       }
-      if (field.maxItems && items.length > field.maxItems) {
+      if (field.maxItems !== undefined && items.length > field.maxItems) {
         issues.push({ path, message: `Не больше ${field.maxItems} элемент(ов)` });
       }
       items.forEach((item, index) => {
@@ -252,12 +239,14 @@ function FieldCard({
   anchorId,
   error,
   action,
+  compact,
   children,
 }: {
   field: SchemaFieldNode;
   anchorId: string;
   error?: string;
   action?: ReactNode;
+  compact?: boolean;
   children: ReactNode;
 }) {
   const labelId = `${anchorId}-label`;
@@ -270,7 +259,9 @@ function FieldCard({
       role="group"
       aria-labelledby={labelId}
       aria-describedby={[descriptionId, errorId].filter(Boolean).join(" ") || undefined}
-      className="scroll-mt-8 space-y-2 border-b border-border pb-7 pt-7 first:border-0 first:pt-0 last:border-0 last:pb-0 focus-visible:rounded-md"
+      className={compact
+        ? "scroll-mt-8 space-y-1.5 border-b border-border py-3 first:border-0 first:pt-0 last:border-0 last:pb-0 focus-visible:rounded-md"
+        : "scroll-mt-8 space-y-2 border-b border-border pb-7 pt-7 first:border-0 first:pt-0 last:border-0 last:pb-0 focus-visible:rounded-md"}
     >
       <div className="flex items-start justify-between gap-2">
         <Label
@@ -343,6 +334,12 @@ function MediaValue({
       return status === "pending" || status === "processing" ? 1500 : false;
     },
   });
+  const mediaQuery = useQuery({
+    queryKey: queryKeys.media.detail(mediaId),
+    queryFn: ({ signal }) => api.media.get(mediaId, signal),
+    enabled: Boolean(mediaId),
+    staleTime: 5 * 60 * 1000,
+  });
   useEffect(() => {
     if (!preparation || !mediaId || renditionQuery.data?.status !== "pending") return;
     const requestKey = `${mediaId}:${preparation.featureKey}:${preparation.schemaKind}:${fieldPath}:${preparation.buildDigest}`;
@@ -384,7 +381,7 @@ function MediaValue({
           ) : renditionQuery.data.status === "failed" ? (
             <>
               <Badge variant="destructive">Ошибка подготовки</Badge>
-              <span className="text-destructive">{renditionQuery.data.error || "Производные файлы не созданы"}</span>
+              <span className="min-w-0 break-words [overflow-wrap:anywhere] text-destructive">{renditionQuery.data.error || "Производные файлы не созданы"}</span>
               <Button type="button" variant="outline" size="sm" onClick={() => void retryProcessing()}>
                 Повторить
               </Button>
@@ -397,15 +394,19 @@ function MediaValue({
       {mediaId ? (
         <div className="overflow-hidden rounded-md border border-border">
           {variant === "image" ? (
-            <img src={publicMediaPath(mediaId)} alt="" className={compact ? "h-14 w-full object-cover" : "max-h-56 w-full object-cover"} />
+            <div className={compact ? "flex h-16 items-center bg-muted/20 px-2" : "flex max-h-56 items-center justify-center bg-muted/20"}>
+              <img src={publicMediaPath(mediaId)} alt="" className={compact ? "max-h-14 max-w-full object-contain" : "max-h-56 max-w-full object-contain"} />
+            </div>
           ) : (
-            <a href={publicMediaPath(mediaId)} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-4 text-sm hover:bg-muted/30">
+            <a href={publicMediaPath(mediaId)} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/30">
               <FileIcon className="h-5 w-5 text-muted-foreground" />
-              Открыть файл
+              <span className="min-w-0 truncate">{mediaQuery.data?.original_filename ?? "Открыть файл"}</span>
             </a>
           )}
           <div className="flex items-center justify-between gap-2 border-t border-border bg-muted/30 px-2 py-1.5">
-            <code className="truncate text-2xs text-muted-foreground">{mediaId}</code>
+            <span className="min-w-0 truncate text-2xs text-muted-foreground" title={mediaQuery.data?.original_filename ?? mediaId}>
+              {mediaQuery.data?.original_filename ?? mediaId}
+            </span>
             <div className="flex gap-1">
               <Button type="button" variant="ghost" size="sm" onClick={onPick} disabled={disabled}>
                 Заменить
@@ -415,6 +416,7 @@ function MediaValue({
                 variant="ghost"
                 size="sm"
                 className="text-destructive hover:text-destructive"
+                aria-label="Удалить выбранный файл"
                 onClick={onClear}
                 disabled={disabled}
               >
@@ -492,7 +494,6 @@ function ScalarControl({
           {...accessibilityProps}
           value={typeof value === "string" ? value : ""}
           disabled={disabled}
-          maxLength={field.maxLength}
           onChange={(event) => onChange(event.target.value)}
           placeholder={field.placeholder}
         />
@@ -505,7 +506,6 @@ function ScalarControl({
             {...accessibilityProps}
             value={typeof value === "string" ? value : ""}
             disabled={disabled}
-            maxLength={field.maxLength}
             onChange={(event) => onChange(event.target.value)}
             placeholder={field.placeholder}
             className="font-mono text-xs leading-6"
@@ -538,7 +538,7 @@ function ScalarControl({
             }
             const parsed = Number(raw);
             if (!Number.isFinite(parsed)) return;
-            onChange(field.type === "integer" ? Math.trunc(parsed) : parsed);
+            onChange(parsed);
           }}
         />
       );
@@ -636,7 +636,6 @@ function ScalarControl({
           className={compact ? "h-8" : undefined}
           value={typeof value === "string" ? value : ""}
           disabled={disabled}
-          maxLength={field.maxLength}
           onChange={(event) => onChange(event.target.value)}
           placeholder={field.placeholder}
         />
@@ -677,7 +676,7 @@ function ArrayTable({
 }) {
   const rows = value;
   const children = field.children.filter((child) => child.key.trim());
-  const canAdd = !field.maxItems || rows.length < field.maxItems;
+  const canAdd = field.maxItems === undefined || rows.length < field.maxItems;
   // The published schema enforces minItems server-side; going below it would
   // make autosave fail with schema_validation_failed.
   const minRows = field.minItems ?? 0;
@@ -749,10 +748,10 @@ function ArrayTable({
       );
     }
     if (child.type === "object") {
-      return null;
+      return <ObjectFields field={child} value={isRecordValue(cellValue) ? cellValue : {}} onChange={setCell} onPickMedia={onPickMedia} disabled={disabled} errorsByPath={errorsByPath} path={cellPath} schemaPath={cellSchemaPath} />;
     }
     if (child.type === "array") {
-      return null;
+      return <ArrayEditorValue field={child} value={Array.isArray(cellValue) ? cellValue : []} onChange={setCell} onPickMedia={onPickMedia} disabled={disabled} errorsByPath={errorsByPath} path={cellPath} schemaPath={cellSchemaPath} />;
     }
     return (
       <div key={cellPath}>
@@ -766,7 +765,7 @@ function ArrayTable({
           fieldPath={cellSchemaPath}
           controlId={entryFieldAnchorId(cellPath)}
           errorId={errorId}
-          accessibleLabel={`${field.label || field.key}, ${child.label || child.key}, строка ${cellPath.split(".")[1] ?? ""}`}
+          accessibleLabel={`${field.label || field.key}, ${child.label || child.key}, строка ${Number(cellPath.slice(path.length + 1).split(".")[0]) + 1}`}
         />
         {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
       </div>
@@ -810,20 +809,13 @@ function ArrayTable({
                 >
                   {children.map((child) => {
                     const cellPath = `${path}.${index}.${child.key}`;
-                    const cell =
-                      child.type === "object" || child.type === "array" ? (
-                        <span className="text-2xs text-muted-foreground">
-                          вложенные структуры в таблице не редактируются
-                        </span>
-                      ) : (
-                        compactControlFor(
-                          child,
-                          record[child.key],
-                          (next) => setRow(index, { ...record, [child.key]: next }),
-                          cellPath,
-                          `${schemaPath}/items/${pointerPart(child.key)}`,
-                        )
-                      );
+                    const cell = compactControlFor(
+                      child,
+                      record[child.key],
+                      (next) => setRow(index, { ...record, [child.key]: next }),
+                      cellPath,
+                      `${schemaPath}/items/${pointerPart(child.key)}`,
+                    );
                     return (
                       <td
                         key={child.id}
@@ -938,7 +930,7 @@ function ScalarArrayList({
   path: string;
   schemaPath: string;
 }) {
-  const canAdd = !field.maxItems || value.length < field.maxItems;
+  const canAdd = field.maxItems === undefined || value.length < field.maxItems;
   const minItemsAllowed = field.minItems ?? 0;
   const canRemove = value.length > minItemsAllowed;
   const itemField: SchemaFieldNode = {
@@ -1240,73 +1232,6 @@ function ArrayEditorValue({
   );
 }
 
-function JsonFieldDialog({
-  field,
-  value,
-  open,
-  onClose,
-  onApply,
-}: {
-  field: SchemaFieldNode;
-  value: JsonValue | undefined;
-  open: boolean;
-  onClose: () => void;
-  onApply: (value: JsonValue) => void;
-}) {
-  const initial = useMemo(
-    () => JSON.stringify(value ?? (field.type === "array" ? [] : {}), null, 2),
-    [field.type, value],
-  );
-  const [text, setText] = useState(initial);
-  const [error, setError] = useState<string | null>(null);
-  // Re-sync when opened.
-  useEffect(() => {
-    if (open) {
-      setText(initial);
-      setError(null);
-    }
-  }, [open, initial]);
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>JSON поля «{field.label || field.key}»</DialogTitle>
-        </DialogHeader>
-        <textarea
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-            setError(null);
-          }}
-          rows={14}
-          spellCheck={false}
-          className="w-full rounded-md border border-input bg-muted/30 p-3 font-mono text-xs leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        />
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Отмена
-          </Button>
-          <Button
-            onClick={() => {
-              try {
-                const parsed = JSON.parse(text) as JsonValue;
-                onApply(parsed);
-                onClose();
-              } catch {
-                setError("Некорректный JSON");
-              }
-            }}
-          >
-            Применить
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Main form
 // ---------------------------------------------------------------------------
@@ -1320,6 +1245,7 @@ export function EntryFieldsForm({
   featureKey,
   buildDigest,
   schemaKind,
+  compact = false,
 }: {
   /** Visible schema fields (without the legacy blocks key). */
   fields: SchemaFieldNode[];
@@ -1330,13 +1256,13 @@ export function EntryFieldsForm({
   featureKey?: string;
   buildDigest?: string;
   schemaKind?: "content" | "settings";
+  compact?: boolean;
 }) {
   const scope = useMemo(
     () => (featureKey && buildDigest && schemaKind ? { featureKey, buildDigest, schemaKind } : null),
     [buildDigest, featureKey, schemaKind],
   );
   const [mediaTarget, setMediaTarget] = useState<MediaPickTarget | null>(null);
-  const [jsonField, setJsonField] = useState<SchemaFieldNode | null>(null);
   const openMediaPick = useCallback(
     (target: MediaPickTarget) => setMediaTarget({
       ...target,
@@ -1369,28 +1295,14 @@ export function EntryFieldsForm({
         const error = errorsByPath.get(field.key);
         const errorId = error ? `${anchorId}-error` : undefined;
         const value = metadata[field.key];
-        const isStructured = field.type === "object" || field.type === "array";
         return (
           <FieldCard
             key={field.id}
             field={field}
             anchorId={anchorId}
             error={error}
-            action={
-              isStructured ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Редактировать JSON"
-                  title="Редактировать как JSON"
-                  onClick={() => setJsonField(field)}
-                  disabled={disabled}
-                >
-                  <Braces className="h-3.5 w-3.5" />
-                </Button>
-              ) : null
-            }
+            compact={compact}
+
           >
             {field.type === "object" ? (
               <ObjectFields
@@ -1419,6 +1331,7 @@ export function EntryFieldsForm({
                 field={field}
                 value={value as JsonValue}
                 disabled={disabled}
+                compact={compact}
                 onChange={(next) => onChange(field.key, next)}
                 onPickMedia={openMediaPick}
                 fieldPath={`/${pointerPart(field.key)}`}
@@ -1447,15 +1360,7 @@ export function EntryFieldsForm({
         preparation={mediaTarget?.preparation}
       />
 
-      {jsonField && (
-        <JsonFieldDialog
-          field={jsonField}
-          value={metadata[jsonField.key]}
-          open
-          onClose={() => setJsonField(null)}
-          onApply={(next) => onChange(jsonField.key, next)}
-        />
-      )}
+
     </div>
     </MediaRenditionScope.Provider>
   );

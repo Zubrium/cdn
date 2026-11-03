@@ -9,6 +9,9 @@ export const queryKeys = {
   content: {
     catalog: ["content", "catalog"] as const,
     settings: (featureId: string) => ["content", "settings", featureId] as const,
+    snapshots: ["content", "snapshots"] as const,
+    snapshotFeatures: (snapshotId: string) => ["content", "snapshot-features", snapshotId] as const,
+    snapshotWorkspace: (snapshotId: string, featureKey: string) => ["content", "snapshot-workspace", snapshotId, featureKey] as const,
   },
   entries: {
     all: ["entries"] as const,

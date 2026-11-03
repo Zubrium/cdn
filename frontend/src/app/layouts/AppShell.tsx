@@ -1,6 +1,7 @@
 import {
   Suspense,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import {
@@ -57,6 +58,7 @@ interface NavItem {
 
 const homeNav: NavItem[] = [
   { to: "/", label: "Главная", icon: LayoutDashboard, end: true },
+  { to: "/media", label: "Файлы", icon: Image, match: (p) => p.startsWith("/media") },
 ];
 
 const siteSettingsNav: NavItem[] = [
@@ -76,8 +78,7 @@ const administrationNav: NavItem[] = [
 ];
 
 const contentNav: NavItem[] = [
-  { to: "/content", label: "Контент", icon: Layers, match: (p) => p === "/content" },
-  { to: "/media", label: "Файлы", icon: Image, match: (p) => p.startsWith("/media") },
+  { to: "/content", label: "Редактор", icon: Layers, match: (p) => p === "/content" },
   { to: "/submissions", label: "Заявки", icon: Inbox, match: (p) => p.startsWith("/submissions") },
 ];
 
@@ -273,6 +274,7 @@ export function AppShell() {
     }
   });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileMenuButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -328,6 +330,10 @@ export function AppShell() {
         <SheetContent
           side="left"
           hideClose
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            mobileMenuButton.current?.focus();
+          }}
           className="w-[85%] max-w-[19rem] border-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
         >
           <SheetHeader className="sr-only">
@@ -345,6 +351,7 @@ export function AppShell() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              ref={mobileMenuButton}
               variant="outline"
               size="icon"
               className="size-10 rounded-xl border-border/80 bg-background/90 shadow-sm backdrop-blur-sm"

@@ -109,6 +109,8 @@ export interface ContentFeature {
   id: string;
   key: string;
   name: string;
+  category?: string;
+  draftRevision?: number;
   mode: FeatureType;
   version: string;
   buildDigest: string;
@@ -476,17 +478,52 @@ export interface SiteDraftState {
 
 export interface SiteSnapshot {
   id: string;
+  parentSnapshotId?: string;
   sequence: number;
   name: string;
   digest: string;
   createdAt: string;
 }
 
+export interface SnapshotContentDraftItem {
+  entryId: string;
+  versionId?: string;
+  version?: number;
+  sortOrder: number;
+  singleSlot?: boolean;
+  data: JsonObject;
+}
+
+export interface SnapshotContentDraftInput {
+  entryId: string;
+  sortOrder: number;
+  singleSlot?: boolean;
+  data: JsonObject;
+}
+
+export interface SnapshotContentWorkspace {
+  snapshot: SiteSnapshot;
+  feature: ContentFeature;
+  revision: number;
+  items: SnapshotContentDraftItem[];
+}
+
 export interface SiteSnapshotList {
   items: SiteSnapshot[];
   active: Record<Environment, string>;
   activeSnapshots?: Record<Environment, SiteSnapshot | null>;
+  events?: SnapshotEvent[];
   nextCursor?: number;
+}
+
+export interface SnapshotEvent {
+  id: string;
+  snapshotId: string;
+  sequence: number;
+  name: string;
+  environment: Environment;
+  action: string;
+  createdAt: string;
 }
 
 export interface SiteMetadataOverride {

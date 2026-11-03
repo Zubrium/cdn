@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { History, Rocket, Save } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { useConfirm } from "@/components/common/confirm";
 import { EmptyState, ErrorState, PageHeader } from "@/components/common/page";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Environment, SiteSnapshot, SiteSnapshotList } from "@/types";
 import { useSiteWorkspace } from "./SiteWorkspace";
 
@@ -20,7 +22,7 @@ const emptyList: SiteSnapshotList = {
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Неизвестная ошибка";
 const environmentNames: Record<Environment, string> = { dev: "dev", prod: "production" };
 
-function SnapshotState({ snapshot, environment }: { snapshot: SiteSnapshot | null; environment: Environment }) {
+function SnapshotState({ snapshot, environment, deployedAt }: { snapshot: SiteSnapshot | null; environment: Environment; deployedAt?: string }) {
   return (
     <Card>
       <CardContent className="p-4">
@@ -28,7 +30,7 @@ function SnapshotState({ snapshot, environment }: { snapshot: SiteSnapshot | nul
         {snapshot ? (
           <div className="mt-1 min-w-0">
             <p className="truncate text-sm font-medium">#{snapshot.sequence} · {snapshot.name}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{new Date(snapshot.createdAt).toLocaleString("ru-RU")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{deployedAt ? `Назначен ${new Date(deployedAt).toLocaleString("ru-RU")}` : "Дата назначения недоступна"}</p>
           </div>
         ) : <p className="mt-1 text-sm text-muted-foreground">Нет активной версии</p>}
       </CardContent>
@@ -39,12 +41,21 @@ function SnapshotState({ snapshot, environment }: { snapshot: SiteSnapshot | nul
 export default function SnapshotsPage() {
   const { dirty, saving: draftSaving, conflict, save, reload } = useSiteWorkspace();
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
   const [snapshots, setSnapshots] = useState<SiteSnapshotList>(emptyList);
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [environment, setEnvironment] = useState<Environment>("dev");
+  const history = useInfiniteQuery({
+    queryKey: ["snapshot-events", environment],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => api.siteBuilder.snapshotEvents(environment, pageParam, signal),
+    getNextPageParam: (page) => page.nextCursor,
+  });
+  const events = history.data?.pages.flatMap((page) => page.items) ?? [];
 
   const refresh = async () => {
     const result = await api.siteBuilder.snapshots();
@@ -87,23 +98,24 @@ export default function SnapshotsPage() {
     }
   };
 
-  const deploy = async (snapshot: SiteSnapshot, environment: Environment) => {
+  const deploy = async (snapshot: SiteSnapshot, environment: Environment, rollback = false) => {
     const target = environment === "dev" ? "dev" : "production";
     const accepted = await confirm({
-      title: `Развернуть снапшот в ${target}?`,
+      title: `${rollback ? "Откатить" : "Развернуть"} снапшот в ${target}?`,
       description: <>
         Снапшот <strong>#{snapshot.sequence} · {snapshot.name}</strong> станет активной версией среды {target}.
         Это можно сделать для любого снапшота; dev и production переключаются независимо.
       </>,
-      confirmLabel: `Развернуть в ${target}`,
+      confirmLabel: `${rollback ? "Откатить" : "Развернуть"} в ${target}`,
     });
     if (!accepted) return;
 
     setBusy(true);
     try {
-      await api.siteBuilder.deploySnapshot(snapshot.id, environment);
-      await refresh();
-      toast.success(`Снапшот #${snapshot.sequence} развёрнут в ${target}`);
+      if (rollback) await api.siteBuilder.rollback(snapshot.id, environment);
+      else await api.siteBuilder.deploySnapshot(snapshot.id, environment);
+      await Promise.all([refresh(), queryClient.invalidateQueries({ queryKey: ["snapshot-events", environment] })]);
+      toast.success(`Снапшот #${snapshot.sequence} ${rollback ? "восстановлен" : "развёрнут"} в ${target}`);
     } catch (reason) {
       toast.error(errorMessage(reason));
     } finally {
@@ -145,14 +157,35 @@ export default function SnapshotsPage() {
       />
 
       <div className="space-y-4">
-        <section aria-label="Активные версии" className="grid gap-3 sm:grid-cols-2">
-          <SnapshotState snapshot={activeRecord("dev")} environment="dev" />
-          <SnapshotState snapshot={activeRecord("prod")} environment="prod" />
-        </section>
+        <Tabs value={environment} onValueChange={(value) => setEnvironment(value as Environment)}>
+          <TabsList aria-label="Окружение">
+            <TabsTrigger value="dev">Development</TabsTrigger>
+            <TabsTrigger value="prod">Production</TabsTrigger>
+          </TabsList>
+          <TabsContent value={environment} className="space-y-4">
+        <SnapshotState snapshot={activeRecord(environment)} environment={environment} deployedAt={events.find((event) => event.snapshotId === snapshots.active[environment])?.createdAt} />
+
+        <Card>
+          <CardHeader><h2 className="text-base font-semibold">История развёртываний</h2><CardDescription>Последние операции выбранной среды.</CardDescription></CardHeader>
+          <CardContent>
+            {history.isPending ? <p className="text-sm text-muted-foreground">Загружаем историю…</p> : history.isError && events.length === 0 ? <ErrorState error={history.error} title="Не удалось загрузить историю" onRetry={() => void history.refetch()} /> : events.length === 0 ? <p className="text-sm text-muted-foreground">Операций пока нет.</p> : (
+              <ol className="divide-y divide-border">{events.map((event) => (
+                <li key={event.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                  <span>{event.action === "rollback" ? "Откат" : "Развёртывание"} · #{event.sequence} · {event.name}</span>
+                  <span className="text-xs text-muted-foreground">{new Date(event.createdAt).toLocaleString("ru-RU")}</span>
+                </li>
+              ))}</ol>
+            )}
+            {history.hasNextPage && <Button type="button" variant="outline" size="sm" className="mt-3" loading={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Показать более ранние операции</Button>}
+            {history.isFetchNextPageError && <p role="alert" className="mt-2 text-sm text-destructive">Не удалось загрузить остальные операции. Повторите попытку.</p>}
+          </CardContent>
+        </Card>
+          </TabsContent>
+        </Tabs>
 
         <Card>
         <CardHeader>
-          <CardTitle className="text-base">Создать снапшот</CardTitle>
+          <h2 className="text-base font-semibold">Создать снапшот</h2>
           <CardDescription>Фиксируется только сохранённый черновик. Создание не меняет активные версии dev или production.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -179,7 +212,7 @@ export default function SnapshotsPage() {
 
         <Card>
         <CardHeader>
-          <CardTitle className="text-base">История снапшотов</CardTitle>
+          <h2 className="text-base font-semibold">История снапшотов</h2>
           <CardDescription>Выберите версию и среду назначения. Развёртывание не требует предварительной отправки в dev.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -203,8 +236,8 @@ export default function SnapshotsPage() {
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      {!inDev && <Button type="button" size="sm" variant="outline" onClick={() => void deploy(snapshot, "dev")} disabled={busy}><Rocket />В dev</Button>}
-                      {!inProd && <Button type="button" size="sm" onClick={() => void deploy(snapshot, "prod")} disabled={busy}><Rocket />В production</Button>}
+                      {snapshot.id !== snapshots.active[environment] && <Button type="button" size="sm" onClick={() => void deploy(snapshot, environment)} disabled={busy}><Rocket />Развернуть</Button>}
+                      {snapshot.id !== snapshots.active[environment] && <Button type="button" size="sm" variant="outline" onClick={() => void deploy(snapshot, environment, true)} disabled={busy}>Откатить</Button>}
                     </div>
                   </article>
                 );

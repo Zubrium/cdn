@@ -13,10 +13,6 @@ import { LoadingPage } from "@/components/common/page";
 
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const ContentHomePage = lazy(() => import("@/pages/content/ContentHomePage"));
-const FeatureLayout = lazy(() => import("@/pages/features/FeatureLayout"));
-const FeatureContentPage = lazy(() => import("@/pages/features/FeatureContentPage"));
-const FeatureSettingsPage = lazy(() => import("@/pages/features/FeatureSettingsPage"));
-const ContentEditorPage = lazy(() => import("@/pages/features/ContentEditorPage"));
 const SubmissionsPage = lazy(() => import("@/pages/submissions/SubmissionsPage"));
 const MediaPage = lazy(() => import("@/pages/media/MediaPage"));
 const AccessLayout = lazy(() => import("@/pages/access/AccessLayout"));
@@ -107,25 +103,7 @@ export const router = createBrowserRouter(
             { path: "content", element: <ContentHomePage /> },
             { path: "site-metadata", element: <SiteMetadataPage /> },
             { path: "features", element: <Navigate to="/content" replace /> },
-            {
-              element: <RequireSiteManager />,
-              children: [
-                { path: "features/new", element: <Navigate to="/site/features" replace /> },
-              ],
-            },
-            {
-              path: "features/:featureId",
-              element: <FeatureLayout />,
-              children: [
-                { index: true, element: <Navigate to="content" replace /> },
-                { path: "schema", element: <Navigate to="../content" replace /> },
-                { path: "settings", element: <Navigate to="../content" replace /> },
-                { path: "content", element: <FeatureContentPage /> },
-                { path: "content/new", element: <ContentEditorPage /> },
-                { path: "content/settings", element: <FeatureSettingsPage /> },
-                { path: "content/:entryId", element: <ContentEditorPage /> },
-              ],
-            },
+            { path: "features/:featureId/*", element: <Navigate to="/content" replace /> },
             { path: "submissions", element: <SubmissionsPage /> },
             { path: "submissions/:submissionId", element: <SubmissionsPage /> },
             { path: "media", element: <MediaPage /> },

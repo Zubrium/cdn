@@ -34,6 +34,7 @@ type Manifest struct {
 	FormatVersion int             `json:"formatVersion"`
 	Key           string          `json:"key"`
 	Name          string          `json:"name"`
+	Category      string          `json:"category,omitempty"`
 	Version       string          `json:"version"`
 	EngineAPI     string          `json:"engineApi"`
 	Entry         string          `json:"entry"`
@@ -108,6 +109,9 @@ func (m Manifest) Validate() error {
 	}
 	if strings.TrimSpace(m.Name) == "" || len([]rune(m.Name)) > 200 {
 		return errors.New("name must contain between 1 and 200 characters")
+	}
+	if len([]rune(m.Category)) > 100 || (m.Category != "" && strings.TrimSpace(m.Category) == "") {
+		return errors.New("category must be omitted or contain between 1 and 100 non-whitespace characters")
 	}
 	if !versionPattern.MatchString(m.Version) {
 		return errors.New("version must use semantic version format, for example 1.2.3")

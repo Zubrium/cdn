@@ -37,11 +37,76 @@ type DraftState struct {
 }
 
 type SnapshotRecord struct {
-	ID        uuid.UUID `json:"id"`
-	Sequence  int64     `json:"sequence"`
-	Name      string    `json:"name"`
-	Digest    string    `json:"digest"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID        uuid.UUID  `json:"id"`
+	ParentID  *uuid.UUID `json:"parentSnapshotId,omitempty"`
+	Sequence  int64      `json:"sequence"`
+	Name      string     `json:"name"`
+	Digest    string     `json:"digest"`
+	CreatedAt time.Time  `json:"createdAt"`
+}
+
+// SnapshotEvent records an environment assignment separately from creation.
+type SnapshotEvent struct {
+	ID          uuid.UUID `json:"id"`
+	SnapshotID  uuid.UUID `json:"snapshotId"`
+	Sequence    int64     `json:"sequence"`
+	Name        string    `json:"name"`
+	Environment string    `json:"environment"`
+	Action      string    `json:"action"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+func (s *SnapshotService) Events(ctx context.Context, limit int) ([]SnapshotEvent, error) {
+	rows, err := s.pool.Query(ctx, `SELECT e.id,e.snapshot_id,s.sequence,s.name,e.environment,e.action,e.created_at
+		FROM site_snapshot_events e JOIN site_snapshots s ON s.id=e.snapshot_id
+		ORDER BY e.created_at DESC,e.id DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SnapshotEvent{}
+	for rows.Next() {
+		var item SnapshotEvent
+		if err := rows.Scan(&item.ID, &item.SnapshotID, &item.Sequence, &item.Name, &item.Environment, &item.Action, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// EventsPage uses a stable (timestamp, ID) cursor so concurrent deployments do
+// not shift earlier pages. A cursor must belong to the requested environment.
+func (s *SnapshotService) EventsPage(ctx context.Context, env environment.Environment, limit int, before *uuid.UUID) ([]SnapshotEvent, error) {
+	var beforeTime *time.Time
+	if before != nil {
+		var t time.Time
+		err := s.pool.QueryRow(ctx, `SELECT created_at FROM site_snapshot_events WHERE id=$1 AND environment=$2`, *before, env.String()).Scan(&t)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: unknown history cursor", ErrInvalid)
+		}
+		if err != nil {
+			return nil, err
+		}
+		beforeTime = &t
+	}
+	rows, err := s.pool.Query(ctx, `SELECT e.id,e.snapshot_id,s.sequence,s.name,e.environment,e.action,e.created_at
+		FROM site_snapshot_events e JOIN site_snapshots s ON s.id=e.snapshot_id
+		WHERE e.environment=$1 AND ($2::timestamptz IS NULL OR (e.created_at,e.id)<($2::timestamptz,$3::uuid))
+		ORDER BY e.created_at DESC,e.id DESC LIMIT $4`, env.String(), beforeTime, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SnapshotEvent{}
+	for rows.Next() {
+		var item SnapshotEvent
+		if err := rows.Scan(&item.ID, &item.SnapshotID, &item.Sequence, &item.Name, &item.Environment, &item.Action, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 type PinnedBuild struct {
@@ -117,19 +182,21 @@ type CollectionPage struct {
 	Total      int               `json:"total"`
 }
 
-// ContentFeature describes an editable feature from the active dev snapshot.
+// ContentFeature describes an editable feature pinned by the selected snapshot.
 // It deliberately exposes the schema shipped with the pinned build rather
 // than a mutable feature draft.
 type ContentFeature struct {
-	ID          uuid.UUID       `json:"id"`
-	Key         string          `json:"key"`
-	Name        string          `json:"name"`
-	Mode        string          `json:"mode"`
-	Version     string          `json:"version"`
-	BuildDigest string          `json:"buildDigest"`
-	Schema      json.RawMessage `json:"schema"`
-	Settings    json.RawMessage `json:"settingsSchema,omitempty"`
-	Submission  json.RawMessage `json:"submissionSchema,omitempty"`
+	ID            uuid.UUID       `json:"id"`
+	Key           string          `json:"key"`
+	Name          string          `json:"name"`
+	Category      string          `json:"category,omitempty"`
+	DraftRevision int64           `json:"draftRevision,omitempty"`
+	Mode          string          `json:"mode"`
+	Version       string          `json:"version"`
+	BuildDigest   string          `json:"buildDigest"`
+	Schema        json.RawMessage `json:"schema"`
+	Settings      json.RawMessage `json:"settingsSchema,omitempty"`
+	Submission    json.RawMessage `json:"submissionSchema,omitempty"`
 }
 
 type SnapshotService struct {
@@ -300,7 +367,7 @@ func (s *SnapshotService) List(ctx context.Context, limit int, beforeSequence *i
 	if limit < 1 || limit > 201 {
 		limit = 51
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id,sequence,name,digest,created_at FROM site_snapshots
+	rows, err := s.pool.Query(ctx, `SELECT id,parent_snapshot_id,sequence,name,digest,created_at FROM site_snapshots
 		WHERE ($1::bigint IS NULL OR sequence < $1)
 		ORDER BY sequence DESC LIMIT $2`, beforeSequence, limit)
 	if err != nil {
@@ -310,7 +377,7 @@ func (s *SnapshotService) List(ctx context.Context, limit int, beforeSequence *i
 	out := []SnapshotRecord{}
 	for rows.Next() {
 		var r SnapshotRecord
-		if err := rows.Scan(&r.ID, &r.Sequence, &r.Name, &r.Digest, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ParentID, &r.Sequence, &r.Name, &r.Digest, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -349,7 +416,7 @@ func (s *SnapshotService) setEnvironment(ctx context.Context, actor, snapshotID 
 		return SnapshotRecord{}, err
 	}
 	var record SnapshotRecord
-	if err := tx.QueryRow(ctx, `SELECT id,sequence,name,digest,created_at FROM site_snapshots WHERE id=$1`, snapshotID).Scan(&record.ID, &record.Sequence, &record.Name, &record.Digest, &record.CreatedAt); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT id,parent_snapshot_id,sequence,name,digest,created_at FROM site_snapshots WHERE id=$1`, snapshotID).Scan(&record.ID, &record.ParentID, &record.Sequence, &record.Name, &record.Digest, &record.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SnapshotRecord{}, ErrNotFound
 		}
@@ -642,7 +709,7 @@ func (s *SnapshotService) Runtime(ctx context.Context, env environment.Environme
 			var data []byte
 			var err error
 			if payload.FormatVersion >= 3 {
-				err = s.pool.QueryRow(ctx, `SELECT sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=TRUE ORDER BY e.created_at,e.id LIMIT 1`, record.ID, info.Manifest.Key).Scan(&data)
+				err = s.pool.QueryRow(ctx, `SELECT sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=TRUE ORDER BY sc.sort_order,sc.entry_id LIMIT 1`, record.ID, info.Manifest.Key).Scan(&data)
 			} else {
 				column := environmentContentColumn(env)
 				err = s.pool.QueryRow(ctx, `SELECT v.data FROM features f JOIN feature_entries e ON e.feature_id=f.id JOIN feature_entry_versions v ON v.id=e.`+column+` WHERE f.key=$1 AND e.single_slot=TRUE AND e.archived_at IS NULL ORDER BY e.created_at,e.id LIMIT 1`, info.Manifest.Key).Scan(&data)
@@ -658,7 +725,7 @@ func (s *SnapshotService) Runtime(ctx context.Context, env environment.Environme
 				var data []byte
 				var err error
 				if payload.FormatVersion >= 3 {
-					err = s.pool.QueryRow(ctx, `SELECT sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=TRUE ORDER BY e.created_at,e.id LIMIT 1`, record.ID, info.Manifest.Key).Scan(&data)
+					err = s.pool.QueryRow(ctx, `SELECT sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=TRUE ORDER BY sc.sort_order,sc.entry_id LIMIT 1`, record.ID, info.Manifest.Key).Scan(&data)
 				} else {
 					column := environmentContentColumn(env)
 					err = s.pool.QueryRow(ctx, `SELECT v.data FROM features f JOIN feature_entries e ON e.feature_id=f.id JOIN feature_entry_versions v ON v.id=e.`+column+` WHERE f.key=$1 AND e.single_slot=TRUE AND e.archived_at IS NULL ORDER BY e.created_at,e.id LIMIT 1`, info.Manifest.Key).Scan(&data)
@@ -770,7 +837,7 @@ func (s *SnapshotService) Collection(ctx context.Context, env environment.Enviro
 		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=FALSE AND ($3='' OR sc.data->>$3=$4)`, record.ID, key, field, value).Scan(&total); err != nil {
 			return CollectionPage{}, err
 		}
-		rows, err = s.pool.Query(ctx, `SELECT sc.entry_id,sc.version_id,e.sort_order,v.version,sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id JOIN feature_entry_versions v ON v.id=sc.version_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=FALSE AND ($3='' OR sc.data->>$3=$4) ORDER BY e.sort_order,e.created_at,e.id OFFSET $5 LIMIT $6`, record.ID, key, field, value, offset, limit)
+		rows, err = s.pool.Query(ctx, `SELECT sc.entry_id,sc.version_id,sc.sort_order,v.version,sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id JOIN feature_entry_versions v ON v.id=sc.version_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=FALSE AND ($3='' OR sc.data->>$3=$4) ORDER BY sc.sort_order,sc.entry_id OFFSET $5 LIMIT $6`, record.ID, key, field, value, offset, limit)
 	} else {
 		column := environmentContentColumn(env)
 		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM features f JOIN feature_entries e ON e.feature_id=f.id JOIN feature_entry_versions v ON v.id=e.`+column+` WHERE f.key=$1 AND e.single_slot=FALSE AND e.archived_at IS NULL AND ($2='' OR v.data->>$2=$3)`, key, field, value).Scan(&total); err != nil {
@@ -1048,13 +1115,13 @@ func (s *SnapshotService) ContentCatalog(ctx context.Context) ([]ContentFeature,
 			continue
 		}
 		var id uuid.UUID
-		if err := s.pool.QueryRow(ctx, `SELECT id FROM features WHERE key=$1 AND status='active'`, build.Key).Scan(&id); err != nil {
+		if err := s.pool.QueryRow(ctx, `SELECT id FROM features WHERE key=$1`, build.Key).Scan(&id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue
 			}
 			return nil, err
 		}
-		item := ContentFeature{ID: id, Key: build.Key, Name: build.Name, Mode: manifest.Content.Mode, Version: build.Version, BuildDigest: build.Digest, Schema: manifest.Content.Schema, Settings: manifest.Content.SettingsSchema}
+		item := ContentFeature{ID: id, Key: build.Key, Name: build.Name, Category: manifest.Category, Mode: manifest.Content.Mode, Version: build.Version, BuildDigest: build.Digest, Schema: manifest.Content.Schema, Settings: manifest.Content.SettingsSchema}
 		if submissionSchema := manifest.SubmissionSchema(); len(submissionSchema) > 0 {
 			item.Submission = submissionSchema
 		}
@@ -1075,7 +1142,7 @@ func manifestHasEditableContent(raw json.RawMessage) bool {
 }
 
 func (s *SnapshotService) findSnapshotRecord(ctx context.Context, snapshotID uuid.UUID, key, field, value string) (SnapshotContent, error) {
-	rows, err := s.pool.Query(ctx, `SELECT sc.entry_id,sc.version_id,e.sort_order,v.version,sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id JOIN feature_entry_versions v ON v.id=sc.version_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=FALSE AND ($3='' OR sc.data->>$3=$4) ORDER BY e.sort_order,e.created_at,e.id LIMIT 2`, snapshotID, key, field, value)
+	rows, err := s.pool.Query(ctx, `SELECT sc.entry_id,sc.version_id,sc.sort_order,v.version,sc.data FROM site_snapshot_content sc JOIN feature_entries e ON e.id=sc.entry_id JOIN feature_entry_versions v ON v.id=sc.version_id WHERE sc.snapshot_id=$1 AND sc.feature_key=$2 AND e.single_slot=FALSE AND ($3='' OR sc.data->>$3=$4) ORDER BY sc.sort_order,sc.entry_id LIMIT 2`, snapshotID, key, field, value)
 	if err != nil {
 		return SnapshotContent{}, err
 	}

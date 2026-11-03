@@ -36,6 +36,9 @@ import type {
   SiteMetadataState,
   SiteSnapshot,
   SiteSnapshotList,
+  SnapshotEvent,
+  SnapshotContentDraftInput,
+  SnapshotContentWorkspace,
   Submission,
   SubmissionFilters,
   SubmissionListResponse,
@@ -780,6 +783,27 @@ export const api = {
     contentFeatures(signal?: AbortSignal): Promise<{ items: ContentFeature[] }> {
       return requestItems<ContentFeature>(`${ADMIN_V2_ROOT}/content/features`, { signal });
     },
+    contentSnapshots(signal?: AbortSignal): Promise<{ items: SiteSnapshot[] }> {
+      return requestItems<SiteSnapshot>(`${ADMIN_V2_ROOT}/content/snapshots`, { signal });
+    },
+    snapshotContentFeatures(snapshotId: string, signal?: AbortSignal): Promise<{ items: ContentFeature[] }> {
+      return requestItems<ContentFeature>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/features`, { signal });
+    },
+    snapshotContentWorkspace(snapshotId: string, featureKey: string, signal?: AbortSignal): Promise<SnapshotContentWorkspace> {
+      return request<SnapshotContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/features/${encoded(featureKey)}`, { signal });
+    },
+    saveSnapshotContentWorkspace(snapshotId: string, featureKey: string, revision: number, items: SnapshotContentDraftInput[]): Promise<SnapshotContentWorkspace> {
+      return request<SnapshotContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/features/${encoded(featureKey)}`, {
+        method: "PUT",
+        body: { revision, items },
+      });
+    },
+    forkSnapshotFromContent(snapshotId: string, name = ""): Promise<SiteSnapshot> {
+      return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/fork`, {
+        method: "POST",
+        body: { name },
+      });
+    },
     featureBuilds(signal?: AbortSignal): Promise<{ items: FeatureBuild[] }> {
       return requestItems<FeatureBuild>(`${ADMIN_V2_ROOT}/feature-builds`, { signal });
     },
@@ -828,7 +852,14 @@ export const api = {
         items: arrayOrEmpty(snapshots?.items),
         active: snapshots?.active ?? { dev: "", prod: "" },
         activeSnapshots: snapshots?.activeSnapshots ?? { dev: null, prod: null },
+        nextCursor: snapshots?.nextCursor ?? undefined,
       };
+    },
+    async snapshotEvents(environment: Environment, before?: string, signal?: AbortSignal): Promise<{ items: SnapshotEvent[]; nextCursor?: string }> {
+      const result = await request<{ items: SnapshotEvent[]; nextCursor?: string | null }>(`${ADMIN_V2_ROOT}/site/snapshot-events`, {
+        signal, query: { environment, before },
+      });
+      return { items: arrayOrEmpty(result.items), nextCursor: result.nextCursor ?? undefined };
     },
     createSnapshot(name: string): Promise<SiteSnapshot> {
       return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots`, {
