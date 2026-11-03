@@ -196,11 +196,23 @@ async function publishContent(feature, data) {
       process.stdout.write(`content ${feature.key}/${entry.id} skipped; it has no draft to publish\n`)
       continue
     }
-    const published = await request(`/api/v1/admin/entries/${encodeURIComponent(entry.id)}/publish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision: entry.revision }),
-    })
+    // Publication blocks until required media renditions are ready; retry
+    // while the engine reports files as processing.
+    let published = null
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      try {
+        published = await request(`/api/v1/admin/entries/${encodeURIComponent(entry.id)}/publish`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revision: entry.revision }),
+        })
+        break
+      } catch (error) {
+        if (attempt === 23 || !/(ready|processing)/i.test(String(error.message))) throw error
+        process.stdout.write(`content ${feature.key}/${entry.id} waits for renditions; retrying in 5 s\n`)
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+      }
+    }
     process.stdout.write(`content ${feature.key}/${published.id} published to dev\n`)
   }
 }
@@ -238,11 +250,15 @@ async function main() {
 
   const allFeatures = await listAll('/api/v1/admin/features?status=active')
   const features = new Map(allFeatures.map((feature) => [feature.key, feature]))
+
+  const homeBackground = mediaID(media, home.background.imageSrc)
+  const catalogBackground = mediaID(media, catalog.background.imageSrc)
   const featureData = [
     ['header', replaceMediaRefs(legacySite.header, media)],
     ['hero', replaceMediaRefs(home.hero, media)],
     ['main-data', replaceMediaRefs(home.mainData, media)],
     ['footer', legacySite.footer],
+    ['form', form],
     ['not-found', {
       title: messages.notFoundTitle,
       description: messages.notFoundDescription,
@@ -250,24 +266,55 @@ async function main() {
       backToHomeTo: '/',
     }],
   ]
-  for (const [key, data] of featureData) {
-    const feature = features.get(key)
-    if (!feature) throw new Error(`Manifest import did not register feature ${key}.`)
-    await publishContent(feature, data)
+
+  const publishAllContent = async () => {
+    for (const [key, data] of featureData) {
+      const feature = features.get(key)
+      if (!feature) throw new Error(`Manifest import did not register feature ${key}.`)
+      await publishContent(feature, data)
+    }
+
+    const catalogFeature = features.get('catalog')
+    const catalogItems = (catalog.content.items ?? []).map((item) => ({
+      slug: String(item.id),
+      title: item.title,
+      price: item.price,
+      ...(item.imageSrc ? { imageSrc: mediaID(media, item.imageSrc) } : {}),
+      ...(item.description ? { description: item.description } : {}),
+    }))
+    await publishContent(catalogFeature, catalogItems)
+
+    // Collection settings live in a dedicated single-slot settings entry; the
+    // catalog build reads labels and footer actions from it, not arguments.
+    const settingsData = {
+      title: catalog.content.title,
+      breadcrumb: catalog.content.breadcrumb,
+      action: catalog.content.action,
+    }
+    let settingsEntry = null
+    try {
+      settingsEntry = await request(`/api/v2/admin/features/${encodeURIComponent(catalogFeature.id)}/settings`)
+    } catch {
+      settingsEntry = null
+    }
+    if (!settingsEntry) {
+      settingsEntry = await request(`/api/v2/admin/features/${encodeURIComponent(catalogFeature.id)}/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: settingsData }),
+      })
+      process.stdout.write(`catalog settings draft created (${settingsData.title ?? ''})\n`)
+    }
+    if (settingsEntry && !settingsEntry.dev_version_id && settingsEntry.draft_version_id) {
+      const published = await request(`/api/v1/admin/entries/${encodeURIComponent(settingsEntry.id)}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision: settingsEntry.revision }),
+      })
+      process.stdout.write(`catalog settings published to dev (v${published.dev_version_id ?? ''} → ${published.dev?.version ?? ''})\n`)
+    }
   }
 
-  const catalogFeature = features.get('catalog')
-  const catalogItems = (catalog.content.items ?? []).map((item) => ({
-    slug: String(item.id),
-    title: item.title,
-    price: item.price,
-    ...(item.imageSrc ? { imageSrc: mediaID(media, item.imageSrc) } : {}),
-    ...(item.description ? { description: item.description } : {}),
-  }))
-  await publishContent(catalogFeature, catalogItems)
-
-  const homeBackground = mediaID(media, home.background.imageSrc)
-  const catalogBackground = mediaID(media, catalog.background.imageSrc)
   const headerPlacement = () => placement(byKey.get('header'), 'header')
   const footerPlacement = () => placement(byKey.get('footer'), 'footer')
   const backgroundPlacement = (imageSrc) => placement(byKey.get('background'), 'background', { imageSrc: literal(imageSrc) })
@@ -278,21 +325,17 @@ async function main() {
     },
     {
       id: 'catalog', name: 'Каталог', kind: 'collection-list',
-      placements: [backgroundPlacement(catalogBackground), headerPlacement(), placement(byKey.get('catalog'), 'main', {
-        title: literal(catalog.content.title),
-        breadcrumb: literal(catalog.content.breadcrumb),
-        action: literal(catalog.content.action),
-      }, { detailLink: { routeId: 'product-detail', field: 'slug', pathTemplate: '/catalog/{slug}' } }), footerPlacement()],
+      placements: [backgroundPlacement(catalogBackground), headerPlacement(), placement(byKey.get('catalog'), 'main', {}, { detailLink: { routeId: 'product-detail', field: 'slug', pathTemplate: '/catalog/{slug}' } }), footerPlacement()],
     },
     {
       id: 'product-detail', name: 'Карточка товара', kind: 'detail',
       placements: [backgroundPlacement(catalogBackground), headerPlacement(), placement(byKey.get('catalog-detail'), 'main', {
-        slug: { source: 'route', routeArg: 'slug' },
+        slug: { source: 'path', pathArg: 'slug' },
       }, { collectionSource: { featureKey: 'catalog', version: byKey.get('catalog').version, field: 'slug', argument: 'slug' } }), footerPlacement()],
     },
     {
       id: 'form', name: 'Форма заявки', kind: 'page',
-      placements: [backgroundPlacement(homeBackground), headerPlacement(), placement(byKey.get('form'), 'main', Object.fromEntries(Object.entries(form).map(([key, value]) => [key, literal(value)]))), footerPlacement()],
+      placements: [backgroundPlacement(homeBackground), headerPlacement(), placement(byKey.get('form'), 'main'), footerPlacement()],
     },
     {
       id: 'not-found', name: 'Страница не найдена', kind: 'page',
@@ -324,12 +367,45 @@ async function main() {
     body: JSON.stringify({ revision: draft.revision, config }),
   })
   await migrateSiteMetadata(legacySite, home, media)
-  const snapshot = await request('/api/v2/admin/site/snapshots', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Перенос legacy сайта' }),
-  })
+
+  // Renditions for background images may still be processing; wait for them
+  // so that the first snapshot does not fail media readiness checks.
+  let snapshot = null
+  let snapshotsList = null
+  try {
+    snapshotsList = await listAll('/api/v2/admin/site/snapshots')
+  } catch {
+    snapshotsList = []
+  }
+  if (snapshotsList.length > 0) {
+    snapshot = snapshotsList[snapshotsList.length - 1]
+    process.stdout.write(`reusing dev snapshot #${snapshot.sequence}\n`)
+  }
+  for (let attempt = 0; attempt < 24 && !snapshot; attempt += 1) {
+    try {
+      snapshot = await request('/api/v2/admin/site/snapshots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Перенос legacy сайта' }),
+      })
+    } catch (error) {
+      if (attempt === 23 || !/(ready|processing)/i.test(String(error.message))) throw error
+      process.stdout.write('media renditions are processing; waiting 5 s\n')
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+    }
+  }
+  const activeDev = (await request('/api/v2/admin/site/snapshots')).activeSnapshots?.dev
+  if (!activeDev || activeDev.id !== snapshot.id) {
+    await request(`/api/v2/admin/site/snapshots/${encodeURIComponent(snapshot.id)}/deploy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ environment: 'dev' }),
+    })
+  }
   process.stdout.write(`site draft r${saved.revision} saved; dev snapshot #${snapshot.sequence} (${snapshot.id}) published\n`)
+  // Listing and publishing entries needs an active site snapshot, so content
+  // migration only runs after the snapshot exists.
+  await publishAllContent()
   process.stdout.write('The migration publishes to dev only. Promote this same snapshot to prod from /admin/site after review.\n')
 }
 
