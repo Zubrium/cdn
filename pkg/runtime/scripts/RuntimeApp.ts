@@ -7,10 +7,29 @@ import {
   markDocumentReady,
   normalizePlacementRoots,
   renderState,
+  setReady,
   setHeadMetadata,
 } from "./document-dom";
 import { identityFor, mountPlacement, routeFor, updatePlacement } from "./feature-lifecycle";
 import type { Composition, MountedFeature } from "./runtime-types";
+
+function hasVisibleFixedDescendant(root: HTMLElement): boolean {
+  // A feature may mark server-rendered viewport UI before its stylesheet has
+  // loaded in the browser. Do not defer consent dialogs, cookie notices, or
+  // other declared overlays while waiting for computed positioning to settle.
+  if (root.matches("[data-engine-runtime-overlay]") || root.querySelector("[data-engine-runtime-overlay]")) {
+    return true;
+  }
+  for (const candidate of [root, ...root.querySelectorAll<HTMLElement>("*")]) {
+    const style = window.getComputedStyle(candidate);
+    if (style.position !== "fixed" || style.display === "none" || style.visibility === "hidden") continue;
+    const bounds = candidate.getBoundingClientRect();
+    if (bounds.width > 0 && bounds.height > 0
+      && bounds.bottom > 0 && bounds.top < window.innerHeight
+      && bounds.right > 0 && bounds.left < window.innerWidth) return true;
+  }
+  return false;
+}
 
 export function mountRuntime(root: HTMLElement): () => void {
   const bootstrap = readRuntimeBootstrap();
@@ -58,12 +77,13 @@ export function mountRuntime(root: HTMLElement): () => void {
   const startPlacement = async (
     placement: Composition["placements"][number],
     placementRoot: HTMLDivElement,
+    hasPrerenderedMarkup: boolean,
     run: number,
     route: ReturnType<typeof routeFor>,
     systemAssets: Composition["systemAssets"],
   ) => {
     const controller = new AbortController();
-    const promise = mountPlacement(placement, placementRoot, controller, route, systemAssets, (error) => reportError(run, error));
+    const promise = mountPlacement(placement, placementRoot, hasPrerenderedMarkup, controller, route, systemAssets, (error) => reportError(run, error));
     const request = { run, controller, promise };
     pendingMounts.set(placement.id, request);
     const item = await promise;
@@ -81,6 +101,7 @@ export function mountRuntime(root: HTMLElement): () => void {
     if (disposed) return;
     const run = expectedGeneration ?? generation + 1;
     generation = run;
+    delete root.dataset.engineRuntimeInitialized;
     deferredObserver?.disconnect();
     deferredObserver = null;
     deferredPlacementIds.clear();
@@ -108,9 +129,15 @@ export function mountRuntime(root: HTMLElement): () => void {
       mounted.delete(id);
     }
     const route = routeFor(path, search, next);
-    const deferredRoots = new Map<string, { placement: Composition["placements"][number]; root: HTMLDivElement }>();
+    const deferredRoots = new Map<string, { placement: Composition["placements"][number]; root: HTMLDivElement; hasPrerenderedMarkup: boolean }>();
     const eagerTasks: Promise<void>[] = [];
-    const canDeferOffscreen = deferOffscreen && typeof IntersectionObserver !== "undefined";
+    // Only defer when this initial document contains the worker's completed
+    // feature output. A cache miss/fallback shell has empty placement roots;
+    // deferring those zero-sized boxes would never trigger the observer and
+    // would leave the page blank.
+    const hasServerPrerender = deferOffscreen
+      && [...roots.values()].some((placementRoot) => placementRoot.hasAttribute("data-runtime-feature-ready"));
+    const canDeferOffscreen = hasServerPrerender && typeof IntersectionObserver !== "undefined";
     for (const placement of next.placements) {
       const placementRoot = roots.get(placement.id)!;
       configurePlacementRoot(placementRoot, placement);
@@ -126,17 +153,31 @@ export function mountRuntime(root: HTMLElement): () => void {
         eagerTasks.push(updatePlacement(current, placement, route, next.systemAssets, (error) => reportError(run, error)));
         continue;
       }
+      // The server-prerendered #root is also the live placement tree, so its
+      // boxes provide the real initial viewport geometry before mounting.
+      const hasPrerenderedMarkup = deferOffscreen
+        && placementRoot.childNodes.length > 0
+        && placementRoot.hasAttribute("data-runtime-feature-ready");
+      setReady(placementRoot, false);
       const bounds = placementRoot.getBoundingClientRect();
-      const isNearViewport = bounds.bottom > -250 && bounds.top < window.innerHeight + 250;
-      if (canDeferOffscreen && !isNearViewport) {
+      const isNearViewport = (bounds.bottom > 0 && bounds.top < window.innerHeight)
+        || hasVisibleFixedDescendant(placementRoot);
+      const hasLayoutBox = bounds.width > 0 && bounds.height > 0;
+      if (canDeferOffscreen && hasLayoutBox && !isNearViewport) {
         deferredPlacementIds.add(placement.id);
-        deferredRoots.set(placement.id, { placement, root: placementRoot });
+        deferredRoots.set(placement.id, { placement, root: placementRoot, hasPrerenderedMarkup });
         continue;
       }
-      eagerTasks.push(startPlacement(placement, placementRoot, run, route, next.systemAssets));
+      eagerTasks.push(startPlacement(placement, placementRoot, hasPrerenderedMarkup, run, route, next.systemAssets));
     }
     await Promise.all(eagerTasks);
     if (run !== generation || disposed) return;
+    const allReady = mounted.size === next.placements.length
+      && deferredPlacementIds.size === 0
+      && pendingMounts.size === 0
+      && [...mounted.values()].every((item) => item.ready && !item.failed)
+      && !root.querySelector(".runtime-loading, .runtime-feature-error");
+    markDocumentReady(root, run, () => generation, allReady, deferOffscreen);
     if (deferredRoots.size > 0) {
       deferredObserver = new IntersectionObserver((entries) => {
         if (run !== generation || disposed) return;
@@ -149,17 +190,12 @@ export function mountRuntime(root: HTMLElement): () => void {
           deferredRoots.delete(id);
           deferredPlacementIds.delete(id);
           deferredObserver?.unobserve(entry.target);
-          void startPlacement(deferred.placement, deferred.root, run, route, next.systemAssets);
+          void startPlacement(deferred.placement, deferred.root, deferred.hasPrerenderedMarkup, run, route, next.systemAssets);
         }
-      }, { rootMargin: "250px 0px" });
+      }, { rootMargin: "0px" });
       for (const { root: placementRoot } of deferredRoots.values()) deferredObserver.observe(placementRoot);
     }
-    const allReady = mounted.size === next.placements.length
-      && deferredPlacementIds.size === 0
-      && pendingMounts.size === 0
-      && [...mounted.values()].every((item) => item.ready && !item.failed)
-      && !root.querySelector(".runtime-loading, .runtime-feature-error");
-    markDocumentReady(root, run, () => generation, allReady, deferOffscreen);
+    root.dataset.engineRuntimeInitialized = "true";
   };
 
   const loadRoute = async () => {

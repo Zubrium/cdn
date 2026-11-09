@@ -192,7 +192,7 @@ try {
   // accepted and cached.
   await page.waitForFunction(() => {
     const root = document.getElementById("root");
-    return Boolean(root && !root.hidden && !document.getElementById("prerender-root"));
+    return Boolean(root && !root.hidden && root.dataset.engineRuntimeInitialized === "true");
   }, { timeout: input.timeoutMs });
   await page.evaluate(async () => {
     const roots = [...document.querySelectorAll("[data-engine-placement]")];
@@ -348,14 +348,11 @@ try {
       // response retains its readable static fallback.
       document.getElementById("engine-static-feature-fallback")?.remove();
       // Keep the populated document tree under #root in the serialized
-      // response. The runtime renames it only after JS starts so no-JS clients
-      // and crawlers retain the canonical root and server-rendered markup.
+      // response. The runtime mounts this same root after JS starts so no-JS
+      // clients and crawlers retain the canonical document and landmarks.
       root.querySelectorAll("form").forEach((form) => { form.setAttribute("inert", ""); });
-      const live = document.createElement("div");
-      live.id = "engine-live-root";
-      live.hidden = true;
-      root.after(live);
       document.documentElement.removeAttribute("data-engine-ready");
+      root.removeAttribute("data-engine-runtime-initialized");
     });
     const html = `<!DOCTYPE html>\n${await page.locator("html").evaluate((element) => element.outerHTML)}`;
     if (Buffer.byteLength(html, "utf8") > input.maxHTMLBytes) throw new Error("HTML size limit exceeded");

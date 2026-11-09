@@ -608,7 +608,7 @@ try {
     if (route === "/missing-vitasil-page" ? response.status() !== 404 : !response.ok()) throw new Error(route + ": unexpected HTTP status " + response.status());
     await page.waitForFunction(() => {
       const root = document.getElementById("root");
-      return Boolean(root && !root.hidden && !document.getElementById("prerender-root"));
+	      return Boolean(root && !root.hidden && root.dataset.engineRuntimeInitialized === "true");
     }, { timeout: 30000 });
     const initialHydration = await page.evaluate(() => [...document.querySelectorAll("[data-engine-placement]")]
       .map(root => ({ id: root.getAttribute("data-engine-placement"), ready: root.hasAttribute("data-runtime-feature-ready") })));

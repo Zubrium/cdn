@@ -1,5 +1,5 @@
 import * as React from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import type { LegacyFeatureInstance, LegacyFeatureProps } from "./runtime-types";
 
 type LegacyFeatureModule = { default: React.ComponentType<LegacyFeatureProps> };
@@ -22,7 +22,11 @@ export async function mountLegacyReact(
   }
 
   const Feature = featureModule.default;
-  const root = createRoot(host);
+  const hasPrerenderedMarkup = host.childNodes.length > 0;
+  if (hasPrerenderedMarkup) {
+    host.querySelectorAll("form[inert]").forEach((form) => form.removeAttribute("inert"));
+  }
+  let root: ReturnType<typeof createRoot> | undefined;
   let disposed = false;
   let pending: { resolve: () => void; reject: (error: unknown) => void } | undefined;
 
@@ -52,7 +56,7 @@ export async function mountLegacyReact(
     return null;
   }
 
-  function render(props: LegacyFeatureProps): Promise<void> {
+  function render(props: LegacyFeatureProps, hydrateInitial = false): Promise<void> {
     if (disposed) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       pending?.resolve();
@@ -62,8 +66,7 @@ export async function mountLegacyReact(
         pending = undefined;
         resolve();
       };
-      root.render(
-        React.createElement(
+      const tree = React.createElement(
           FeatureErrorBoundary,
           null,
           React.createElement(
@@ -72,12 +75,21 @@ export async function mountLegacyReact(
             React.createElement(Feature, props),
             React.createElement(CommitSignal, { onCommit: commit }),
           ),
-        ),
-      );
+        );
+      if (hydrateInitial && !root) {
+        root = hydrateRoot(host, tree, {
+          onRecoverableError() {
+            console.error("Legacy feature hydration recovered from a rendering mismatch");
+          },
+        });
+      } else {
+        root ??= createRoot(host);
+        root.render(tree);
+      }
     });
   }
 
-  const ready = render(initialProps);
+  const ready = render(initialProps, hasPrerenderedMarkup);
   return {
     ready,
     update: render,
@@ -86,7 +98,7 @@ export async function mountLegacyReact(
       disposed = true;
       pending?.resolve();
       pending = undefined;
-      root.unmount();
+      root?.unmount();
     },
   };
 }

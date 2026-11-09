@@ -163,7 +163,7 @@ func TestPrerenderWorkerRendersAndRejectsSideEffects(t *testing.T) {
 		}
 		if r.URL.Path == "/assets/fixture.js" {
 			w.Header().Set("Content-Type", "text/javascript")
-			_, _ = w.Write([]byte(`Promise.all([fetch('/api/v2/runtime?token=private-query-secret').then(response=>response.json()),fetch('/api/v2/content/private-record-id/records?token=private-record-query-secret').then(response=>response.json())]).then(()=>{document.getElementById('root').innerHTML='<main data-snapshot="fixture" data-content-revision="7"><h1>Published content</h1><form><button>Send</button></form></main>';document.documentElement.dataset.engineReady='true';});fetch('/favicon.svg').catch(()=>{});if(location.search.includes('unsafe')){fetch('/api/v2/forms/test/submissions',{method:'POST'}).catch(()=>{});fetch('/api/v2/admin/private').catch(()=>{});}`))
+			_, _ = w.Write([]byte(`Promise.all([fetch('/api/v2/runtime?token=private-query-secret').then(response=>response.json()),fetch('/api/v2/content/private-record-id/records?token=private-record-query-secret').then(response=>response.json())]).then(()=>{document.getElementById('root').innerHTML='<main data-snapshot="fixture" data-content-revision="7"><h1>Published content</h1><form><button>Send</button></form></main>';document.getElementById('root').dataset.engineRuntimeInitialized='true';document.documentElement.dataset.engineReady='true';});fetch('/favicon.svg').catch(()=>{});if(location.search.includes('unsafe')){fetch('/api/v2/forms/test/submissions',{method:'POST'}).catch(()=>{});fetch('/api/v2/admin/private').catch(()=>{});}`))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
@@ -181,10 +181,13 @@ func TestPrerenderWorkerRendersAndRejectsSideEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"Published content", `id="root"`, `id="engine-live-root" hidden=""`, `inert=""`} {
+	for _, text := range []string{"Published content", `id="root"`, `inert=""`} {
 		if !strings.Contains(string(output), text) {
 			t.Fatalf("missing %q: %s", text, output)
 		}
+	}
+	if strings.Contains(string(output), `id="engine-live-root"`) {
+		t.Fatalf("the prerendered document must not contain a duplicate hidden mount root: %s", output)
 	}
 	if strings.Contains(string(output), `id="prerender-root"`) {
 		t.Fatalf("the HTTP document must keep prerendered content under #root until JavaScript starts: %s", output)

@@ -55,6 +55,7 @@ export function contextKeyFor(placement: RuntimePlacement, route: FeatureRouteCo
 export async function mountPlacement(
   placement: RuntimePlacement,
   root: HTMLDivElement,
+  hasPrerenderedMarkup: boolean,
   controller: AbortController,
   route: FeatureRouteContext,
   systemAssets: Composition["systemAssets"],
@@ -79,6 +80,11 @@ export async function mountPlacement(
     if (controller.signal.aborted) return mounted;
     const abi = placement.runtimeAbi ?? "legacy-react-v1";
     if (abi === "static-html-v1") {
+      if (hasPrerenderedMarkup && root.childNodes.length > 0) {
+        mounted.ready = true;
+        setReady(root, true);
+        return mounted;
+      }
       const response = await fetch(placement.entryUrl, { headers: { Accept: "text/html" }, signal: controller.signal });
       if (!response.ok) throw new Error(`HTML feature request failed (${response.status})`);
       root.replaceChildren(parseStaticHTMLFragment(await response.text(), placement.entryUrl));

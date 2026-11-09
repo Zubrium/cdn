@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 const snapshotId = "11111111-1111-1111-1111-111111111111";
 const server = http.createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
-  response.end(`<!DOCTYPE html><html data-engine-ready="true"><body><div id="root"><main data-snapshot="${snapshotId}" data-content-revision="1"><h1>Пререндер работает</h1><form><button>Отправить</button></form></main></div></body></html>`);
+  response.end(`<!DOCTYPE html><html data-engine-ready="true"><body><div id="root" data-engine-runtime-initialized="true"><main data-snapshot="${snapshotId}" data-content-revision="1"><h1>Пререндер работает</h1><form><button>Отправить</button></form></main></div></body></html>`);
 });
 await new Promise((resolve) => server.listen(39091, "127.0.0.1", resolve));
 const child = spawn("/usr/bin/node", ["/app/scripts/prerender-worker.mjs"]);
@@ -22,8 +22,8 @@ child.stdin.end(JSON.stringify({
 }));
 const code = await new Promise((resolve) => child.on("close", resolve));
 server.close();
-if (code || !output.includes("Пререндер работает") || !output.includes('inert=""') || !output.includes('id="root"') || !output.includes('id="engine-live-root" hidden=""') || output.includes("prerender-root")) {
+if (code || !output.includes("Пререндер работает") || !output.includes('inert=""') || !output.includes('id="root"') || output.includes("engine-live-root") || output.includes("prerender-root")) {
   console.error(errors || output.slice(0, 1500));
   process.exit(1);
 }
-console.log("Worker produced static HTML and an inert form with Chromium sandbox enabled");
+console.log("Worker produced one canonical static HTML root with an inert form and Chromium sandbox enabled");

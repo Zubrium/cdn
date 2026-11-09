@@ -255,13 +255,12 @@ try {
     return {
       rootCount: document.querySelectorAll("#root").length,
       rootHasSnapshot: Boolean(root?.hasAttribute("data-snapshot")),
-      liveMountHidden: document.getElementById("engine-live-root")?.hidden === true,
-      prerenderRootCount: document.querySelectorAll("#prerender-root").length,
+      duplicateMountRootCount: document.querySelectorAll("#engine-live-root, #prerender-root").length,
       mainCount: document.querySelectorAll("main").length,
       placementsUnderRoot: placements.every((placement) => placement.parentElement === (placement.getAttribute("data-engine-slot") === "main" ? main : root)),
     };
   });
-  if (noJsStructure.rootCount !== 1 || !noJsStructure.rootHasSnapshot || !noJsStructure.liveMountHidden || noJsStructure.prerenderRootCount !== 0 || noJsStructure.mainCount !== 1 || !noJsStructure.placementsUnderRoot) {
+  if (noJsStructure.rootCount !== 1 || !noJsStructure.rootHasSnapshot || noJsStructure.duplicateMountRootCount !== 0 || noJsStructure.mainCount !== 1 || !noJsStructure.placementsUnderRoot) {
     throw new Error("no-JS response does not preserve the populated canonical #root: " + JSON.stringify(noJsStructure));
   }
   await noJs.close();

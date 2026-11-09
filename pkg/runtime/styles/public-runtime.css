@@ -16,3 +16,12 @@ body { min-height: 100vh; }
 .runtime-state button { margin-top: 1.5rem; padding: .75rem 1.25rem; border: 1px solid currentColor; border-radius: .5rem; color: inherit; background: transparent; font: inherit; cursor: pointer; }
 .runtime-state button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
 @media (prefers-color-scheme: dark) { .runtime-state { background: #141414; color: #eee; } .runtime-state__eyebrow { color: #aaa; } }
+#root:not([data-engine-runtime-initialized="true"]) [data-engine-runtime-overlay] {
+  visibility: visible;
+}
+@media (scripting: enabled) {
+  #root:not([data-engine-runtime-initialized="true"]) [data-engine-runtime-overlay] {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
