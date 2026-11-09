@@ -2,16 +2,40 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Stable public runtime bundle embedded in the engine. Feature artifacts are
-// fetched from the engine's immutable asset endpoint and share this React.
+const frontendRoot = fileURLToPath(new URL(".", import.meta.url));
+const runtimeRoot = fileURLToPath(new URL("../pkg/runtime/scripts/", import.meta.url));
+
 export default defineConfig({
+  root: frontendRoot,
   base: "/",
+  publicDir: fileURLToPath(new URL("../pkg/runtime/assets/", import.meta.url)),
   plugins: [react()],
-  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
+  resolve: {
+    alias: [
+      { find: /^@\//, replacement: `${runtimeRoot}/` },
+      { find: /^react$/, replacement: fileURLToPath(new URL("./node_modules/react/index.js", import.meta.url)) },
+      { find: /^react\/(.*)$/, replacement: `${fileURLToPath(new URL("./node_modules/react/", import.meta.url))}$1` },
+      { find: /^react-dom\/(.*)$/, replacement: `${fileURLToPath(new URL("./node_modules/react-dom/", import.meta.url))}$1` },
+    ],
+  },
   build: {
-    outDir: "../pkg/runtime/dist",
+    outDir: fileURLToPath(new URL("../pkg/runtime/dist/", import.meta.url)),
     emptyOutDir: true,
-    rollupOptions: { input: { index: fileURLToPath(new URL("./index.html", import.meta.url)) } },
+    lib: {
+      entry: fileURLToPath(new URL("../pkg/runtime/scripts/main.ts", import.meta.url)),
+      formats: ["es"],
+      fileName: () => "assets/public-runtime-[hash].js",
+      cssFileName: "public-runtime",
+    },
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/public-runtime-[hash].js",
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: (asset) => asset.name?.endsWith(".css")
+          ? "assets/public-runtime-[hash][extname]"
+          : "assets/[name]-[hash][extname]",
+      },
+    },
     sourcemap: false,
   },
 });

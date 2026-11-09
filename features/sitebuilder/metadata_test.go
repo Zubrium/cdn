@@ -20,7 +20,11 @@ func TestSiteMetadataForPageUsesGlobalDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("unexpected global metadata: %#v", global)
 	}
 	page := metadata.ForPage("catalog")
-	if page.Title != "Catalog" || page.Description != "Products" || page.OGTitle != "VitaSil" || page.OGImageURL != "/media/global-image" {
+	if page.Title != "Catalog" || page.Description != "Products" || page.OGTitle != "Catalog" || page.OGDescription != "Products" || page.OGImageURL != "/media/global-image" {
 		t.Fatalf("unexpected page metadata: %#v", page)
+	}
+	metadata.OGTitle = "Explicit shared title"
+	if metadata.ForPage("catalog").OGTitle != "Explicit shared title" {
+		t.Fatal("explicit global OG title should be inherited")
 	}
 }

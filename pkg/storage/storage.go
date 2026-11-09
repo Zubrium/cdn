@@ -4,6 +4,7 @@ package storage
 import (
 	"context"
 	"io"
+	"time"
 )
 
 type PutOptions struct {
@@ -19,4 +20,24 @@ type ObjectStore interface {
 	Delete(ctx context.Context, key string) error
 	PublicURL(key string) (string, error)
 	Ready(ctx context.Context) error
+}
+
+// RangeStore allows large object delivery without downloading a prefix.
+// ObjectStore-only implementations can still stream originals with a bounded
+// memory fallback; production S3 implements this interface.
+type RangeStore interface {
+	Stat(context.Context, string) (ObjectInfo, error)
+	GetRange(context.Context, string, int64, int64) (io.ReadCloser, error)
+}
+
+type ObjectInfo struct {
+	Size        int64
+	ContentType string
+}
+
+// ComposeStore assembles already verified parts in storage without requiring
+// a second full local copy. CleanupMultipart reclaims interrupted compositions.
+type ComposeStore interface {
+	Compose(context.Context, string, []string, PutOptions) error
+	CleanupMultipart(context.Context, time.Time) error
 }

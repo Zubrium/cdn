@@ -11,39 +11,39 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"websiteengine/features/auth"
-	"websiteengine/features/content"
 	"websiteengine/features/features"
 	"websiteengine/features/forms"
 	"websiteengine/features/media"
 	"websiteengine/features/overview"
-	"websiteengine/features/releases"
 	"websiteengine/features/settings"
 	"websiteengine/features/sitebuilder"
 	"websiteengine/migrations"
+	"websiteengine/pkg/config"
 	"websiteengine/pkg/environment"
 	"websiteengine/pkg/postgres"
-	"websiteengine/pkg/secrets"
+	publicruntime "websiteengine/pkg/runtime"
 	"websiteengine/pkg/storage"
 	httptransport "websiteengine/presentation/http"
 	hauth "websiteengine/presentation/http/handlers/auth"
-	hcontent "websiteengine/presentation/http/handlers/content"
 	hfeatures "websiteengine/presentation/http/handlers/features"
 	hforms "websiteengine/presentation/http/handlers/forms"
 	hmedia "websiteengine/presentation/http/handlers/media"
 	hoverview "websiteengine/presentation/http/handlers/overview"
-	hpublication "websiteengine/presentation/http/handlers/publication"
-	hreleases "websiteengine/presentation/http/handlers/releases"
 	hsettings "websiteengine/presentation/http/handlers/settings"
 	hsitebuilder "websiteengine/presentation/http/handlers/sitebuilder"
 )
@@ -56,12 +56,13 @@ func TestMain(m *testing.M) {
 }
 
 type fakeStore struct {
-	objects map[string][]byte
-	types   map[string]string
+	objects       map[string][]byte
+	types         map[string]string
+	cacheControls map[string]string
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{objects: map[string][]byte{}, types: map[string]string{}}
+	return &fakeStore{objects: map[string][]byte{}, types: map[string]string{}, cacheControls: map[string]string{}}
 }
 
 func (f *fakeStore) Put(_ context.Context, key string, body io.Reader, _ int64, opts storage.PutOptions) error {
@@ -71,6 +72,7 @@ func (f *fakeStore) Put(_ context.Context, key string, body io.Reader, _ int64, 
 	}
 	f.objects[key] = data
 	f.types[key] = opts.ContentType
+	f.cacheControls[key] = opts.CacheControl
 	return nil
 }
 
@@ -94,40 +96,52 @@ func (f *fakeStore) PublicURL(key string) (string, error) {
 func (f *fakeStore) Ready(context.Context) error { return nil }
 
 type testEnv struct {
-	t          *testing.T
-	pool       *pgxpool.Pool
-	server     *httptest.Server
-	devServer  *httptest.Server
-	prodServer *httptest.Server
-	adminToken string
-	store      *fakeStore
-	media      *media.Service
-	processor  *integrationRenditionProcessor
-	releases   *releases.Service
-	content    *content.Service
-	forms      *forms.Service
-	snapshots  *sitebuilder.SnapshotService
+	t           *testing.T
+	pool        *pgxpool.Pool
+	server      *httptest.Server
+	devServer   *httptest.Server
+	prodServer  *httptest.Server
+	adminToken  string
+	devBranch   environment.Environment
+	prodBranch  environment.Environment
+	store       *fakeStore
+	objectStore storage.ObjectStore
+	media       *media.Service
+	processor   *integrationRenditionProcessor
+	forms       *forms.Service
+	snapshots   *sitebuilder.SnapshotService
+	routerDeps  httptransport.Dependencies
 }
 
 func newTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWithObjectStore(t, nil)
+}
+
+// newTestEnvWithObjectStore runs the ordinary disposable integration setup
+// against an injected storage implementation. The fake remains available on
+// testEnv.store for existing unit-style assertions; end-to-end callers should
+// use objectStore so the same flow can be exercised against MinIO.
+func newTestEnvWithObjectStore(t *testing.T, objectStore storage.ObjectStore) *testEnv {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
 	}
+	requireDisposableIntegrationDatabase(t, dbURL)
 	ctx := context.Background()
-	pool, err := postgres.Open(ctx, dbURL)
+	pool, err := postgres.Open(ctx, dbURL, integrationPoolSettings())
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
+	if err := postgres.Migrate(ctx, pool, migrations.FS, time.Minute); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE site_html_shells, site_metadata_state, site_snapshot_content, site_snapshot_events, site_snapshots,
-		site_draft_config, feature_builds, media_objects, form_submissions, feature_entry_versions,
-		feature_entries, feature_versions, features, access_tokens, content_publication_events,
-		release_events, site_releases, site_environments, release_sources, site_settings
+	if _, err := pool.Exec(ctx, `TRUNCATE snapshot_model_content_publications, site_snapshot_model_workspaces,
+		site_snapshot_events, site_snapshots, feature_builds, media_renditions, media_objects,
+		file_upload_parts, file_upload_sessions, file_object_deletions, form_submissions,
+		feature_versions, features, access_tokens,
+		site_environments, site_settings
 		RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -139,32 +153,67 @@ func newTestEnv(t *testing.T) *testEnv {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authRepo := auth.NewRepository(pool)
 	authService := auth.NewService(authRepo)
+	if err := authService.SetListLimit(50); err != nil {
+		t.Fatalf("set token list limit: %v", err)
+	}
 	if created, err := authService.Bootstrap(ctx, testAdminToken); err != nil || !created {
 		t.Fatalf("bootstrap admin: created=%v err=%v", created, err)
 	}
 	featureRepo := features.NewRepository(pool)
 	featureService := features.NewService(featureRepo)
-	contentRepo := content.NewRepository(pool)
-	contentService := content.NewService(contentRepo, featureRepo)
 	formsRepo := forms.NewRepository(pool)
 	formsService := forms.NewService(formsRepo, featureRepo)
-	store := newFakeStore()
-	buildService := sitebuilder.NewBuildService(pool, store, 8<<20)
+	if err := formsService.SetLimits(50, 10000); err != nil {
+		t.Fatalf("set submission limits: %v", err)
+	}
+	fake := newFakeStore()
+	if objectStore == nil {
+		objectStore = fake
+	}
+	buildService := configuredBuildService(t, pool, objectStore, 8<<20)
 	snapshotService := sitebuilder.NewSnapshotService(pool, buildService)
+	if err := snapshotService.SetDesignPreviewTTL(20 * time.Minute); err != nil {
+		t.Fatalf("set design preview TTL: %v", err)
+	}
+	// Lighthouse opt-in uses a crawlable disposable branch with explicit
+	// fixture metadata. Ordinary integration runs keep both branches private.
+	indexable := os.Getenv("LIGHTHOUSE_BIN") != "" || os.Getenv("VITASIL_BROWSER_INDEXABLE") == "1"
+	branches, err := snapshotService.RegisterBranches(ctx, []config.BranchConfig{
+		{Name: "Integration Development", HTTPAddr: ":18081", CORSOrigins: []string{"https://site.example"}, Indexable: &indexable},
+		{Name: "Integration Production", HTTPAddr: ":18082", CORSOrigins: []string{"https://site.example"}, Indexable: &indexable},
+	})
+	if err != nil || len(branches) != 2 {
+		t.Fatalf("register integration branches: branches=%v err=%v", branches, err)
+	}
+	devBranch := environment.Environment(branches[0].ID.String())
+	prodBranch := environment.Environment(branches[1].ID.String())
+	formsService.SetSnapshotSchemaProvider(snapshotService)
 	mediaRepo := media.NewRepository(pool)
 	processor := &integrationRenditionProcessor{}
-	mediaService := media.NewServiceWithProcessor(mediaRepo, store, 20<<20, processor)
+	mediaService := media.NewServiceWithProcessor(mediaRepo, objectStore, 20<<20, processor)
+	configureMediaRenditionWorker(t, mediaService)
 	snapshotService.SetMediaService(mediaService)
 	mediaHandler := hmedia.NewHandler(mediaService, log, 20<<20)
-	mediaHandler.SetProfileProvider(snapshotService)
-
-	releaseRepo := releases.NewRepository(pool)
-	box, err := secrets.New(strings.Repeat("k", 32))
-	if err != nil {
-		t.Fatalf("release master key: %v", err)
+	if err := mediaHandler.SetRedirectCacheTTL(time.Hour); err != nil {
+		t.Fatal(err)
 	}
-	releaseService := releases.NewService(releaseRepo, store, box, 8<<20)
-	releaseHandler := hreleases.NewHandler(releaseService, log, 8<<20)
+	if err := mediaHandler.SetPagination(20, 50); err != nil {
+		t.Fatalf("set media pagination: %v", err)
+	}
+	mediaHandler.SetProfileProvider(snapshotService)
+	featureHandler := hfeatures.NewHandler(featureService, log)
+	if err := featureHandler.SetPagination(20, 50); err != nil {
+		t.Fatalf("set feature pagination: %v", err)
+	}
+	formsHandler := hforms.NewHandler(formsService, log, 1<<20)
+	if err := formsHandler.SetLimits(20, 50); err != nil {
+		t.Fatalf("set submission pagination: %v", err)
+	}
+	snapshotHandler := hsitebuilder.NewSnapshotsHandler(snapshotService, formsService, log, 1<<20)
+	if err := snapshotHandler.SetPagination(20, 50); err != nil {
+		t.Fatalf("set snapshot pagination: %v", err)
+	}
+
 	settingsService := settings.NewService(settings.Config{
 		MaxJSONBytes:         1 << 20,
 		MaxUploadBytes:       20 << 20,
@@ -175,34 +224,149 @@ func newTestEnv(t *testing.T) *testEnv {
 	})
 
 	deps := httptransport.Dependencies{
+		BranchIndexable: map[environment.Environment]bool{devBranch: indexable, prodBranch: indexable},
+		PublicCORSByBranch: map[environment.Environment][]string{
+			devBranch: {"https://site.example"}, prodBranch: {"https://site.example"},
+		},
 		Log: log, AuthService: authService,
-		Auth:              hauth.NewHandler(authService, log, 1<<20),
-		Features:          hfeatures.NewHandler(featureService, log, 1<<20),
-		Content:           hcontent.NewHandler(contentService, log, 1<<20),
-		Forms:             hforms.NewHandler(formsService, log, 1<<20),
-		Media:             mediaHandler,
-		Overview:          hoverview.NewHandler(overview.NewRepository(pool), log),
-		Releases:          releaseHandler,
-		PublicationEvents: hpublication.NewHandler(pool, log),
-		Settings:          hsettings.NewHandler(settingsService),
-		FeatureBuilds:     hsitebuilder.NewBuildsHandler(buildService, log, 8<<20),
-		SiteSnapshots:     hsitebuilder.NewSnapshotsHandler(snapshotService, formsService, log, 1<<20),
-		CorsResolver:      releaseService.Cors(),
-		Health:            func(context.Context) error { return nil },
-		MaxJSONBytes:      1 << 20,
-		FormRateLimit:     10000,
-		FormRateWindow:    time.Minute,
-		PublicCORSOrigins: []string{"https://site.example"},
+		Auth:                  hauth.NewHandler(authService, log, 1<<20),
+		Features:              featureHandler,
+		Forms:                 formsHandler,
+		Media:                 mediaHandler,
+		Overview:              hoverview.NewHandler(overview.NewRepository(pool), log),
+		Settings:              hsettings.NewHandler(settingsService),
+		FeatureBuilds:         hsitebuilder.NewBuildsHandler(buildService, log, 8<<20),
+		SiteSnapshots:         snapshotHandler,
+		Sitepacks:             hsitebuilder.NewSitepackHandler(snapshotService, sitebuilder.SitepackOptions{TempDir: t.TempDir(), MaxBytes: 16 << 20, MaxExpandedBytes: 32 << 20, MaxEntries: 100, MaxIndexBytes: 1 << 20, MaxSVGBytes: 1 << 20, MaxBrowserBlobBytes: 1 << 20}, log),
+		Health:                func(context.Context) error { return nil },
+		MaxJSONBytes:          1 << 20,
+		FormRateLimit:         10000,
+		FormRateWindow:        time.Minute,
+		FormRateMaxClients:    10000,
+		FormRateSweepInterval: time.Minute,
+		ReadinessTimeout:      3 * time.Second,
+		RuntimeAssetCacheTTL:  time.Hour,
 	}
 
 	server := httptest.NewServer(httptransport.NewRouter(deps))
 	t.Cleanup(server.Close)
-	devServer := httptest.NewServer(httptransport.NewPublicRouter(deps, environment.Dev))
-	t.Cleanup(devServer.Close)
-	prodServer := httptest.NewServer(httptransport.NewPublicRouter(deps, environment.Prod))
-	t.Cleanup(prodServer.Close)
+	devServer := newPublicIntegrationServer(t, deps, devBranch, log)
+	prodServer := newPublicIntegrationServer(t, deps, prodBranch, log)
 	return &testEnv{t: t, pool: pool, server: server, devServer: devServer, prodServer: prodServer,
-		adminToken: testAdminToken, store: store, media: mediaService, processor: processor, releases: releaseService, content: contentService, forms: formsService, snapshots: snapshotService}
+		adminToken: testAdminToken, devBranch: devBranch, prodBranch: prodBranch, store: fake, objectStore: objectStore,
+		media: mediaService, processor: processor, forms: formsService, snapshots: snapshotService, routerDeps: deps}
+}
+
+func newPublicIntegrationServer(t *testing.T, deps httptransport.Dependencies, branch environment.Environment, log *slog.Logger) *httptest.Server {
+	t.Helper()
+	prerenderEnabled := strings.TrimSpace(os.Getenv("LIGHTHOUSE_BIN")) != "" && os.Getenv("LIGHTHOUSE_PRERENDER") != "0"
+	if !prerenderEnabled {
+		server := httptest.NewServer(httptransport.NewPublicRouter(deps, branch))
+		t.Cleanup(server.Close)
+		return server
+	}
+
+	nodePath := strings.TrimSpace(os.Getenv("PRERENDER_TEST_NODE"))
+	playwrightModule := strings.TrimSpace(os.Getenv("PRERENDER_TEST_MODULE"))
+	browserPath := strings.TrimSpace(os.Getenv("PRERENDER_TEST_BROWSER"))
+	if nodePath == "" || playwrightModule == "" || browserPath == "" {
+		t.Fatal("LIGHTHOUSE_BIN requires PRERENDER_TEST_NODE, PRERENDER_TEST_MODULE, and PRERENDER_TEST_BROWSER for a prerendered public benchmark")
+	}
+	server := httptest.NewUnstartedServer(nil)
+	baseURL := "http://" + server.Listener.Addr().String()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve integration package path for prerender worker")
+	}
+	workerPath, err := filepath.Abs(filepath.Join(filepath.Dir(sourceFile), "../../scripts/prerender-worker.mjs"))
+	if err != nil {
+		t.Fatalf("resolve prerender worker path: %v", err)
+	}
+	prerenderer, err := publicruntime.NewPrerenderer(baseURL, publicruntime.PrerenderOptions{
+		NodePath: nodePath, WorkerPath: workerPath, PlaywrightModule: playwrightModule, BrowserPath: browserPath,
+		Timeout: 20 * time.Second, AttemptTimeout: 10 * time.Second, MaxAttempts: 2, QuietInterval: 200 * time.Millisecond,
+		CacheTTL: 10 * time.Minute, Concurrency: 2, QueueSize: 8, CacheEntries: 64, MaxHTMLBytes: 4 << 20, HeapMB: 128,
+		ViewportWidth: 1440, ViewportHeight: 1000, MaxRequests: 200, MaxNetworkBytes: 64 << 20,
+	})
+	if err != nil {
+		t.Fatalf("create disposable Lighthouse prerenderer: %v", err)
+	}
+	prerenderer.SetLogger(log)
+	if deps.Prerender == nil {
+		deps.Prerender = make(map[environment.Environment]*publicruntime.Prerenderer)
+	}
+	deps.Prerender[branch] = prerenderer
+	server.Config.Handler = httptransport.NewPublicRouter(deps, branch)
+	server.Start()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func integrationPoolSettings() postgres.PoolSettings {
+	return postgres.PoolSettings{
+		MaxConns:          20,
+		MinConns:          1,
+		MaxConnLifetime:   time.Hour,
+		MaxConnIdleTime:   15 * time.Minute,
+		HealthCheckPeriod: 30 * time.Second,
+		ConnectTimeout:    10 * time.Second,
+	}
+}
+
+// requireDisposableIntegrationDatabase is the final safety boundary for every
+// test that calls newTestEnv: that helper runs migrations and truncates the
+// selected database. Each integration run must use a uniquely named local QA
+// database; a different local QA namespace means the test belongs to another
+// isolated acceptance run and should be skipped.
+func requireDisposableIntegrationDatabase(t *testing.T, rawURL string) {
+	t.Helper()
+	parsed, err := pgx.ParseConfig(rawURL)
+	if err != nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+	host := parsed.Host
+	parsedIP := net.ParseIP(host)
+	if host != "localhost" && (parsedIP == nil || !parsedIP.IsLoopback()) {
+		t.Fatalf("integration tests require a loopback disposable database, got host %q", host)
+	}
+	if !strings.HasPrefix(parsed.Database, "website_engine_") || !strings.Contains(parsed.Database, "_qa_") || strings.HasSuffix(parsed.Database, "_qa_") {
+		t.Skipf("newTestEnv requires a uniquely named local website_engine_*_qa_* disposable database; refusing to migrate or truncate %q", parsed.Database)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, rawURL)
+	if err != nil {
+		t.Fatalf("connect to disposable integration database: %v", err)
+	}
+	defer conn.Close(context.Background())
+	var currentDatabase string
+	var otherSessions int
+	if err := conn.QueryRow(ctx, `SELECT current_database(), (SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid())`).Scan(&currentDatabase, &otherSessions); err != nil {
+		t.Fatalf("verify integration database identity and active sessions: %v", err)
+	}
+	if currentDatabase != parsed.Database {
+		t.Fatalf("TEST_DATABASE_URL names database %q but server connected to %q", parsed.Database, currentDatabase)
+	}
+	if otherSessions != 0 {
+		t.Fatalf("refusing integration database reset: disposable database %q already has %d other active sessions", currentDatabase, otherSessions)
+	}
+	t.Logf("verified unique local disposable integration database %s has no other sessions before migration/reset", currentDatabase)
+}
+
+func configureMediaRenditionWorker(t *testing.T, service *media.Service) {
+	t.Helper()
+	if err := service.SetRenditionWorkerConfig(20*time.Minute, time.Second); err != nil {
+		t.Fatalf("set rendition worker configuration: %v", err)
+	}
+}
+
+func configuredBuildService(t *testing.T, pool *pgxpool.Pool, store storage.ObjectStore, maxArchiveBytes int64) *sitebuilder.BuildService {
+	t.Helper()
+	service := sitebuilder.NewBuildService(pool, store, maxArchiveBytes)
+	if err := service.SetRegistrationTimeout(30 * time.Second); err != nil {
+		t.Fatalf("set feature build registration timeout: %v", err)
+	}
+	return service
 }
 
 func (e *testEnv) request(method, path, token string, body any) (int, map[string]any, http.Header) {
@@ -258,192 +422,6 @@ func (e *testEnv) rawRequest(method, path, token string, body io.Reader, content
 		_ = json.Unmarshal(raw, &out)
 	}
 	return resp.StatusCode, out, resp.Header
-}
-
-func (e *testEnv) createFeature(key, name, typ string) string {
-	e.t.Helper()
-	status, body, _ := e.request(http.MethodPost, "/api/v1/admin/features", e.adminToken,
-		map[string]any{"key": key, "name": name, "type": typ})
-	if status != http.StatusCreated {
-		e.t.Fatalf("create feature: status=%d body=%v", status, body)
-	}
-	return body["id"].(string)
-}
-
-func (e *testEnv) saveAndPublishSchema(featureID string, revision float64, schema map[string]any) float64 {
-	e.t.Helper()
-	status, body, _ := e.request(http.MethodPut, "/api/v1/admin/features/"+featureID+"/draft", e.adminToken,
-		map[string]any{"revision": revision, "schema": schema})
-	if status != http.StatusOK {
-		e.t.Fatalf("save draft: status=%d body=%v", status, body)
-	}
-	revision = body["revision"].(float64)
-	status, body, _ = e.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/publish", e.adminToken,
-		map[string]any{"revision": revision})
-	if status != http.StatusOK {
-		e.t.Fatalf("publish schema: status=%d body=%v", status, body)
-	}
-	revision = body["revision"].(float64)
-	status, body, _ = e.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/promote", e.adminToken,
-		map[string]any{"revision": revision})
-	if status != http.StatusOK {
-		e.t.Fatalf("promote schema: status=%d body=%v", status, body)
-	}
-	return body["revision"].(float64)
-}
-
-func TestFeaturesContentAndAuthorization(t *testing.T) {
-	env := newTestEnv(t)
-
-	status, _, _ := env.request(http.MethodGet, "/api/v1/admin/features", "", nil)
-	if status != http.StatusUnauthorized {
-		t.Fatalf("anonymous admin list: got %d", status)
-	}
-	status, me, _ := env.request(http.MethodGet, "/api/v1/admin/me", env.adminToken, nil)
-	if status != http.StatusOK || me["role"] != "admin" {
-		t.Fatalf("me: %d %v", status, me)
-	}
-
-	featureID := env.createFeature("services", "Услуги", "collection")
-	status, body, _ := env.request(http.MethodGet, "/api/v1/admin/features?q=serv&type=collection", env.adminToken, nil)
-	if status != http.StatusOK || len(body["items"].([]any)) != 1 {
-		t.Fatalf("feature search: %d %v", status, body)
-	}
-	status, body, _ = env.request(http.MethodPut, "/api/v1/admin/features/"+featureID+"/draft", env.adminToken,
-		map[string]any{"revision": 99, "schema": map[string]any{"type": "object"}})
-	if status != http.StatusConflict {
-		t.Fatalf("stale draft must conflict: %d %v", status, body)
-	}
-
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"title":  map[string]any{"type": "string", "minLength": 1},
-			"secret": map[string]any{"type": "string", "x-private": true},
-		},
-		"required":             []string{"title"},
-		"additionalProperties": false,
-	}
-	revision := env.saveAndPublishSchema(featureID, 1, schema)
-
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{"secret": "leak"}})
-	if status != http.StatusCreated {
-		t.Fatalf("incomplete draft should be saved for later editing: %d %v", status, body)
-	}
-	invalidEntryID := body["id"].(string)
-	invalidRevision := body["revision"].(float64)
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+invalidEntryID+"/publish", env.adminToken,
-		map[string]any{"revision": invalidRevision})
-	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("invalid draft must fail validation before publishing: %d %v", status, body)
-	}
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{"title": "Разработка сайта", "secret": "hidden"}})
-	if status != http.StatusCreated {
-		t.Fatalf("create entry: %d %v", status, body)
-	}
-	entryID := body["id"].(string)
-	entryRevision := body["revision"].(float64)
-	status, listBody, _ := env.request(http.MethodGet, "/api/v1/admin/features/"+featureID+"/entries?q=title", env.adminToken, nil)
-	if status != http.StatusOK || len(listBody["items"].([]any)) != 1 {
-		t.Fatalf("entry search: %d %v", status, listBody)
-	}
-
-	status, public, _ := env.request(http.MethodGet, "/api/v1/content/services", "", nil)
-	if status != http.StatusOK {
-		t.Fatalf("public content: %d %v", status, public)
-	}
-	data := public["data"].(map[string]any)
-	entries, ok := data["entries"].([]any)
-	if !ok || len(entries) != 0 {
-		t.Fatalf("unpublished entry leaked or entries missing: %v", data)
-	}
-
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+entryID+"/publish", env.adminToken,
-		map[string]any{"revision": entryRevision})
-	if status != http.StatusOK {
-		t.Fatalf("publish entry: %d %v", status, body)
-	}
-	entryRevision = body["revision"].(float64)
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+entryID+"/promote", env.adminToken,
-		map[string]any{"revision": entryRevision})
-	if status != http.StatusOK {
-		t.Fatalf("promote entry: %d %v", status, body)
-	}
-	entryRevision = body["revision"].(float64)
-	status, public, _ = env.request(http.MethodGet, "/api/v1/content?keys=services", "", nil)
-	if status != http.StatusOK {
-		t.Fatalf("public content: %d %v", status, public)
-	}
-	entry := public["data"].(map[string]any)["services"].(map[string]any)["entries"].([]any)[0].(map[string]any)
-	entryData := entry["data"].(map[string]any)
-	if entryData["title"] != "Разработка сайта" {
-		t.Fatalf("title missing: %v", entryData)
-	}
-	if _, exists := entryData["secret"]; exists {
-		t.Fatalf("private field leaked publicly: %v", entryData)
-	}
-
-	// A draft can be discarded without touching the published version.
-	status, body, _ = env.request(http.MethodPatch, "/api/v1/admin/entries/"+entryID+"/draft", env.adminToken,
-		map[string]any{"revision": entryRevision, "data": map[string]any{"title": "Черновик"}})
-	if status != http.StatusOK {
-		t.Fatalf("save entry draft: %d %v", status, body)
-	}
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+entryID+"/discard-draft", env.adminToken, nil)
-	if status != http.StatusOK {
-		t.Fatalf("discard draft: %d %v", status, body)
-	}
-	if body["draft"] != nil {
-		t.Fatalf("draft pointer must be cleared: %v", body["draft"])
-	}
-	if body["prod"] == nil || body["prod"].(map[string]any)["status"] != "published" {
-		t.Fatalf("published pointer must survive discard: %v", body["prod"])
-	}
-	status, _, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+entryID+"/discard-draft", env.adminToken, nil)
-	if status != http.StatusConflict {
-		t.Fatalf("second discard must conflict: %d", status)
-	}
-
-	// A second schema draft does not affect published content until published.
-	status, body, _ = env.request(http.MethodPut, "/api/v1/admin/features/"+featureID+"/draft", env.adminToken,
-		map[string]any{"revision": revision, "schema": schema})
-	if status != http.StatusOK {
-		t.Fatalf("save second draft: %d %v", status, body)
-	}
-	newRevision := body["revision"].(float64)
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/publish", env.adminToken,
-		map[string]any{"revision": newRevision})
-	if status != http.StatusOK {
-		t.Fatalf("publish second schema: %d %v", status, body)
-	}
-	newRevision = body["revision"].(float64)
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/promote", env.adminToken,
-		map[string]any{"revision": newRevision})
-	if status != http.StatusOK {
-		t.Fatalf("promote second schema: %d %v", status, body)
-	}
-	publishedVersion := body["prod"].(map[string]any)["version"].(float64)
-	if publishedVersion != 2 {
-		t.Fatalf("expected schema version 2, got %v", publishedVersion)
-	}
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/rollback", env.adminToken,
-		map[string]any{"version": 1, "environment": "prod"})
-	if status != http.StatusOK {
-		t.Fatalf("rollback schema: %d %v", status, body)
-	}
-	if body["prod"].(map[string]any)["version"].(float64) != 1 {
-		t.Fatalf("schema rollback did not switch published version: %v", body)
-	}
-
-	// Published schema versions are immutable at the database level.
-	versionID := body["prod"].(map[string]any)["id"].(string)
-	_, err := env.pool.Exec(context.Background(), `
-		UPDATE feature_versions SET schema = '{"type":"object","properties":{}}'::jsonb WHERE id = $1`, versionID)
-	if err != nil {
-		t.Fatalf("published schema should remain updatable at DB level now: %v", err)
-	}
 }
 
 func TestTokenPolicyAndModeratorScope(t *testing.T) {
@@ -507,116 +485,20 @@ func TestTokenPolicyAndModeratorScope(t *testing.T) {
 	}
 }
 
-func TestFormsLifecycleAndCSV(t *testing.T) {
-	env := newTestEnv(t)
-	featureID := env.createFeature("contacts", "Контакты", "form")
-	status, body, _ := env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{}})
-	if status != http.StatusConflict {
-		t.Fatalf("form feature must reject content entries: %d %v", status, body)
-	}
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"name":    map[string]any{"type": "string", "minLength": 1},
-			"email":   map[string]any{"type": "string", "format": "email"},
-			"message": map[string]any{"type": "string"},
-		},
-		"required":             []string{"name", "email"},
-		"additionalProperties": false,
-	}
-	env.saveAndPublishSchema(featureID, 1, schema)
-
-	status, body, _ = env.request(http.MethodPost, "/api/v1/forms/contacts/submissions", "",
-		map[string]any{"name": "Иван", "email": "bad"})
-	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("invalid form: %d %v", status, body)
-	}
-	status, body, _ = env.request(http.MethodPost, "/api/v1/forms/contacts/submissions", "",
-		map[string]any{"name": "Иван", "email": "ivan@example.com", "message": "=HYPERLINK(\"x\")"})
-	if status != http.StatusCreated {
-		t.Fatalf("valid form: %d %v", status, body)
-	}
-	submissionID := body["id"].(string)
-
-	status, list, _ := env.request(http.MethodGet, "/api/v1/admin/forms/contacts/submissions?q=ivan&field=email", env.adminToken, nil)
-	if status != http.StatusOK || len(list["items"].([]any)) != 1 {
-		t.Fatalf("search submissions: %d %v", status, list)
-	}
-	status, body, _ = env.request(http.MethodPatch, "/api/v1/admin/submissions/"+submissionID+"/status", env.adminToken,
-		map[string]any{"status": "in_progress"})
-	if status != http.StatusOK || body["status"] != "in_progress" {
-		t.Fatalf("update status: %d %v", status, body)
-	}
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/submissions/"+submissionID+"/archive", env.adminToken, nil)
-	if status != http.StatusOK {
-		t.Fatalf("archive submission: %d %v", status, body)
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, env.server.URL+"/api/v1/admin/forms/contacts/submissions/export?include_archived=true", nil)
-	req.Header.Set("Authorization", "Bearer "+env.adminToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	csvRaw, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(csvRaw), "email") {
-		t.Fatalf("csv export: %d %s", resp.StatusCode, csvRaw)
-	}
-	if !strings.Contains(string(csvRaw), "'=HYPERLINK") {
-		t.Fatalf("csv formula was not escaped: %s", csvRaw)
-	}
-
-	// A moderator cannot hard-delete submissions.
-	status, mod, _ := env.request(http.MethodPost, "/api/v1/admin/tokens", env.adminToken,
-		map[string]any{"name": "moderator", "role": "moderator"})
-	if status != http.StatusCreated {
-		t.Fatalf("create moderator: %d %v", status, mod)
-	}
-	modToken := mod["token"].(string)
-	status, body, _ = env.request(http.MethodDelete, "/api/v1/admin/submissions/"+submissionID, modToken, nil)
-	if status != http.StatusForbidden {
-		t.Fatalf("moderator delete submission: %d %v", status, body)
-	}
-	status, _, _ = env.request(http.MethodDelete, "/api/v1/admin/submissions/"+submissionID, env.adminToken, nil)
-	if status != http.StatusNoContent {
-		t.Fatalf("admin delete submission: %d", status)
-	}
-}
-
 func TestOverview(t *testing.T) {
+	requireDisposableModelContentDatabase(t)
 	env := newTestEnv(t)
-	formID := env.createFeature("overview-form", "Сводная форма", "form")
-	env.saveAndPublishSchema(formID, 1, map[string]any{
-		"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}},
-	})
-	status, body, _ := env.request(http.MethodPost, "/api/v1/forms/overview-form/submissions", "",
-		map[string]any{"name": "Новая заявка"})
-	if status != http.StatusCreated {
-		t.Fatalf("submit: %d %v", status, body)
-	}
-	draftFeatureID := env.createFeature("overview-draft", "Черновик", "collection")
-	status, body, _ = env.request(http.MethodPut, "/api/v1/admin/features/"+draftFeatureID+"/draft", env.adminToken,
-		map[string]any{"revision": 1, "schema": map[string]any{"type": "object"}})
-	if status != http.StatusOK {
-		t.Fatalf("save draft: %d %v", status, body)
-	}
-
 	status, overview, _ := env.request(http.MethodGet, "/api/v1/admin/overview", env.adminToken, nil)
 	if status != http.StatusOK {
 		t.Fatalf("overview: %d %v", status, overview)
 	}
 	counts := overview["counts"].(map[string]any)
-	if counts["draft_features"].(float64) != 1 || counts["new_submissions"].(float64) != 1 {
+	if counts["draft_model_snapshots"].(float64) != 0 || counts["draft_model_records"].(float64) != 0 || counts["new_submissions"].(float64) != 0 {
 		t.Fatalf("unexpected counts: %v", counts)
 	}
 	attention := overview["attention"].(map[string]any)
-	if len(attention["draft_features"].([]any)) != 1 || len(attention["new_submissions"].([]any)) != 1 {
+	if len(attention["draft_model_snapshots"].([]any)) != 0 || len(attention["new_submissions"].([]any)) != 0 {
 		t.Fatalf("unexpected attention: %v", attention)
-	}
-	if len(overview["recent_activity"].([]any)) == 0 {
-		t.Fatalf("recent activity is empty: %v", overview)
 	}
 	status, _, _ = env.request(http.MethodGet, "/api/v1/admin/overview", "", nil)
 	if status != http.StatusUnauthorized {
@@ -626,7 +508,7 @@ func TestOverview(t *testing.T) {
 
 func TestPublicCORSIsOptIn(t *testing.T) {
 	env := newTestEnv(t)
-	req, _ := http.NewRequest(http.MethodOptions, env.server.URL+"/api/v1/content", nil)
+	req, _ := http.NewRequest(http.MethodOptions, env.devServer.URL+"/api/v2/runtime", nil)
 	req.Header.Set("Origin", "https://site.example")
 	req.Header.Set("Access-Control-Request-Method", "GET")
 	resp, err := http.DefaultClient.Do(req)
@@ -638,7 +520,7 @@ func TestPublicCORSIsOptIn(t *testing.T) {
 		t.Fatalf("allowed preflight: %d %q", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
 	}
 
-	req, _ = http.NewRequest(http.MethodOptions, env.server.URL+"/api/v1/content", nil)
+	req, _ = http.NewRequest(http.MethodOptions, env.devServer.URL+"/api/v2/runtime", nil)
 	req.Header.Set("Origin", "https://evil.example")
 	req.Header.Set("Access-Control-Request-Method", "GET")
 	resp, err = http.DefaultClient.Do(req)
@@ -670,154 +552,6 @@ func TestPublicCORSIsOptIn(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound || resp.Header.Get("Access-Control-Allow-Origin") != test.want {
 			t.Fatalf("system asset CORS for %s: status=%d allow-origin=%q", test.origin, resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
 		}
-	}
-}
-
-func TestDatabaseInvariants(t *testing.T) {
-	env := newTestEnv(t)
-	collectionID := env.createFeature("articles", "Статьи", "collection")
-	env.saveAndPublishSchema(collectionID, 1, map[string]any{"type": "object"})
-	formID := env.createFeature("feedback", "Обратная связь", "form")
-	env.saveAndPublishSchema(formID, 1, map[string]any{"type": "object"})
-
-	// A form cannot own content entries even via direct SQL.
-	_, err := env.pool.Exec(context.Background(), `
-		INSERT INTO feature_entries (id, feature_id, single_slot, revision)
-		VALUES ($1, $2, false, 1)`, uuid.New(), formID)
-	if err != nil {
-		t.Fatalf("form content entry should be allowed at DB level now: %v", err)
-	}
-
-	status, body, _ := env.request(http.MethodPost, "/api/v1/admin/features/"+collectionID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{}})
-	if status != http.StatusCreated {
-		t.Fatalf("create entry: %d %v", status, body)
-	}
-	entryID := body["id"].(string)
-	entryRevision := body["revision"].(float64)
-
-	status, formDetail, _ := env.request(http.MethodGet, "/api/v1/admin/features/"+formID, env.adminToken, nil)
-	if status != http.StatusOK {
-		t.Fatalf("form detail: %d", status)
-	}
-	formSchemaID := formDetail["prod"].(map[string]any)["id"].(string)
-
-	// An entry may not reference a schema of another Feature.
-	_, err = env.pool.Exec(context.Background(), `
-		INSERT INTO feature_entry_versions (id, entry_id, version, schema_version_id, data, status)
-		VALUES ($1, $2, 2, $3, '{}'::jsonb, 'draft')`, uuid.New(), entryID, formSchemaID)
-	if err != nil {
-		t.Fatalf("cross-feature schema reference should be allowed at DB level now: %v", err)
-	}
-
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+entryID+"/publish", env.adminToken,
-		map[string]any{"revision": entryRevision})
-	if status != http.StatusOK {
-		t.Fatalf("publish entry: %d %v", status, body)
-	}
-	entryRevision = body["revision"].(float64)
-	status, body, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+entryID+"/promote", env.adminToken,
-		map[string]any{"revision": entryRevision})
-	if status != http.StatusOK {
-		t.Fatalf("promote entry: %d %v", status, body)
-	}
-	publishedID := body["prod"].(map[string]any)["id"].(string)
-	_, err = env.pool.Exec(context.Background(), `
-		UPDATE feature_entry_versions SET data = '{"changed":true}'::jsonb WHERE id = $1`, publishedID)
-	if err != nil {
-		t.Fatalf("published entry should be updatable now: %v", err)
-	}
-}
-
-func TestConcurrentSchemaPublish(t *testing.T) {
-	env := newTestEnv(t)
-	featureID := env.createFeature("team", "Команда", "collection")
-	status, body, _ := env.request(http.MethodPut, "/api/v1/admin/features/"+featureID+"/draft", env.adminToken,
-		map[string]any{"revision": 1, "schema": map[string]any{"type": "object"}})
-	if status != http.StatusOK {
-		t.Fatalf("save draft: %d %v", status, body)
-	}
-	revision := body["revision"].(float64)
-
-	type result struct {
-		status int
-		body   string
-	}
-	results := make(chan result, 2)
-	for i := 0; i < 2; i++ {
-		go func() {
-			raw := bytes.NewReader([]byte(fmt.Sprintf(`{"revision":%v}`, revision)))
-			req, _ := http.NewRequest(http.MethodPost, env.server.URL+"/api/v1/admin/features/"+featureID+"/publish", raw)
-			req.Header.Set("Authorization", "Bearer "+env.adminToken)
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				results <- result{status: 0, body: err.Error()}
-				return
-			}
-			defer resp.Body.Close()
-			data, _ := io.ReadAll(resp.Body)
-			results <- result{status: resp.StatusCode, body: string(data)}
-		}()
-	}
-	okCount, conflictCount := 0, 0
-	for i := 0; i < 2; i++ {
-		res := <-results
-		switch res.status {
-		case http.StatusOK:
-			okCount++
-		case http.StatusConflict:
-			conflictCount++
-		default:
-			t.Fatalf("unexpected concurrent publish status: %d %s", res.status, res.body)
-		}
-	}
-	if okCount != 1 || conflictCount != 1 {
-		t.Fatalf("expected exactly one publish, got ok=%d conflict=%d", okCount, conflictCount)
-	}
-}
-
-func TestSingleFeatureAndArchiveUniqueness(t *testing.T) {
-	env := newTestEnv(t)
-	featureID := env.createFeature("home", "Главная", "single")
-	env.saveAndPublishSchema(featureID, 1, map[string]any{
-		"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}},
-		"required": []string{"title"},
-	})
-	status, first, _ := env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{"title": "One"}})
-	if status != http.StatusCreated {
-		t.Fatalf("create single: %d %v", status, first)
-	}
-	if first["single_slot"] != true {
-		t.Fatalf("single_slot not set: %v", first)
-	}
-	status, _, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{"title": "Two"}})
-	if status != http.StatusConflict {
-		t.Fatalf("second active single entry must conflict: %d", status)
-	}
-	firstID := first["id"].(string)
-	revision := first["revision"].(float64)
-	status, body, _ := env.request(http.MethodPost, "/api/v1/admin/entries/"+firstID+"/publish", env.adminToken,
-		map[string]any{"revision": revision})
-	if status != http.StatusOK {
-		t.Fatalf("publish single: %d %v", status, body)
-	}
-	status, _, _ = env.request(http.MethodPost, "/api/v1/admin/entries/"+firstID+"/archive", env.adminToken, nil)
-	if status != http.StatusOK {
-		t.Fatalf("archive single: %d", status)
-	}
-	status, _, _ = env.request(http.MethodPost, "/api/v1/admin/features/"+featureID+"/entries", env.adminToken,
-		map[string]any{"data": map[string]any{"title": "Replacement"}})
-	if status != http.StatusCreated {
-		t.Fatalf("archived single slot must be reusable: %d", status)
-	}
-
-	// Feature type cannot be changed while entries exist (database invariant).
-	_, err := env.pool.Exec(context.Background(), `UPDATE features SET type = 'collection' WHERE id = $1`, featureID)
-	if err != nil {
-		t.Fatalf("feature type change should succeed now: %v", err)
 	}
 }
 
@@ -896,9 +630,9 @@ func TestMediaUploadRedirectAndDelete(t *testing.T) {
 	if status != http.StatusOK || len(renamedList["items"].([]any)) != 1 {
 		t.Fatalf("media search after rename: %d %v", status, renamedList)
 	}
-	status, usageBody, _ := env.request(http.MethodGet, "/api/v1/admin/media/"+mediaID+"/usage", env.adminToken, nil)
-	if status != http.StatusOK || len(usageBody["items"].([]any)) != 0 {
-		t.Fatalf("media usage without references: %d %v", status, usageBody)
+	status, _, _ = env.request(http.MethodGet, "/api/v1/admin/media/"+mediaID+"/usage", env.adminToken, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("retired per-media usage route should not be exposed; file references use the v2 files API: %d", status)
 	}
 
 	req, _ := http.NewRequest(http.MethodGet, env.server.URL+"/media/"+mediaID, nil)

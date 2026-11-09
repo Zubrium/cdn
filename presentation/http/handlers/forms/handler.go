@@ -22,9 +22,11 @@ import (
 )
 
 type Handler struct {
-	service *forms.Service
-	log     *slog.Logger
-	maxJSON int64
+	service     *forms.Service
+	log         *slog.Logger
+	maxJSON     int64
+	pageDefault int
+	pageMax     int
 }
 
 func NewHandler(service *forms.Service, log *slog.Logger, maxJSON int64) *Handler {
@@ -64,7 +66,11 @@ func (h *Handler) Submit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	filter, err := parseFilter(w, r, true)
+	if !validPagination(h.pageDefault, h.pageMax) {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
+	filter, err := parseFilterWithLimits(w, r, true, h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_query", err.Error())
 		return
@@ -84,7 +90,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
-	filter, err := parseFilter(w, r, false)
+	if !validPagination(h.pageDefault, h.pageMax) {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
+	filter, err := parseFilterWithLimits(w, r, false, h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_query", err.Error())
 		return
@@ -99,7 +109,7 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "submissions-"+r.PathValue("key")+".csv"))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	cw := csv.NewWriter(w)
-	header := []string{"id", "status", "created_at", "updated_at", "processed_by"}
+	header := []string{"id", "status", "created_at", "updated_at", "processed_by", "branchId", "formKey"}
 	for _, field := range fields {
 		header = append(header, field.Key)
 	}
@@ -113,6 +123,7 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 		} else {
 			row = append(row, "")
 		}
+		row = append(row, s.Environment, s.FeatureKey)
 		var data map[string]any
 		dec := json.NewDecoder(strings.NewReader(string(s.Data)))
 		dec.UseNumber()
@@ -189,9 +200,9 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	response.NoContent(w)
 }
 
-func parseFilter(w http.ResponseWriter, r *http.Request, withCursor bool) (forms.ListFilter, error) {
+func parseFilterWithLimits(w http.ResponseWriter, r *http.Request, withCursor bool, defaultPage, maxPage int) (forms.ListFilter, error) {
 	q := r.URL.Query()
-	limit, err := response.ParseLimit(q.Get("limit"), 50, 200)
+	limit, err := response.ParseLimit(q.Get("limit"), defaultPage, maxPage)
 	if err != nil {
 		return forms.ListFilter{}, err
 	}
@@ -203,7 +214,22 @@ func parseFilter(w http.ResponseWriter, r *http.Request, withCursor bool) (forms
 		Sort:            strings.ToLower(q.Get("sort")),
 		Limit:           limit,
 	}
-	if raw := strings.TrimSpace(q.Get("environment")); raw != "" && !strings.EqualFold(raw, "all") {
+	branchID := strings.TrimSpace(q.Get("branchId"))
+	legacy := strings.TrimSpace(q.Get("environment"))
+	if branchID != "" && !strings.EqualFold(branchID, "all") {
+		parsedBranchID, err := uuid.Parse(branchID)
+		if err != nil {
+			return forms.ListFilter{}, errors.New("branchId должен быть идентификатором ветки")
+		}
+		canonicalBranchID := parsedBranchID.String()
+		if legacy != "" && !strings.EqualFold(legacy, "all") {
+			legacyBranchID, err := uuid.Parse(legacy)
+			if err != nil || legacyBranchID.String() != canonicalBranchID {
+				return forms.ListFilter{}, errors.New("branchId и environment задают разные ветки")
+			}
+		}
+		filter.Environment = environment.Environment(canonicalBranchID)
+	} else if raw := legacy; raw != "" && !strings.EqualFold(raw, "all") {
 		env, err := environment.Parse(raw)
 		if err != nil {
 			return forms.ListFilter{}, err
@@ -229,6 +255,9 @@ func parseFilter(w http.ResponseWriter, r *http.Request, withCursor bool) (forms
 			return forms.ListFilter{}, errors.New("created_to должен быть RFC 3339")
 		}
 		filter.CreatedTo = &t
+	}
+	if filter.CreatedFrom != nil && filter.CreatedTo != nil && !filter.CreatedTo.After(*filter.CreatedFrom) {
+		return forms.ListFilter{}, errors.New("Конец периода должен быть позже начала")
 	}
 	if withCursor && q.Get("cursor") != "" {
 		cursor, ok := response.DecodeCursor(q.Get("cursor"))
@@ -283,9 +312,9 @@ func safeCSV(value string) string {
 	if value == "" {
 		return value
 	}
-	if strings.HasPrefix(value, "=") || strings.HasPrefix(value, "+") ||
-		strings.HasPrefix(value, "-") || strings.HasPrefix(value, "@") ||
-		strings.HasPrefix(value, "\t") || strings.HasPrefix(value, "\r") {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+	if strings.HasPrefix(value, "\t") || strings.HasPrefix(value, "\r") ||
+		(trimmed != "" && strings.ContainsRune("=+-@", rune(trimmed[0]))) {
 		return "'" + value
 	}
 	return value
@@ -294,7 +323,10 @@ func safeCSV(value string) string {
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var validationErr *forms.ValidationError
 	var conflictErr *forms.ConflictError
+	var exportLimitErr *forms.ExportLimitError
 	switch {
+	case errors.As(err, &exportLimitErr):
+		response.Error(w, r, http.StatusRequestEntityTooLarge, "export_limit_exceeded", exportLimitErr.Error())
 	case errors.As(err, &validationErr):
 		details := make([]response.ErrorDetail, 0, len(validationErr.Details))
 		for _, d := range validationErr.Details {
@@ -315,4 +347,28 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		h.log.Error("form operation failed", "request_id", response.RequestID(r.Context()), "error", err)
 		response.Error(w, r, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка сервера")
 	}
+}
+
+// Branches exposes only names required by submission filters, not management
+// settings, ports or assignments which remain site-manager protected.
+func (h *Handler) Branches(w http.ResponseWriter, r *http.Request) {
+	items, err := h.service.BranchChoices(r.Context())
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) SetLimits(defaultPage, maxPage int) error {
+	if !validPagination(defaultPage, maxPage) {
+		return errors.New("submission pagination limits are invalid")
+	}
+	h.pageDefault = defaultPage
+	h.pageMax = maxPage
+	return nil
+}
+
+func validPagination(defaultPage, maxPage int) bool {
+	return defaultPage > 0 && maxPage >= defaultPage
 }

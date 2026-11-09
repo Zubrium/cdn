@@ -1,157 +1,318 @@
 package integration
 
 import (
+	"archive/zip"
 	"bytes"
+	"context"
+	"encoding/json"
+
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"websiteengine/features/sitebuilder"
 )
 
-// This opt-in test uses a real feature archive supplied by the caller. The
-// regular integration suite remains independent of any particular site.
-func TestExternalFeatureContentWorkspace(t *testing.T) {
-	path := os.Getenv("TEST_FEATURE_ZIP")
-	if path == "" {
-		t.Skip("TEST_FEATURE_ZIP is not set")
+type externalFeatureManifest struct {
+	Key     string `json:"key"`
+	Version string `json:"version"`
+}
+
+func compareExternalFeatureVersions(left, right string) int {
+	parse := func(value string) ([3]uint64, string, bool) {
+		value = strings.SplitN(value, "+", 2)[0]
+		parts := strings.SplitN(value, "-", 2)
+		core, prerelease := parts[0], ""
+		if len(parts) == 2 {
+			prerelease = parts[1]
+		}
+		segments := strings.Split(core, ".")
+		if len(segments) != 3 {
+			return [3]uint64{}, "", false
+		}
+		var numbers [3]uint64
+		for index, segment := range segments {
+			number, err := strconv.ParseUint(segment, 10, 64)
+			if err != nil {
+				return [3]uint64{}, "", false
+			}
+			numbers[index] = number
+		}
+		return numbers, prerelease, true
 	}
-	archive, err := os.ReadFile(path)
+	leftNumbers, leftPrerelease, leftOK := parse(left)
+	rightNumbers, rightPrerelease, rightOK := parse(right)
+	if !leftOK || !rightOK {
+		return strings.Compare(left, right)
+	}
+	for index := range leftNumbers {
+		if leftNumbers[index] < rightNumbers[index] {
+			return -1
+		}
+		if leftNumbers[index] > rightNumbers[index] {
+			return 1
+		}
+	}
+	if leftPrerelease == rightPrerelease {
+		return 0
+	}
+	if leftPrerelease == "" {
+		return 1
+	}
+	if rightPrerelease == "" {
+		return -1
+	}
+	leftIDs, rightIDs := strings.Split(leftPrerelease, "."), strings.Split(rightPrerelease, ".")
+	for index := 0; index < len(leftIDs) && index < len(rightIDs); index++ {
+		leftNumber, leftErr := strconv.ParseUint(leftIDs[index], 10, 64)
+		rightNumber, rightErr := strconv.ParseUint(rightIDs[index], 10, 64)
+		switch {
+		case leftErr == nil && rightErr == nil && leftNumber < rightNumber:
+			return -1
+		case leftErr == nil && rightErr == nil && leftNumber > rightNumber:
+			return 1
+		case leftErr == nil && rightErr != nil:
+			return -1
+		case leftErr != nil && rightErr == nil:
+			return 1
+		case leftErr != nil && rightErr != nil:
+			if comparison := strings.Compare(leftIDs[index], rightIDs[index]); comparison != 0 {
+				return comparison
+			}
+		}
+	}
+	if len(leftIDs) < len(rightIDs) {
+		return -1
+	}
+	if len(leftIDs) > len(rightIDs) {
+		return 1
+	}
+	return 0
+}
+
+func TestCompareExternalFeatureVersions(t *testing.T) {
+	for _, test := range []struct {
+		left, right string
+		want        int
+	}{
+		{left: "1.0.10", right: "1.0.9", want: 1},
+		{left: "1.0.5", right: "1.0.5-rc.2", want: 1},
+		{left: "1.0.5-rc.10", right: "1.0.5-rc.2", want: 1},
+		{left: "1.0.5+build.1", right: "1.0.5+build.2", want: 0},
+	} {
+		if got := compareExternalFeatureVersions(test.left, test.right); got != test.want {
+			t.Errorf("compareExternalFeatureVersions(%q, %q) = %d, want %d", test.left, test.right, got, test.want)
+		}
+	}
+}
+
+func readExternalFeatureArchive(t *testing.T, dir, key string) ([]byte, string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := newTestEnv(t)
-	status, build, _ := env.rawRequest(http.MethodPost, "/api/v2/admin/feature-builds", env.adminToken, bytes.NewReader(archive), "application/zip")
-	if status != http.StatusCreated && status != http.StatusOK {
-		t.Fatalf("upload feature: %d %v", status, build)
-	}
-	key, version := build["key"].(string), build["version"].(string)
-	if key != "header" {
-		t.Fatalf("this fixture expects the header feature, got %q", key)
-	}
-	config := singlePageConfig(key, version)
-	page := config["pages"].([]any)[0].(map[string]any)
-	page["placements"].([]any)[0].(map[string]any)["slot"] = "header"
-	snapshot := saveAndDeploySnapshot(t, env, config, "real feature")
-	workspacePath := "/api/v2/admin/content/snapshots/" + snapshot["id"].(string) + "/features/" + key
-	status, _, _ = env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{
-		"revision": 0, "items": []any{map[string]any{"singleSlot": true, "data": map[string]any{
-			"brand": "Vitasil", "brandTo": "/", "navigationLabel": "Navigation",
-			"navigation": []any{map[string]any{"label": "Catalog", "to": "/catalog", "end": false}},
-		}}},
-	})
-	if status != http.StatusOK {
-		t.Fatalf("save real header schema: status=%d", status)
-	}
-	status, workspace, _ := env.request(http.MethodGet, workspacePath, env.adminToken, nil)
-	if status != http.StatusOK || workspace["revision"] != float64(1) {
-		t.Fatalf("reopen header workspace: %d %v", status, workspace)
-	}
-	items := workspace["items"].([]any)
-	data := items[0].(map[string]any)["data"].(map[string]any)
-	if data["brand"] != "Vitasil" || len(data["navigation"].([]any)) != 1 {
-		t.Fatalf("reopened data: %v", data)
-	}
-	sourceID := snapshot["id"].(string)
-	forkPath := "/api/v2/admin/content/snapshots/" + sourceID + "/fork"
-	status, versionB, _ := env.request(http.MethodPost, forkPath, env.adminToken, map[string]any{"name": "B"})
-	if status != http.StatusCreated {
-		t.Fatalf("fork B: %d %v", status, versionB)
-	}
-	item := items[0].(map[string]any)
-	data["brand"] = "Vitasil C"
-	input := map[string]any{"entryId": item["entryId"], "singleSlot": true, "data": data}
-	status, stale, _ := env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{"revision": 0, "items": []any{input}})
-	if status != http.StatusConflict {
-		t.Fatalf("stale save must conflict: %d %v", status, stale)
-	}
-	results := make(chan int, 2)
-	for range 2 {
-		go func() {
-			status, _, _ := env.request(http.MethodPut, workspacePath, env.adminToken, map[string]any{"revision": 1, "items": []any{input}})
-			results <- status
-		}()
-	}
-	first, second := <-results, <-results
-	if !((first == http.StatusOK && second == http.StatusConflict) || (second == http.StatusOK && first == http.StatusConflict)) {
-		t.Fatalf("concurrent saves must produce one success and one conflict: %d, %d", first, second)
-	}
-	status, versionC, _ := env.request(http.MethodPost, forkPath, env.adminToken, map[string]any{"name": "C"})
-	if status != http.StatusCreated {
-		t.Fatalf("fork C: %d %v", status, versionC)
-	}
-	assign := func(id, environment, action string) {
-		t.Helper()
-		status, result, _ := env.request(http.MethodPost, "/api/v2/admin/site/snapshots/"+id+"/"+action, env.adminToken, map[string]any{"environment": environment})
-		if status != http.StatusOK {
-			t.Fatalf("%s %s: %d %v", action, environment, status, result)
+	var selectedPath, selectedVersion string
+	prefix := key + "-"
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".zip") {
+			continue
+		}
+		versionPart := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), prefix), ".zip")
+		if len(versionPart) > 0 && versionPart[0] >= '0' && versionPart[0] <= '9' {
+			if selectedPath == "" || compareExternalFeatureVersions(versionPart, selectedVersion) > 0 {
+				selectedPath = filepath.Join(dir, entry.Name())
+				selectedVersion = versionPart
+			}
 		}
 	}
-	bID, cID := versionB["id"].(string), versionC["id"].(string)
-	assign(bID, "prod", "deploy")
-	assign(cID, "dev", "deploy")
-	if got := runtimePlacement(t, env, env.prodServer.URL, "/")["content"].(map[string]any)["brand"]; got != "Vitasil" {
-		t.Fatalf("production changed with dev: %v", got)
+	if selectedPath == "" {
+		t.Fatalf("no %s feature archive found in %s", key, dir)
 	}
-	if got := runtimePlacement(t, env, env.devServer.URL, "/")["content"].(map[string]any)["brand"]; got != "Vitasil C" {
-		t.Fatalf("dev content: %v", got)
+	archive, err := os.ReadFile(selectedPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	assign(cID, "prod", "deploy")
-	assign(bID, "dev", "rollback")
-	assign(bID, "prod", "rollback")
-	status, history, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshots", env.adminToken, nil)
-	if status != http.StatusOK || history["active"].(map[string]any)["dev"] != bID || history["active"].(map[string]any)["prod"] != bID {
-		t.Fatalf("independent rollback: %d %v", status, history)
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatalf("open %s archive: %v", key, err)
 	}
-	assertSnapshotDigestMatchesContent(t, env, bID)
-	assertSnapshotDigestMatchesContent(t, env, cID)
+	for _, file := range reader.File {
+		if file.Name != "manifest.json" {
+			continue
+		}
+		manifestFile, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manifestFile.Close()
+		var manifest externalFeatureManifest
+		if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
+			t.Fatalf("decode %s manifest: %v", key, err)
+		}
+		if manifest.Key != key || manifest.Version == "" {
+			t.Fatalf("unexpected %s archive manifest: %+v", key, manifest)
+		}
+		if manifest.Version != selectedVersion {
+			t.Fatalf("%s archive filename version %s differs from manifest version %s", key, selectedVersion, manifest.Version)
+		}
+		return archive, manifest.Version
+	}
+	t.Fatalf("%s archive is missing manifest.json", key)
+	return nil, ""
 }
 
-func TestExternalNestedFeatureWorkspaces(t *testing.T) {
+func TestExternalVitasilFeatureBuildsRegister(t *testing.T) {
 	dir := os.Getenv("TEST_FEATURE_DIR")
 	if dir == "" {
 		t.Skip("TEST_FEATURE_DIR is not set")
 	}
-	tests := []struct {
-		name, archive, version, mode string
-		items                        []any
-	}{
-		{"catalog", "catalog-1.0.3.zip", "1.0.3", "collection", []any{
-			map[string]any{"data": map[string]any{"slug": "milk", "title": "Milk", "price": "100"}},
-			map[string]any{"singleSlot": true, "data": map[string]any{"title": "Catalog", "breadcrumb": map[string]any{"homeLabel": "Home", "currentLabel": "Catalog"}, "action": map[string]any{"label": "Contact", "to": "/contact"}}},
-		}},
-		{"main-data", "main-data-1.0.3.zip", "1.0.3", "single", []any{
-			map[string]any{"singleSlot": true, "data": map[string]any{
-				"info":   map[string]any{"title": "Benefits", "items": []any{map[string]any{"id": "one", "icon": "quality", "title": "Quality", "description": "Description"}}},
-				"slider": map[string]any{"eyebrow": "Products", "title": "Range", "previousLabel": "Previous", "nextLabel": "Next", "itemsLabel": "Items", "catalogActionLabel": "Catalog", "catalogActionTo": "/catalog", "products": []any{map[string]any{"id": "milk", "name": "Milk", "category": "Dairy", "summary": "Fresh"}}},
-			}},
-		}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			env := newTestEnv(t)
-			archive, err := os.ReadFile(filepath.Join(dir, tc.archive))
-			if err != nil {
-				t.Fatal(err)
+	env := newTestEnv(t)
+	expected := []string{"background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"}
+	for _, key := range expected {
+		t.Run(key, func(t *testing.T) {
+			archive, version := readExternalFeatureArchive(t, dir, key)
+			if os.Getenv("EXPECT_STATIC_FEATURES") == "1" {
+				verified, err := sitebuilder.VerifyArchive(archive, int64(len(archive)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if verified.Manifest.RuntimeABI() != sitebuilder.RuntimeABIStaticModule {
+					t.Fatalf("%s@%s uses runtime ABI %q, want %q", key, version, verified.Manifest.RuntimeABI(), sitebuilder.RuntimeABIStaticModule)
+				}
+				if len(verified.Manifest.RuntimeSharedStyles()) == 0 {
+					t.Fatalf("%s@%s does not declare its shared core stylesheet", key, version)
+				}
 			}
 			status, build, _ := env.rawRequest(http.MethodPost, "/api/v2/admin/feature-builds", env.adminToken, bytes.NewReader(archive), "application/zip")
 			if status != http.StatusCreated && status != http.StatusOK {
-				t.Fatalf("upload: %d %v", status, build)
+				t.Fatalf("register %s@%s: status=%d body=%v", key, version, status, build)
 			}
-			snapshot := saveAndDeploySnapshot(t, env, singlePageConfig(tc.name, tc.version), "nested")
-			path := "/api/v2/admin/content/snapshots/" + snapshot["id"].(string) + "/features/" + tc.name
-			status, saved, _ := env.request(http.MethodPut, path, env.adminToken, map[string]any{"revision": 0, "items": tc.items})
-			if status != http.StatusOK {
-				t.Fatalf("save %s: %d %v", tc.mode, status, saved)
+			if build["key"] != key || build["version"] != version {
+				t.Fatalf("registered identity differs from manifest: %v", build)
 			}
-			status, reopened, _ := env.request(http.MethodGet, path, env.adminToken, nil)
-			if status != http.StatusOK || reopened["revision"] != float64(1) || len(reopened["items"].([]any)) != len(tc.items) {
-				t.Fatalf("reopen: %d %v", status, reopened)
+			featureID := build["featureId"].(string)
+			var registeredKey string
+			if err := env.pool.QueryRow(context.Background(), `SELECT key FROM features WHERE id=$1`, featureID).Scan(&registeredKey); err != nil {
+				t.Fatal(err)
 			}
-			status, child, _ := env.request(http.MethodPost, "/api/v2/admin/content/snapshots/"+snapshot["id"].(string)+"/fork", env.adminToken, map[string]any{"name": "nested child"})
-			if status != http.StatusCreated {
-				t.Fatalf("fork: %d %v", status, child)
+			if registeredKey != key {
+				t.Fatalf("feature build registered as %q, want %q", registeredKey, key)
 			}
-			assertSnapshotDigestMatchesContent(t, env, child["id"].(string))
+			var pointerColumns int
+			if err := env.pool.QueryRow(context.Background(), `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('features','feature_entries') AND column_name IN ('draft_version_id','dev_version_id','prod_version_id')`).Scan(&pointerColumns); err != nil {
+				t.Fatal(err)
+			}
+			if pointerColumns != 0 {
+				t.Fatalf("clean schema contains %d global feature/content pointer columns", pointerColumns)
+			}
 		})
 	}
 }
+
+func TestExternalVitasilDesignTokensFollowSnapshotBuildSelection(t *testing.T) {
+	dir := os.Getenv("TEST_FEATURE_DIR")
+	if dir == "" {
+		t.Skip("TEST_FEATURE_DIR is not set")
+	}
+	env := newTestEnv(t)
+	keys := []string{"background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"}
+	features := make([]any, 0, len(keys))
+	versions := make(map[string]string, len(keys))
+	manifests := make([]sitebuilder.Manifest, 0, len(keys))
+	for _, key := range keys {
+		archive, version := readExternalFeatureArchive(t, dir, key)
+		status, build, _ := env.rawRequest(http.MethodPost, "/api/v2/admin/feature-builds", env.adminToken, bytes.NewReader(archive), "application/zip")
+		if status != http.StatusCreated && status != http.StatusOK {
+			t.Fatalf("register %s@%s: status=%d body=%v", key, version, status, build)
+		}
+		versions[key] = version
+		manifests = append(manifests, modelAcceptanceManifestFromArchive(t, archive))
+		features = append(features, map[string]any{"featureKey": key, "version": version})
+	}
+	config := singlePageConfig("header", versions["header"])
+	page := config["pages"].([]any)[0].(map[string]any)
+	page["placements"].([]any)[0].(map[string]any)["slot"] = "header"
+	config["features"] = features
+	config = modelAcceptanceBindManifestInputs(t, config, manifests)
+	snapshot := saveAndDeploySnapshot(t, env, config, "Vitasil design tokens")
+	status, workspace, _ := env.request(http.MethodGet, "/api/v2/admin/site/snapshots/"+snapshot["id"].(string)+"/design-system", env.adminToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("read snapshot design tokens: status=%d body=%v", status, workspace)
+	}
+	definitions, ok := workspace["featureTokens"].([]any)
+	if !ok || len(definitions) == 0 {
+		t.Fatalf("snapshot should expose tokens declared by selected Vitasil builds: %v", workspace)
+	}
+	counts := make(map[string]int, len(keys))
+	headerFocusFound := false
+	for _, raw := range definitions {
+		definition, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected feature token: %T", raw)
+		}
+		key, _ := definition["featureKey"].(string)
+		counts[key]++
+		if key == "header" {
+			token, _ := definition["definition"].(map[string]any)
+			if token["key"] == "color-focus" {
+				headerFocusFound = true
+			}
+		}
+	}
+	for _, key := range keys {
+		if counts[key] == 0 {
+			t.Errorf("snapshot did not expose %s design tokens: counts=%v", key, counts)
+		}
+	}
+	if counts["unselected-fixture"] != 0 || len(counts) != len(keys) {
+		t.Fatalf("snapshot exposed tokens outside its selected feature set: %v", counts)
+	}
+	if !headerFocusFound {
+		t.Fatal("current Vitasil header build does not expose its color-focus token")
+	}
+	t.Run("published browser applies Vitasil header token overrides", func(t *testing.T) {
+		if os.Getenv("PRERENDER_TEST_NODE") == "" || os.Getenv("PRERENDER_TEST_MODULE") == "" || os.Getenv("PRERENDER_TEST_BROWSER") == "" {
+			t.Skip("set PRERENDER_TEST_NODE/MODULE/BROWSER for browser-computed design token acceptance")
+		}
+		parentID, err := uuid.Parse(snapshot["id"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseID := uuid.NewString()
+		design := sitebuilder.NewDesignSystem()
+		design.Groups = []sitebuilder.TokenGroup{{ID: uuid.NewString(), Name: "QA brand"}}
+		design.BaseTokens = []sitebuilder.BaseToken{{ID: baseID, Name: "Focus", GroupID: design.Groups[0].ID, Kind: "color", Value: sitebuilder.TokenValue{Color: &sitebuilder.TokenColor{Hex: "#123456", Opacity: 100}}}}
+		design.FeatureValues = map[string]sitebuilder.TokenValue{"header/color-focus": {BaseTokenID: baseID}}
+		design.Breakpoints = []sitebuilder.TokenBreakpoint{{ID: uuid.NewString(), Name: "Desktop", MinWidthPx: 1024, BaseValues: map[string]sitebuilder.TokenValue{baseID: {Color: &sitebuilder.TokenColor{Hex: "#abcdef", Opacity: 100}}}, FeatureValues: map[string]sitebuilder.TokenValue{}}}
+		actor := testActor(t, env)
+		child, err := env.snapshots.CreateSnapshot(context.Background(), actor, sitebuilder.CreateSnapshotInput{Name: "Vitasil responsive tokens", ParentID: &parentID, DesignSystem: &design})
+		if err != nil {
+			t.Fatalf("create child snapshot with Vitasil design tokens: %v", err)
+		}
+		branchID, err := uuid.Parse(string(env.devBranch))
+		if err != nil {
+			t.Fatal(err)
+		}
+		branch, err := env.snapshots.Branch(context.Background(), branchID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		branch, err = env.snapshots.AssignBranch(context.Background(), actor, branchID, child.ID, branch.Revision)
+		if err != nil {
+			t.Fatalf("explicitly assign Vitasil child to disposable branch: %v", err)
+		}
+		assertResponsiveDesignTokensInBrowser(t, env, branch, baseID, "--feature-header-color-focus", []designTokenBrowserCase{
+			{Width: 500, Color: "rgb(18, 52, 86)"},
+			{Width: 1280, Color: "rgb(171, 205, 239)"},
+		})
+	})
+}
+
+// This opt-in test uses a real feature archive supplied by the caller. The
+// regular integration suite remains independent of any particular site.

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -18,8 +19,6 @@ import (
 )
 
 var ErrRenditionsPending = errors.New("required media renditions are still processing")
-
-const renditionLease = 20 * time.Minute
 
 func (s *Service) Prepare(ctx context.Context, id uuid.UUID, profile FieldProfile) (RenditionState, error) {
 	if err := profile.Validate(); err != nil {
@@ -98,7 +97,10 @@ func publicRenditionPath(id uuid.UUID, profileHash, name string) string {
 }
 
 func (s *Service) ProcessOne(ctx context.Context) (bool, error) {
-	job, ok, err := s.repo.ClaimRendition(ctx, renditionLease)
+	if s.renditionLease <= 0 {
+		return false, errors.New("media rendition lease is not configured")
+	}
+	job, ok, err := s.repo.ClaimRendition(ctx, s.renditionLease)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -109,21 +111,6 @@ func (s *Service) ProcessOne(ctx context.Context) (bool, error) {
 	if object.Status != "ready" {
 		return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "original media object is not ready")
 	}
-	reader, err := s.store.Get(ctx, object.ObjectKey)
-	if err != nil {
-		return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "original media object is unavailable")
-	}
-	data, readErr := io.ReadAll(io.LimitReader(reader, s.maxUpload+1))
-	closeErr := reader.Close()
-	if readErr != nil || closeErr != nil || int64(len(data)) > s.maxUpload {
-		message := "cannot read original media object"
-		if readErr != nil {
-			message = readErr.Error()
-		} else if closeErr != nil {
-			message = closeErr.Error()
-		}
-		return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, message)
-	}
 	if s.processorErr != nil || s.processor == nil {
 		message := "media processor is unavailable"
 		if s.processorErr != nil {
@@ -131,24 +118,74 @@ func (s *Service) ProcessOne(ctx context.Context) (bool, error) {
 		}
 		return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, message)
 	}
-	processed, err := s.processor.Process(ctx, object, job.Profile, data)
+	processCtx := ctx
+	if timed, ok := s.processor.(interface{ ProcessingTimeout() time.Duration }); ok {
+		var cancel context.CancelFunc
+		processCtx, cancel = context.WithTimeout(ctx, timed.ProcessingTimeout())
+		defer cancel()
+	}
+	reader, err := s.store.Get(processCtx, object.ObjectKey)
 	if err != nil {
-		return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, err.Error())
+		return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "original media object is unavailable")
 	}
-	outputs := make(map[string]StoredOutput, len(processed))
-	for name, output := range processed {
-		extension := ".webp"
-		if output.MIMEType == "video/mp4" {
-			extension = ".mp4"
+	outputs := map[string]StoredOutput{}
+	if processor, ok := s.processor.(StreamingRenditionProcessor); ok {
+		processed, cleanup, processErr := processor.ProcessStream(processCtx, object, job.Profile, reader)
+		closeErr := reader.Close()
+		if cleanup != nil {
+			defer cleanup()
 		}
-		key := fmt.Sprintf("media/%s/renditions/%s/%s%s", job.MediaID, job.ProfileHash, name, extension)
-		if err := s.store.Put(ctx, key, bytes.NewReader(output.Data), int64(len(output.Data)), storage.PutOptions{
-			ContentType: output.MIMEType, CacheControl: cacheControl,
-		}); err != nil {
-			return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "store processed rendition: "+err.Error())
+		if processErr != nil {
+			return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, processErr.Error())
 		}
-		outputs[name] = StoredOutput{ObjectKey: key, MIMEType: output.MIMEType, Width: output.Width, Height: output.Height}
+		if closeErr != nil {
+			return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, closeErr.Error())
+		}
+		for name, output := range processed {
+			extension := ".webp"
+			if output.MIMEType == "video/mp4" {
+				extension = ".mp4"
+			}
+			key := fmt.Sprintf("media/%s/renditions/%s/%s%s", job.MediaID, job.ProfileHash, name, extension)
+			file, err := os.Open(output.Path)
+			if err != nil {
+				return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "read processed rendition: "+err.Error())
+			}
+			putErr := s.store.Put(processCtx, key, file, output.Size, storage.PutOptions{ContentType: output.MIMEType, CacheControl: cacheControl})
+			closeErr := file.Close()
+			if putErr != nil {
+				return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "store processed rendition: "+putErr.Error())
+			}
+			if closeErr != nil {
+				return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, closeErr.Error())
+			}
+			outputs[name] = StoredOutput{ObjectKey: key, MIMEType: output.MIMEType, Width: output.Width, Height: output.Height}
+		}
+	} else {
+		// Compatibility path for injected small test processors. The production
+		// constructor always supplies FFmpegProcessor's bounded streaming method.
+		data, readErr := io.ReadAll(io.LimitReader(reader, s.maxUpload+1))
+		closeErr := reader.Close()
+		if readErr != nil || closeErr != nil || int64(len(data)) > s.maxUpload {
+			return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "cannot read original media object")
+		}
+		processed, err := s.processor.Process(ctx, object, job.Profile, data)
+		if err != nil {
+			return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, err.Error())
+		}
+		for name, output := range processed {
+			extension := ".webp"
+			if output.MIMEType == "video/mp4" {
+				extension = ".mp4"
+			}
+			key := fmt.Sprintf("media/%s/renditions/%s/%s%s", job.MediaID, job.ProfileHash, name, extension)
+			if err := s.store.Put(ctx, key, bytes.NewReader(output.Data), int64(len(output.Data)), storage.PutOptions{ContentType: output.MIMEType, CacheControl: cacheControl}); err != nil {
+				return true, s.repo.FailRendition(ctx, job.MediaID, job.ProfileHash, "store processed rendition: "+err.Error())
+			}
+			outputs[name] = StoredOutput{ObjectKey: key, MIMEType: output.MIMEType, Width: output.Width, Height: output.Height}
+		}
 	}
+
 	if err := s.repo.CompleteRendition(ctx, job.MediaID, job.ProfileHash, outputs); err != nil {
 		return true, err
 	}
@@ -158,6 +195,10 @@ func (s *Service) ProcessOne(ctx context.Context) (bool, error) {
 func (s *Service) RunWorker(ctx context.Context, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
+	}
+	if s.workerPollInterval <= 0 || s.renditionLease <= 0 {
+		log.Error("media rendition worker configuration is incomplete")
+		return
 	}
 	for {
 		if ctx.Err() != nil {
@@ -173,7 +214,7 @@ func (s *Service) RunWorker(ctx context.Context, log *slog.Logger) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Second):
+		case <-time.After(s.workerPollInterval):
 		}
 	}
 }
@@ -374,13 +415,7 @@ func (s *Service) hydrateMedia(ctx context.Context, id uuid.UUID, schema map[str
 	for name, output := range record.Outputs {
 		variants[name] = Output{URL: publicRenditionPath(id, hash, name), Width: output.Width, Height: output.Height, MIMEType: output.MIMEType}
 	}
-	imageVariants := make([]Output, 0, len(variants))
-	for _, rendition := range profile.Renditions {
-		if output, ok := variants[rendition.Name]; ok {
-			imageVariants = append(imageVariants, output)
-		}
-	}
-	sort.Slice(imageVariants, func(i, j int) bool { return imageVariants[i].Width < imageVariants[j].Width })
+	imageVariants := responsiveOutputs(profile, variants)
 	src := "/media/" + id.String()
 	srcSetParts := make([]string, 0, len(imageVariants))
 	if len(imageVariants) > 0 {
@@ -390,6 +425,29 @@ func (s *Service) hydrateMedia(ctx context.Context, id uuid.UUID, schema map[str
 		srcSetParts = append(srcSetParts, fmt.Sprintf("%s %dw", output.URL, output.Width))
 	}
 	return ImageSource{ID: id.String(), Kind: "image", OriginalURL: "/media/" + id.String(), Src: src, SrcSet: strings.Join(srcSetParts, ", "), Variants: variants}, nil
+}
+
+func responsiveOutputs(profile FieldProfile, variants map[string]Output) []Output {
+	outputs := make([]Output, 0, len(profile.Renditions))
+	for _, rendition := range profile.Renditions {
+		if output, ok := variants[rendition.Name]; ok && output.Width > 0 && output.Height > 0 {
+			outputs = append(outputs, output)
+		}
+	}
+	sort.SliceStable(outputs, func(i, j int) bool { return outputs[i].Width < outputs[j].Width })
+
+	unique := outputs[:0]
+	for _, output := range outputs {
+		if len(unique) > 0 && unique[len(unique)-1].Width == output.Width {
+			previous := &unique[len(unique)-1]
+			if output.Height > previous.Height {
+				*previous = output
+			}
+			continue
+		}
+		unique = append(unique, output)
+	}
+	return unique
 }
 
 func (s *Service) HydrateFeatureContent(ctx context.Context, profileSchema, data json.RawMessage) (json.RawMessage, error) {

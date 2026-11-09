@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,21 +24,26 @@ import (
 const cacheControl = "public, max-age=31536000, immutable"
 
 type Service struct {
-	repo             *Repository
-	store            storage.ObjectStore
-	maxUpload        int64
-	processor        RenditionProcessor
-	processorErr     error
-	referenceChecker func(context.Context, uuid.UUID) (bool, error)
-}
-
-func NewService(repo *Repository, store storage.ObjectStore, maxUpload int64) *Service {
-	processor, err := NewFFmpegProcessor()
-	return &Service{repo: repo, store: store, maxUpload: maxUpload, processor: processor, processorErr: err}
+	repo               *Repository
+	store              storage.ObjectStore
+	maxUpload          int64
+	processor          RenditionProcessor
+	processorErr       error
+	referenceChecker   func(context.Context, uuid.UUID) (bool, error)
+	renditionLease     time.Duration
+	workerPollInterval time.Duration
 }
 
 func NewServiceWithProcessor(repo *Repository, store storage.ObjectStore, maxUpload int64, processor RenditionProcessor) *Service {
 	return &Service{repo: repo, store: store, maxUpload: maxUpload, processor: processor}
+}
+
+func (s *Service) SetRenditionWorkerConfig(lease, pollInterval time.Duration) error {
+	if lease <= 0 || pollInterval <= 0 {
+		return fmt.Errorf("media rendition lease and worker poll interval must be explicitly configured")
+	}
+	s.renditionLease, s.workerPollInterval = lease, pollInterval
+	return nil
 }
 
 func (s *Service) Upload(ctx context.Context, actor principal.Principal, filename string, data []byte) (Media, error) {
@@ -71,13 +77,14 @@ func (s *Service) Upload(ctx context.Context, actor principal.Principal, filenam
 			return Media{}, &ValidationError{Message: "Повреждённое или слишком большое изображение"}
 		}
 	}
+	digest := sha256.Sum256(data)
 	creator := actor.TokenID
 	id := uuid.New()
 	objectKey := fmt.Sprintf("media/%s/original%s", id, ext)
 	m := Media{
 		ID: id, ObjectKey: objectKey, OriginalFilename: filename, ContentType: contentType,
 		SizeBytes: int64(len(data)), Status: "processing", Variants: map[string]string{},
-		UploadedBy: &creator,
+		UploadedBy: &creator, SHA256: hex.EncodeToString(digest[:]),
 	}
 	_, err := s.repo.Create(ctx, m)
 	if err != nil {
@@ -222,14 +229,6 @@ func (s *Service) Rename(ctx context.Context, id uuid.UUID, filename string) (Me
 		return Media{}, &ConflictError{Message: "Объект удалён"}
 	}
 	return s.repo.Rename(ctx, id, name)
-}
-
-// Usage reports the content records that reference the media object.
-func (s *Service) Usage(ctx context.Context, id uuid.UUID) ([]Usage, error) {
-	if _, err := s.repo.Get(ctx, id); err != nil {
-		return nil, err
-	}
-	return s.repo.Usage(ctx, id, 100)
 }
 
 func (s *Service) Retry(ctx context.Context, id uuid.UUID) (Media, error) {

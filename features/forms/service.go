@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"websiteengine/features/features"
+	"websiteengine/features/files"
 	"websiteengine/pkg/environment"
 	"websiteengine/pkg/platform/validate"
 	"websiteengine/pkg/response"
@@ -32,19 +34,43 @@ type ConflictError struct{ Message string }
 func (e *ConflictError) Error() string { return e.Message }
 func (e *ConflictError) Unwrap() error { return ErrConflict }
 
+type ExportLimitError struct{ MaxRows int }
+
+func (e *ExportLimitError) Error() string {
+	return fmt.Sprintf("Экспорт превышает настроенный предел (%d строк). Уточните фильтры", e.MaxRows)
+}
+
 type Service struct {
-	repo        *Repository
-	featureRepo *features.Repository
-	schemas     SnapshotSchemaProvider
+	repo          *Repository
+	featureRepo   *features.Repository
+	schemas       SnapshotSchemaProvider
+	maxPageSize   int
+	exportMaxRows int
 }
 
 type SnapshotSchemaProvider interface {
 	FormSchema(context.Context, environment.Environment, string) (uuid.UUID, json.RawMessage, error)
 }
 
+type transactionalSnapshotSchemaProvider interface {
+	FormSchemaTx(context.Context, pgx.Tx, environment.Environment, string) (uuid.UUID, json.RawMessage, error)
+}
+
 type SubmissionListSchemaProvider interface {
 	SnapshotSchemaProvider
 	FormSchemaForListing(context.Context, environment.Environment, string) (uuid.UUID, json.RawMessage, error)
+}
+
+// SubmissionSchemaCatalog includes the current form contracts of configured
+// branches; historical schemas are merged independently from stored rows.
+type SubmissionSchemaCatalog interface {
+	FormSchemasForListing(context.Context, string) ([]json.RawMessage, error)
+}
+
+// BranchSubmissionSchemaCatalog supports the all-forms view without mixing
+// fields from a different branch when a particular branch is selected.
+type BranchSubmissionSchemaCatalog interface {
+	FormSchemasForBranchListing(context.Context, environment.Environment, string) ([]json.RawMessage, error)
 }
 
 func NewService(repo *Repository, featureRepo *features.Repository) *Service {
@@ -61,89 +87,45 @@ func (s *Service) Submit(ctx context.Context, env environment.Environment, key s
 	if err := validateObject(data); err != nil {
 		return Submission{}, err
 	}
-	var form FormSchema
-	if s.schemas != nil {
-		schemaID, schema, err := s.schemas.FormSchema(ctx, env, key)
-		if err != nil {
-			return Submission{}, err
-		}
-		feature, err := s.featureRepo.GetByKey(ctx, key)
-		if err != nil {
-			return Submission{}, err
-		}
-		if feature.Type != "form" {
-			return Submission{}, &ValidationError{Message: "Feature не является формой"}
-		}
-		form = FormSchema{FeatureID: feature.ID, FeatureKey: feature.Key, VersionID: schemaID, Schema: schema, Environment: env}
-	}
-	if s.schemas != nil {
-		fieldErrors, err := validate.Validate(form.Schema, data)
-		if err != nil {
-			return Submission{}, fmt.Errorf("validate snapshot form data: %w", err)
-		}
-		if len(fieldErrors) > 0 {
-			return Submission{}, &ValidationError{Message: "Данные не соответствуют форме", Details: fieldErrors}
-		}
+	if s.schemas == nil {
+		return Submission{}, errors.New("snapshot schema provider is not configured")
 	}
 	tx, err := s.repo.Begin(ctx)
 	if err != nil {
 		return Submission{}, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-
-	if s.schemas == nil {
-		form, err = s.repo.LookupFormByKey(ctx, tx, env, key, true)
-		if err != nil {
-			return Submission{}, err
-		}
-		fieldErrors, err := validate.Validate(form.Schema, data)
-		if err != nil {
-			return Submission{}, fmt.Errorf("validate form data: %w", err)
-		}
-		if len(fieldErrors) > 0 {
-			return Submission{}, &ValidationError{Message: "Данные не соответствуют форме", Details: fieldErrors}
-		}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('websiteengine_file_references'))`); err != nil {
+		return Submission{}, err
+	}
+	var form FormSchema
+	provider, ok := s.schemas.(transactionalSnapshotSchemaProvider)
+	if !ok {
+		return Submission{}, errors.New("snapshot schema provider does not support transactional submissions")
+	}
+	schemaID, schema, err := provider.FormSchemaTx(ctx, tx, env, key)
+	if err != nil {
+		return Submission{}, err
+	}
+	var featureID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM features WHERE key=$1`, key).Scan(&featureID); err != nil {
+		return Submission{}, translateDBError(err)
+	}
+	form = FormSchema{FeatureID: featureID, FeatureKey: key, VersionID: schemaID, Schema: schema, Environment: env}
+	fieldErrors, err := validate.Validate(form.Schema, data)
+	if err != nil {
+		return Submission{}, fmt.Errorf("validate form data: %w", err)
+	}
+	if len(fieldErrors) > 0 {
+		return Submission{}, &ValidationError{Message: "Данные не соответствуют форме", Details: fieldErrors}
+	}
+	if err := files.ValidateReferencesTx(ctx, tx, form.Schema, data, false); err != nil {
+		return Submission{}, &ValidationError{Message: "Указанный файл недоступен"}
 	}
 	submission := Submission{
 		ID: uuid.New(), FeatureID: form.FeatureID, FeatureKey: form.FeatureKey,
 		SchemaVersionID: form.VersionID, Environment: form.Environment.String(), Data: data, Status: "new",
 	}
-	if err := s.repo.InsertSubmission(ctx, tx, submission); err != nil {
-		return Submission{}, translateDBError(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Submission{}, translateDBError(err)
-	}
-	return submission, nil
-}
-
-// SubmitWithSchema persists a submission using the schema pinned by the
-// active site snapshot. This keeps form validation stable across promotions
-// and rollbacks while the submissions themselves remain independent.
-func (s *Service) SubmitWithSchema(ctx context.Context, env environment.Environment, key string, schemaVersionID uuid.UUID, schema, data json.RawMessage) (Submission, error) {
-	if err := validateObject(data); err != nil {
-		return Submission{}, err
-	}
-	fieldErrors, err := validate.Validate(schema, data)
-	if err != nil {
-		return Submission{}, fmt.Errorf("validate snapshot form data: %w", err)
-	}
-	if len(fieldErrors) > 0 {
-		return Submission{}, &ValidationError{Message: "Данные не соответствуют форме", Details: fieldErrors}
-	}
-	feature, err := s.featureRepo.GetByKey(ctx, key)
-	if err != nil {
-		return Submission{}, err
-	}
-	if feature.Type != "form" {
-		return Submission{}, &ValidationError{Message: "Feature не является формой"}
-	}
-	tx, err := s.repo.Begin(ctx)
-	if err != nil {
-		return Submission{}, err
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	submission := Submission{ID: uuid.New(), FeatureID: feature.ID, FeatureKey: feature.Key, SchemaVersionID: schemaVersionID, Environment: env.String(), Data: data, Status: "new"}
 	if err := s.repo.InsertSubmission(ctx, tx, submission); err != nil {
 		return Submission{}, translateDBError(err)
 	}
@@ -177,6 +159,12 @@ type FieldDefinition struct {
 }
 
 func (s *Service) List(ctx context.Context, key string, filter ListFilter) ([]Submission, string, []FieldDefinition, error) {
+	if s.maxPageSize < 1 {
+		return nil, "", nil, errors.New("submission pagination limits are not configured")
+	}
+	if filter.Limit < 1 || filter.Limit > s.maxPageSize {
+		return nil, "", nil, &ValidationError{Message: fmt.Sprintf("limit должен быть от 1 до %d", s.maxPageSize)}
+	}
 	feature, form, fields, err := s.formContext(ctx, filter.Environment, key)
 	if err != nil {
 		return nil, "", nil, err
@@ -211,8 +199,12 @@ func (s *Service) List(ctx context.Context, key string, filter ListFilter) ([]Su
 	return items, next, fields, nil
 }
 
-// Export returns a capped result set and the searchable field names for CSV.
+// Export rejects a result set above its configured ceiling rather than
+// returning a CSV that silently omits matching submissions.
 func (s *Service) Export(ctx context.Context, key string, filter ListFilter) ([]Submission, []FieldDefinition, error) {
+	if s.maxPageSize < 1 || s.exportMaxRows < 1 {
+		return nil, nil, errors.New("submission pagination and export limits are not configured")
+	}
 	_, form, fields, err := s.formContext(ctx, filter.Environment, key)
 	if err != nil {
 		return nil, nil, err
@@ -230,9 +222,15 @@ func (s *Service) Export(ctx context.Context, key string, filter ListFilter) ([]
 	items, err := s.repo.List(ctx, s.repo.pool, ListParams{
 		FeatureID: form.FeatureID, Environment: filter.Environment, Status: filter.Status, CreatedFrom: filter.CreatedFrom,
 		CreatedTo: filter.CreatedTo, SearchFields: searchFields, Search: filter.Search,
-		IncludeArchived: filter.IncludeArchived, SortAsc: filter.Sort == "asc", Limit: 10000,
+		IncludeArchived: filter.IncludeArchived, SortAsc: filter.Sort == "asc", Limit: s.exportMaxRows + 1,
 	})
-	return items, fields, err
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(items) > s.exportMaxRows {
+		return nil, nil, &ExportLimitError{MaxRows: s.exportMaxRows}
+	}
+	return items, fields, nil
 }
 
 func (s *Service) SetStatus(ctx context.Context, id uuid.UUID, status string, actor uuid.UUID) (Submission, error) {
@@ -255,12 +253,43 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 func (s *Service) formContext(ctx context.Context, env environment.Environment, key string) (features.Feature, FormSchema, []FieldDefinition, error) {
-	feature, err := s.featureRepo.GetByKey(ctx, key)
+	if s.schemas == nil {
+		return features.Feature{}, FormSchema{}, nil, errors.New("snapshot schema provider is not configured")
+	}
+	if key == "" {
+		historical, err := s.repo.HistoricalSubmissionSchemas(ctx, uuid.Nil, env)
+		if err != nil {
+			return features.Feature{}, FormSchema{}, nil, err
+		}
+		var fields []FieldDefinition
+		for _, schema := range historical {
+			fields = mergeSchemaFields(fields, schemaFields(schema))
+		}
+		if catalog, ok := s.schemas.(BranchSubmissionSchemaCatalog); ok {
+			schemas, err := catalog.FormSchemasForBranchListing(ctx, env, "")
+			if err != nil {
+				return features.Feature{}, FormSchema{}, nil, err
+			}
+			for _, schema := range schemas {
+				fields = mergeSchemaFields(fields, schemaFields(schema))
+			}
+		}
+		return features.Feature{}, FormSchema{}, fields, nil
+	}
+	feature, err := s.featureRepo.GetIdentityByKey(ctx, key)
 	if err != nil {
 		return features.Feature{}, FormSchema{}, nil, err
 	}
 	if feature.Type != "form" {
 		return features.Feature{}, FormSchema{}, nil, &ValidationError{Message: "Feature не является формой"}
+	}
+	historical, err := s.repo.HistoricalSubmissionSchemas(ctx, feature.ID, env)
+	if err != nil {
+		return features.Feature{}, FormSchema{}, nil, err
+	}
+	historyFields := []FieldDefinition{}
+	for _, schema := range historical {
+		historyFields = mergeSchemaFields(historyFields, schemaFields(schema))
 	}
 	if s.schemas != nil {
 		listSchema := func(ctx context.Context, env environment.Environment, key string) (uuid.UUID, json.RawMessage, error) {
@@ -270,57 +299,28 @@ func (s *Service) formContext(ctx context.Context, env environment.Environment, 
 			return s.schemas.FormSchema(ctx, env, key)
 		}
 		if env == "" {
-			devID, devSchema, devErr := listSchema(ctx, environment.Dev, key)
-			prodID, prodSchema, prodErr := listSchema(ctx, environment.Prod, key)
-			if devErr != nil && prodErr != nil {
-				return features.Feature{}, FormSchema{}, nil, devErr
+			if catalog, ok := s.schemas.(SubmissionSchemaCatalog); ok {
+				schemas, err := catalog.FormSchemasForListing(ctx, key)
+				if err != nil {
+					return features.Feature{}, FormSchema{}, nil, err
+				}
+				fields := historyFields
+				for _, schema := range schemas {
+					fields = mergeSchemaFields(fields, schemaFields(schema))
+				}
+				return feature, FormSchema{FeatureID: feature.ID, FeatureKey: feature.Key}, fields, nil
 			}
-
-			schemaID, schema, schemaEnv := devID, devSchema, environment.Dev
-			if devErr != nil {
-				schemaID, schema, schemaEnv = prodID, prodSchema, environment.Prod
-			}
-			fields := mergeSchemaFields(
-				fieldsForSchema(devSchema, devErr),
-				fieldsForSchema(prodSchema, prodErr),
-			)
-			return feature, FormSchema{FeatureID: feature.ID, FeatureKey: feature.Key, VersionID: schemaID, Schema: schema, Environment: schemaEnv}, fields, nil
+			return features.Feature{}, FormSchema{}, nil, errors.New("snapshot schema provider does not expose branch form catalogs")
 		}
 		schemaEnv := env
 		schemaID, schema, err := listSchema(ctx, schemaEnv, key)
 		if err != nil {
 			return features.Feature{}, FormSchema{}, nil, err
 		}
-		fields := schemaFields(schema)
+		fields := mergeSchemaFields(historyFields, schemaFields(schema))
 		return feature, FormSchema{FeatureID: feature.ID, FeatureKey: feature.Key, VersionID: schemaID, Schema: schema, Environment: schemaEnv}, fields, nil
 	}
-	var schema json.RawMessage
-	var schemaID uuid.UUID
-	var schemaVersion int
-	id := feature.DevVersionID
-	if env == environment.Prod {
-		id = feature.ProdVersionID
-	}
-	if id == nil {
-		id = feature.DevVersionID
-	}
-	if id == nil {
-		id = feature.ProdVersionID
-	}
-	if id == nil {
-		id = feature.DraftVersionID
-	}
-	if id != nil {
-		v, err := s.featureRepo.VersionByID(ctx, s.repo.pool, *id)
-		if err != nil {
-			return features.Feature{}, FormSchema{}, nil, err
-		}
-		schema = v.Schema
-		schemaID = v.ID
-		schemaVersion = v.Version
-	}
-	fields := schemaFields(schema)
-	return feature, FormSchema{FeatureID: feature.ID, FeatureKey: feature.Key, VersionID: schemaID, Version: schemaVersion, Schema: schema, Environment: env}, fields, nil
+	return features.Feature{}, FormSchema{}, nil, errors.New("snapshot schema provider is not configured")
 }
 
 func fieldsForSchema(schema json.RawMessage, err error) []FieldDefinition {
@@ -386,9 +386,6 @@ func chooseSearchFields(fields []FieldDefinition, requested string) ([]string, e
 		for i, field := range fields {
 			keys[i] = field.Key
 		}
-		if len(keys) > 10 {
-			return keys[:10], nil
-		}
 		return keys, nil
 	}
 	for _, field := range fields {
@@ -435,4 +432,18 @@ func translateDBError(err error) error {
 		}
 	}
 	return fmt.Errorf("forms: %w", err)
+}
+
+func (s *Service) BranchChoices(ctx context.Context) ([]BranchChoice, error) {
+	return s.repo.BranchChoices(ctx)
+}
+
+// SetLimits binds production behavior to explicit operator configuration.
+func (s *Service) SetLimits(maxPageSize, exportMaxRows int) error {
+	if maxPageSize < 1 || exportMaxRows < 1 || exportMaxRows == int(^uint(0)>>1) {
+		return errors.New("submission page and export limits must be positive")
+	}
+	s.maxPageSize = maxPageSize
+	s.exportMaxRows = exportMaxRows
+	return nil
 }

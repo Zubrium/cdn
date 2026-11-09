@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	defaultMaxArtifactBytes  = 100 << 20
 	maxExpandedArtifactBytes = 300 << 20
 	maxArchiveFiles          = 600
 	maxArchiveFileBytes      = 80 << 20
@@ -39,10 +38,10 @@ type VerifiedArchive struct {
 
 // VerifyArchive validates a feature ZIP before any contents are persisted. It
 // rejects traversal, links, duplicate paths, oversized entries and manifests
-// that refer to absent ESM/CSS files.
+// that refer to absent runtime entries, stylesheets or local browser assets.
 func VerifyArchive(raw []byte, maxBytes int64) (VerifiedArchive, error) {
 	if maxBytes <= 0 {
-		maxBytes = defaultMaxArtifactBytes
+		return VerifiedArchive{}, fmt.Errorf("feature archive limit must be explicitly configured")
 	}
 	if len(raw) == 0 || int64(len(raw)) > maxBytes {
 		return VerifiedArchive{}, fmt.Errorf("feature archive must be between 1 and %d bytes", maxBytes)
@@ -101,6 +100,14 @@ func VerifyArchive(raw []byte, maxBytes int64) (VerifiedArchive, error) {
 		}
 		digest := sha256.Sum256(data)
 		contentType := mime.TypeByExtension(strings.ToLower(path.Ext(name)))
+		switch strings.ToLower(path.Ext(name)) {
+		case ".js", ".mjs":
+			contentType = "text/javascript; charset=utf-8"
+		case ".css":
+			contentType = "text/css; charset=utf-8"
+		case ".html", ".htm":
+			contentType = "text/html; charset=utf-8"
+		}
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
@@ -117,12 +124,24 @@ func VerifyArchive(raw []byte, maxBytes int64) (VerifiedArchive, error) {
 	for _, asset := range assets {
 		assetPaths[asset.Path] = true
 	}
-	if !assetPaths[manifest.Entry] {
-		return VerifiedArchive{}, fmt.Errorf("manifest entry %q is absent from the archive", manifest.Entry)
+	entry := manifest.RuntimeEntry()
+	if !assetPaths[entry] {
+		return VerifiedArchive{}, fmt.Errorf("manifest entry %q is absent from the archive", entry)
 	}
-	for _, style := range append(append([]string(nil), manifest.Styles...), manifest.SharedStyles...) {
+	styles := manifest.RuntimeStyles()
+	if manifest.Runtime == nil {
+		styles = append(append([]string(nil), manifest.Styles...), manifest.SharedStyles...)
+	} else {
+		styles = append(append([]string(nil), styles...), manifest.RuntimeSharedStyles()...)
+	}
+	for _, style := range styles {
 		if !assetPaths[style] {
 			return VerifiedArchive{}, fmt.Errorf("manifest stylesheet %q is absent from the archive", style)
+		}
+	}
+	if manifest.Runtime != nil {
+		if err := validateStaticFeatureAssets(manifest, assets, assetPaths); err != nil {
+			return VerifiedArchive{}, err
 		}
 	}
 	digest := sha256.Sum256(raw)

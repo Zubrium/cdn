@@ -1,31 +1,25 @@
-// Package environment describes the deployable content environment.
+// Package environment carries the configured branch identifier on requests.
 package environment
 
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 )
 
 type Environment string
 
-const (
-	Dev  Environment = "dev"
-	Prod Environment = "prod"
-)
-
 func Parse(raw string) (Environment, error) {
-	switch Environment(raw) {
-	case Dev:
-		return Dev, nil
-	case Prod:
-		return Prod, nil
-	default:
-		return "", fmt.Errorf("environment must be dev or prod")
+	branchID, err := uuid.Parse(raw)
+	if err == nil {
+		return Environment(branchID.String()), nil
 	}
+	return "", fmt.Errorf("branch ID must be a UUID")
 }
 
 func (e Environment) Valid() bool {
-	return e == Dev || e == Prod
+	_, err := uuid.Parse(string(e))
+	return err == nil
 }
 
 func (e Environment) String() string { return string(e) }
@@ -40,8 +34,5 @@ func FromContext(ctx context.Context) Environment {
 	if env, ok := ctx.Value(contextKey{}).(Environment); ok && env.Valid() {
 		return env
 	}
-	return Prod
+	return ""
 }
-
-func IsDev(env Environment) bool  { return env == Dev }
-func IsProd(env Environment) bool { return env == Prod }

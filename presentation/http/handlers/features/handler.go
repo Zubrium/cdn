@@ -1,33 +1,45 @@
 package features
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
-	"websiteengine/features/auth"
-	"websiteengine/features/features"
-	"websiteengine/pkg/principal"
 
 	"github.com/google/uuid"
 
-	"websiteengine/pkg/environment"
+	"websiteengine/features/features"
 	"websiteengine/pkg/response"
 )
 
 type Handler struct {
-	service *features.Service
-	log     *slog.Logger
-	maxJSON int64
+	service     *features.Service
+	log         *slog.Logger
+	pageDefault int
+	pageMax     int
 }
 
-func NewHandler(service *features.Service, log *slog.Logger, maxJSON int64) *Handler {
-	return &Handler{service: service, log: log, maxJSON: maxJSON}
+func NewHandler(service *features.Service, log *slog.Logger) *Handler {
+	return &Handler{service: service, log: log}
 }
 
+// SetPagination binds list endpoints to operator-configured page limits.
+func (h *Handler) SetPagination(defaultPage, maxPage int) error {
+	if defaultPage < 1 || maxPage < defaultPage {
+		return errors.New("feature pagination limits are invalid")
+	}
+	h.pageDefault, h.pageMax = defaultPage, maxPage
+	return nil
+}
+
+// List exposes feature identities for submission filters. It never returns or
+// edits a global content schema; the active schema is pinned by each snapshot.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), 50, 200)
+	if h.pageDefault < 1 || h.pageMax < h.pageDefault {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
+	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
@@ -40,83 +52,18 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nullableString(next)})
 }
 
-func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	actor, ok := principal.FromContext(r.Context())
-	if !ok {
-		response.Error(w, r, http.StatusUnauthorized, "unauthorized", "Требуется авторизация")
-		return
-	}
-	if !auth.CanCreateFeature(string(actor.Role)) {
-		response.Error(w, r, http.StatusForbidden, "forbidden", "Недостаточно прав для создания раздела: "+string(actor.Role))
-		return
-	}
-	var in features.CreateInput
-	if err := response.DecodeJSON(w, r, &in, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	detail, err := h.service.Create(r.Context(), actor, in)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusCreated, detail)
-}
-
-func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	detail, err := h.service.Detail(r.Context(), id)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, detail)
-}
-
-type updateFeatureRequest struct {
-	Name string `json:"name"`
-}
-
-func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	var req updateFeatureRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	feature, err := h.service.UpdateName(r.Context(), id, req.Name)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, feature)
-}
-
-func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	feature, err := h.service.Archive(r.Context(), id)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, feature)
-}
-
+// Versions returns immutable manifest schemas associated with imported builds
+// so historical form submissions can retain their original field labels.
 func (h *Handler) Versions(w http.ResponseWriter, r *http.Request) {
+	if h.pageDefault < 1 || h.pageMax < h.pageDefault {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
 	id, ok := featureID(w, r)
 	if !ok {
 		return
 	}
-	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), 50, 200)
+	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
@@ -129,126 +76,10 @@ func (h *Handler) Versions(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]any{"items": versions})
 }
 
-func (h *Handler) Draft(w http.ResponseWriter, r *http.Request) {
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	state, err := h.service.DraftState(r.Context(), id)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-type saveDraftRequest struct {
-	Revision int64           `json:"revision"`
-	Schema   json.RawMessage `json:"schema"`
-}
-
-func (h *Handler) SaveDraft(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	var req saveDraftRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	state, err := h.service.SaveDraft(r.Context(), actor, id, req.Revision, req.Schema)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-type revisionRequest struct {
-	Revision int64 `json:"revision"`
-}
-
-func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	var req revisionRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	detail, err := h.service.Publish(r.Context(), actor, id, req.Revision)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, detail)
-}
-
-type promoteRequest struct {
-	Revision int64 `json:"revision"`
-}
-
-func (h *Handler) Promote(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	var req promoteRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	detail, err := h.service.Promote(r.Context(), actor, id, req.Revision)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, detail)
-}
-
-type rollbackRequest struct {
-	Version     int    `json:"version"`
-	Environment string `json:"environment"`
-}
-
-func (h *Handler) Rollback(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := featureID(w, r)
-	if !ok {
-		return
-	}
-	var req rollbackRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	env, err := environment.Parse(req.Environment)
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_environment", err.Error())
-		return
-	}
-	if !auth.CanRollbackContent(string(actor.Role), env) {
-		response.Error(w, r, http.StatusForbidden, "forbidden", "Недостаточно прав для отката в этой среде")
-		return
-	}
-	detail, err := h.service.Rollback(r.Context(), actor, id, req.Version, env)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, detail)
-}
-
 func featureID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		response.Error(w, r, http.StatusNotFound, "not_found", "Раздел не найден")
+		response.Error(w, r, http.StatusNotFound, "not_found", "Feature was not found")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -263,25 +94,13 @@ func nullableString(s string) any {
 
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var validationErr *features.ValidationError
-	var schemaErr *features.SchemaValidationError
-	var conflictErr *features.ConflictError
 	switch {
-	case errors.As(err, &schemaErr):
-		details := make([]response.ErrorDetail, 0, len(schemaErr.Details))
-		for _, d := range schemaErr.Details {
-			details = append(details, response.ErrorDetail{Path: d.Path, Code: d.Code, Message: d.Message})
-		}
-		response.Error(w, r, http.StatusUnprocessableEntity, "schema_validation_failed", schemaErr.Message, details...)
 	case errors.As(err, &validationErr):
 		response.Error(w, r, http.StatusBadRequest, "validation_failed", validationErr.Message)
-	case errors.As(err, &conflictErr):
-		response.Error(w, r, http.StatusConflict, "conflict", conflictErr.Message)
 	case errors.Is(err, features.ErrNotFound):
-		response.Error(w, r, http.StatusNotFound, "not_found", "Раздел не найден")
-	case errors.Is(err, features.ErrConflict):
-		response.Error(w, r, http.StatusConflict, "conflict", "Конфликт состояния раздела")
+		response.Error(w, r, http.StatusNotFound, "not_found", "Feature was not found")
 	default:
-		h.log.Error("feature operation failed", "request_id", response.RequestID(r.Context()), "error", err)
-		response.Error(w, r, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка сервера")
+		h.log.Error("feature query failed", "request_id", response.RequestID(r.Context()), "error", err)
+		response.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
 	}
 }

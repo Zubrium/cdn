@@ -4,12 +4,12 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "../pkg/static/dist/**"],
+    ignores: ["frontend/dist/**", "pkg/static/dist/**", "pkg/runtime/dist/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.{ts,tsx}"],
+    files: ["frontend/admin/src/**/*.{ts,tsx}", "pkg/runtime/scripts/**/*.{ts,tsx}"],
     languageOptions: {
       globals: {
         window: "readonly",

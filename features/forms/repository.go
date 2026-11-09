@@ -43,6 +43,16 @@ type Submission struct {
 	DeletedAt       *time.Time      `json:"deleted_at,omitempty"`
 }
 
+// MarshalJSON exposes the configured branch identity while preserving the
+// historical environment alias for existing consumers.
+func (s Submission) MarshalJSON() ([]byte, error) {
+	type plain Submission
+	return json.Marshal(struct {
+		plain
+		BranchID string `json:"branchId"`
+	}{plain(s), s.Environment})
+}
+
 type FormSchema struct {
 	FeatureID   uuid.UUID
 	FeatureKey  string
@@ -75,30 +85,6 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 
 func (r *Repository) Begin(ctx context.Context) (pgx.Tx, error) { return r.pool.Begin(ctx) }
 
-func (r *Repository) LookupFormByKey(ctx context.Context, db DBTX, env environment.Environment, key string, lock bool) (FormSchema, error) {
-	column := "dev_version_id"
-	if env == environment.Prod {
-		column = "prod_version_id"
-	}
-	query := `
-		SELECT f.id, f.key, v.id, v.version, v.schema
-		  FROM features f
-		  JOIN feature_versions v ON v.id = f.` + column + `
-		 WHERE f.key = $1
-		   AND f.type = 'form'
-		   AND f.status = 'active'`
-	if lock {
-		query += ` FOR SHARE OF f`
-	}
-	var f FormSchema
-	f.Environment = env
-	err := db.QueryRow(ctx, query, key).Scan(&f.FeatureID, &f.FeatureKey, &f.VersionID, &f.Version, &f.Schema)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return FormSchema{}, ErrNotFound
-	}
-	return f, err
-}
-
 func (r *Repository) InsertSubmission(ctx context.Context, db DBTX, s Submission) error {
 	return db.QueryRow(ctx, `
 		INSERT INTO form_submissions (id, feature_id, schema_version_id, environment, data, status)
@@ -115,7 +101,7 @@ func (r *Repository) Get(ctx context.Context, db DBTX, id uuid.UUID) (Submission
 		       s.processed_by, s.created_at, s.updated_at, s.archived_at, s.deleted_at
 		  FROM form_submissions s
 		  JOIN features f ON f.id = s.feature_id
-		 WHERE s.id = $1`, id,
+		 WHERE s.id = $1 AND s.deleted_at IS NULL `, id,
 	).Scan(&s.ID, &s.FeatureID, &s.FeatureKey, &s.SchemaVersionID, &s.Environment, &s.Data, &s.Status,
 		&s.ProcessedBy, &s.CreatedAt, &s.UpdatedAt, &s.ArchivedAt, &s.DeletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -125,9 +111,13 @@ func (r *Repository) Get(ctx context.Context, db DBTX, id uuid.UUID) (Submission
 }
 
 func (r *Repository) List(ctx context.Context, db DBTX, p ListParams) ([]Submission, error) {
-	args := []any{p.FeatureID, p.Environment.String(), p.Status, p.CreatedFrom, p.CreatedTo}
+	var featureID any
+	if p.FeatureID != uuid.Nil {
+		featureID = p.FeatureID
+	}
+	args := []any{featureID, p.Environment.String(), p.Status, p.CreatedFrom, p.CreatedTo}
 	where := []string{
-		"s.feature_id = $1",
+		"($1::uuid IS NULL OR s.feature_id = $1)",
 		"s.deleted_at IS NULL",
 		"($2 = '' OR s.environment = $2)",
 		"($3 = '' OR s.status = $3)",
@@ -140,7 +130,7 @@ func (r *Repository) List(ctx context.Context, db DBTX, p ListParams) ([]Submiss
 	if p.Search != "" && len(p.SearchFields) > 0 {
 		expressions := make([]string, 0, len(p.SearchFields))
 		for _, field := range p.SearchFields {
-			args = append(args, field, "%"+p.Search+"%")
+			args = append(args, field, "%"+escapeLikeSearch(p.Search)+"%")
 			expressions = append(expressions, fmt.Sprintf("(s.data->>$%d) ILIKE $%d", len(args)-1, len(args)))
 		}
 		where = append(where, "("+strings.Join(expressions, " OR ")+")")
@@ -223,4 +213,53 @@ func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func escapeLikeSearch(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
+// HistoricalSubmissionSchemas survives branch removal and feature upgrades.
+func (r *Repository) HistoricalSubmissionSchemas(ctx context.Context, featureID uuid.UUID, branch environment.Environment) ([]json.RawMessage, error) {
+	var selectedFeature any
+	if featureID != uuid.Nil {
+		selectedFeature = featureID
+	}
+	rows, err := r.pool.Query(ctx, `SELECT DISTINCT v.schema FROM form_submissions s JOIN feature_versions v ON v.id=s.schema_version_id WHERE ($1::uuid IS NULL OR s.feature_id=$1) AND ($2='' OR s.environment=$2) AND s.deleted_at IS NULL`, selectedFeature, branch.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	schemas := []json.RawMessage{}
+	for rows.Next() {
+		var schema json.RawMessage
+		if err := rows.Scan(&schema); err != nil {
+			return nil, err
+		}
+		schemas = append(schemas, schema)
+	}
+	return schemas, rows.Err()
+}
+
+type BranchChoice struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}
+
+func (r *Repository) BranchChoices(ctx context.Context) ([]BranchChoice, error) {
+	rows, err := r.pool.Query(ctx, `SELECT e.key,e.name,e.enabled FROM site_environments e WHERE e.enabled OR EXISTS(SELECT 1 FROM form_submissions s WHERE s.environment=e.key AND s.deleted_at IS NULL) ORDER BY e.name,e.key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BranchChoice{}
+	for rows.Next() {
+		var item BranchChoice
+		if err := rows.Scan(&item.ID, &item.Name, &item.Enabled); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }

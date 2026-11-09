@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../../vitasil/frontend/src/*"],
+      "react": ["../../vitasil/frontend/node_modules/@types/react/index.d.ts"],
+      "react/*": ["../../vitasil/frontend/node_modules/@types/react/*"],
+      "react-dom": ["../../vitasil/frontend/node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["../../vitasil/frontend/node_modules/@types/react-dom/*"]
+    }
+  },
+  "include": ["src", "../../vitasil/frontend/node_modules/vite/client.d.ts"]
+}

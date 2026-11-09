@@ -14,7 +14,9 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/lib/pq v1.10.9
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	github.com/tdewolff/parse/v2 v2.8.16
 	golang.org/x/image v0.24.0
+	golang.org/x/net v0.61.0
 )
 
 require (

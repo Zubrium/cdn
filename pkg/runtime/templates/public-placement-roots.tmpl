@@ -1,0 +1,5 @@
+{{define "placement"}}<div class="runtime-placement runtime-placement--{{.Slot}}" data-engine-feature="{{.FeatureKey}}" data-engine-placement="{{.ID}}" data-engine-slot="{{.Slot}}"></div>{{end}}
+
+{{define "pageRoot"}}<div id="root" class="runtime-page runtime-page--{{.PageKind}}" data-snapshot="{{.SnapshotID}}" data-content-revision="{{.ContentRevision}}">{{range .Background}}{{template "placement" .}}{{end}}{{range .Header}}{{template "placement" .}}{{end}}<main class="runtime-slot runtime-slot--main">{{range .Main}}{{template "placement" .}}{{end}}</main>{{range .Footer}}{{template "placement" .}}{{end}}</div>{{end}}
+
+{{define "publicPlacementDocument"}}{{.Before}}{{template "pageRoot" .Groups}}{{.After}}{{end}}

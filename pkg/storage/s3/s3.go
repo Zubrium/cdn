@@ -37,6 +37,10 @@ func New(ctx context.Context, cfg config.S3Config) (*Store, error) {
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = cfg.ForcePathStyle
+		// File objects are streamed from non-seekable readers. The application
+		// verifies their SHA-256 before commit; optional trailing SDK checksums
+		// cannot be sent over plain HTTP to S3-compatible stores such as MinIO.
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 	return &Store{client: client, bucket: cfg.Bucket, publicBaseURL: strings.TrimRight(cfg.PublicBaseURL, "/")}, nil
 }
@@ -94,9 +98,8 @@ func (s *Store) PublicURL(key string) (string, error) {
 	return base.String(), nil
 }
 
-// EnsureBucket creates the configured bucket when missing and applies a
-// public-read policy. It is intended for local development and self-hosted
-// deployments; production buckets are usually managed by infrastructure.
+// EnsureBucket creates the configured bucket when missing and removes public
+// bucket policies. Bytes are served through the engine's access checks.
 func (s *Store) EnsureBucket(ctx context.Context) error {
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)})
 	if err != nil {
@@ -111,12 +114,52 @@ func (s *Store) EnsureBucket(ctx context.Context) error {
 			}
 		}
 	}
-	policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}`, s.bucket)
-	if _, err := s.client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
+	if _, err := s.client.DeleteBucketPolicy(ctx, &s3.DeleteBucketPolicyInput{
 		Bucket: aws.String(s.bucket),
-		Policy: aws.String(policy),
 	}); err != nil {
-		return fmt.Errorf("set S3 public policy: %w", err)
+		return fmt.Errorf("remove S3 public policy: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) Stat(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	if err != nil {
+		return storage.ObjectInfo{}, fmt.Errorf("stat S3 object: %w", err)
+	}
+	return storage.ObjectInfo{Size: aws.ToInt64(out.ContentLength), ContentType: aws.ToString(out.ContentType)}, nil
+}
+
+func (s *Store) GetRange(ctx context.Context, key string, start, end int64) (io.ReadCloser, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Range: aws.String(fmt.Sprintf("bytes=%d-%d", start, end))})
+	if err != nil {
+		return nil, fmt.Errorf("read S3 range: %w", err)
+	}
+	return out.Body, nil
+}
+
+// RequirePrivate refuses a bucket policy granting anonymous object reads.
+// Existing deployments must remove that policy before private files are used.
+func (s *Store) RequirePrivate(ctx context.Context) error {
+	acl, err := s.client.GetBucketAcl(ctx, &s3.GetBucketAclInput{Bucket: aws.String(s.bucket)})
+	if err != nil {
+		return fmt.Errorf("check private bucket ACL: %w", err)
+	}
+	for _, grant := range acl.Grants {
+		if grant.Grantee != nil && grant.Grantee.URI != nil && (strings.HasSuffix(*grant.Grantee.URI, "/AllUsers") || strings.HasSuffix(*grant.Grantee.URI, "/AuthenticatedUsers")) {
+			return errors.New("S3 bucket ACL must not grant public access")
+		}
+	}
+	policy, err := s.client.GetBucketPolicyStatus(ctx, &s3.GetBucketPolicyStatusInput{Bucket: aws.String(s.bucket)})
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchBucketPolicy" || apiErr.ErrorCode() == "NoSuchPolicy") {
+			return nil
+		}
+		return fmt.Errorf("check private bucket policy: %w", err)
+	}
+	if policy.PolicyStatus != nil && aws.ToBool(policy.PolicyStatus.IsPublic) {
+		return errors.New("S3 bucket must be private; public policy would bypass file authorization")
 	}
 	return nil
 }

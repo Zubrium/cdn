@@ -22,42 +22,87 @@ var supportedEngineAPIs = map[string]bool{"1": true, "2": true}
 
 var (
 	featureKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,99}$`)
-	versionPattern    = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	versionPattern    = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 	argumentPattern   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 	allowedSlots      = map[string]bool{"background": true, "header": true, "main": true, "footer": true}
 )
 
-// Manifest is shipped next to each feature's ESM entry point. The JSON
-// Schemas are authored by the feature developer and are rendered by the
-// engine's form generator; they are never edited in the admin UI.
+// Manifest is shipped at the root of each feature build. It describes feature
+// arguments, typed model inputs, public form submission validation, and the
+// browser runtime contract. It never defines CMS record forms.
 type Manifest struct {
-	FormatVersion int             `json:"formatVersion"`
-	Key           string          `json:"key"`
-	Name          string          `json:"name"`
-	Category      string          `json:"category,omitempty"`
-	Version       string          `json:"version"`
-	EngineAPI     string          `json:"engineApi"`
-	Entry         string          `json:"entry"`
-	Styles        []string        `json:"styles,omitempty"`
-	SharedStyles  []string        `json:"sharedStyles,omitempty"`
-	Slots         []string        `json:"slots"`
-	Arguments     json.RawMessage `json:"arguments"`
-	Content       ContentContract `json:"content"`
-	Form          *FormContract   `json:"form,omitempty"`
+	FormatVersion int                      `json:"formatVersion"`
+	Key           string                   `json:"key"`
+	Name          string                   `json:"name"`
+	Category      string                   `json:"category,omitempty"`
+	Version       string                   `json:"version"`
+	EngineAPI     string                   `json:"engineApi"`
+	Entry         string                   `json:"entry,omitempty"`
+	Styles        []string                 `json:"styles,omitempty"`
+	SharedStyles  []string                 `json:"sharedStyles,omitempty"`
+	Runtime       *RuntimeContract         `json:"runtime,omitempty"`
+	Slots         []string                 `json:"slots"`
+	Arguments     json.RawMessage          `json:"arguments"`
+	RuntimeInput  RuntimeInputContract     `json:"-"` // derived validation shape; never supplied by manifest JSON
+	DataInputs    []DataInputPort          `json:"dataInputs"`
+	Form          *FormContract            `json:"form,omitempty"`
+	DesignTokens  []FeatureTokenDefinition `json:"designTokens,omitempty"`
+	Requests      []FeatureRequestSlot     `json:"requests,omitempty"`
 }
 
-type ContentContract struct {
-	Mode           string          `json:"mode"`
-	Schema         json.RawMessage `json:"schema"`
-	SettingsSchema json.RawMessage `json:"settingsSchema,omitempty"`
-	// Form is accepted for builds created by an earlier engine draft. New
-	// manifests declare the submission schema at the top-level form property.
-	Form *FormContract `json:"form,omitempty"`
+// RuntimeContract selects an immutable browser runtime ABI for this build.
+// An omitted Runtime keeps the original React component ABI and its root-level
+// entry/styles fields.
+type RuntimeContract struct {
+	ABI          string   `json:"abi"`
+	Entry        string   `json:"entry"`
+	Styles       []string `json:"styles,omitempty"`
+	SharedStyles []string `json:"sharedStyles,omitempty"`
 }
 
-// FormContract keeps editable form presentation content separate from the
-// schema used to validate public submissions. Older manifests omit this
-// block; their content.schema remains the submission schema.
+const (
+	RuntimeABIReactComponent = "legacy-react-v1"
+	RuntimeABIStaticModule   = "static-module-v1"
+	RuntimeABIStaticHTML     = "static-html-v1"
+)
+
+func (m Manifest) RuntimeABI() string {
+	if m.Runtime == nil {
+		return RuntimeABIReactComponent
+	}
+	return m.Runtime.ABI
+}
+
+func (m Manifest) RuntimeEntry() string {
+	if m.Runtime != nil {
+		return m.Runtime.Entry
+	}
+	return m.Entry
+}
+
+func (m Manifest) RuntimeStyles() []string {
+	if m.Runtime != nil {
+		return m.Runtime.Styles
+	}
+	return m.Styles
+}
+
+func (m Manifest) RuntimeSharedStyles() []string {
+	if m.Runtime != nil {
+		return m.Runtime.SharedStyles
+	}
+	return m.SharedStyles
+}
+
+// RuntimeInputContract is generated from typed DataInputs. It validates the
+// runtime payload projected from model records; its schema is not a CMS schema.
+type RuntimeInputContract struct {
+	Mode   string          `json:"mode"`
+	Schema json.RawMessage `json:"schema"`
+}
+
+// FormContract defines public submission validation. Editable form copy and
+// labels arrive through model data inputs.
 type FormContract struct {
 	SubmissionSchema json.RawMessage `json:"submissionSchema"`
 }
@@ -66,9 +111,42 @@ func (m Manifest) SubmissionSchema() json.RawMessage {
 	if m.Form != nil {
 		return m.Form.SubmissionSchema
 	}
-	if m.Content.Form != nil {
-		return m.Content.Form.SubmissionSchema
+	return nil
+}
+
+// UnmarshalJSON accepts only the current typed-input contract. Older
+// per-feature CMS schemas are intentionally unsupported; feature content is
+// projected from the snapshot data model.
+func (m *Manifest) UnmarshalJSON(raw []byte) error {
+	type manifestWire Manifest
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
 	}
+	var version struct {
+		FormatVersion int `json:"formatVersion"`
+	}
+	if err := json.Unmarshal(raw, &version); err != nil {
+		return err
+	}
+	if version.FormatVersion != 2 {
+		return errors.New("formatVersion must be 2; legacy feature content schemas are unsupported")
+	}
+	if _, exists := fields["dataInputs"]; !exists {
+		return errors.New("dataInputs is required; use [] when the feature consumes no model data")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var decoded manifestWire
+	if err := dec.Decode(&decoded); err != nil {
+		return err
+	}
+	*m = Manifest(decoded)
+	content, err := runtimeInputContractFromDataInputs(m.DataInputs, m.Form)
+	if err != nil {
+		return err
+	}
+	m.RuntimeInput = content
 	return nil
 }
 
@@ -101,8 +179,11 @@ func requireJSONEnd(dec *json.Decoder) error {
 }
 
 func (m Manifest) Validate() error {
-	if m.FormatVersion != 1 {
-		return errors.New("formatVersion must be 1")
+	if err := ValidateFeatureTokens(m.DesignTokens); err != nil {
+		return err
+	}
+	if m.FormatVersion != 2 {
+		return errors.New("formatVersion must be 2; formatVersion 1 manifests are no longer supported")
 	}
 	if !featureKeyPattern.MatchString(m.Key) {
 		return errors.New("key must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens")
@@ -119,8 +200,50 @@ func (m Manifest) Validate() error {
 	if !supportedEngineAPIs[m.EngineAPI] {
 		return fmt.Errorf("engineApi %q is not supported (current: %q)", m.EngineAPI, CurrentEngineAPI)
 	}
-	if !validAssetPath(m.Entry) || !strings.HasSuffix(strings.ToLower(m.Entry), ".js") {
-		return errors.New("entry must be a safe relative JavaScript asset path")
+	if m.Runtime == nil {
+		if !validAssetPath(m.Entry) || !strings.HasSuffix(strings.ToLower(m.Entry), ".js") {
+			return errors.New("entry must be a safe relative JavaScript asset path")
+		}
+	} else {
+		if m.Entry != "" || len(m.Styles) > 0 || len(m.SharedStyles) > 0 {
+			return errors.New("runtime builds must declare entry, styles, and sharedStyles only inside runtime")
+		}
+		if !validAssetPath(m.Runtime.Entry) {
+			return errors.New("runtime.entry must be a safe relative asset path")
+		}
+		switch m.Runtime.ABI {
+		case RuntimeABIStaticModule:
+			if ext := strings.ToLower(path.Ext(m.Runtime.Entry)); ext != ".js" && ext != ".mjs" {
+				return errors.New("static-module-v1 runtime.entry must be a JavaScript module")
+			}
+		case RuntimeABIStaticHTML:
+			if ext := strings.ToLower(path.Ext(m.Runtime.Entry)); ext != ".html" && ext != ".htm" {
+				return errors.New("static-html-v1 runtime.entry must be an HTML fragment")
+			}
+		default:
+			return fmt.Errorf("unsupported runtime.abi %q", m.Runtime.ABI)
+		}
+		if hasDuplicates(m.Runtime.Styles) {
+			return errors.New("runtime.styles must not contain duplicates")
+		}
+		if hasDuplicates(m.Runtime.SharedStyles) {
+			return errors.New("runtime.sharedStyles must not contain duplicates")
+		}
+		for _, shared := range m.Runtime.SharedStyles {
+			if contains(m.Runtime.Styles, shared) {
+				return fmt.Errorf("stylesheet %q cannot be both runtime.styles and runtime.sharedStyles", shared)
+			}
+		}
+		for _, asset := range m.Runtime.Styles {
+			if !validAssetPath(asset) || !strings.HasSuffix(strings.ToLower(asset), ".css") {
+				return fmt.Errorf("runtime style %q must be a safe relative CSS asset path", asset)
+			}
+		}
+		for _, asset := range m.Runtime.SharedStyles {
+			if !validAssetPath(asset) || !strings.HasSuffix(strings.ToLower(asset), ".css") {
+				return fmt.Errorf("runtime shared style %q must be a safe relative CSS asset path", asset)
+			}
+		}
 	}
 	if len(m.Slots) == 0 {
 		return errors.New("at least one placement slot is required")
@@ -132,12 +255,18 @@ func (m Manifest) Validate() error {
 		}
 		seenSlots[slot] = true
 	}
-	for _, asset := range append(append([]string(nil), m.Styles...), m.SharedStyles...) {
+	stylePaths := m.Styles
+	sharedStylePaths := m.SharedStyles
+	if m.Runtime != nil {
+		stylePaths = m.Runtime.Styles
+		sharedStylePaths = m.Runtime.SharedStyles
+	}
+	for _, asset := range append(append([]string(nil), stylePaths...), sharedStylePaths...) {
 		if !validAssetPath(asset) || !strings.HasSuffix(strings.ToLower(asset), ".css") {
 			return fmt.Errorf("style %q must be a safe relative CSS asset path", asset)
 		}
 	}
-	if hasDuplicates(m.SharedStyles) {
+	if hasDuplicates(sharedStylePaths) {
 		return errors.New("sharedStyles must not contain duplicates")
 	}
 	if len(m.Arguments) == 0 {
@@ -149,52 +278,40 @@ func (m Manifest) Validate() error {
 	if err := media.ValidateSchemaProfiles(m.Arguments); err != nil {
 		return fmt.Errorf("arguments: %w", err)
 	}
-	switch m.Content.Mode {
+	if err := validateFeatureRequestSlots(m.Arguments, m.Requests); err != nil {
+		return fmt.Errorf("requests: %w", err)
+	}
+	if m.DataInputs == nil {
+		return errors.New("dataInputs must be an array; use [] when the feature consumes no model data")
+	}
+	if err := validateDataInputPorts(m.DataInputs); err != nil {
+		return fmt.Errorf("dataInputs: %w", err)
+	}
+	if len(m.RuntimeInput.Schema) == 0 {
+		content, err := runtimeInputContractFromDataInputs(m.DataInputs, m.Form)
+		if err != nil {
+			return err
+		}
+		m.RuntimeInput = content
+	}
+	switch m.RuntimeInput.Mode {
 	case "single", "collection", "form":
 	default:
-		return errors.New("content.mode must be single, collection, or form")
+		return errors.New("typed dataInputs do not produce a supported runtime payload shape")
 	}
-	if len(m.Content.Schema) == 0 {
-		return errors.New("content.schema is required")
+	if len(m.RuntimeInput.Schema) == 0 {
+		return errors.New("dataInputs runtime schema is required")
 	}
-	if err := validateObjectSchema(m.Content.Schema, "content.schema"); err != nil {
+	if err := validateObjectSchema(m.RuntimeInput.Schema, "dataInputs runtime schema"); err != nil {
 		return err
 	}
-	if err := media.ValidateSchemaProfiles(m.Content.Schema); err != nil {
-		return fmt.Errorf("content.schema: %w", err)
+	if err := validateRecordIDAnnotations(m.RuntimeInput.Schema); err != nil {
+		return fmt.Errorf("dataInputs runtime schema: %w", err)
 	}
-	if len(m.Content.SettingsSchema) > 0 {
-		if m.Content.Mode != "collection" {
-			return errors.New("content.settingsSchema is only valid when content.mode is collection")
-		}
-		if err := validateObjectSchema(m.Content.SettingsSchema, "content.settingsSchema"); err != nil {
-			return err
-		}
-		if err := media.ValidateSchemaProfiles(m.Content.SettingsSchema); err != nil {
-			return fmt.Errorf("content.settingsSchema: %w", err)
-		}
-	}
-	if m.Content.Form != nil {
-		if m.Content.Mode != "form" {
-			return errors.New("content.form is only valid when content.mode is form")
-		}
-		if m.Form != nil {
-			return errors.New("declare form.submissionSchema in one place only")
-		}
-		if len(m.Content.Form.SubmissionSchema) == 0 {
-			return errors.New("content.form.submissionSchema is required")
-		}
-		if err := validateObjectSchema(m.Content.Form.SubmissionSchema, "content.form.submissionSchema"); err != nil {
-			return err
-		}
-		if err := media.ValidateSchemaProfiles(m.Content.Form.SubmissionSchema); err != nil {
-			return fmt.Errorf("content.form.submissionSchema: %w", err)
-		}
+	if err := media.ValidateSchemaProfiles(m.RuntimeInput.Schema); err != nil {
+		return fmt.Errorf("dataInputs runtime schema: %w", err)
 	}
 	if m.Form != nil {
-		if m.Content.Mode != "form" {
-			return errors.New("form is only valid when content.mode is form")
-		}
 		if len(m.Form.SubmissionSchema) == 0 {
 			return errors.New("form.submissionSchema is required")
 		}

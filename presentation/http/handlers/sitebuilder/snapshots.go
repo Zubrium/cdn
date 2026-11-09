@@ -1,9 +1,9 @@
 package sitebuilder
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -20,163 +20,54 @@ import (
 )
 
 type SnapshotsHandler struct {
-	service *sitebuilder.SnapshotService
-	forms   *formsFeature.Service
-	log     *slog.Logger
-	maxJSON int64
+	service     *sitebuilder.SnapshotService
+	forms       *formsFeature.Service
+	log         *slog.Logger
+	maxJSON     int64
+	pageDefault int
+	pageMax     int
 }
 
 func NewSnapshotsHandler(service *sitebuilder.SnapshotService, forms *formsFeature.Service, log *slog.Logger, maxJSON int64) *SnapshotsHandler {
 	return &SnapshotsHandler{service: service, forms: forms, log: log, maxJSON: maxJSON}
 }
 
-func (h *SnapshotsHandler) Draft(w http.ResponseWriter, r *http.Request) {
-	state, err := h.service.GetDraft(r.Context())
-	if err != nil {
-		h.writeError(w, r, err)
-		return
+// SetPagination applies operator-configured bounds to snapshot list endpoints.
+func (h *SnapshotsHandler) SetPagination(defaultPage, maxPage int) error {
+	if validPagination(defaultPage, maxPage) == false {
+		return fmt.Errorf("invalid snapshot page limits")
 	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-type saveDraftRequest struct {
-	Revision int64           `json:"revision"`
-	Config   json.RawMessage `json:"config"`
-}
-
-func (h *SnapshotsHandler) SaveDraft(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	var req saveDraftRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	if len(req.Config) == 0 {
-		response.Error(w, r, http.StatusBadRequest, "invalid_config", "Config is required")
-		return
-	}
-	state, err := h.service.SaveDraft(r.Context(), actor.TokenID, req.Revision, req.Config)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-func (h *SnapshotsHandler) Metadata(w http.ResponseWriter, r *http.Request) {
-	state, err := h.service.GetMetadata(r.Context())
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-type saveMetadataRequest struct {
-	Revision int64           `json:"revision"`
-	Metadata json.RawMessage `json:"metadata"`
-}
-
-func (h *SnapshotsHandler) SaveMetadata(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	var req saveMetadataRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	if len(req.Metadata) == 0 {
-		response.Error(w, r, http.StatusBadRequest, "invalid_metadata", "Metadata is required")
-		return
-	}
-	state, err := h.service.SaveMetadata(r.Context(), actor.TokenID, req.Revision, req.Metadata)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-func (h *SnapshotsHandler) PublishMetadata(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	state, err := h.service.PublishMetadata(r.Context(), actor.TokenID)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-func (h *SnapshotsHandler) PromoteMetadata(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	state, err := h.service.PromoteMetadata(r.Context(), actor.TokenID)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, state)
-}
-
-func (h *SnapshotsHandler) DesignSystem(w http.ResponseWriter, r *http.Request) {
-	state, err := h.service.GetDesignSystem(r.Context())
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, map[string]any{"state": state, "definitions": sitebuilder.DesignTokenDefinitions()})
-}
-
-type saveDesignSystemRequest struct {
-	Revision     int64           `json:"revision"`
-	DesignSystem json.RawMessage `json:"designSystem"`
-}
-
-func (h *SnapshotsHandler) SaveDesignSystem(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	var req saveDesignSystemRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	if len(req.DesignSystem) == 0 {
-		response.Error(w, r, http.StatusBadRequest, "invalid_design_system", "Design system is required")
-		return
-	}
-	state, err := h.service.SaveDesignSystem(r.Context(), actor.TokenID, req.Revision, req.DesignSystem)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, map[string]any{"state": state, "definitions": sitebuilder.DesignTokenDefinitions()})
-}
-
-func (h *SnapshotsHandler) PreviewDesignSystem(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		DesignSystem json.RawMessage `json:"designSystem"`
-	}
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	token, err := h.service.CreateDesignPreview(r.Context(), req.DesignSystem)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusCreated, map[string]string{"token": token})
+	h.pageDefault, h.pageMax = defaultPage, maxPage
+	return nil
 }
 
 func (h *SnapshotsHandler) SnapshotThemeCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex")
+	w.Header().Set("Cache-Control", "no-store")
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		h.writeThemeError(w, r, err)
 		return
 	}
-	value, err := h.service.ThemeForSnapshot(r.Context(), id)
+	branch := environment.FromContext(r.Context())
+	if !branch.Valid() {
+		h.writeThemeError(w, r, sitebuilder.ErrNotFound)
+		return
+	}
+	branchID, err := uuid.Parse(branch.String())
+	if err != nil {
+		h.writeThemeError(w, r, sitebuilder.ErrNotFound)
+		return
+	}
+	css, err := h.service.SnapshotThemeStylesheetForBranch(r.Context(), branchID, id)
 	if err != nil {
 		h.writeThemeError(w, r, err)
 		return
 	}
-	h.writeThemeCSS(w, r, value, true)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+	_, _ = w.Write([]byte(css))
 }
 
 func (h *SnapshotsHandler) PreviewThemeCSS(w http.ResponseWriter, r *http.Request) {
@@ -213,18 +104,25 @@ func (h *SnapshotsHandler) writeThemeError(w http.ResponseWriter, r *http.Reques
 	http.Error(w, "theme stylesheet unavailable", http.StatusInternalServerError)
 }
 
-type publishRequest struct {
-	Name string `json:"name"`
-}
+// PreviewRelationUnlink is a read-only, authenticated preview of the content
+// and placements affected by removing a structural relation.
+
+// UnlinkContentRelation explicitly forks the selected snapshot through the
+// service's previewed revision tuple. IDs come from the route, never the form.
+
+// PreviewRelationSourceEntryDeletion lets content editors inspect the
+// published/draft relation impact before they remove a collection record.
 
 func (h *SnapshotsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	actor, _ := principal.FromContext(r.Context())
-	var req publishRequest
+	var req sitebuilder.CreateSnapshotInput
 	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
 		response.WriteDecodeError(w, r, err)
 		return
 	}
-	record, err := h.service.Create(r.Context(), actor.TokenID, strings.TrimSpace(req.Name))
+	var record sitebuilder.SnapshotRecord
+	var err error
+	record, err = h.service.CreateSnapshot(r.Context(), actor.TokenID, req)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -233,7 +131,11 @@ func (h *SnapshotsHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SnapshotsHandler) List(w http.ResponseWriter, r *http.Request) {
-	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), 50, 200)
+	if !validPagination(h.pageDefault, h.pageMax) {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
+	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
@@ -258,35 +160,26 @@ func (h *SnapshotsHandler) List(w http.ResponseWriter, r *http.Request) {
 		nextCursor = &cursor
 		items = items[:limit]
 	}
-	active := map[string]string{"dev": "", "prod": ""}
-	activeSnapshots := map[string]*sitebuilder.SnapshotRecord{"dev": nil, "prod": nil}
-	for _, env := range []environment.Environment{environment.Dev, environment.Prod} {
-		record, _, activeErr := h.service.Active(r.Context(), env)
-		if errors.Is(activeErr, sitebuilder.ErrSnapshotUnavailable) {
-			continue
-		}
-		if activeErr != nil {
-			h.writeError(w, r, activeErr)
-			return
-		}
-		active[env.String()] = record.ID.String()
-		activeSnapshots[env.String()] = &record
-	}
-	events, err := h.service.Events(r.Context(), 200)
+	branches, err := h.service.Branches(r.Context())
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items, "active": active, "activeSnapshots": activeSnapshots, "events": events, "nextCursor": nextCursor})
+	response.JSON(w, http.StatusOK, map[string]any{"items": items, "branches": branches, "nextCursor": nextCursor})
 }
 
 func (h *SnapshotsHandler) Events(w http.ResponseWriter, r *http.Request) {
-	env, err := environment.Parse(r.URL.Query().Get("environment"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_environment", err.Error())
+	if !validPagination(h.pageDefault, h.pageMax) {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
 		return
 	}
-	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), 50, 200)
+	branchID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("branchId")))
+	if err != nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_branch", "Укажите корректный branchId")
+		return
+	}
+	env := environment.Environment(branchID.String())
+	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
@@ -314,73 +207,8 @@ func (h *SnapshotsHandler) Events(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]any{"items": items, "nextCursor": next})
 }
 
-func (h *SnapshotsHandler) Promote(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := snapshotID(w, r)
-	if !ok {
-		return
-	}
-	record, err := h.service.Promote(r.Context(), actor.TokenID, id)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, record)
-}
-
-type rollbackRequest struct {
-	Environment string `json:"environment"`
-}
-
-func (h *SnapshotsHandler) Deploy(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := snapshotID(w, r)
-	if !ok {
-		return
-	}
-	var req rollbackRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	env, err := environment.Parse(req.Environment)
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_environment", err.Error())
-		return
-	}
-	record, err := h.service.Deploy(r.Context(), actor.TokenID, id, env)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, record)
-}
-
-func (h *SnapshotsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
-	actor, _ := principal.FromContext(r.Context())
-	id, ok := snapshotID(w, r)
-	if !ok {
-		return
-	}
-	var req rollbackRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	env, err := environment.Parse(req.Environment)
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_environment", err.Error())
-		return
-	}
-	record, err := h.service.Rollback(r.Context(), actor.TokenID, id, env)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, record)
-}
-
 func (h *SnapshotsHandler) Runtime(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex")
 	requestPath := r.URL.Query().Get("path")
 	if requestPath == "" {
 		requestPath = "/"
@@ -394,137 +222,52 @@ func (h *SnapshotsHandler) Runtime(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	composition, err := h.service.Runtime(r.Context(), environment.FromContext(r.Context()), requestPath, query)
+	composition, pageStatus, err := h.service.PublicRuntime(r.Context(), environment.FromContext(r.Context()), requestPath, query)
 	if err != nil {
 		h.writePublicError(w, r, err)
 		return
 	}
+	w.Header().Set("X-Engine-Page-Status", strconv.Itoa(pageStatus))
 	response.JSON(w, http.StatusOK, composition)
-}
-
-func (h *SnapshotsHandler) HTMLShell(ctx context.Context, env environment.Environment, requestPath string) ([]byte, bool, error) {
-	return h.service.HTMLShell(ctx, env, requestPath)
-}
-
-func (h *SnapshotsHandler) ContentCatalog(w http.ResponseWriter, r *http.Request) {
-	items, err := h.service.ContentCatalog(r.Context())
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // ContentSnapshots exposes immutable snapshot metadata to all authenticated
 // content editors. Environment deployment controls remain site-manager only.
 func (h *SnapshotsHandler) ContentSnapshots(w http.ResponseWriter, r *http.Request) {
-	items, err := h.service.ContentSnapshots(r.Context())
+	if !validPagination(h.pageDefault, h.pageMax) {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
+	limit, err := response.ParseLimit(r.URL.Query().Get("limit"), h.pageDefault, h.pageMax)
 	if err != nil {
-		h.writeError(w, r, err)
+		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
 	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-func (h *SnapshotsHandler) SnapshotContentCatalog(w http.ResponseWriter, r *http.Request) {
-	snapshotID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
-		return
-	}
-	items, err := h.service.ContentCatalogForSnapshot(r.Context(), snapshotID)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-func (h *SnapshotsHandler) ContentWorkspace(w http.ResponseWriter, r *http.Request) {
-	snapshotID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
-		return
-	}
-	workspace, err := h.service.ContentWorkspace(r.Context(), snapshotID, r.PathValue("featureKey"))
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, workspace)
-}
-
-type saveContentWorkspaceRequest struct {
-	Revision int64                                   `json:"revision"`
-	Items    []sitebuilder.SnapshotContentDraftInput `json:"items"`
-}
-
-func (h *SnapshotsHandler) SaveContentWorkspace(w http.ResponseWriter, r *http.Request) {
-	snapshotID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
-		return
-	}
-	var req saveContentWorkspaceRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	actor, _ := principal.FromContext(r.Context())
-	workspace, err := h.service.SaveContentWorkspace(r.Context(), actor.TokenID, snapshotID, r.PathValue("featureKey"), req.Revision, req.Items)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, workspace)
-}
-
-func (h *SnapshotsHandler) ForkSnapshotFromContent(w http.ResponseWriter, r *http.Request) {
-	snapshotID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_id", "Некорректный идентификатор снапшота")
-		return
-	}
-	var req publishRequest
-	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
-		response.WriteDecodeError(w, r, err)
-		return
-	}
-	actor, _ := principal.FromContext(r.Context())
-	record, err := h.service.ForkSnapshotFromContentDraft(r.Context(), actor.TokenID, snapshotID, strings.TrimSpace(req.Name))
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusCreated, record)
-}
-
-func (h *SnapshotsHandler) Collection(w http.ResponseWriter, r *http.Request) {
-	offset, err := parseNonnegative(r.URL.Query().Get("offset"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_offset", "offset must be a non-negative integer")
-		return
-	}
-	limit, err := parseNonnegative(r.URL.Query().Get("limit"))
-	if err != nil {
-		response.Error(w, r, http.StatusBadRequest, "invalid_limit", "limit must be a non-negative integer")
-		return
-	}
-	var snapshotID *uuid.UUID
-	if raw := r.URL.Query().Get("snapshot"); raw != "" {
-		parsed, parseErr := uuid.Parse(raw)
-		if parseErr != nil {
-			response.Error(w, r, http.StatusBadRequest, "invalid_snapshot", "snapshot must be a valid snapshot id")
+	var before *int64
+	if raw := r.URL.Query().Get("beforeSequence"); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 1 {
+			response.Error(w, r, http.StatusBadRequest, "invalid_cursor", "beforeSequence должен быть положительным номером снапшота")
 			return
 		}
-		snapshotID = &parsed
+		before = &value
 	}
-	page, err := h.service.Collection(r.Context(), environment.FromContext(r.Context()), snapshotID, r.PathValue("key"), r.URL.Query().Get("field"), r.URL.Query().Get("value"), offset, limit)
+	items, err := h.service.List(r.Context(), limit+1, before)
 	if err != nil {
-		h.writePublicError(w, r, err)
+		h.writeError(w, r, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, page)
+	var next *int64
+	if len(items) > limit {
+		cursor := items[limit-1].Sequence
+		next = &cursor
+		items = items[:limit]
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items, "nextCursor": next})
+}
+
+func validPagination(defaultPage, maxPage int) bool {
+	return defaultPage > 0 && maxPage >= defaultPage
 }
 
 type formRequest struct {
@@ -539,12 +282,7 @@ func (h *SnapshotsHandler) SubmitForm(w http.ResponseWriter, r *http.Request) {
 	}
 	key := r.PathValue("key")
 	env := environment.FromContext(r.Context())
-	schemaID, schema, err := h.service.FormSchema(r.Context(), env, key)
-	if err != nil {
-		h.writePublicError(w, r, err)
-		return
-	}
-	submission, err := h.forms.SubmitWithSchema(r.Context(), env, key, schemaID, schema, req.Data)
+	submission, err := h.forms.Submit(r.Context(), env, key, req.Data)
 	if err != nil {
 		h.writePublicError(w, r, err)
 		return
@@ -597,15 +335,4 @@ func snapshotID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
-}
-
-func parseNonnegative(raw string) (int, error) {
-	if raw == "" {
-		return 0, nil
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0, errors.New("invalid non-negative integer")
-	}
-	return n, nil
 }

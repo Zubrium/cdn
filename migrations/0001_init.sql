@@ -1,363 +1,93 @@
--- Clean initial schema for Website Engine. Every final column and constraint is declared here.
+-- Initial schema for the branch and snapshot model. Existing installations require a new empty database.
+--
+-- PostgreSQL database dump
+--
 
-CREATE TABLE access_tokens (
-    "id" uuid NOT NULL,"name" text NOT NULL,"token_hash" bytea NOT NULL,"role" text NOT NULL,"created_by" uuid,"expires_at" timestamptz,"revoked_at" timestamptz,"last_used_at" timestamptz,"created_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT access_tokens_role_check CHECK (role IN ('admin', 'moderator', 'staff', 'user')),
-    CONSTRAINT access_tokens_name_check CHECK (length(trim(name)) BETWEEN 1 AND 120),
-    CONSTRAINT access_tokens_expiry_check CHECK (expires_at IS NULL OR expires_at > created_at),
-    CONSTRAINT fk_access_tokens_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
 
-CREATE TABLE features (
-    "id" uuid NOT NULL,"key" text NOT NULL,"name" text NOT NULL,"type" text NOT NULL,"status" text NOT NULL DEFAULT 'active',"revision" bigint NOT NULL DEFAULT 1,"draft_version_id" uuid,"dev_version_id" uuid,"prod_version_id" uuid,"created_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT features_key_check CHECK (key ~ '^[a-z][a-z0-9_-]{0,99}$'),
-    CONSTRAINT features_name_check CHECK (length(trim(name)) BETWEEN 1 AND 200),
-    CONSTRAINT features_type_check CHECK (type IN ('collection', 'single', 'form')),
-    CONSTRAINT features_status_check CHECK (status IN ('active', 'archived')),
-    CONSTRAINT features_revision_check CHECK (revision > 0),
-    CONSTRAINT features_draft_not_dev CHECK (draft_version_id IS NULL OR dev_version_id IS NULL OR draft_version_id <> dev_version_id),
-    CONSTRAINT features_draft_not_prod CHECK (draft_version_id IS NULL OR prod_version_id IS NULL OR draft_version_id <> prod_version_id),
-    CONSTRAINT features_prod_requires_dev CHECK (prod_version_id IS NULL OR dev_version_id IS NOT NULL),
-    CONSTRAINT fk_features_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+-- Dumped from database version 16.15
+-- Dumped by pg_dump version 16.15
 
-CREATE TABLE feature_versions (
-    "id" uuid NOT NULL,"feature_id" uuid NOT NULL,"version" integer NOT NULL,"schema" jsonb NOT NULL,"status" text NOT NULL DEFAULT 'draft',"created_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"published_at" timestamptz,PRIMARY KEY ("id"),
-    CONSTRAINT feature_versions_version_check CHECK (version > 0),
-    CONSTRAINT feature_versions_schema_check CHECK (jsonb_typeof(schema) = 'object'),
-    CONSTRAINT feature_versions_status_check CHECK (status IN ('draft', 'published')),
-    CONSTRAINT feature_versions_published_at_check CHECK ( (status = 'draft' AND published_at IS NULL) OR (status = 'published' AND published_at IS NOT NULL) ),
-    CONSTRAINT fk_feature_versions_feature FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_feature_versions_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+SET check_function_bodies = false;
 
-CREATE TABLE feature_entries (
-    "id" uuid NOT NULL,"feature_id" uuid NOT NULL,"single_slot" boolean NOT NULL DEFAULT false,"revision" bigint NOT NULL DEFAULT 1,"draft_version_id" uuid,"dev_version_id" uuid,"prod_version_id" uuid,"created_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),"archived_at" timestamptz,"sort_order" bigint NOT NULL DEFAULT 0,PRIMARY KEY ("id"),
-    CONSTRAINT feature_entries_revision_check CHECK (revision > 0),
-    CONSTRAINT entries_draft_not_dev CHECK (draft_version_id IS NULL OR dev_version_id IS NULL OR draft_version_id <> dev_version_id),
-    CONSTRAINT entries_draft_not_prod CHECK (draft_version_id IS NULL OR prod_version_id IS NULL OR draft_version_id <> prod_version_id),
-    CONSTRAINT entries_prod_requires_dev CHECK (prod_version_id IS NULL OR dev_version_id IS NOT NULL),
-    CONSTRAINT fk_feature_entries_feature FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_feature_entries_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+--
+-- Name: admin_file_owner(); Type: FUNCTION; Schema: public; Owner: -
+--
 
-CREATE TABLE feature_entry_versions (
-    "id" uuid NOT NULL,"entry_id" uuid NOT NULL,"version" integer NOT NULL,"schema_version_id" uuid NOT NULL,"data" jsonb NOT NULL,"status" text NOT NULL DEFAULT 'draft',"created_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"published_at" timestamptz,PRIMARY KEY ("id"),
-    CONSTRAINT entry_versions_version_check CHECK (version > 0),
-    CONSTRAINT entry_versions_data_check CHECK (jsonb_typeof(data) = 'object'),
-    CONSTRAINT entry_versions_status_check CHECK (status IN ('draft', 'published')),
-    CONSTRAINT entry_versions_published_at_check CHECK ( (status = 'draft' AND published_at IS NULL) OR (status = 'published' AND published_at IS NOT NULL) ),
-    CONSTRAINT fk_entry_versions_entry FOREIGN KEY (entry_id) REFERENCES feature_entries(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_entry_versions_schema FOREIGN KEY (schema_version_id) REFERENCES feature_versions(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_entry_versions_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+CREATE FUNCTION public.admin_file_owner() RETURNS uuid
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT id FROM file_owners WHERE kind='admin'
+$$;
 
-CREATE TABLE form_submissions (
-    "id" uuid NOT NULL,"feature_id" uuid NOT NULL,"schema_version_id" uuid NOT NULL,"data" jsonb NOT NULL,"status" text NOT NULL DEFAULT 'new',"processed_by" uuid,"environment" text NOT NULL DEFAULT 'prod',"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),"archived_at" timestamptz,"deleted_at" timestamptz,PRIMARY KEY ("id"),
-    CONSTRAINT submissions_data_check CHECK (jsonb_typeof(data) = 'object'),
-    CONSTRAINT submissions_status_check CHECK (status IN ('new', 'in_progress', 'processed', 'rejected')),
-    CONSTRAINT submissions_environment_check CHECK (environment IN ('dev', 'prod')),
-    CONSTRAINT fk_submissions_feature FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_submissions_schema FOREIGN KEY (schema_version_id) REFERENCES feature_versions(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_submissions_processor FOREIGN KEY (processed_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
 
-CREATE TABLE media_objects (
-    "id" uuid NOT NULL,"object_key" text NOT NULL,"original_filename" text NOT NULL,"content_type" text NOT NULL,"size_bytes" bigint NOT NULL,"status" text NOT NULL DEFAULT 'processing',"variants" jsonb NOT NULL DEFAULT '{}',"uploaded_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT media_objects_object_key_check CHECK (length(object_key) BETWEEN 1 AND 1024),
-    CONSTRAINT media_objects_filename_check CHECK (length(original_filename) BETWEEN 1 AND 255),
-    CONSTRAINT media_objects_size_check CHECK (size_bytes >= 0),
-    CONSTRAINT media_objects_status_check CHECK (status IN ('processing', 'ready', 'failed', 'deleted')),
-    CONSTRAINT media_objects_variants_check CHECK (jsonb_typeof(variants) = 'object'),
-    CONSTRAINT fk_media_objects_uploader FOREIGN KEY (uploaded_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+--
+-- Name: allow_file_reference_clear(jsonb, jsonb, text); Type: FUNCTION; Schema: public; Owner: -
+--
 
-CREATE TABLE content_publication_events (
-    "id" uuid NOT NULL,"entity_kind" text NOT NULL,"feature_id" uuid NOT NULL,"entry_id" uuid,"version_id" uuid NOT NULL,"environment" text NOT NULL,"action" text NOT NULL,"actor_token_id" uuid,"metadata" jsonb NOT NULL DEFAULT '{}',"created_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT publication_events_entity_kind_check CHECK (entity_kind IN ('schema', 'entry')),
-    CONSTRAINT publication_events_environment_check CHECK (environment IN ('dev', 'prod')),
-    CONSTRAINT publication_events_action_check CHECK (action IN ('publish', 'promote', 'rollback', 'unpublish')),
-    CONSTRAINT publication_events_metadata_check CHECK (jsonb_typeof(metadata) = 'object'),
-    CONSTRAINT publication_events_entry_check CHECK ( (entity_kind = 'schema' AND entry_id IS NULL) OR (entity_kind = 'entry' AND entry_id IS NOT NULL) ),
-    CONSTRAINT fk_publication_events_feature FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE CASCADE,
-    CONSTRAINT fk_publication_events_entry FOREIGN KEY (entry_id) REFERENCES feature_entries(id) ON DELETE CASCADE,
-    CONSTRAINT fk_publication_events_actor FOREIGN KEY (actor_token_id) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+CREATE FUNCTION public.allow_file_reference_clear(old_value jsonb, new_value jsonb, file_id text) RETURNS boolean
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+DECLARE
+    key text;
+    old_item jsonb;
+    new_item jsonb;
+    i integer;
+BEGIN
+    IF old_value = new_value THEN RETURN true; END IF;
+    IF old_value = to_jsonb(file_id) AND new_value = to_jsonb(''::text) THEN RETURN true; END IF;
+    IF jsonb_typeof(old_value) <> jsonb_typeof(new_value) THEN RETURN false; END IF;
+    IF jsonb_typeof(old_value) = 'object' THEN
+        IF (SELECT count(*) FROM jsonb_object_keys(old_value)) <> (SELECT count(*) FROM jsonb_object_keys(new_value)) THEN RETURN false; END IF;
+        FOR key, old_item IN SELECT * FROM jsonb_each(old_value) LOOP
+            IF NOT new_value ? key THEN RETURN false; END IF;
+            new_item := new_value -> key;
+            IF NOT allow_file_reference_clear(old_item,new_item,file_id) THEN RETURN false; END IF;
+        END LOOP;
+        RETURN true;
+    ELSIF jsonb_typeof(old_value) = 'array' THEN
+        IF jsonb_array_length(old_value) <> jsonb_array_length(new_value) THEN RETURN false; END IF;
+        FOR i IN 0..(jsonb_array_length(old_value)-1) LOOP
+            IF NOT allow_file_reference_clear(old_value -> i,new_value -> i,file_id) THEN RETURN false; END IF;
+        END LOOP;
+        RETURN true;
+    END IF;
+    RETURN false;
+END;
+$$;
 
-CREATE TABLE site_settings (
-    "id" boolean NOT NULL DEFAULT true,"name" text NOT NULL DEFAULT 'Website',"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT site_settings_id_check CHECK (id),
-    CONSTRAINT site_settings_name_check CHECK (length(trim(name)) BETWEEN 1 AND 200)
-);
 
-CREATE TABLE release_sources (
-    "id" uuid NOT NULL,"provider" text NOT NULL,"repo_url" text NOT NULL DEFAULT '',"asset_pattern" text NOT NULL DEFAULT '',"auth_ciphertext" bytea,"auth_nonce" bytea,"is_enabled" boolean NOT NULL DEFAULT true,"created_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT release_sources_provider_check CHECK (provider IN ('github', 'gitlab', 'gitea', 'manual')),
-    CONSTRAINT release_sources_repo_check CHECK (provider = 'manual' OR repo_url <> ''),
-    CONSTRAINT release_sources_auth_check CHECK (auth_ciphertext IS NULL OR auth_nonce IS NOT NULL),
-    CONSTRAINT fk_release_sources_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+--
+-- Name: protect_snapshot_structure(); Type: FUNCTION; Schema: public; Owner: -
+--
 
-CREATE TABLE site_releases (
-    "id" uuid NOT NULL,"version" text NOT NULL,"source_id" uuid,"external_id" text,"tag" text,"commit_sha" text,"artifact_object_key" text NOT NULL,"artifact_sha256" text NOT NULL,"artifact_size" bigint NOT NULL,"manifest" jsonb NOT NULL DEFAULT '{}',"imported_by" uuid,"created_at" timestamptz NOT NULL DEFAULT now(),"updated_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT site_releases_version_check CHECK (length(version) BETWEEN 1 AND 200),
-    CONSTRAINT site_releases_sha256_check CHECK (length(artifact_sha256) = 64),
-    CONSTRAINT site_releases_size_check CHECK (artifact_size > 0),
-    CONSTRAINT site_releases_manifest_check CHECK (jsonb_typeof(manifest) = 'object'),
-    CONSTRAINT fk_site_releases_source FOREIGN KEY (source_id) REFERENCES release_sources(id) ON DELETE SET NULL,
-    CONSTRAINT fk_site_releases_importer FOREIGN KEY (imported_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
+CREATE FUNCTION public.protect_snapshot_structure() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE file_id text;
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id OR NEW.sequence IS DISTINCT FROM OLD.sequence OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'snapshot identity is immutable' USING ERRCODE='check_violation';
+    END IF;
+    file_id := NULLIF(current_setting('websiteengine.prune_file',true),'');
+    IF NEW.payload IS DISTINCT FROM OLD.payload THEN
+        IF file_id IS NULL OR NOT allow_file_reference_clear(OLD.payload,NEW.payload,file_id) THEN
+            RAISE EXCEPTION 'snapshot structure is immutable' USING ERRCODE='check_violation';
+        END IF;
+    ELSIF NEW.digest IS DISTINCT FROM OLD.digest THEN
+        RAISE EXCEPTION 'snapshot digest is immutable without content removal' USING ERRCODE='check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
 
-CREATE TABLE site_snapshots (
-    id uuid NOT NULL,
-    sequence bigserial NOT NULL,
-    name text NOT NULL,
-    digest text NOT NULL,
-    payload jsonb NOT NULL,
-    created_by uuid,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (id),
-    CONSTRAINT site_snapshots_sequence_check CHECK (sequence > 0),
-    CONSTRAINT site_snapshots_name_check CHECK (length(trim(name)) BETWEEN 1 AND 160),
-    CONSTRAINT site_snapshots_digest_check CHECK (digest ~ '^[a-f0-9]{64}$'),
-    CONSTRAINT site_snapshots_payload_check CHECK (jsonb_typeof(payload) = 'object'),
-    CONSTRAINT fk_site_snapshots_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
 
-CREATE TABLE site_environments (
-    "key" text NOT NULL,"name" text NOT NULL,"public_base_url" text NOT NULL DEFAULT '',"domains" text[] NOT NULL DEFAULT '{}',"http_port" integer NOT NULL,"tls_enabled" boolean NOT NULL DEFAULT false,"cors_origins" text[] NOT NULL DEFAULT '{}',"active_release_id" uuid,"active_snapshot_id" uuid,"revision" bigint NOT NULL DEFAULT 1,"updated_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("key"),
-    CONSTRAINT site_environments_key_check CHECK (key IN ('dev', 'prod')),
-    CONSTRAINT site_environments_name_check CHECK (length(trim(name)) BETWEEN 1 AND 100),
-    CONSTRAINT site_environments_port_check CHECK (http_port BETWEEN 1 AND 65535),
-    CONSTRAINT site_environments_revision_check CHECK (revision > 0),
-    CONSTRAINT fk_site_environments_release FOREIGN KEY (active_release_id) REFERENCES site_releases(id) ON DELETE SET NULL,
-    CONSTRAINT fk_site_environments_snapshot FOREIGN KEY (active_snapshot_id) REFERENCES site_snapshots(id) ON DELETE SET NULL
-);
+--
+-- Name: reject_site_artifact_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
 
-CREATE TABLE release_events (
-    "id" uuid NOT NULL,"release_id" uuid,"environment" text NOT NULL,"action" text NOT NULL,"actor_token_id" uuid,"metadata" jsonb NOT NULL DEFAULT '{}',"created_at" timestamptz NOT NULL DEFAULT now(),PRIMARY KEY ("id"),
-    CONSTRAINT release_events_environment_check CHECK (environment IN ('dev', 'prod')),
-    CONSTRAINT release_events_action_check CHECK (action IN ('import', 'activate', 'rollback')),
-    CONSTRAINT release_events_metadata_check CHECK (jsonb_typeof(metadata) = 'object'),
-    CONSTRAINT fk_release_events_release FOREIGN KEY (release_id) REFERENCES site_releases(id) ON DELETE SET NULL,
-    CONSTRAINT fk_release_events_actor FOREIGN KEY (actor_token_id) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
-
-CREATE TABLE feature_builds (
-    id uuid NOT NULL,
-    feature_id uuid NOT NULL,
-    version text NOT NULL,
-    schema_version_id uuid NOT NULL, submission_schema_version_id uuid, settings_schema_version_id uuid,
-    digest text NOT NULL,
-    artifact_size bigint NOT NULL,
-    manifest jsonb NOT NULL,
-    assets jsonb NOT NULL,
-    created_by uuid,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (id),
-    CONSTRAINT feature_builds_version_check CHECK (version ~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'),
-    CONSTRAINT feature_builds_digest_check CHECK (digest ~ '^[a-f0-9]{64}$'),
-    CONSTRAINT feature_builds_size_check CHECK (artifact_size > 0),
-    CONSTRAINT feature_builds_manifest_check CHECK (jsonb_typeof(manifest) = 'object' AND jsonb_typeof(assets) = 'object'),
-    CONSTRAINT fk_feature_builds_feature FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_feature_builds_schema FOREIGN KEY (schema_version_id) REFERENCES feature_versions(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_feature_builds_creator FOREIGN KEY (created_by) REFERENCES access_tokens(id) ON DELETE SET NULL,
-    CONSTRAINT fk_feature_builds_submission_schema FOREIGN KEY (submission_schema_version_id) REFERENCES feature_versions(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_feature_builds_settings_schema FOREIGN KEY (settings_schema_version_id) REFERENCES feature_versions(id) ON DELETE RESTRICT
-);
-
-CREATE TABLE site_draft_config (
-    id boolean NOT NULL DEFAULT true,
-    config jsonb NOT NULL DEFAULT '{}',
-    revision bigint NOT NULL DEFAULT 1,
-    updated_by uuid,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (id),
-    CONSTRAINT site_draft_config_singleton_check CHECK (id),
-    CONSTRAINT site_draft_config_revision_check CHECK (revision > 0),
-    CONSTRAINT site_draft_config_object_check CHECK (jsonb_typeof(config) = 'object'),
-    CONSTRAINT fk_site_draft_config_updater FOREIGN KEY (updated_by) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
-
-CREATE TABLE site_snapshot_events (
-    id uuid NOT NULL,
-    snapshot_id uuid NOT NULL,
-    environment text NOT NULL,
-    action text NOT NULL,
-    actor_token_id uuid,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (id),
-    CONSTRAINT site_snapshot_events_environment_check CHECK (environment IN ('dev', 'prod')),
-    CONSTRAINT site_snapshot_events_action_check CHECK (action IN ('publish', 'promote', 'rollback')),
-    CONSTRAINT fk_site_snapshot_events_snapshot FOREIGN KEY (snapshot_id) REFERENCES site_snapshots(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_site_snapshot_events_actor FOREIGN KEY (actor_token_id) REFERENCES access_tokens(id) ON DELETE SET NULL
-);
-
-CREATE TABLE site_snapshot_content (
-    snapshot_id uuid NOT NULL,
-    feature_key text NOT NULL,
-    entry_id uuid NOT NULL,
-    version_id uuid NOT NULL,
-    sort_order bigint NOT NULL DEFAULT 0,
-    data jsonb NOT NULL,
-    PRIMARY KEY (snapshot_id, feature_key, entry_id),
-    CONSTRAINT site_snapshot_content_key_check CHECK (length(trim(feature_key)) BETWEEN 1 AND 100),
-    CONSTRAINT site_snapshot_content_order_check CHECK (sort_order >= 0),
-    CONSTRAINT site_snapshot_content_data_check CHECK (jsonb_typeof(data) = 'object'),
-    CONSTRAINT fk_site_snapshot_content_snapshot FOREIGN KEY (snapshot_id) REFERENCES site_snapshots(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_site_snapshot_content_entry FOREIGN KEY (entry_id) REFERENCES feature_entries(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_site_snapshot_content_version FOREIGN KEY (version_id) REFERENCES feature_entry_versions(id) ON DELETE RESTRICT
-);
-
-CREATE TABLE site_metadata_state (
-    id boolean NOT NULL DEFAULT TRUE,
-    revision bigint NOT NULL DEFAULT 1,
-    dev_revision bigint NOT NULL DEFAULT 0,
-    prod_revision bigint NOT NULL DEFAULT 0,
-    draft jsonb NOT NULL DEFAULT '{"formatVersion":1,"siteName":"Website","pages":{}}'::jsonb,
-    dev jsonb NOT NULL DEFAULT '{"formatVersion":1,"siteName":"Website","pages":{}}'::jsonb,
-    prod jsonb NOT NULL DEFAULT '{"formatVersion":1,"siteName":"Website","pages":{}}'::jsonb,
-    updated_by uuid,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT site_metadata_state_singleton_check CHECK (id),
-    CONSTRAINT site_metadata_state_revision_check CHECK (revision > 0 AND dev_revision >= 0 AND prod_revision >= 0),
-    CONSTRAINT site_metadata_state_json_check CHECK (jsonb_typeof(draft)='object' AND jsonb_typeof(dev)='object' AND jsonb_typeof(prod)='object'),
-    CONSTRAINT fk_site_metadata_state_updater FOREIGN KEY (updated_by) REFERENCES access_tokens(id) ON DELETE SET NULL,
-    PRIMARY KEY (id)
-);
-
-CREATE TABLE site_html_shells (
-    environment text NOT NULL,
-    snapshot_id uuid NOT NULL,
-    route_id text NOT NULL,
-    metadata_revision bigint NOT NULL,
-    html text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT site_html_shells_environment_check CHECK (environment IN ('dev','prod')),
-    CONSTRAINT site_html_shells_route_check CHECK (length(route_id) BETWEEN 1 AND 200),
-    CONSTRAINT site_html_shells_revision_check CHECK (metadata_revision >= 0),
-    CONSTRAINT fk_site_html_shells_snapshot FOREIGN KEY (snapshot_id) REFERENCES site_snapshots(id) ON DELETE CASCADE,
-    PRIMARY KEY (environment,snapshot_id,route_id)
-);
-
-CREATE INDEX IF NOT EXISTS "idx_access_tokens_creator" ON "access_tokens" ("created_by");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_access_tokens_token_hash" ON "access_tokens" ("token_hash");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_features_key" ON "features" ("key");
-
-CREATE INDEX IF NOT EXISTS "idx_feature_versions_feature" ON "feature_versions" ("feature_id","version" desc);
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_feature_versions_feature_version" ON "feature_versions" ("feature_id","version");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_feature_versions_identity" ON "feature_versions" ("id","feature_id");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_feature_entries_identity" ON "feature_entries" ("id","feature_id");
-
-CREATE INDEX IF NOT EXISTS "idx_entry_versions_schema" ON "feature_entry_versions" ("schema_version_id");
-
-CREATE INDEX IF NOT EXISTS "idx_entry_versions_entry" ON "feature_entry_versions" ("entry_id","version" desc);
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_feature_entry_versions_entry_version" ON "feature_entry_versions" ("entry_id","version");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_feature_entry_versions_identity" ON "feature_entry_versions" ("id","entry_id");
-
-CREATE INDEX IF NOT EXISTS "idx_media_objects_status_created" ON "media_objects" ("status","created_at" desc);
-
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_media_objects_object_key" ON "media_objects" ("object_key");
-
-CREATE INDEX IF NOT EXISTS "idx_publication_events_feature" ON "content_publication_events" ("feature_id","created_at" desc);
-
-CREATE INDEX IF NOT EXISTS "idx_site_releases_created" ON "site_releases" ("created_at" desc,"id" desc);
-
-CREATE INDEX IF NOT EXISTS "idx_release_events_env" ON "release_events" ("environment","created_at" desc);
-
-CREATE INDEX idx_access_tokens_active
-    ON access_tokens(role, expires_at)
-    WHERE revoked_at IS NULL;
-
-CREATE INDEX idx_features_dev
-    ON features(dev_version_id)
-    WHERE dev_version_id IS NOT NULL;
-
-CREATE INDEX idx_features_prod
-    ON features(prod_version_id)
-    WHERE prod_version_id IS NOT NULL;
-
-CREATE UNIQUE INDEX uq_feature_entries_single_slot
-    ON feature_entries(feature_id)
-    WHERE single_slot = TRUE AND archived_at IS NULL;
-
-CREATE INDEX idx_feature_entries_feature
-    ON feature_entries(feature_id, created_at DESC)
-    WHERE archived_at IS NULL;
-
-CREATE INDEX idx_feature_entries_dev
-    ON feature_entries(dev_version_id)
-    WHERE dev_version_id IS NOT NULL;
-
-CREATE INDEX idx_feature_entries_prod
-    ON feature_entries(prod_version_id)
-    WHERE prod_version_id IS NOT NULL;
-
-CREATE INDEX idx_entry_versions_data
-    ON feature_entry_versions USING GIN (data jsonb_path_ops)
-    WHERE status = 'published';
-
-CREATE INDEX idx_submissions_feature_created
-    ON form_submissions(feature_id, created_at DESC)
-    WHERE deleted_at IS NULL;
-
-CREATE INDEX idx_submissions_status_created
-    ON form_submissions(status, created_at DESC)
-    WHERE deleted_at IS NULL;
-
-CREATE INDEX idx_submissions_data
-    ON form_submissions USING GIN (data jsonb_path_ops)
-    WHERE deleted_at IS NULL;
-
-CREATE INDEX idx_submissions_environment_created
-    ON form_submissions(environment, created_at DESC)
-    WHERE deleted_at IS NULL;
-
-CREATE INDEX idx_publication_events_entry
-    ON content_publication_events(entry_id, created_at DESC)
-    WHERE entry_id IS NOT NULL;
-
-CREATE INDEX idx_feature_entries_order
-    ON feature_entries(feature_id, sort_order);
-
-CREATE UNIQUE INDEX uq_feature_builds_digest ON feature_builds(digest);
-
-CREATE INDEX idx_feature_builds_schema ON feature_builds(schema_version_id);
-
-CREATE INDEX idx_feature_builds_feature ON feature_builds(feature_id, created_at DESC);
-
-CREATE UNIQUE INDEX uq_feature_builds_feature_version ON feature_builds(feature_id, version);
-
-CREATE UNIQUE INDEX uq_feature_builds_identity ON feature_builds(id, feature_id);
-
-CREATE INDEX idx_site_snapshots_created ON site_snapshots(created_at DESC);
-
-CREATE UNIQUE INDEX uq_site_snapshots_digest ON site_snapshots(digest);
-
-CREATE UNIQUE INDEX uq_site_snapshots_sequence ON site_snapshots(sequence);
-
-CREATE INDEX idx_site_snapshot_events_env
-    ON site_snapshot_events(environment, snapshot_id, created_at DESC);
-
-CREATE INDEX idx_site_snapshot_content_order
-    ON site_snapshot_content(snapshot_id, feature_key, sort_order);
-
-CREATE UNIQUE INDEX uq_site_snapshot_content_entry
-    ON site_snapshot_content(snapshot_id, feature_key, entry_id);
-
-CREATE INDEX idx_site_snapshot_content_data
-    ON site_snapshot_content USING GIN (data jsonb_path_ops);
-
--- Immutable build and snapshot rows remain protected at the database boundary.
-CREATE FUNCTION reject_site_artifact_mutation() RETURNS trigger
-    LANGUAGE plpgsql AS $$
+CREATE FUNCTION public.reject_site_artifact_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
 BEGIN
     IF TG_OP = 'UPDATE'
        AND TG_TABLE_NAME IN ('feature_builds', 'site_snapshots')
@@ -370,9 +100,393 @@ BEGIN
     RAISE EXCEPTION '% rows are immutable', TG_TABLE_NAME USING ERRCODE = 'check_violation';
 END;
 $$;
-CREATE TRIGGER feature_builds_are_immutable BEFORE UPDATE OR DELETE ON feature_builds FOR EACH ROW EXECUTE FUNCTION reject_site_artifact_mutation();
-CREATE TRIGGER site_snapshots_are_immutable BEFORE UPDATE OR DELETE ON site_snapshots FOR EACH ROW EXECUTE FUNCTION reject_site_artifact_mutation();
-CREATE TRIGGER site_snapshot_content_is_immutable BEFORE UPDATE OR DELETE ON site_snapshot_content FOR EACH ROW EXECUTE FUNCTION reject_site_artifact_mutation();
 
 
-CREATE INDEX idx_site_html_shells_snapshot ON site_html_shells(environment,snapshot_id);
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+
+-- Tables and constraints are declared together in this fresh initial schema.
+
+-- access_tokens
+CREATE TABLE public.access_tokens (
+    id uuid NOT NULL,
+    name text NOT NULL,
+    token_hash bytea NOT NULL,
+    role text NOT NULL,
+    created_by uuid,
+    expires_at timestamp with time zone,
+    revoked_at timestamp with time zone,
+    last_used_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT access_tokens_expiry_check CHECK (((expires_at IS NULL) OR (expires_at > created_at))),
+    CONSTRAINT access_tokens_name_check CHECK (((length(TRIM(BOTH FROM name)) >= 1) AND (length(TRIM(BOTH FROM name)) <= 120))),
+    CONSTRAINT access_tokens_role_check CHECK ((role = ANY (ARRAY['admin'::text, 'moderator'::text, 'staff'::text, 'user'::text]))),
+    CONSTRAINT access_tokens_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_access_tokens_creator FOREIGN KEY (created_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL
+);
+
+-- file_object_deletions
+CREATE TABLE public.file_object_deletions (
+    object_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT file_object_deletions_pkey PRIMARY KEY (object_key)
+);
+
+-- file_owners
+CREATE TABLE public.file_owners (
+    id uuid NOT NULL,
+    kind text NOT NULL,
+    name text NOT NULL,
+    enabled boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT file_owners_kind_check CHECK ((kind = ANY (ARRAY['admin'::text, 'service'::text]))),
+    CONSTRAINT file_owners_name_check CHECK (((length(TRIM(BOTH FROM name)) >= 1) AND (length(TRIM(BOTH FROM name)) <= 100))),
+    CONSTRAINT file_owners_kind_name_key UNIQUE (kind, name),
+    CONSTRAINT file_owners_pkey PRIMARY KEY (id)
+);
+
+-- site_settings
+CREATE TABLE public.site_settings (
+    id boolean DEFAULT true NOT NULL,
+    name text DEFAULT 'Website'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT site_settings_id_check CHECK (id),
+    CONSTRAINT site_settings_name_check CHECK (((length(TRIM(BOTH FROM name)) >= 1) AND (length(TRIM(BOTH FROM name)) <= 200))),
+    CONSTRAINT site_settings_pkey PRIMARY KEY (id)
+);
+
+-- features
+CREATE TABLE public.features (
+    id uuid NOT NULL,
+    key text NOT NULL,
+    name text NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT features_key_check CHECK ((key ~ '^[a-z][a-z0-9_-]{0,99}$'::text)),
+    CONSTRAINT features_name_check CHECK (((length(TRIM(BOTH FROM name)) >= 1) AND (length(TRIM(BOTH FROM name)) <= 200))),
+    CONSTRAINT features_revision_check CHECK ((revision > 0)),
+    CONSTRAINT features_status_check CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text]))),
+    CONSTRAINT features_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_features_creator FOREIGN KEY (created_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL
+);
+
+-- file_upload_sessions
+CREATE TABLE public.file_upload_sessions (
+    id uuid NOT NULL,
+    file_id uuid NOT NULL,
+    owner_id uuid NOT NULL,
+    name text NOT NULL,
+    size_bytes bigint NOT NULL,
+    sha256 text NOT NULL,
+    visibility text NOT NULL,
+    part_bytes bigint NOT NULL,
+    state text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT file_upload_sessions_part_bytes_check CHECK ((part_bytes > 0)),
+    CONSTRAINT file_upload_sessions_sha256_check CHECK ((sha256 ~ '^[a-f0-9]{64}$'::text)),
+    CONSTRAINT file_upload_sessions_size_bytes_check CHECK (((size_bytes > 0) AND (size_bytes <= '5368709120'::bigint))),
+    CONSTRAINT file_upload_sessions_state_check CHECK ((state = ANY (ARRAY['uploading'::text, 'complete'::text, 'cancelled'::text]))),
+    CONSTRAINT file_upload_sessions_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'private'::text]))),
+    CONSTRAINT file_upload_sessions_file_id_key UNIQUE (file_id),
+    CONSTRAINT file_upload_sessions_pkey PRIMARY KEY (id),
+    CONSTRAINT file_upload_sessions_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.file_owners(id)
+);
+
+-- media_objects
+CREATE TABLE public.media_objects (
+    id uuid NOT NULL,
+    object_key text NOT NULL,
+    original_filename text NOT NULL,
+    content_type text NOT NULL,
+    size_bytes bigint NOT NULL,
+    status text DEFAULT 'processing'::text NOT NULL,
+    variants jsonb DEFAULT '{}'::jsonb NOT NULL,
+    uploaded_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    owner_id uuid DEFAULT public.admin_file_owner() NOT NULL,
+    visibility text DEFAULT 'public'::text NOT NULL,
+    sha256 text,
+    CONSTRAINT media_objects_filename_check CHECK (((length(original_filename) >= 1) AND (length(original_filename) <= 255))),
+    CONSTRAINT media_objects_object_key_check CHECK (((length(object_key) >= 1) AND (length(object_key) <= 1024))),
+    CONSTRAINT media_objects_sha256_check CHECK (((sha256 IS NULL) OR (sha256 ~ '^[a-f0-9]{64}$'::text))),
+    CONSTRAINT media_objects_size_check CHECK ((size_bytes >= 0)),
+    CONSTRAINT media_objects_status_check CHECK ((status = ANY (ARRAY['processing'::text, 'ready'::text, 'failed'::text, 'deleted'::text]))),
+    CONSTRAINT media_objects_variants_check CHECK ((jsonb_typeof(variants) = 'object'::text)),
+    CONSTRAINT media_objects_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'private'::text]))),
+    CONSTRAINT media_objects_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_media_objects_uploader FOREIGN KEY (uploaded_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL,
+    CONSTRAINT media_objects_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.file_owners(id)
+);
+
+-- site_snapshots
+CREATE TABLE public.site_snapshots (
+    id uuid NOT NULL,
+    sequence bigint GENERATED BY DEFAULT AS IDENTITY (START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1) NOT NULL,
+    name text NOT NULL,
+    digest text NOT NULL,
+    payload jsonb NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    parent_snapshot_id uuid,
+    content_revision bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT site_snapshots_content_revision_check CHECK ((content_revision >= 0)),
+    CONSTRAINT site_snapshots_digest_check CHECK ((digest ~ '^[a-f0-9]{64}$'::text)),
+    CONSTRAINT site_snapshots_name_check CHECK (((length(TRIM(BOTH FROM name)) >= 1) AND (length(TRIM(BOTH FROM name)) <= 160))),
+    CONSTRAINT site_snapshots_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
+    CONSTRAINT site_snapshots_sequence_check CHECK ((sequence > 0)),
+    CONSTRAINT site_snapshots_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_site_snapshots_creator FOREIGN KEY (created_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL,
+    CONSTRAINT fk_site_snapshots_parent FOREIGN KEY (parent_snapshot_id) REFERENCES public.site_snapshots(id) ON DELETE RESTRICT
+);
+
+-- feature_versions
+CREATE TABLE public.feature_versions (
+    id uuid NOT NULL,
+    feature_id uuid NOT NULL,
+    version integer NOT NULL,
+    schema jsonb NOT NULL,
+    status text DEFAULT 'draft'::text NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    published_at timestamp with time zone,
+    CONSTRAINT feature_versions_published_at_check CHECK ((((status = 'draft'::text) AND (published_at IS NULL)) OR ((status = 'published'::text) AND (published_at IS NOT NULL)))),
+    CONSTRAINT feature_versions_schema_check CHECK ((jsonb_typeof(schema) = 'object'::text)),
+    CONSTRAINT feature_versions_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'published'::text]))),
+    CONSTRAINT feature_versions_version_check CHECK ((version > 0)),
+    CONSTRAINT feature_versions_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_feature_versions_creator FOREIGN KEY (created_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL,
+    CONSTRAINT fk_feature_versions_feature FOREIGN KEY (feature_id) REFERENCES public.features(id) ON DELETE RESTRICT
+);
+
+-- file_upload_parts
+CREATE TABLE public.file_upload_parts (
+    session_id uuid NOT NULL,
+    number integer NOT NULL,
+    object_key text NOT NULL,
+    size_bytes bigint NOT NULL,
+    sha256 text NOT NULL,
+    ready boolean NOT NULL,
+    CONSTRAINT file_upload_parts_number_check CHECK ((number > 0)),
+    CONSTRAINT file_upload_parts_sha256_check CHECK ((sha256 ~ '^[a-f0-9]{64}$'::text)),
+    CONSTRAINT file_upload_parts_size_bytes_check CHECK ((size_bytes > 0)),
+    CONSTRAINT file_upload_parts_object_key_key UNIQUE (object_key),
+    CONSTRAINT file_upload_parts_pkey PRIMARY KEY (session_id, number),
+    CONSTRAINT file_upload_parts_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.file_upload_sessions(id) ON DELETE CASCADE
+);
+
+-- media_renditions
+CREATE TABLE public.media_renditions (
+    media_id uuid NOT NULL,
+    profile_hash text NOT NULL,
+    profile jsonb NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    outputs jsonb DEFAULT '{}'::jsonb NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    lease_expires_at timestamp with time zone,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT media_renditions_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT media_renditions_outputs_check CHECK ((jsonb_typeof(outputs) = 'object'::text)),
+    CONSTRAINT media_renditions_profile_check CHECK ((jsonb_typeof(profile) = 'object'::text)),
+    CONSTRAINT media_renditions_profile_hash_check CHECK ((profile_hash ~ '^[a-f0-9]{64}$'::text)),
+    CONSTRAINT media_renditions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'ready'::text, 'failed'::text]))),
+    CONSTRAINT media_renditions_pkey PRIMARY KEY (media_id, profile_hash),
+    CONSTRAINT fk_media_renditions_media FOREIGN KEY (media_id) REFERENCES public.media_objects(id) ON DELETE CASCADE
+);
+
+-- site_environments
+CREATE TABLE public.site_environments (
+    key text NOT NULL,
+    name text NOT NULL,
+    public_base_url text DEFAULT ''::text NOT NULL,
+    http_port integer NOT NULL,
+    cors_origins text[] DEFAULT '{}'::text[] NOT NULL,
+    active_snapshot_id uuid,
+    revision bigint DEFAULT 1 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    indexable boolean DEFAULT false NOT NULL,
+    http_addr text DEFAULT ''::text NOT NULL,
+    CONSTRAINT site_environments_name_check CHECK (((length(TRIM(BOTH FROM name)) >= 1) AND (length(TRIM(BOTH FROM name)) <= 100))),
+    CONSTRAINT site_environments_port_check CHECK (((http_port >= 1) AND (http_port <= 65535))),
+    CONSTRAINT site_environments_revision_check CHECK ((revision > 0)),
+    CONSTRAINT site_environments_pkey PRIMARY KEY (key),
+    CONSTRAINT fk_site_environments_snapshot FOREIGN KEY (active_snapshot_id) REFERENCES public.site_snapshots(id) ON DELETE SET NULL
+);
+
+-- site_snapshot_events
+CREATE TABLE public.site_snapshot_events (
+    id uuid NOT NULL,
+    snapshot_id uuid,
+    environment text NOT NULL,
+    action text NOT NULL,
+    actor_token_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    snapshot_name text DEFAULT ''::text NOT NULL,
+    snapshot_sequence bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT site_snapshot_events_action_check CHECK ((action = ANY (ARRAY['publish'::text, 'promote'::text, 'rollback'::text, 'deploy'::text]))),
+    CONSTRAINT site_snapshot_events_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_site_snapshot_events_actor FOREIGN KEY (actor_token_id) REFERENCES public.access_tokens(id) ON DELETE SET NULL,
+    CONSTRAINT fk_site_snapshot_events_snapshot FOREIGN KEY (snapshot_id) REFERENCES public.site_snapshots(id) ON DELETE SET NULL
+);
+
+-- site_snapshot_model_workspaces
+CREATE TABLE public.site_snapshot_model_workspaces (
+    snapshot_id uuid NOT NULL,
+    revision bigint DEFAULT 0 NOT NULL,
+    published_revision bigint DEFAULT 0 NOT NULL,
+    draft_records jsonb DEFAULT '[]'::jsonb NOT NULL,
+    draft_selections jsonb DEFAULT '[]'::jsonb NOT NULL,
+    published_records jsonb DEFAULT '[]'::jsonb NOT NULL,
+    published_selections jsonb DEFAULT '[]'::jsonb NOT NULL,
+    updated_by uuid,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT site_snapshot_model_workspaces_pkey PRIMARY KEY (snapshot_id),
+    CONSTRAINT site_snapshot_model_workspaces_revision_check CHECK (((revision >= 0) AND (published_revision >= 0) AND (published_revision <= revision))),
+    CONSTRAINT site_snapshot_model_workspaces_draft_records_check CHECK ((jsonb_typeof(draft_records) = 'array'::text)),
+    CONSTRAINT site_snapshot_model_workspaces_draft_selections_check CHECK ((jsonb_typeof(draft_selections) = 'array'::text)),
+    CONSTRAINT site_snapshot_model_workspaces_published_records_check CHECK ((jsonb_typeof(published_records) = 'array'::text)),
+    CONSTRAINT site_snapshot_model_workspaces_published_selections_check CHECK ((jsonb_typeof(published_selections) = 'array'::text)),
+    CONSTRAINT fk_site_snapshot_model_workspaces_snapshot FOREIGN KEY (snapshot_id) REFERENCES public.site_snapshots(id) ON DELETE CASCADE,
+    CONSTRAINT fk_site_snapshot_model_workspaces_updater FOREIGN KEY (updated_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL
+);
+
+-- snapshot_model_content_publications
+CREATE TABLE public.snapshot_model_content_publications (
+    id uuid NOT NULL,
+    snapshot_id uuid NOT NULL,
+    draft_revision bigint NOT NULL,
+    content_revision bigint NOT NULL,
+    records jsonb NOT NULL,
+    selections jsonb NOT NULL,
+    actor_token_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT snapshot_model_content_publications_records_check CHECK ((jsonb_typeof(records) = 'array'::text)),
+    CONSTRAINT snapshot_model_content_publications_selections_check CHECK ((jsonb_typeof(selections) = 'array'::text)),
+    CONSTRAINT snapshot_model_content_publications_snapshot_revision_key UNIQUE (snapshot_id, draft_revision),
+    CONSTRAINT snapshot_model_content_publications_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_snapshot_model_content_publications_snapshot FOREIGN KEY (snapshot_id) REFERENCES public.site_snapshots(id) ON DELETE CASCADE,
+    CONSTRAINT fk_snapshot_model_content_publications_actor FOREIGN KEY (actor_token_id) REFERENCES public.access_tokens(id) ON DELETE SET NULL
+);
+
+-- feature_builds
+CREATE TABLE public.feature_builds (
+    id uuid NOT NULL,
+    feature_id uuid NOT NULL,
+    version text NOT NULL,
+    submission_schema_version_id uuid,
+    digest text NOT NULL,
+    artifact_size bigint NOT NULL,
+    manifest jsonb NOT NULL,
+    assets jsonb NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT feature_builds_digest_check CHECK ((digest ~ '^[a-f0-9]{64}$'::text)),
+    CONSTRAINT feature_builds_manifest_check CHECK (((jsonb_typeof(manifest) = 'object'::text) AND (jsonb_typeof(assets) = 'object'::text))),
+    CONSTRAINT feature_builds_size_check CHECK ((artifact_size > 0)),
+    CONSTRAINT feature_builds_version_check CHECK ((version ~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'::text)),
+    CONSTRAINT feature_builds_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_feature_builds_creator FOREIGN KEY (created_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL,
+    CONSTRAINT fk_feature_builds_feature FOREIGN KEY (feature_id) REFERENCES public.features(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_feature_builds_submission_schema FOREIGN KEY (submission_schema_version_id) REFERENCES public.feature_versions(id) ON DELETE RESTRICT
+);
+
+-- form_submissions
+CREATE TABLE public.form_submissions (
+    id uuid NOT NULL,
+    feature_id uuid NOT NULL,
+    schema_version_id uuid NOT NULL,
+    data jsonb NOT NULL,
+    status text DEFAULT 'new'::text NOT NULL,
+    processed_by uuid,
+    environment text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    archived_at timestamp with time zone,
+    deleted_at timestamp with time zone,
+    CONSTRAINT submissions_data_check CHECK ((jsonb_typeof(data) = 'object'::text)),
+    CONSTRAINT submissions_status_check CHECK ((status = ANY (ARRAY['new'::text, 'in_progress'::text, 'processed'::text, 'rejected'::text]))),
+    CONSTRAINT form_submissions_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_submissions_feature FOREIGN KEY (feature_id) REFERENCES public.features(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_submissions_processor FOREIGN KEY (processed_by) REFERENCES public.access_tokens(id) ON DELETE SET NULL,
+    CONSTRAINT fk_submissions_schema FOREIGN KEY (schema_version_id) REFERENCES public.feature_versions(id) ON DELETE RESTRICT
+);
+
+-- Seed the single administrative file owner.
+
+CREATE UNIQUE INDEX file_owners_one_admin ON public.file_owners USING btree (kind) WHERE (kind = 'admin'::text);
+
+CREATE INDEX file_upload_sessions_cleanup ON public.file_upload_sessions USING btree (state, expires_at);
+
+CREATE INDEX idx_access_tokens_active ON public.access_tokens USING btree (role, expires_at) WHERE (revoked_at IS NULL);
+
+CREATE INDEX idx_access_tokens_creator ON public.access_tokens USING btree (created_by);
+
+CREATE INDEX idx_feature_builds_feature ON public.feature_builds USING btree (feature_id, created_at DESC);
+
+CREATE INDEX idx_feature_versions_feature ON public.feature_versions USING btree (feature_id, version DESC);
+
+CREATE INDEX idx_media_objects_status_created ON public.media_objects USING btree (status, created_at DESC);
+
+CREATE INDEX idx_media_renditions_lease ON public.media_renditions USING btree (lease_expires_at) WHERE (status = 'processing'::text);
+
+CREATE INDEX idx_media_renditions_queue ON public.media_renditions USING btree (created_at) WHERE (status = 'pending'::text);
+
+CREATE INDEX idx_site_snapshot_events_env ON public.site_snapshot_events USING btree (environment, snapshot_id, created_at DESC);
+
+CREATE INDEX idx_site_snapshots_created ON public.site_snapshots USING btree (created_at DESC);
+
+CREATE INDEX idx_site_snapshots_digest ON public.site_snapshots USING btree (digest);
+
+CREATE INDEX idx_submissions_data ON public.form_submissions USING gin (data jsonb_path_ops) WHERE (deleted_at IS NULL);
+
+CREATE INDEX idx_submissions_environment_created ON public.form_submissions USING btree (environment, created_at DESC) WHERE (deleted_at IS NULL);
+
+CREATE INDEX idx_submissions_feature_created ON public.form_submissions USING btree (feature_id, created_at DESC) WHERE (deleted_at IS NULL);
+
+CREATE INDEX idx_submissions_status_created ON public.form_submissions USING btree (status, created_at DESC) WHERE (deleted_at IS NULL);
+
+CREATE INDEX media_objects_owner ON public.media_objects USING btree (owner_id, id);
+
+CREATE UNIQUE INDEX site_environments_unique_enabled_port ON public.site_environments USING btree (http_port) WHERE enabled;
+
+CREATE UNIQUE INDEX site_environments_unique_name ON public.site_environments USING btree (name);
+
+CREATE UNIQUE INDEX uq_access_tokens_token_hash ON public.access_tokens USING btree (token_hash);
+
+CREATE UNIQUE INDEX uq_feature_builds_digest ON public.feature_builds USING btree (digest);
+
+CREATE UNIQUE INDEX uq_feature_builds_feature_version ON public.feature_builds USING btree (feature_id, version);
+
+CREATE UNIQUE INDEX uq_feature_builds_identity ON public.feature_builds USING btree (id, feature_id);
+
+CREATE UNIQUE INDEX uq_feature_versions_feature_version ON public.feature_versions USING btree (feature_id, version);
+
+CREATE UNIQUE INDEX uq_feature_versions_identity ON public.feature_versions USING btree (id, feature_id);
+
+CREATE UNIQUE INDEX uq_features_key ON public.features USING btree (key);
+
+CREATE UNIQUE INDEX uq_media_objects_object_key ON public.media_objects USING btree (object_key);
+
+CREATE UNIQUE INDEX uq_site_snapshots_sequence ON public.site_snapshots USING btree (sequence);
+
+CREATE TRIGGER feature_builds_are_immutable BEFORE DELETE OR UPDATE ON public.feature_builds FOR EACH ROW EXECUTE FUNCTION public.reject_site_artifact_mutation();
+
+CREATE TRIGGER site_snapshots_structure_is_immutable BEFORE UPDATE ON public.site_snapshots FOR EACH ROW EXECUTE FUNCTION public.protect_snapshot_structure();
+
+INSERT INTO public.file_owners(id,kind,name,enabled) VALUES(gen_random_uuid(),'admin','admin',true);
+
+CREATE INDEX idx_site_snapshot_model_workspaces_draft_updated ON public.site_snapshot_model_workspaces USING btree (updated_at DESC) WHERE (revision > published_revision);
+
+CREATE INDEX idx_snapshot_model_content_publications_history ON public.snapshot_model_content_publications USING btree (snapshot_id, content_revision DESC);

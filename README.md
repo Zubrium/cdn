@@ -1,6 +1,6 @@
-# Website Engine
+# Zubrium
 
-Движок для сайтов, собираемых из независимо версионируемых frontend-фич. Один экземпляр обслуживает один сайт: хранит feature builds, данные и снапшоты, отдаёт встроенный публичный runtime и админку, управляет медиа, заявками и CORS. Движок принимает HTTP-трафик; HTTPS, если он нужен, завершается на внешнем сетевом уровне.
+Движок для сайтов, собираемых из независимо версионируемых frontend-фич. Один экземпляр может обслуживать несколько сайтов: каждый назначенный статической ветке снапшот задаёт отдельную структуру сайта и порт. Движок хранит сборки фич и данные, отдаёт встроенный публичный runtime и админку, управляет медиа, заявками и CORS. Движок принимает HTTP-трафик; HTTPS, если он нужен, завершается на внешнем сетевом уровне.
 
 ## Быстрый старт
 
@@ -12,9 +12,12 @@ docker compose up -d --no-build
 ```
 
 - Админка и API: <http://localhost:8080/admin/>
-- Публичная dev-среда: <http://localhost:8081/>
-- Публичная prod-среда: <http://localhost:8082/>
-- MinIO console: <http://localhost:9001> (`minioadmin` / `minioadmin`)
+- Публичная ветка `preview`: <http://localhost:8081/>
+- Публичная ветка `website`: <http://localhost:8082/>
+- MinIO console: <http://localhost:9001>; учётные данные задаются конфигурацией.
+
+Имена, порты, CORS и политика индексации веток заданы в `BRANCHES` из `.env.example`.
+Настройте значения под окружение; публичные домены и TLS назначает внешний gateway.
 
 `ENGINE_IMAGE` указывает на опубликованный в GHCR образ. Compose не собирает движок на этой машине и всегда проверяет registry при запуске. Для приватного пакета выполните `docker login ghcr.io` с токеном, имеющим `read:packages`. Перед запуском замените тестовые токены и пароли из `.env.example`.
 
@@ -27,78 +30,65 @@ Workflow [engine-image.yml](.github/workflows/engine-image.yml) запускае
 ## Как собирается сайт
 
 ```text
-репозиторий сайта                         Website Engine
+репозиторий сайта                         Zubrium
 ┌────────────────────────┐                ┌───────────────────────────┐
 │ core/                  │  feature ZIPs  │ admin + public runtime    │
 │ features/<key>/        ├───────────────►│ feature build registry    │
 │   manifest.json        │                │ visual page/route editor  │
-│   MVC + SCSS            │                │ dev/prod snapshots        │
+│   MVC + SCSS           │                │ snapshot tree + branches │
 └────────────────────────┘                └───────────────────────────┘
 ```
 
-В репозитории сайта исходниками остаются `core` и независимые `features`; в CI каждая фича собирается в отдельный ESM ZIP. Архив содержит `manifest.json`, entry-модуль, CSS и ресурсы. Движок проверяет архив и digest, хранит его неизменяемо и не компилирует загруженный код. Публичный runtime и React обслуживаются движком; страницы подгружают только нужные feature chunks.
+В репозитории сайта исходниками остаются `core` и независимые `features`; в CI каждая фича собирается в отдельный статический ZIP. Архив содержит `manifest.json` и готовые browser assets. Движок проверяет архив и digest, хранит его неизменяемо и не компилирует загруженный код. Помимо совместимого legacy React ABI поддерживаются `static-module-v1` для framework-neutral ESM lifecycle и `static-html-v1` для статических HTML-фрагментов, видимых без JavaScript. Загрузки доверенные и исполняются с origin сайта. Контракт, ограничения и руководство по упаковке описаны в [SPEC-feature-runtime.md](docs/SPEC-feature-runtime.md) и [FEATURE-RUNTIME-AUTHORING.md](docs/FEATURE-RUNTIME-AUTHORING.md); реализация отслеживается в TODO.
 
-Manifest — кодовый контракт разработчика: версия ABI, режим данных (`single`, `collection`, `form`), JSON Schema аргументов и содержимого, места размещения и UI-метаданные полей. Схемы не редактируются в админке. Администратор загружает сборки и собирает страницы/маршруты визуально; JSON-импорт контента доступен только как отдельная операция.
+Manifest format 2 — контракт разработчика: runtime ABI, schema аргументов для редактора сайта, typed `dataInputs`, form submission schema, слоты и feature tokens. CMS-модель и формы записей принадлежат снапшоту и настраиваются графически в `/site`; значения сущностей редактируются в `/content`. Для CMS-схемы в манифесте нет обратной совместимости с format 1.
 
-Сайт публикуется неизменяемыми снапшотами:
+Структурные изменения создают новый снапшот. Снапшоты образуют дерево; копия получает независимые модель, записи, черновики и выборки. У движка нет фиксированных сред dev/prod: имена и порты веток задаются в конфигурации, а назначения снапшотов изменяются только в `/snapshots/branches`. В каждой ветке публикация контента обновляет только записи назначенного снапшота.
 
-1. Черновик фиксирует страницы, маршруты, размещения, bindings аргументов и выбранные сборки.
-2. Публикация атомарно фиксирует конфигурацию, digest сборок и опубликованные версии контента в dev.
-3. В prod продвигается тот же снапшот; откат переключает среду на ранее созданный снапшот.
+Схема записей задаётся графически в ER-редакторе `/site/data-model`. Все настройки фич, включая аргументы и сопоставления `dataInputs`, задаются в `/site`; редакционные значения, черновики, публикация и выбор записей для размещений — в `/content`. Медиа загружаются в `/media`, а редакторы могут только выбирать уже загруженные файлы. Формы заявок валидируются отдельной строгой схемой manifest.
 
-Формы валидируются схемой активного снапшота. Заявки и их статусы хранятся отдельно и переживают публикации и откаты. Коллекции сохраняют ручной порядок, а runtime запрашивает записи с серверной фильтрацией и пагинацией.
+## Чистый запуск без переноса старых данных
 
-## Миграция текущего сайта
-
-Скрипт `scripts/migrate-legacy-site.mjs` переносит feature ZIP-сборки, файлы из `backend/assets` (включая WOFF2 и SVG), контент из `backend/data`, SEO-метаданные, маршруты и композиции в dev-снапшот движка. Он назначает домашний и каталоговый фон разным размещениям `background`, добавляет Alumni Sans SC и общий логотип в дизайн-систему и включает их в первый снапшот. Скрипт предназначен для одноразового запуска на staging после проверки исходных данных:
-
-```bash
-ENGINE_URL=http://localhost:8080 \
-ENGINE_TOKEN='...' \
-LEGACY_SITE_DIR='/path/to/vitasil' \
-node scripts/migrate-legacy-site.mjs
-```
-
-Перед этим соберите feature archives в репозитории сайта: `npm ci && npm run build` из `frontend/`. Скрипт публикует только в dev. Проверьте главную и каталог, включая разные фоны и загрузку шрифта, затем продвиньте полученный снапшот в prod через экран «Настройки сайта → Снапшоты». Старый nginx-стек можно оставить развёрнутым отдельно на время staging и использовать для отката трафика.
+Для перехода используйте пустую базу с единственной начальной миграцией, затем загрузите ZIP-фичи, соберите модель данных и структуру сайта и назначьте снапшот нужной статической ветке. Старые per-feature CMS-данные, manifest format 1 и relation envelopes не переносятся и не читаются новой системой. Проверки сброса выполняйте только на явно disposable QA-ресурсах; рабочие базы, storage и данные Vitasil не сбрасываются и не мигрируются.
 
 ## Архитектура движка
 
-- `features/sitebuilder` — manifests, проверка ZIP, реестр сборок, маршруты и снапшоты.
-- `features/content`, `features/forms`, `features/media` — данные, заявки и медиахранилище.
-- `features/releases` — настройки сред, CORS и совместимость со старыми таблицами релизов.
+- `features/sitebuilder` — manifests, проверка ZIP, реестр сборок, модель сайта, маршруты и снапшоты.
+- `features/forms`, `features/media`, `features/files` — заявки, медиагалерея и серверное файловое API.
 - `presentation/http` — API, middleware и публичные маршрутизаторы.
-- `pkg/runtime` — встроенный публичный runtime shell.
-- `frontend/src/pages/site` — визуальная сборка страниц, bindings аргументов и управление снапшотами.
-- `frontend/src/domains/content-schema` — формы контента, генерируемые по manifest-backed JSON Schema.
+- `pkg/runtime` — публичные Go HTML-шаблоны, ABI lifecycle scripts и независимые публичные стили/assets.
+- `frontend/admin/src/pages/site` — структура сайта, ER-модель, аргументы, bindings и дизайн-система; управление ветками вынесено в `/snapshots/branches`.
+- `frontend/admin/src/pages/content` — записи snapshot-scoped модели, черновики, публикация и выборки размещений.
+- `frontend/admin/src/domains/content-schema` — общие поля и проверки редакционных значений; формы записей строятся из ER-модели выбранного снапшота.
+- `frontend/admin` и `frontend/ui` содержат админку и её стили. Публичные HTML и маршруты полностью формируются Go из route tree снапшота; scripts жизненного цикла ABI и отдельные публичные стили находятся в `pkg/runtime`. Подробности и команды — в [архитектуре frontend](docs/FRONTEND_ARCHITECTURE.md).
 
-Ограничения зависимостей: доменная логика находится в `features/<name>`, `pkg` не зависит от `features`, HTTP-слой не обращается к БД напрямую. Внешний runtime получает композицию через `/api/v2/runtime`; в него не добавлен адаптер к старой структуре статических JSON-файлов.
+Ограничения зависимостей: доменная логика находится в `features/<name>`, `pkg` не зависит от `features`, HTTP-слой не обращается к БД напрямую. Go формирует начальный HTML и bootstrap напрямую из snapshot composition; `/api/v2/runtime` используется внешними API-потребителями и браузерным ABI-runtime при последующих переходах назад/вперёд.
 
 ## Локальная разработка
 
 ```bash
 docker compose up -d db minio
 export DATABASE_URL='postgres://engine:engine@localhost:5432/engine?sslmode=disable'
-export BOOTSTRAP_ADMIN_TOKEN='dev-admin-token-change-me-please'
+export BOOTSTRAP_ADMIN_TOKEN='replace-with-a-local-admin-secret'
 export S3_ENDPOINT='http://localhost:9000'
 export S3_PUBLIC_BASE_URL='http://localhost:9000'
 export S3_ENSURE_BUCKET=true
 ```
 
-Админка и публичный runtime встраиваются в Go-бинарь. Dockerfile собирает оба frontend bundle до сборки backend:
+Админка и публичные runtime scripts встраиваются в Go-бинарь. Dockerfile собирает admin UI и ABI scripts до сборки backend; публичный HTML отдельным frontend bundle не является:
 
 ```bash
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend build
-pnpm --dir frontend build:runtime
 go run ./cmd/api
 ```
 
-В репозитории сайта сборка отдельных feature ZIP-архивов проверяется так:
+Для локальной разработки и сборки каждого пакета отдельно:
 
 ```bash
-npm ci --prefix frontend
-npm run lint --prefix frontend
-npm run build --prefix frontend
+pnpm --dir frontend dev:admin
+pnpm --dir frontend build:admin
+pnpm --dir frontend build:runtime
 ```
 
 ## Проверки

@@ -27,9 +27,12 @@ const revisionTable = "atlas_schema_revisions"
 // the revision table. All files are applied inside a single transaction, and
 // a transaction-scoped advisory lock makes sure that only one instance
 // migrates at a time.
-func Migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
+func Migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, lockTimeout time.Duration) error {
 	if pool == nil {
 		return errors.New("database: nil pool")
+	}
+	if lockTimeout <= 0 {
+		return errors.New("database: migration lock timeout must be explicitly configured")
 	}
 
 	dir, err := dirFromFS(fsys)
@@ -46,7 +49,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
 	}
 	defer db.Close()
 
-	lockCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	lockCtx, cancel := context.WithTimeout(ctx, lockTimeout)
 	defer cancel()
 
 	tx, err := db.BeginTx(lockCtx, nil)
@@ -84,39 +87,14 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("database: commit migrations: %w", err)
 	}
-	if err := SeedDefaults(ctx, pool); err != nil {
-		return fmt.Errorf("database: seed defaults: %w", err)
-	}
 	return nil
 }
 
-// SeedDefaults creates the rows every deployment needs: the site settings
-// singleton and the dev/prod environment rows behind CORS and release
-// activation. Idempotent; safe after truncate too.
+// SeedDefaults adds only non-site operational settings. Site state is configured
+// by immutable snapshots and statically configured branches.
 func SeedDefaults(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, `INSERT INTO site_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING`); err != nil {
 		return fmt.Errorf("seed site settings: %w", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO site_environments (key, name, http_port)
-		VALUES ('dev', 'Development', 8081), ('prod', 'Production', 8082)
-		ON CONFLICT (key) DO NOTHING`); err != nil {
-		return fmt.Errorf("seed site environments: %w", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO site_draft_config (id, config, revision)
-		VALUES (TRUE, '{"formatVersion":3,"pages":[{"id":"home","name":"Главная","kind":"page","placements":[]}],"routeTree":{"id":"site","type":"site","children":[{"id":"home-route","type":"path","path":"/","pageId":"home","children":[]}]}}'::jsonb, 1)
-		ON CONFLICT (id) DO NOTHING`); err != nil {
-		return fmt.Errorf("seed default site page: %w", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO site_metadata_state (id, draft, dev, prod)
-		VALUES (TRUE,
-			'{"formatVersion":1,"siteName":"Website","pages":{}}'::jsonb,
-			'{"formatVersion":1,"siteName":"Website","pages":{}}'::jsonb,
-			'{"formatVersion":1,"siteName":"Website","pages":{}}'::jsonb)
-		ON CONFLICT (id) DO NOTHING`); err != nil {
-		return fmt.Errorf("seed site metadata: %w", err)
 	}
 	return nil
 }

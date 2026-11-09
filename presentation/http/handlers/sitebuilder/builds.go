@@ -39,7 +39,8 @@ func (h *BuildsHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.maxBytes <= 0 {
-		h.maxBytes = 100 << 20
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Feature archive size limit is not configured")
+		return
 	}
 	if r.ContentLength > h.maxBytes {
 		response.Error(w, r, http.StatusRequestEntityTooLarge, "artifact_too_large", "Архив фичи превышает допустимый размер")

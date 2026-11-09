@@ -10,6 +10,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -18,8 +19,6 @@ import (
 	"strings"
 	"time"
 )
-
-const ffmpegTimeout = 15 * time.Minute
 
 type ProcessedOutput struct {
 	Data     []byte
@@ -33,12 +32,42 @@ type RenditionProcessor interface {
 	Ready(context.Context) error
 }
 
+// ProcessedFile is a ready rendition on disk; callers stream it to storage
+// and then invoke the returned cleanup function.
+type ProcessedFile struct {
+	Path          string
+	Size          int64
+	MIMEType      string
+	Width, Height int
+}
+type StreamingRenditionProcessor interface {
+	ProcessStream(context.Context, Media, FieldProfile, io.Reader) (map[string]ProcessedFile, func(), error)
+}
 type FFmpegProcessor struct {
 	ffmpeg  string
 	ffprobe string
+	tempDir string
+	timeout time.Duration
 }
 
-func NewFFmpegProcessor() (*FFmpegProcessor, error) {
+func (p *FFmpegProcessor) ProcessingTimeout() time.Duration { return p.timeout }
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(buffer)
+}
+
+func NewFFmpegProcessor(timeout time.Duration) (*FFmpegProcessor, error) {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("media processing timeout must be explicitly configured")
+	}
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg executable not found: %w", err)
@@ -47,7 +76,24 @@ func NewFFmpegProcessor() (*FFmpegProcessor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe executable not found: %w", err)
 	}
-	return &FFmpegProcessor{ffmpeg: ffmpeg, ffprobe: ffprobe}, nil
+	return &FFmpegProcessor{ffmpeg: ffmpeg, ffprobe: ffprobe, timeout: timeout}, nil
+}
+
+// NewFFmpegProcessorWithSettings is the production constructor: the
+// temporary storage directory and processing timeout are operator configured.
+func NewFFmpegProcessorWithSettings(tempDir string, timeout time.Duration) (*FFmpegProcessor, error) {
+	if tempDir == "" || timeout <= 0 {
+		return nil, fmt.Errorf("media processing directory and positive timeout are required")
+	}
+	if err := os.MkdirAll(tempDir, 0700); err != nil {
+		return nil, err
+	}
+	p, err := NewFFmpegProcessor(timeout)
+	if err != nil {
+		return nil, err
+	}
+	p.tempDir = tempDir
+	return p, nil
 }
 
 func (p *FFmpegProcessor) Ready(_ context.Context) error {
@@ -60,67 +106,176 @@ func (p *FFmpegProcessor) Ready(_ context.Context) error {
 	return nil
 }
 
+// Process preserves the legacy in-memory processor contract for callers that
+// already supply small in-memory fixtures; production uses ProcessStream.
 func (p *FFmpegProcessor) Process(ctx context.Context, original Media, profile FieldProfile, data []byte) (map[string]ProcessedOutput, error) {
-	if err := profile.Validate(); err != nil {
+	original.SizeBytes = int64(len(data))
+	files, cleanup, err := p.ProcessStream(ctx, original, profile, bytes.NewReader(data))
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
 		return nil, err
+	}
+	outputs := make(map[string]ProcessedOutput, len(files))
+	for name, file := range files {
+		data, err := os.ReadFile(file.Path)
+		if err != nil {
+			return nil, err
+		}
+		outputs[name] = ProcessedOutput{Data: data, MIMEType: file.MIMEType, Width: file.Width, Height: file.Height}
+	}
+	return outputs, nil
+}
+
+func (p *FFmpegProcessor) ProcessStream(ctx context.Context, original Media, profile FieldProfile, source io.Reader) (map[string]ProcessedFile, func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	if err := profile.Validate(); err != nil {
+		return nil, nil, err
 	}
 	if err := validateProfileType(profile, original.ContentType); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if profile.Accept == "raster-image" && (original.ContentType == "image/gif" || original.ContentType == "image/svg+xml") {
-		// Preserve source formats whose animation/vector semantics must not be
-		// flattened. Runtime hydration falls back to the original media URL.
-		return map[string]ProcessedOutput{}, nil
+		return map[string]ProcessedFile{}, nil, nil
 	}
-	if original.ContentType == "image/webp" && isAnimatedWebP(data) {
-		// Preserve animation. A profile can still be considered ready; runtime
-		// hydration falls back to the original when no static rendition exists.
-		return map[string]ProcessedOutput{}, nil
+	if original.SizeBytes < 1 {
+		return nil, nil, fmt.Errorf("invalid original size")
 	}
-	workDir, err := os.MkdirTemp("", "website-engine-media-*")
+	workDir, err := os.MkdirTemp(p.tempDir, "website-engine-media-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer os.RemoveAll(workDir)
-
-	ext := filepath.Ext(original.ObjectKey)
-	if ext == "" {
-		ext = ".media"
+	cleanup := func() { _ = os.RemoveAll(workDir) }
+	fail := func(err error) (map[string]ProcessedFile, func(), error) { cleanup(); return nil, nil, err }
+	inputPath := filepath.Join(workDir, "original.media")
+	input, err := os.OpenFile(inputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fail(err)
 	}
-	inputPath := filepath.Join(workDir, "original"+ext)
-	if err := os.WriteFile(inputPath, data, 0600); err != nil {
-		return nil, err
+	n, copyErr := io.Copy(input, io.LimitReader(contextReader{ctx: ctx, reader: source}, original.SizeBytes+1))
+	closeErr := input.Close()
+	if copyErr != nil {
+		return fail(copyErr)
 	}
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
-
+	if closeErr != nil {
+		return fail(closeErr)
+	}
+	if n != original.SizeBytes {
+		return fail(fmt.Errorf("original size does not match its metadata"))
+	}
+	if original.ContentType == "image/webp" {
+		animated, err := isAnimatedWebPFile(inputPath)
+		if err != nil {
+			return fail(err)
+		}
+		if animated {
+			return map[string]ProcessedFile{}, cleanup, nil
+		}
+	}
 	if profile.Accept == "video" {
-		return p.processVideo(ctx, workDir, inputPath, profile)
+		outputs, err := p.processVideoFiles(ctx, workDir, inputPath, profile)
+		if err != nil {
+			return fail(err)
+		}
+		return outputs, cleanup, nil
 	}
-	outputs := make(map[string]ProcessedOutput, len(profile.Renditions))
-	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	input, err = os.Open(inputPath)
 	if err != nil {
-		return nil, fmt.Errorf("read source image dimensions: %w", err)
+		return fail(err)
 	}
+	config, _, decodeErr := image.DecodeConfig(input)
+	closeErr = input.Close()
+	if decodeErr != nil {
+		return fail(fmt.Errorf("read source image dimensions: %w", decodeErr))
+	}
+	if closeErr != nil {
+		return fail(closeErr)
+	}
+	if config.Width < 1 || config.Height < 1 || int64(config.Width)*int64(config.Height) > maxImagePixels {
+		return fail(fmt.Errorf("source image dimensions are not supported"))
+	}
+	outputs := make(map[string]ProcessedFile, len(profile.Renditions))
 	for _, rendition := range profile.Renditions {
 		outputPath := filepath.Join(workDir, rendition.Name+".webp")
 		filter, err := renditionFilter(rendition, config.Width, config.Height)
 		if err != nil {
-			return nil, fmt.Errorf("build image rendition %q filter: %w", rendition.Name, err)
+			return fail(fmt.Errorf("build image rendition %q filter: %w", rendition.Name, err))
 		}
-		if _, err := runCommand(ctx, p.ffmpeg,
-			"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
-			"-map_metadata", "-1", "-frames:v", "1", "-vf", filter,
-			"-c:v", "libwebp", "-quality", "82", "-compression_level", "6", outputPath); err != nil {
-			return nil, fmt.Errorf("encode image rendition %q: %w", rendition.Name, err)
+		if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", inputPath, "-map_metadata", "-1", "-frames:v", "1", "-vf", filter, "-c:v", "libwebp", "-quality", "82", "-compression_level", "6", outputPath); err != nil {
+			return fail(fmt.Errorf("encode image rendition %q: %w", rendition.Name, err))
 		}
-		output, err := readImageOutput(outputPath)
+		output, err := inspectImageFile(outputPath)
 		if err != nil {
-			return nil, fmt.Errorf("read image rendition %q: %w", rendition.Name, err)
+			return fail(fmt.Errorf("read image rendition %q: %w", rendition.Name, err))
 		}
 		outputs[rendition.Name] = output
 	}
-	return outputs, nil
+	return outputs, cleanup, nil
+}
+
+// Scan WebP chunks without loading the original or any large payload into RAM.
+func isAnimatedWebPFile(path string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	var header [12]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		return false, err
+	}
+	if string(header[:4]) != "RIFF" || string(header[8:]) != "WEBP" {
+		return false, nil
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	offset := int64(12)
+	for offset+8 <= stat.Size() {
+		var chunk [8]byte
+		if _, err := file.ReadAt(chunk[:], offset); err != nil {
+			return false, err
+		}
+		size := int64(binary.LittleEndian.Uint32(chunk[4:]))
+		start := offset + 8
+		if size > stat.Size()-start {
+			return false, fmt.Errorf("truncated WebP chunk")
+		}
+		kind := string(chunk[:4])
+		if kind == "ANIM" || kind == "ANMF" {
+			return true, nil
+		}
+		if kind == "VP8X" && size > 0 {
+			var flag [1]byte
+			if _, err := file.ReadAt(flag[:], start); err != nil {
+				return false, err
+			}
+			if flag[0]&0x02 != 0 {
+				return true, nil
+			}
+		}
+		offset = start + size + (size & 1)
+	}
+	return false, nil
+}
+func inspectImageFile(path string) (ProcessedFile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return ProcessedFile{}, err
+	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return ProcessedFile{}, err
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return ProcessedFile{}, err
+	}
+	return ProcessedFile{Path: path, Size: stat.Size(), MIMEType: "image/webp", Width: cfg.Width, Height: cfg.Height}, nil
 }
 
 func isAnimatedWebP(data []byte) bool {
@@ -146,26 +301,21 @@ func isAnimatedWebP(data []byte) bool {
 	return false
 }
 
-func (p *FFmpegProcessor) processVideo(ctx context.Context, workDir, inputPath string, profile FieldProfile) (map[string]ProcessedOutput, error) {
+func (p *FFmpegProcessor) processVideoFiles(ctx context.Context, workDir, inputPath string, profile FieldProfile) (map[string]ProcessedFile, error) {
 	v := profile.Video
 	videoPath := filepath.Join(workDir, "video.mp4")
 	videoFilter := fmt.Sprintf("scale=w='min(iw,%d)':h='min(ih,%d)':force_original_aspect_ratio=decrease:force_divisible_by=2", v.MaxWidth, v.MaxHeight)
-	if _, err := runCommand(ctx, p.ffmpeg,
-		"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
-		"-map", "0:v:0", "-map", "0:a?", "-map_metadata", "-1", "-vf", videoFilter,
-		"-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p",
-		"-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", videoPath); err != nil {
+	if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", inputPath, "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "-1", "-vf", videoFilter, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", videoPath); err != nil {
 		return nil, fmt.Errorf("encode H.264 video: %w", err)
-	}
-	video, err := os.ReadFile(videoPath)
-	if err != nil {
-		return nil, err
 	}
 	width, height, err := p.probeDimensions(ctx, videoPath)
 	if err != nil {
 		return nil, fmt.Errorf("probe encoded video: %w", err)
 	}
-
+	stat, err := os.Stat(videoPath)
+	if err != nil {
+		return nil, err
+	}
 	posterPath := filepath.Join(workDir, "poster.webp")
 	posterWidth, posterHeight, err := p.probeDimensions(ctx, inputPath)
 	if err != nil {
@@ -173,22 +323,16 @@ func (p *FFmpegProcessor) processVideo(ctx context.Context, workDir, inputPath s
 	}
 	posterFilter, err := renditionFilter(v.Poster, posterWidth, posterHeight)
 	if err != nil {
-		return nil, fmt.Errorf("build video poster filter: %w", err)
+		return nil, err
 	}
-	if _, err := runCommand(ctx, p.ffmpeg,
-		"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
-		"-map_metadata", "-1", "-vf", posterFilter, "-frames:v", "1",
-		"-c:v", "libwebp", "-quality", "82", "-compression_level", "6", posterPath); err != nil {
+	if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", inputPath, "-map_metadata", "-1", "-vf", posterFilter, "-frames:v", "1", "-c:v", "libwebp", "-quality", "82", "-compression_level", "6", posterPath); err != nil {
 		return nil, fmt.Errorf("encode video poster: %w", err)
 	}
-	poster, err := readImageOutput(posterPath)
+	poster, err := inspectImageFile(posterPath)
 	if err != nil {
-		return nil, fmt.Errorf("read video poster: %w", err)
+		return nil, err
 	}
-	return map[string]ProcessedOutput{
-		"video":  {Data: video, MIMEType: "video/mp4", Width: width, Height: height},
-		"poster": poster,
-	}, nil
+	return map[string]ProcessedFile{"video": {Path: videoPath, Size: stat.Size(), MIMEType: "video/mp4", Width: width, Height: height}, "poster": poster}, nil
 }
 
 func renditionFilter(r Rendition, sourceWidth, sourceHeight int) (string, error) {
@@ -216,7 +360,7 @@ func coverCropDimensions(sourceWidth, sourceHeight, targetWidth, targetHeight in
 }
 
 func (p *FFmpegProcessor) probeDimensions(ctx context.Context, path string) (int, int, error) {
-	out, err := runCommand(ctx, p.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", path)
+	out, err := runCommand(ctx, p.ffprobe, "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", path)
 	if err != nil {
 		return 0, 0, err
 	}

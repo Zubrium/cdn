@@ -13,7 +13,6 @@ import (
 	"time"
 	"websiteengine/features/media"
 	"websiteengine/features/sitebuilder"
-	"websiteengine/pkg/environment"
 	"websiteengine/pkg/principal"
 
 	"github.com/google/uuid"
@@ -21,26 +20,63 @@ import (
 	"websiteengine/pkg/response"
 )
 
+type FileHandler interface {
+	ServeMedia(http.ResponseWriter, *http.Request)
+	UploadAdminMedia(http.ResponseWriter, *http.Request)
+	DeleteAdminMedia(http.ResponseWriter, *http.Request)
+	AdminMediaAccess(http.ResponseWriter, *http.Request) bool
+}
+
 type Handler struct {
-	service   *media.Service
-	profiles  MediaProfileProvider
-	log       *slog.Logger
-	maxUpload int64
+	files            FileHandler
+	service          *media.Service
+	profiles         MediaProfileProvider
+	log              *slog.Logger
+	maxUpload        int64
+	pageDefault      int
+	pageMax          int
+	redirectCacheTTL time.Duration
 }
 
 type MediaProfileProvider interface {
-	MediaProfile(context.Context, environment.Environment, string, string, string, string, string) (sitebuilder.MediaProfileLookup, error)
+	MediaProfile(context.Context, uuid.UUID, string, string, string, string, string) (sitebuilder.MediaProfileLookup, error)
 }
 
 func NewHandler(service *media.Service, log *slog.Logger, maxUpload int64) *Handler {
 	return &Handler{service: service, log: log, maxUpload: maxUpload}
 }
 
+// SetRedirectCacheTTL applies the configured TTL to legacy public media
+// redirects. The canonical file service serves directly and manages its own
+// no-cache policy.
+func (h *Handler) SetRedirectCacheTTL(ttl time.Duration) error {
+	if ttl < time.Second || ttl%time.Second != 0 {
+		return fmt.Errorf("MEDIA_REDIRECT_CACHE_TTL must be a positive whole number of seconds")
+	}
+	h.redirectCacheTTL = ttl
+	return nil
+}
+
+func (h *Handler) SetFileHandler(handler FileHandler) { h.files = handler }
+
 func (h *Handler) SetProfileProvider(provider MediaProfileProvider) {
 	h.profiles = provider
 }
 
+// SetPagination binds the media list to operator-configured page limits.
+func (h *Handler) SetPagination(defaultPage, maxPage int) error {
+	if defaultPage < 1 || maxPage < defaultPage {
+		return fmt.Errorf("media pagination limits are invalid")
+	}
+	h.pageDefault, h.pageMax = defaultPage, maxPage
+	return nil
+}
+
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil {
+		h.files.UploadAdminMedia(w, r)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUpload+(1<<20))
 	if err := r.ParseMultipartForm(h.maxUpload + 1); err != nil {
 		var maxErr *http.MaxBytesError
@@ -78,8 +114,12 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	if h.pageDefault < 1 || h.pageMax < h.pageDefault {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Pagination limits are not configured")
+		return
+	}
 	q := r.URL.Query()
-	limit, err := response.ParseLimit(q.Get("limit"), 50, 200)
+	limit, err := response.ParseLimit(q.Get("limit"), h.pageDefault, h.pageMax)
 	if err != nil {
 		response.Error(w, r, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
@@ -160,6 +200,9 @@ func parseSizeParam(raw string) (*int64, error) {
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil && !h.files.AdminMediaAccess(w, r) {
+		return
+	}
 	id, ok := mediaID(w, r)
 	if !ok {
 		return
@@ -178,6 +221,9 @@ type updateMediaRequest struct {
 
 // Update renames the display metadata of a media object.
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil && !h.files.AdminMediaAccess(w, r) {
+		return
+	}
 	id, ok := mediaID(w, r)
 	if !ok {
 		return
@@ -195,21 +241,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, m)
 }
 
-// Usage lists the content records that reference the media object.
-func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
-	id, ok := mediaID(w, r)
-	if !ok {
-		return
-	}
-	items, err := h.service.Usage(r.Context(), id)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
 func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil && !h.files.AdminMediaAccess(w, r) {
+		return
+	}
 	id, ok := mediaID(w, r)
 	if !ok {
 		return
@@ -223,14 +258,18 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 }
 
 type renditionRequest struct {
-	FeatureKey   string `json:"featureKey"`
-	BuildVersion string `json:"buildVersion,omitempty"`
-	SchemaKind   string `json:"schemaKind"`
-	FieldPath    string `json:"fieldPath"`
-	BuildDigest  string `json:"buildDigest"`
+	SnapshotID   uuid.UUID `json:"snapshotId"`
+	FeatureKey   string    `json:"featureKey"`
+	BuildVersion string    `json:"buildVersion"`
+	SchemaKind   string    `json:"schemaKind"`
+	FieldPath    string    `json:"fieldPath"`
+	BuildDigest  string    `json:"buildDigest"`
 }
 
 func (h *Handler) PrepareRendition(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil && !h.files.AdminMediaAccess(w, r) {
+		return
+	}
 	id, ok := mediaID(w, r)
 	if !ok {
 		return
@@ -244,7 +283,7 @@ func (h *Handler) PrepareRendition(w http.ResponseWriter, r *http.Request) {
 		response.WriteDecodeError(w, r, err)
 		return
 	}
-	profile, err := h.profiles.MediaProfile(r.Context(), environment.Dev, req.FeatureKey, req.BuildVersion, req.SchemaKind, req.FieldPath, req.BuildDigest)
+	profile, err := h.profiles.MediaProfile(r.Context(), req.SnapshotID, req.FeatureKey, req.BuildVersion, req.SchemaKind, req.FieldPath, req.BuildDigest)
 	if err != nil {
 		h.writeProfileError(w, r, err)
 		return
@@ -262,6 +301,9 @@ func (h *Handler) PrepareRendition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RenditionState(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil && !h.files.AdminMediaAccess(w, r) {
+		return
+	}
 	id, ok := mediaID(w, r)
 	if !ok {
 		return
@@ -271,7 +313,12 @@ func (h *Handler) RenditionState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	profile, err := h.profiles.MediaProfile(r.Context(), environment.Dev, query.Get("featureKey"), query.Get("buildVersion"), query.Get("schemaKind"), query.Get("fieldPath"), query.Get("buildDigest"))
+	snapshotID, err := uuid.Parse(query.Get("snapshotId"))
+	if err != nil || snapshotID == uuid.Nil {
+		response.Error(w, r, http.StatusBadRequest, "invalid_snapshot_id", "Укажите корректный ID снапшота")
+		return
+	}
+	profile, err := h.profiles.MediaProfile(r.Context(), snapshotID, query.Get("featureKey"), query.Get("buildVersion"), query.Get("schemaKind"), query.Get("fieldPath"), query.Get("buildDigest"))
 	if err != nil {
 		h.writeProfileError(w, r, err)
 		return
@@ -301,19 +348,23 @@ func (h *Handler) RenditionState(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) writeProfileError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, sitebuilder.ErrNotFound):
-		response.Error(w, r, http.StatusNotFound, "media_field_not_found", "Поле медиа не найдено в активной сборке")
+		response.Error(w, r, http.StatusNotFound, "media_field_not_found", "Поле медиа не найдено в выбранном снапшоте")
 	case errors.Is(err, sitebuilder.ErrConflict):
 		response.Error(w, r, http.StatusConflict, "feature_build_changed", err.Error())
 	case errors.Is(err, sitebuilder.ErrInvalid):
 		response.Error(w, r, http.StatusUnprocessableEntity, "invalid_media_field", err.Error())
 	case errors.Is(err, sitebuilder.ErrSnapshotUnavailable):
-		response.Error(w, r, http.StatusConflict, "no_active_snapshot", "Нет активного dev-снапшота")
+		response.Error(w, r, http.StatusConflict, "snapshot_unavailable", "Выбранный снапшот недоступен")
 	default:
 		h.writeError(w, r, err)
 	}
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil {
+		h.files.DeleteAdminMedia(w, r)
+		return
+	}
 	id, ok := mediaID(w, r)
 	if !ok {
 		return
@@ -328,6 +379,14 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 // Redirect responds with 302 to a public object URL. No user-supplied URL is
 // ever used, which prevents open redirects.
 func (h *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
+	if h.files == nil && (h.redirectCacheTTL < time.Second || h.redirectCacheTTL%time.Second != 0) {
+		response.Error(w, r, http.StatusInternalServerError, "configuration_error", "Media redirect cache TTL is not configured")
+		return
+	}
+	if h.files != nil {
+		h.files.ServeMedia(w, r)
+		return
+	}
 	id, err := uuid.Parse(r.PathValue("key"))
 	if err != nil {
 		response.Error(w, r, http.StatusNotFound, "not_found", "Медиаобъект не найден")
@@ -348,15 +407,23 @@ func (h *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, r, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка сервера")
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Cache-Control", redirectCacheControl(h.redirectCacheTTL))
 	w.Header().Set("Location", url)
 	w.WriteHeader(http.StatusFound)
+}
+
+func redirectCacheControl(ttl time.Duration) string {
+	return fmt.Sprintf("public, max-age=%d", int64(ttl/time.Second))
 }
 
 // SystemAsset streams a font or logo through the engine origin so public
 // themes do not depend on bucket CORS configuration. The route's CORS
 // middleware owns origin policy; this handler must not override it.
 func (h *Handler) SystemAsset(w http.ResponseWriter, r *http.Request) {
+	if h.files != nil {
+		h.files.ServeMedia(w, r)
+		return
+	}
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.NotFound(w, r)

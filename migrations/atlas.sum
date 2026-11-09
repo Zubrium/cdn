@@ -1,8 +1,2 @@
-h1:OWjdJ+d/lZuR0kPoVb8mWsrc8tYCTqJWSvtE/jM5Ups=
-0001_init.sql h1:TycfehMRBObO6abllYDLcvYLfmaUBNCS5xhaPljR1X0=
-0002_remove_tls.sql h1:4cuTCB12sT2/lY5Rp0nBUVvFtC1QPZ4OtW3cGqP2qFQ=
-0003_media_renditions.sql h1:kMm0Udy2woNY/mBrZM7SLWeLLn7KDtHYuSK7+72hoUE=
-0004_design_system.sql h1:o/RuuMeYxOIE3kb6mfHaxw4bJRi0fuC28tB5yLb8FwY=
-0005_snapshot_workflow.sql h1:F4pFcEHcIoju7yHzMG5AEzuxLHtjqtGoHyy/BHYI3oY=
-0006_snapshot_content_deploy.sql h1:ErXTmUteoZm2QRjOG+lvlIdvG69dN0yAcjzVaYTCSvg=
-0007_snapshot_content_drafts.sql h1:Y2p8LkQo70PPr/ugnBRzO35kfpc/uDtJkNwMphlNh9g=
+h1:W5n7AMHzJXsT/ZyWG/1ClILd5vRUklDk+JQjrUD3dfU=
+0001_init.sql h1:yWG0atsX1xaRZvB6HdKxFjJBAh7y+dK2HEaNrwrO1qM=

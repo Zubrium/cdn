@@ -106,6 +106,12 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
+					if rec == http.ErrAbortHandler {
+						// A streamed response can already have sent its headers and
+						// partial body. Let net/http abort the connection; writing
+						// JSON here would corrupt the download while reporting 200.
+						panic(rec)
+					}
 					log.Error("panic recovered",
 						"request_id", response.RequestID(r.Context()),
 						"panic", rec,
@@ -296,7 +302,7 @@ func corsHandler(origins []string, next http.Handler) http.Handler {
 	})
 }
 
-// CORSFor selects the allow-list for the environment attached to the request.
+// CORSFor selects the allow-list for the configured branch attached to the request.
 func CORSFor(origins map[environment.Environment][]string) func(http.Handler) http.Handler {
 	handlers := make(map[environment.Environment]func(http.Handler) http.Handler, len(origins))
 	for env, list := range origins {
@@ -315,29 +321,6 @@ func CORSFor(origins map[environment.Environment][]string) func(http.Handler) ht
 				return
 			}
 			fallback(next).ServeHTTP(w, r)
-		})
-	}
-}
-
-// CorsResolver serves the live CORS allow-list per environment. Public
-// listeners install one: it reads site_environments from the database, so
-// operators can change origins from the admin panel without a restart.
-type CorsResolver interface {
-	Origins(ctx context.Context, env environment.Environment) []string
-}
-
-// DynamicCORS combines the live resolver with the static bootstrap
-// allow-list: when the environment has no origins in the database, the
-// bootstrap list applies.
-func DynamicCORS(resolver CorsResolver, bootstrap map[environment.Environment][]string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			env := environment.FromContext(r.Context())
-			origins := resolver.Origins(r.Context(), env)
-			if len(origins) == 0 {
-				origins = bootstrap[env]
-			}
-			corsHandler(origins, next).ServeHTTP(w, r)
 		})
 	}
 }

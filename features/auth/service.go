@@ -13,7 +13,8 @@ import (
 )
 
 type Service struct {
-	repo *Repository
+	repo      *Repository
+	listLimit int
 }
 
 func NewService(repo *Repository) *Service {
@@ -111,12 +112,23 @@ func (s *Service) List(ctx context.Context, actor Principal) ([]Token, error) {
 	if !IsStaff(actor.Role) {
 		return nil, ErrForbidden
 	}
+	if s.listLimit < 1 {
+		return nil, errors.New("token list limit is not configured")
+	}
 	var creator *uuid.UUID
 	if actor.Role == RoleModerator {
 		id := actor.TokenID
 		creator = &id
 	}
-	return s.repo.List(ctx, creator, 200)
+	return s.repo.List(ctx, creator, s.listLimit)
+}
+
+func (s *Service) SetListLimit(limit int) error {
+	if limit < 1 {
+		return errors.New("token list limit must be positive")
+	}
+	s.listLimit = limit
+	return nil
 }
 
 func (s *Service) Get(ctx context.Context, actor Principal, id uuid.UUID) (Token, error) {

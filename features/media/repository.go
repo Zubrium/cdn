@@ -19,6 +19,9 @@ var (
 )
 
 type Media struct {
+	OwnerID          uuid.UUID         `json:"ownerId"`
+	Visibility       string            `json:"visibility"`
+	SHA256           string            `json:"sha256,omitempty"`
 	ID               uuid.UUID         `json:"id"`
 	ObjectKey        string            `json:"object_key"`
 	OriginalFilename string            `json:"original_filename"`
@@ -33,17 +36,6 @@ type Media struct {
 
 type Repository struct {
 	pool *pgxpool.Pool
-}
-
-// Usage describes one content record that references a media object.
-type Usage struct {
-	Kind       string    `json:"kind"`
-	ID         uuid.UUID `json:"id"`
-	FeatureID  uuid.UUID `json:"feature_id"`
-	FeatureKey string    `json:"feature_key"`
-	Version    int       `json:"version"`
-	Status     string    `json:"status"`
-	OccurredAt time.Time `json:"occurred_at"`
 }
 
 type StoredOutput struct {
@@ -74,11 +66,11 @@ func (r *Repository) Create(ctx context.Context, m Media) (Media, error) {
 	variantJSON, _ := json.Marshal(m.Variants)
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO media_objects
-			(id, object_key, original_filename, content_type, size_bytes, status, variants, uploaded_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING created_at, updated_at`,
-		m.ID, m.ObjectKey, m.OriginalFilename, m.ContentType, m.SizeBytes, m.Status, variantJSON, m.UploadedBy,
-	).Scan(&m.CreatedAt, &m.UpdatedAt)
+			(id, object_key, original_filename, content_type, size_bytes, status, variants, uploaded_by, sha256)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9,''))
+		RETURNING created_at, updated_at, owner_id, visibility`,
+		m.ID, m.ObjectKey, m.OriginalFilename, m.ContentType, m.SizeBytes, m.Status, variantJSON, m.UploadedBy, m.SHA256,
+	).Scan(&m.CreatedAt, &m.UpdatedAt, &m.OwnerID, &m.Visibility)
 	return m, err
 }
 
@@ -122,7 +114,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]Media, error) {
 		keyset = "AND ($11::bigint IS NULL OR (size_bytes, id) > ($11, $9))"
 	}
 	rows, err := r.pool.Query(ctx, selectMedia+`
-		WHERE ($1 = '' OR status = $1)
+		WHERE owner_id=admin_file_owner() AND ($1 = '' OR status = $1)
 		  AND ($2 = '' OR original_filename ILIKE '%' || $2 || '%')
 		  AND ($3 = '' OR content_type LIKE $3)
 		  AND ($4::timestamptz IS NULL OR created_at >= $4)
@@ -161,38 +153,7 @@ func (r *Repository) Rename(ctx context.Context, id uuid.UUID, filename string) 
 		   SET original_filename = $2
 		 WHERE id = $1 AND status <> 'deleted'
 		RETURNING id, object_key, original_filename, content_type, size_bytes, status,
-		          variants, uploaded_by, created_at, updated_at`, id, filename))
-}
-
-// Usage lists content records that reference the media object. Media ids are
-// stored as UUID strings inside the JSON payload, so the lookup is a text
-// match on the serialized document.
-func (r *Repository) Usage(ctx context.Context, id uuid.UUID, limit int) ([]Usage, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT 'entry'::text, e.id, e.feature_id, f.key, v.version, v.status, v.created_at
-		  FROM feature_entry_versions v
-		  JOIN feature_entries e ON e.id = v.entry_id
-		  JOIN features f ON f.id = e.feature_id
-		 WHERE v.data::text LIKE '%' || $1 || '%'
-		UNION ALL
-		SELECT 'submission'::text, s.id, s.feature_id, f.key, 0, s.status, s.created_at
-		  FROM form_submissions s
-		  JOIN features f ON f.id = s.feature_id
-		 WHERE s.data::text LIKE '%' || $1 || '%'
-		LIMIT $2`, id.String(), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]Usage, 0, limit)
-	for rows.Next() {
-		var u Usage
-		if err := rows.Scan(&u.Kind, &u.ID, &u.FeatureID, &u.FeatureKey, &u.Version, &u.Status, &u.OccurredAt); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+		          variants, uploaded_by, created_at, updated_at, owner_id, visibility, COALESCE(sha256,'')`, id, filename))
 }
 
 func (r *Repository) SetProcessing(ctx context.Context, id uuid.UUID) error {
@@ -215,7 +176,7 @@ func (r *Repository) SetReady(ctx context.Context, id uuid.UUID, variants map[st
 		   SET status = 'ready', variants = $2
 		 WHERE id = $1
 		RETURNING id, object_key, original_filename, content_type, size_bytes, status,
-		          variants, uploaded_by, created_at, updated_at`, id, raw))
+		          variants, uploaded_by, created_at, updated_at, owner_id, visibility, COALESCE(sha256,'')`, id, raw))
 }
 
 func (r *Repository) SetFailed(ctx context.Context, id uuid.UUID) error {
@@ -377,7 +338,7 @@ func (r *Repository) SetDeleted(ctx context.Context, id uuid.UUID) error {
 
 const selectMedia = `
 	SELECT id, object_key, original_filename, content_type, size_bytes, status,
-	       variants, uploaded_by, created_at, updated_at
+	       variants, uploaded_by, created_at, updated_at, owner_id, visibility, COALESCE(sha256,'')
 	  FROM media_objects`
 
 type rowScanner interface {
@@ -388,7 +349,7 @@ func scanMedia(row rowScanner) (Media, error) {
 	var m Media
 	var variants []byte
 	err := row.Scan(&m.ID, &m.ObjectKey, &m.OriginalFilename, &m.ContentType, &m.SizeBytes,
-		&m.Status, &variants, &m.UploadedBy, &m.CreatedAt, &m.UpdatedAt)
+		&m.Status, &variants, &m.UploadedBy, &m.CreatedAt, &m.UpdatedAt, &m.OwnerID, &m.Visibility, &m.SHA256)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Media{}, ErrNotFound
 	}

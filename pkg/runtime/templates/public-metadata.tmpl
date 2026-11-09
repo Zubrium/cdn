@@ -1,0 +1,25 @@
+{{define "engineMetadata"}}
+    <title>{{.Title}}</title>
+    {{if .CanonicalURL}}<link rel="canonical" href="{{.CanonicalURL}}" />
+    <meta property="og:url" content="{{.CanonicalURL}}" />{{end}}
+    {{if .Robots}}<meta name="robots" content="{{.Robots}}" />{{end}}
+    {{if .Description}}<meta name="description" content="{{.Description}}" />{{end}}
+    {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}" />{{end}}
+    {{if .OGTitle}}<meta property="og:title" content="{{.OGTitle}}" />{{end}}
+    {{if .OGDescription}}<meta property="og:description" content="{{.OGDescription}}" />{{end}}
+    {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />{{end}}
+{{end}}
+
+{{define "publicDocument"}}<!doctype html>
+<html{{if .Metadata.Language}} lang="{{.Metadata.Language}}"{{end}}>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {{template "engineMetadata" .Metadata}}
+    <link rel="stylesheet" href="{{.StylesheetURL}}" />
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="{{.ScriptURL}}"></script>
+</body>
+</html>{{end}}

@@ -1,0 +1,18 @@
+html { font-family: system-ui, sans-serif; color: #173a43; background: #eef1ee; font-synthesis: none; text-rendering: optimizeLegibility; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
+body { min-height: 100vh; }
+.runtime-page { position: relative; min-height: 100vh; isolation: isolate; }
+.runtime-placement--background { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+.runtime-placement--header { position: relative; z-index: 20; }
+.runtime-slot--main { position: relative; z-index: 1; }
+.runtime-placement--footer { position: relative; z-index: 1; }
+.runtime-loading { display: block; min-height: 8rem; }
+.runtime-feature-error { padding: 1.5rem; color: #8b1d1d; text-align: center; }
+.runtime-state { display: grid; min-height: 100vh; align-content: center; justify-items: start; max-width: 48rem; margin: auto; padding: 2rem; color: #202020; background: #f7f7f7; }
+.runtime-state__eyebrow { margin: 0 0 .5rem; color: #666; }
+.runtime-state h1 { max-width: 42rem; margin: 0; font-size: clamp(1.6rem, 5vw, 3rem); font-weight: 600; line-height: 1.15; }
+.runtime-state p:not(.runtime-state__eyebrow) { max-width: 34rem; margin: 1rem 0 0; line-height: 1.65; }
+.runtime-state button { margin-top: 1.5rem; padding: .75rem 1.25rem; border: 1px solid currentColor; border-radius: .5rem; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+.runtime-state button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+@media (prefers-color-scheme: dark) { .runtime-state { background: #141414; color: #eee; } .runtime-state__eyebrow { color: #aaa; } }

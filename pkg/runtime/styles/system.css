@@ -1,0 +1,9 @@
+html{font:16px/1.6 system-ui,sans-serif;background:#f7f7f7;color:#202020;color-scheme:light dark}
+body{margin:0}
+main{min-height:100vh;box-sizing:border-box;display:grid;align-content:center;justify-items:start;max-width:48rem;margin:auto;padding:2rem}
+small{color:#666}
+h1{font-size:clamp(1.6rem,5vw,3rem);font-weight:600;line-height:1.15;margin:.5rem 0}
+p{max-width:36rem}
+a{color:inherit;text-underline-offset:.25em}
+a:focus-visible{outline:2px solid currentColor;outline-offset:6px}
+@media(prefers-color-scheme:dark){html{background:#141414;color:#eee}small{color:#aaa}}

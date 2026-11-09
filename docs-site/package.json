@@ -1,0 +1,19 @@
+{
+  "name": "website-engine-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "npm run docs:generate && vitepress dev . --host 127.0.0.1",
+    "docs:build": "npm run docs:generate && vitepress build .",
+    "docs:preview": "vitepress preview . --host 127.0.0.1",
+    "docs:generate": "node scripts/generate-references.mjs",
+    "docs:check-generated": "node scripts/generate-references.mjs --check",
+    "docs:screenshots": "node scripts/capture-product-screenshots.mjs",
+    "docs:qa": "node scripts/qa-docs.mjs"
+  },
+  "devDependencies": {
+    "mermaid": "11.12.1",
+    "playwright": "1.65.0",
+    "vitepress": "1.6.4"
+  }
+}

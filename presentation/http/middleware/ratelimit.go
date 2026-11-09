@@ -17,21 +17,34 @@ type rateEntry struct {
 // RateLimiter is a small per-process fixed-window limiter suitable for public
 // form submission. For multi-instance deployments use a shared limiter.
 type RateLimiter struct {
-	mu         sync.Mutex
-	clients    map[string]*rateEntry
-	limit      int
-	window     time.Duration
-	trustProxy bool
-	lastSweep  time.Time
+	mu            sync.Mutex
+	clients       map[string]*rateEntry
+	limit         int
+	window        time.Duration
+	maxClients    int
+	sweepInterval time.Duration
+	trustProxy    bool
+	lastSweep     time.Time
 }
 
-func NewRateLimiter(limit int, window time.Duration, trustProxy bool) *RateLimiter {
+func NewRateLimiter(limit int, window time.Duration, maxClients int, sweepInterval time.Duration, trustProxy bool) *RateLimiter {
 	return &RateLimiter{
-		clients:    make(map[string]*rateEntry),
-		limit:      limit,
-		window:     window,
-		trustProxy: trustProxy,
+		clients:       make(map[string]*rateEntry),
+		limit:         limit,
+		window:        window,
+		maxClients:    maxClients,
+		sweepInterval: sweepInterval,
+		trustProxy:    trustProxy,
 	}
+}
+
+func (l *RateLimiter) sweepExpired(now time.Time) {
+	for key, entry := range l.clients {
+		if !now.Before(entry.resetAt) {
+			delete(l.clients, key)
+		}
+	}
+	l.lastSweep = now
 }
 
 func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
@@ -40,15 +53,30 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 		now := time.Now()
 
 		l.mu.Lock()
-		if now.Sub(l.lastSweep) > 10*time.Minute {
-			for key, entry := range l.clients {
-				if now.After(entry.resetAt) {
-					delete(l.clients, key)
-				}
-			}
-			l.lastSweep = now
+		if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.sweepInterval {
+			l.sweepExpired(now)
 		}
 		entry, ok := l.clients[ip]
+		capacityExceeded := false
+		if !ok && len(l.clients) >= l.maxClients {
+			l.sweepExpired(now)
+			capacityExceeded = len(l.clients) >= l.maxClients
+		}
+		if capacityExceeded {
+			nextReset := time.Time{}
+			for _, client := range l.clients {
+				if nextReset.IsZero() || client.resetAt.Before(nextReset) {
+					nextReset = client.resetAt
+				}
+			}
+			retryAfter := max(int(time.Until(nextReset).Seconds())+1, 1)
+			l.mu.Unlock()
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(l.limit))
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			response.Error(w, r, http.StatusTooManyRequests, "rate_limited", "Слишком много запросов. Повторите позже")
+			return
+		}
 		if !ok || now.After(entry.resetAt) {
 			entry = &rateEntry{count: 0, resetAt: now.Add(l.window)}
 			l.clients[ip] = entry

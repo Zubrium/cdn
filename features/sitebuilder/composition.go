@@ -11,9 +11,14 @@ import (
 
 // SiteConfig is the editable page/route composition authored in the admin UI.
 type SiteConfig struct {
-	FormatVersion int           `json:"formatVersion"`
-	Pages         []Page        `json:"pages"`
-	RouteTree     RouteTreeNode `json:"routeTree"`
+	SystemPages     map[string]string        `json:"systemPages,omitempty"`
+	Features        []BuildRef               `json:"features,omitempty"`
+	Backends        []PublicBackend          `json:"backends,omitempty"`
+	PublicConstants []PublicSnapshotConstant `json:"publicConstants,omitempty"`
+	DataModel       *DataModel               `json:"dataModel,omitempty"`
+	FormatVersion   int                      `json:"formatVersion"`
+	Pages           []Page                   `json:"pages"`
+	RouteTree       RouteTreeNode            `json:"routeTree"`
 }
 
 // RouteTreeNode is one ordered URL route. A path node defines a complete root
@@ -43,21 +48,13 @@ type BuildRef struct {
 }
 
 type Placement struct {
-	ID               string                     `json:"id"`
-	Build            BuildRef                   `json:"build"`
-	Slot             string                     `json:"slot"`
-	Arguments        map[string]ArgumentBinding `json:"arguments,omitempty"`
-	CollectionSource *CollectionSource          `json:"collectionSource,omitempty"`
-	DetailLink       *DetailLink                `json:"detailLink,omitempty"`
-}
-
-// CollectionSource configures a detail feature to read one record from a
-// collection feature using a route-bound argument as the lookup key.
-type CollectionSource struct {
-	FeatureKey string `json:"featureKey"`
-	Version    string `json:"version"`
-	Field      string `json:"field"`
-	Argument   string `json:"argument"`
+	ID              string                           `json:"id"`
+	Build           BuildRef                         `json:"build"`
+	Slot            string                           `json:"slot"`
+	Arguments       map[string]ArgumentBinding       `json:"arguments,omitempty"`
+	DetailLink      *DetailLink                      `json:"detailLink,omitempty"`
+	DataBindings    []DataInputBinding               `json:"dataBindings,omitempty"`
+	BackendRequests map[string]BackendRequestBinding `json:"backendRequests,omitempty"`
 }
 
 // DetailLink tells a collection-list feature how to generate links to the
@@ -66,6 +63,34 @@ type DetailLink struct {
 	RouteID      string `json:"routeId"`
 	Field        string `json:"field"`
 	PathTemplate string `json:"pathTemplate"`
+}
+
+func modelCollectionFieldForDetail(placement Placement, manifest Manifest, detailField string) (entityID, fieldID string, ok bool) {
+	bindings := make(map[string]DataInputBinding, len(placement.DataBindings))
+	for _, binding := range placement.DataBindings {
+		bindings[binding.InputKey] = binding
+	}
+	for _, port := range manifest.DataInputs {
+		if port.Kind != "collection" {
+			continue
+		}
+		binding, exists := bindings[port.Key]
+		if !exists {
+			continue
+		}
+		for _, declared := range port.Fields {
+			segments, err := parseJSONPointer(declared.Path)
+			if err != nil || len(segments) == 0 || segments[len(segments)-1] != detailField {
+				continue
+			}
+			for _, mapping := range binding.Fields {
+				if mapping.InputPath == declared.Path {
+					return binding.EntityID, mapping.FieldID, true
+				}
+			}
+		}
+	}
+	return "", "", false
 }
 
 var pathTemplateArgument = regexp.MustCompile(`\{([A-Za-z][A-Za-z0-9_]{0,63})\}`)
@@ -115,9 +140,31 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 	if len(cfg.Pages) == 0 {
 		return errors.New("at least one page is required")
 	}
+	if err := validatePublicBackendRegistry(cfg.Backends, cfg.PublicConstants); err != nil {
+		return err
+	}
+	if cfg.DataModel != nil {
+		if err := ValidateDataModel(*cfg.DataModel); err != nil {
+			return err
+		}
+	}
 	pages := make(map[string]Page, len(cfg.Pages))
 	placements := make(map[string]Placement)
 	buildVersions := make(map[string]string)
+	for _, ref := range cfg.Features {
+		if ref.FeatureKey == "" || ref.Version == "" {
+			return fmt.Errorf("feature key and version are required")
+		}
+		if _, ok := buildVersions[ref.FeatureKey]; ok {
+			return fmt.Errorf("duplicate selected feature %q", ref.FeatureKey)
+		}
+		buildVersions[ref.FeatureKey] = ref.Version
+		if builds != nil {
+			if _, ok := builds.Build(ref.FeatureKey, ref.Version); !ok {
+				return fmt.Errorf("unknown selected build %s@%s", ref.FeatureKey, ref.Version)
+			}
+		}
+	}
 	for _, page := range cfg.Pages {
 		if page.ID == "" || page.Name == "" || (page.Kind != "page" && page.Kind != "collection-list" && page.Kind != "detail") {
 			return fmt.Errorf("page id, name or kind is invalid")
@@ -134,20 +181,21 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 				return fmt.Errorf("duplicate placement id %q", placement.ID)
 			}
 			placements[placement.ID] = placement
+			if err := validatePlacementBackendRequestShape(cfg, placement); err != nil {
+				return err
+			}
 			if previous, ok := buildVersions[placement.Build.FeatureKey]; ok && previous != placement.Build.Version {
 				return fmt.Errorf("snapshot composition mixes versions %s and %s for feature %q", previous, placement.Build.Version, placement.Build.FeatureKey)
 			}
 			buildVersions[placement.Build.FeatureKey] = placement.Build.Version
-			if placement.CollectionSource != nil {
-				source := placement.CollectionSource
-				if source.FeatureKey == "" || source.Version == "" || source.Field == "" || source.Argument == "" {
-					return fmt.Errorf("placement %q has an incomplete collection source", placement.ID)
-				}
-				if previous, ok := buildVersions[source.FeatureKey]; ok && previous != source.Version {
-					return fmt.Errorf("snapshot composition mixes versions %s and %s for feature %q", previous, source.Version, source.FeatureKey)
-				}
-				buildVersions[source.FeatureKey] = source.Version
-			}
+		}
+	}
+	for status, pageID := range cfg.SystemPages {
+		if status != "404" && status != "403" && status != "500" && status != "503" {
+			return fmt.Errorf("unsupported system page %q", status)
+		}
+		if _, ok := pages[pageID]; !ok {
+			return fmt.Errorf("system page references missing page %q", pageID)
 		}
 	}
 	routes, err := CompileRouteTree(cfg.RouteTree)
@@ -178,13 +226,58 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 		if page.Kind == "detail" && len(pageRouteCaptures[page.ID]) == 0 {
 			return fmt.Errorf("detail page %q must have a route capture", page.ID)
 		}
-		hasCollectionSource := false
+		hasModelRecordLookup := false
+		hasDetailSEOFields := false
 		for _, placement := range page.Placements {
 			info, ok := builds.Build(placement.Build.FeatureKey, placement.Build.Version)
 			if !ok {
 				return fmt.Errorf("placement %q references unknown feature build %s@%s", placement.ID, placement.Build.FeatureKey, placement.Build.Version)
 			}
-			for _, style := range info.Manifest.SharedStyles {
+			if err := validateBackendRequestContract(cfg, placement, info.Manifest, pageRouteCaptures[page.ID]); err != nil {
+				return err
+			}
+			if len(info.Manifest.DataInputs) > 0 && cfg.DataModel == nil {
+				return fmt.Errorf("placement %q requires a snapshot dataModel for its declared dataInputs", placement.ID)
+			}
+			model := DataModel{}
+			if cfg.DataModel != nil {
+				model = *cfg.DataModel
+			}
+			if err := ValidateDataInputBindings(model, info.Manifest.DataInputs, placement.DataBindings, placement.Arguments); err != nil {
+				return fmt.Errorf("placement %q data bindings: %w", placement.ID, err)
+			}
+			for _, binding := range placement.DataBindings {
+				if binding.DetailSEO == nil {
+					continue
+				}
+				if page.Kind != "detail" {
+					return fmt.Errorf("placement %q detailSEO is only valid on a detail page", placement.ID)
+				}
+				if hasDetailSEOFields {
+					return fmt.Errorf("detail page %q can declare detailSEO on only one record input", page.ID)
+				}
+				hasDetailSEOFields = true
+			}
+			availableCaptureNames := pageRouteCaptures[page.ID]
+			availableCaptures := make(map[string]bool, len(availableCaptureNames))
+			for _, capture := range availableCaptureNames {
+				availableCaptures[capture] = true
+			}
+			for _, dataBinding := range placement.DataBindings {
+				if dataBinding.Lookup == nil {
+					continue
+				}
+				argument := placement.Arguments[dataBinding.Lookup.Argument]
+				if argument.Source != "path" || argument.PathArg == "" || !availableCaptures[argument.PathArg] {
+					return fmt.Errorf("placement %q lookup argument %q must be bound to an available route capture", placement.ID, dataBinding.Lookup.Argument)
+				}
+				for _, input := range info.Manifest.DataInputs {
+					if input.Key == dataBinding.InputKey && input.Kind == "record" {
+						hasModelRecordLookup = true
+					}
+				}
+			}
+			for _, style := range info.Manifest.RuntimeSharedStyles() {
 				digest := info.AssetDigests[style]
 				if digest == "" {
 					return fmt.Errorf("placement %q shared stylesheet %q has no verified asset digest", placement.ID, style)
@@ -196,11 +289,6 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 			}
 			if !allowedSlots[placement.Slot] || !contains(info.Manifest.Slots, placement.Slot) {
 				return fmt.Errorf("feature %q does not support slot %q", info.Manifest.Key, placement.Slot)
-			}
-			availableCaptureNames := pageRouteCaptures[page.ID]
-			availableCaptures := make(map[string]bool, len(availableCaptureNames))
-			for _, capture := range availableCaptureNames {
-				availableCaptures[capture] = true
 			}
 			for name, binding := range placement.Arguments {
 				if schemaPropertyFormat(info.Manifest.Arguments, name) == "media" && binding.Source != "literal" {
@@ -245,36 +333,18 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 			if _, err := ResolveArguments(info.Manifest.Arguments, placement.Arguments, placeholderRouteArgs, placeholderQuery); err != nil {
 				return fmt.Errorf("placement %q arguments: %w", placement.ID, err)
 			}
-			if placement.CollectionSource != nil {
-				hasCollectionSource = true
-				if page.Kind != "detail" {
-					return fmt.Errorf("placement %q collectionSource is only valid on a detail page", placement.ID)
-				}
-				source, ok := builds.Build(placement.CollectionSource.FeatureKey, placement.CollectionSource.Version)
-				if !ok {
-					return fmt.Errorf("placement %q collection source build is unavailable", placement.ID)
-				}
-				if source.Manifest.Content.Mode != "collection" || !hasSchemaProperty(source.Manifest.Content.Schema, placement.CollectionSource.Field) {
-					return fmt.Errorf("placement %q collectionSource must refer to a field on a collection feature", placement.ID)
-				}
-				if schemaPropertyType(info.Manifest.Arguments, placement.CollectionSource.Argument) == "" {
-					return fmt.Errorf("placement %q collectionSource argument %q is not declared by the detail feature", placement.ID, placement.CollectionSource.Argument)
-				}
-				binding, ok := placement.Arguments[placement.CollectionSource.Argument]
-				if !ok || binding.Source != "path" {
-					return fmt.Errorf("placement %q must bind collection lookup argument %q from a named route capture", placement.ID, placement.CollectionSource.Argument)
-				}
-				if !availableCaptures[binding.PathArg] {
-					return fmt.Errorf("placement %q collection lookup path parameter %q is unavailable", placement.ID, binding.PathArg)
-				}
-			}
 			if placement.DetailLink != nil {
 				route, ok := routeByID[placement.DetailLink.RouteID]
 				if !ok || pages[route.PageID].Kind != "detail" {
 					return fmt.Errorf("placement %q detailLink must point to a detail route", placement.ID)
 				}
-				if info.Manifest.Content.Mode != "collection" || !hasSchemaProperty(info.Manifest.Content.Schema, placement.DetailLink.Field) {
-					return fmt.Errorf("placement %q detailLink field must exist on its collection feature", placement.ID)
+				var sourceEntityID, sourceFieldID string
+				if cfg.DataModel != nil {
+					var exists bool
+					sourceEntityID, sourceFieldID, exists = modelCollectionFieldForDetail(placement, info.Manifest, placement.DetailLink.Field)
+					if !exists {
+						return fmt.Errorf("placement %q detailLink field must map to a model field on a collection input", placement.ID)
+					}
 				}
 				if !strings.HasPrefix(placement.DetailLink.PathTemplate, "/") || strings.ContainsAny(placement.DetailLink.PathTemplate, "?#") {
 					return fmt.Errorf("placement %q detailLink needs an absolute pathTemplate without query or fragment", placement.ID)
@@ -287,13 +357,11 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 				detailPage := pages[route.PageID]
 				compatible := false
 				for _, detailPlacement := range detailPage.Placements {
-					if detailPlacement.CollectionSource == nil || detailPlacement.CollectionSource.FeatureKey != info.Manifest.Key || detailPlacement.CollectionSource.Field != placement.DetailLink.Field {
-						continue
-					}
-					binding := detailPlacement.Arguments[detailPlacement.CollectionSource.Argument]
-					for _, candidateRoute := range routes {
-						if candidateRoute.PageID == detailPage.ID && binding.PathArg != "" && contains(candidateRoute.CaptureNames(), binding.PathArg) {
-							compatible = true
+					if cfg.DataModel != nil {
+						for _, dataBinding := range detailPlacement.DataBindings {
+							if dataBinding.Lookup != nil && dataBinding.EntityID == sourceEntityID && dataBinding.Lookup.FieldID == sourceFieldID {
+								compatible = true
+							}
 						}
 					}
 				}
@@ -302,7 +370,7 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 				}
 			}
 		}
-		if page.Kind == "detail" && !hasCollectionSource {
+		if page.Kind == "detail" && !hasModelRecordLookup {
 			return fmt.Errorf("detail page %q must select a collection source", page.ID)
 		}
 	}

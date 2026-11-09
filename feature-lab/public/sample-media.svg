@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480" role="img" aria-labelledby="title">
+  <title id="title">Локальное изображение для предпросмотра</title>
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1">
+      <stop stop-color="#dfe9dc" />
+      <stop offset="1" stop-color="#b7c9b5" />
+    </linearGradient>
+  </defs>
+  <rect width="720" height="480" fill="url(#sky)" />
+  <circle cx="540" cy="130" r="64" fill="#fff5d8" />
+  <path d="m0 360 190-170 120 120 96-104 314 274H0Z" fill="#82987a" />
+  <path d="m0 414 224-140 173 128 120-78 203 156H0Z" fill="#657c63" />
+</svg>

@@ -9,22 +9,20 @@ import (
 )
 
 type Counts struct {
-	FeaturesActive   int64 `json:"features_active"`
-	FeaturesArchived int64 `json:"features_archived"`
-	DraftFeatures    int64 `json:"draft_features"`
-	DraftEntries     int64 `json:"draft_entries"`
-	NewSubmissions   int64 `json:"new_submissions"`
-	MediaReady       int64 `json:"media_ready"`
-	FailedMedia      int64 `json:"failed_media"`
+	FeaturesActive      int64 `json:"features_active"`
+	FeaturesArchived    int64 `json:"features_archived"`
+	DraftModelSnapshots int64 `json:"draft_model_snapshots"`
+	DraftModelRecords   int64 `json:"draft_model_records"`
+	NewSubmissions      int64 `json:"new_submissions"`
+	MediaReady          int64 `json:"media_ready"`
+	FailedMedia         int64 `json:"failed_media"`
 }
 
-type DraftFeature struct {
-	ID        uuid.UUID `json:"id"`
-	Key       string    `json:"key"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Revision  int64     `json:"revision"`
-	UpdatedAt time.Time `json:"updated_at"`
+type DraftModelSnapshot struct {
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	Name       string    `json:"name"`
+	Revision   int64     `json:"revision"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type NewSubmission struct {
@@ -42,9 +40,9 @@ type FailedMedia struct {
 }
 
 type Attention struct {
-	DraftFeatures  []DraftFeature  `json:"draft_features"`
-	NewSubmissions []NewSubmission `json:"new_submissions"`
-	FailedMedia    []FailedMedia   `json:"failed_media"`
+	DraftModelSnapshots []DraftModelSnapshot `json:"draft_model_snapshots"`
+	NewSubmissions      []NewSubmission      `json:"new_submissions"`
+	FailedMedia         []FailedMedia        `json:"failed_media"`
 }
 
 type Activity struct {
@@ -69,9 +67,9 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Load(ctx context.Context) (Overview, error) {
 	out := Overview{
 		Attention: Attention{
-			DraftFeatures:  []DraftFeature{},
-			NewSubmissions: []NewSubmission{},
-			FailedMedia:    []FailedMedia{},
+			DraftModelSnapshots: []DraftModelSnapshot{},
+			NewSubmissions:      []NewSubmission{},
+			FailedMedia:         []FailedMedia{},
 		},
 		RecentActivity: []Activity{},
 	}
@@ -79,32 +77,34 @@ func (r *Repository) Load(ctx context.Context) (Overview, error) {
 		SELECT
 		  (SELECT count(*) FROM features WHERE status = 'active'),
 		  (SELECT count(*) FROM features WHERE status = 'archived'),
-		  (SELECT count(*) FROM features WHERE draft_version_id IS NOT NULL),
-		  (SELECT count(*) FROM feature_entries WHERE draft_version_id IS NOT NULL AND archived_at IS NULL),
+		  (SELECT count(*) FROM site_snapshot_model_workspaces WHERE revision > published_revision),
+		  (SELECT COALESCE(sum(jsonb_array_length(draft_records)),0) FROM site_snapshot_model_workspaces WHERE revision > published_revision),
 		  (SELECT count(*) FROM form_submissions WHERE status = 'new' AND deleted_at IS NULL AND archived_at IS NULL),
 		  (SELECT count(*) FROM media_objects WHERE status = 'ready'),
 		  (SELECT count(*) FROM media_objects WHERE status = 'failed')`,
-	).Scan(&out.Counts.FeaturesActive, &out.Counts.FeaturesArchived, &out.Counts.DraftFeatures,
-		&out.Counts.DraftEntries, &out.Counts.NewSubmissions, &out.Counts.MediaReady, &out.Counts.FailedMedia); err != nil {
+	).Scan(&out.Counts.FeaturesActive, &out.Counts.FeaturesArchived,
+		&out.Counts.DraftModelSnapshots, &out.Counts.DraftModelRecords, &out.Counts.NewSubmissions,
+		&out.Counts.MediaReady, &out.Counts.FailedMedia); err != nil {
 		return Overview{}, err
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, key, name, type, revision, updated_at
-		  FROM features
-		 WHERE draft_version_id IS NOT NULL AND status = 'active'
-		 ORDER BY updated_at DESC
+		SELECT s.id, s.name, w.revision, w.updated_at
+		  FROM site_snapshot_model_workspaces w
+		  JOIN site_snapshots s ON s.id = w.snapshot_id
+		 WHERE w.revision > w.published_revision
+		 ORDER BY w.updated_at DESC
 		 LIMIT 5`)
 	if err != nil {
 		return Overview{}, err
 	}
 	for rows.Next() {
-		var f DraftFeature
-		if err := rows.Scan(&f.ID, &f.Key, &f.Name, &f.Type, &f.Revision, &f.UpdatedAt); err != nil {
+		var item DraftModelSnapshot
+		if err := rows.Scan(&item.SnapshotID, &item.Name, &item.Revision, &item.UpdatedAt); err != nil {
 			rows.Close()
 			return Overview{}, err
 		}
-		out.Attention.DraftFeatures = append(out.Attention.DraftFeatures, f)
+		out.Attention.DraftModelSnapshots = append(out.Attention.DraftModelSnapshots, item)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -166,10 +166,14 @@ func (r *Repository) Load(ctx context.Context) (Overview, error) {
 			(SELECT 'feature' AS kind, 'Feature: ' || name AS title, key AS feature_key, updated_at AS occurred_at
 			   FROM features ORDER BY updated_at DESC LIMIT 10)
 			UNION ALL
-			(SELECT 'entry' AS kind, 'Запись в «' || f.name || '»' AS title, f.key AS feature_key, e.updated_at AS occurred_at
-			   FROM feature_entries e JOIN features f ON f.id = e.feature_id
-			  WHERE e.archived_at IS NULL
-			  ORDER BY e.updated_at DESC LIMIT 10)
+			(SELECT 'content' AS kind, 'Черновик данных: ' || s.name AS title, NULL::text AS feature_key, w.updated_at AS occurred_at
+			   FROM site_snapshot_model_workspaces w JOIN site_snapshots s ON s.id = w.snapshot_id
+			  WHERE w.revision > w.published_revision
+			  ORDER BY w.updated_at DESC LIMIT 10)
+			UNION ALL
+			(SELECT 'content' AS kind, 'Опубликованы данные: ' || s.name AS title, NULL::text AS feature_key, p.created_at AS occurred_at
+			   FROM snapshot_model_content_publications p JOIN site_snapshots s ON s.id = p.snapshot_id
+			  ORDER BY p.created_at DESC LIMIT 10)
 			UNION ALL
 			(SELECT 'submission' AS kind, 'Заявка: ' || f.name AS title, f.key AS feature_key, s.created_at AS occurred_at
 			   FROM form_submissions s JOIN features f ON f.id = s.feature_id

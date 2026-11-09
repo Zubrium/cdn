@@ -1,0 +1,18 @@
+{{define "publicSystemDocument"}}<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{{.Title}}</title>
+  {{template "publicSystemStyle" .Style}}
+</head>
+<body>
+  <main>
+    <small>{{.Status}}</small>
+    <h1>{{.Title}}</h1>
+    <p>{{.Detail}}</p>
+    <a href="/">На главную</a>
+  </main>
+</body>
+</html>{{end}}

@@ -1,6 +1,6 @@
 # API
 
-Административный CMS API использует `/api/v1`; runtime сайта использует `/api/v2`. Все тела запросов и ответов — JSON UTF-8, кроме загрузки медиа
+Большинство административных endpoints, включая управление заявками и медиа, используют `/api/v1`; публичная отправка форм, API сборок фич, веток, снапшотов, DataModel, файлов и runtime используют `/api/v2`. Все тела запросов и ответов — JSON UTF-8, кроме загрузки медиа
 (`multipart/form-data`) и CSV-экспорта. Время — RFC 3339 в UTC. Идентификаторы — UUID.
 
 Авторизация административных маршрутов:
@@ -34,10 +34,9 @@ Authorization: Bearer ct_live_...
 административных списков, 50 для публичных коллекций. Формы: 200 для списка заявок,
 10 000 строк для CSV.
 
-Публичные маршруты чтения и отправки форм поддерживают CORS. Пока в настройках
-среды не задан список origins, работают bootstrap-origins из конфигурации
-(`PUBLIC_CORS_ORIGINS[_DEV|_PROD]`, `*` разрешает все); после заполнения списка
-в админке действует только он. Административные маршруты CORS не отдают.
+Публичные маршруты каждой ветки применяют её список CORS origins из `BRANCHES`.
+Wildcard origin разрешает любой источник; используйте его только если это намеренно.
+Административные маршруты не отдают CORS-заголовки.
 
 ## Служебные маршруты
 
@@ -52,21 +51,21 @@ Authorization: Bearer ct_live_...
 
 ## Сводка для админки
 
-`GET /admin/overview` (staff) возвращает реальные агрегаты для главной страницы:
+`GET /admin/overview` (admin, moderator, staff, user) возвращает реальные агрегаты для главной страницы:
 
 ```json
 {
   "counts": {
     "features_active": 4,
     "features_archived": 0,
-    "draft_features": 1,
-    "draft_entries": 2,
+    "draft_model_snapshots": 1,
+    "draft_model_records": 2,
     "new_submissions": 3,
     "media_ready": 8,
     "failed_media": 0
   },
   "attention": {
-    "draft_features": [{"id":"...","key":"services","name":"Услуги","type":"collection","revision":3,"updated_at":"..."}],
+    "draft_model_snapshots": [{"snapshot_id":"...","name":"Основной сайт","revision":3,"updated_at":"..."}],
     "new_submissions": [{"id":"...","feature_key":"contacts","status":"new","created_at":"...","data_preview":"Иван"}],
     "failed_media": []
   },
@@ -112,169 +111,30 @@ Authorization: Bearer ct_live_...
 Секрет возвращается один раз. В БД хранится только SHA-256 хеш. `DELETE` отзывает токен
 (204), физического удаления нет.
 
-## Features и схемы
+## Feature ZIP и модель сайта
 
-Feature:
+Feature ZIP регистрируется как неизменяемая сборка и закрепляется в снапшоте только после явной структурной настройки. Манифест format 2 содержит аргументы фичи для /site, типизированные dataInputs, runtime metadata и строгую form.submissionSchema, если фича принимает публичные отправки. Манифест не содержит CMS-схемы записей. Format 1 и старые content.* поля отклоняются; конвертации нет.
 
-```json
-{
-  "id": "uuid",
-  "key": "services",
-  "name": "Услуги",
-  "type": "collection",
-  "status": "active",
-  "revision": 3,
-  "draft_version_id": "uuid|null",
-  "published_version_id": "uuid|null",
-  "created_by": "uuid|null",
-  "created_at": "...",
-  "updated_at": "...",
-  "draft": {"version": 2, "schema": {}, "status": "draft", "...": "..."},
-  "published": {"version": 1, "schema": {}, "status": "published", "published_at": "...", "...": "..."}
-}
-```
+ER-модель и bindings dataInputs входят в структурную конфигурацию снапшота. Аргументы и bindings редактируются в /site; записи и значения модели — в /content; файлы загружаются только через /media. Структурное сохранение создаёт дочерний снапшот. API старого глобального CRUD схем фич и per-feature записей не зарегистрированы.
 
-`revision` — оптимистическая блокировка на уровне Feature и записи контента. Клиент обязан
-передавать revision, полученный при чтении, в операции сохранения черновика и публикации.
-Несовпадение — `409 Conflict`.
+Для действующих manifest, ZIP, runtime ABI и editor API см. SPEC-feature-runtime.md, SPEC-data-model.md и FEATURE_SNAPSHOTS.md.
 
-| Метод | Маршрут | Назначение |
-| --- | --- | --- |
-| GET | `/admin/features?status=&type=&q=&limit=&cursor=` | список; `q` ищет по name/key |
-| POST | `/admin/features` | создание `{key,name,type}` |
-| GET | `/admin/features/{id}` | детали и версии |
-| PATCH | `/admin/features/{id}` | изменение `name` |
-| POST | `/admin/features/{id}/archive` | архив |
-| GET | `/admin/features/{id}/versions?limit=` | история схем (по умолчанию 50, максимум 200) |
-| GET | `/admin/features/{id}/draft` | `{revision,draft,published}` |
-| PUT | `/admin/features/{id}/draft` | сохранить `{revision,schema}` |
-| POST | `/admin/features/{id}/publish` | опубликовать `{revision}` |
-| POST | `/admin/features/{id}/rollback` | переключить на `{version}` |
+## Модельные записи
 
-Типы Feature: `collection`, `single`, `form`. Тип нельзя изменить, пока у Feature есть записи.
+Контент хранится в модели выбранного снапшота. Один запрос читает или сохраняет черновик записей и выборок размещений с проверкой ревизии; публикация выполняется отдельно в том же снапшоте. Формы строятся по полям ER-модели, все редакционные поля необязательны, а типы, ограничения, связи и media ownership проверяются сервером. История/restore создают проверяемую новую черновую ревизию. Draft не используется публичным runtime.
 
-### JSON Schema и расширения
+Точные маршруты и требования к роли приведены ниже в разделе «Сайт: статические ветки и снапшоты».
 
-Поддерживается JSON Schema draft 2020-12. Внешние `$ref` запрещены; схема должна быть
-самодостаточной. Пользовательские расширения:
+## Публичная композиция
 
-| Расширение | Назначение |
-| --- | --- |
-| `format: "media"` | строка содержит UUID медиаобъекта |
-| `x-ui` | объект с подсказками для UI (`widget`, `placeholder`, `help`, …) |
-| `x-private: true` | поле не попадает в публичный ответ |
-| `x-public: false` | то же, что `x-private` |
-
-Пример:
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "title": {
-      "type": "string",
-      "title": "Название",
-      "minLength": 1,
-      "maxLength": 200,
-      "x-ui": {"widget": "text", "placeholder": "Название услуги"}
-    },
-    "cover": {"type": "string", "format": "media"},
-    "internal_note": {"type": "string", "x-private": true}
-  },
-  "required": ["title"],
-  "additionalProperties": false
-}
-```
-
-При сохранении черновика схема компилируется и проверяется. Публикация атомарна:
-версия получает `published`, после чего `features.published_version_id` переключается в той же
-транзакции. Опубликованные версии схемы и контента неизменяемы на уровне БД.
-
-`rollback` не удаляет историю и не трогает черновик. Он переключает указатель
-`published_version_id` на ранее опубликованную версию.
-
-## Контентные записи
-
-Доступно для `collection` и `single`. Для `form` возвращается `409`.
-
-| Метод | Маршрут | Назначение |
-| --- | --- | --- |
-| GET | `/admin/features/{id}/entries?include_archived=&q=&limit=&cursor=` | список; `q` ищет по JSON данных |
-| POST | `/admin/features/{id}/entries` | создать черновик `{data}` |
-| GET | `/admin/entries/{id}` | запись и обе версии |
-| PATCH | `/admin/entries/{id}/draft` | `{revision,data}` |
-| POST | `/admin/entries/{id}/publish` | `{revision}` |
-| POST | `/admin/entries/{id}/rollback` | `{version}` |
-| POST | `/admin/entries/{id}/unpublish` | снять с публикации, черновик сохраняется |
-| POST | `/admin/entries/{id}/discard-draft` | отменить черновик, вернуться к опубликованной версии |
-| POST | `/admin/entries/{id}/archive` | архив |
-| GET | `/admin/entries/{id}/versions?limit=` | история (по умолчанию 50, максимум 200) |
-
-Запись:
-
-```json
-{
-  "id": "uuid",
-  "feature_id": "uuid",
-  "feature_key": "services",
-  "feature_type": "collection",
-  "single_slot": false,
-  "revision": 2,
-  "draft_version_id": null,
-  "published_version_id": "uuid",
-  "draft": null,
-  "published": {
-    "id": "uuid",
-    "version": 1,
-    "schema_version_id": "uuid",
-    "data": {"title": "Разработка сайта"},
-    "status": "published",
-    "published_at": "..."
-  }
-}
-```
-
-Для `single` разрешена только одна активная запись. После архивации запись больше не
-занимает слот. Публикация проверяет данные по актуальной опубликованной схеме Feature и
-фиксирует `schema_version_id` в одной транзакции.
-
-## Публичное чтение
-
-| Метод | Маршрут | Ответ |
-| --- | --- | --- |
-| GET | `/content?keys=services,team&limit=20` | `{"data":{...}}` |
-| GET | `/content/{key}` | `{"data":{...}}` |
-| GET | `/content/{key}/entries?limit=&cursor=` | `{"data":{...},"next_cursor":...}` |
-
-Пример BFF:
-
-```json
-{
-  "data": {
-    "services": {
-      "type": "collection",
-      "version": 2,
-      "entries": [
-        {"id": "uuid", "data": {"title": "Разработка сайта"}, "published_at": "..."}
-      ]
-    },
-    "team": {"type": "collection", "version": 1, "entries": []},
-    "contacts": {"type": "single", "version": 1, "data": {"email": "hello@example.com"}},
-    "feedback": {"type": "form", "version": 1, "schema": {"type": "object", "...": "..."}}
-  }
-}
-```
-
-Возвращаются только активные Feature с опубликованной схемой, только опубликованные записи,
-без авторов и черновиков. Поля `x-private`/`x-public:false` вырезаются. Максимум 20 ключей в
-одном BFF-запросе; записи каждой коллекции ограничены `limit` (по умолчанию 20, максимум 50).
+GET /api/v2/runtime?path=... возвращает композицию для ветки и назначенного ей снапшота. Runtime получает опубликованные модельные данные в прежнем feature content ABI. Черновики не выдаются. Публичные формы продолжают проходить строгую валидацию по закреплённому manifest form.submissionSchema; см. раздел «Формы».
 
 ## Формы
 
 Публичная отправка:
 
 ```http
-POST /api/v1/forms/{key}/submissions
+POST /api/v2/forms/{key}/submissions
 Content-Type: application/json
 
 {"name":"Иван","email":"ivan@example.com","message":"Хочу обсудить проект"}
@@ -288,18 +148,21 @@ Content-Type: application/json
 
 Сервис в одной транзакции читает опубликованную схему, валидирует данные и записывает
 заявку с `schema_version_id`. Публичный API не раскрывает содержимое заявки. Действует
-лимит частоты по IP (20/мин по умолчанию; настраивается `FORM_RATE_LIMIT`) и лимит размера
-JSON.
+лимит частоты по IP, окно и предел одновременно сохранённых IP-счётчиков задаются
+`FORM_RATE_LIMIT`, `FORM_RATE_WINDOW` и `FORM_RATE_MAX_CLIENTS`; частота очистки счётчиков
+задаётся `FORM_RATE_SWEEP_INTERVAL`. Если таблица счётчиков заполнена активными адресами,
+запросы с новых IP временно отклоняются до освобождения места. Скрытых значений по умолчанию
+нет. Также действует лимит размера JSON.
 
 Административные маршруты:
 
 | Метод | Маршрут | Доступ |
 | --- | --- | --- |
-| GET | `/admin/forms/{key}/submissions?environment=dev\|prod` | staff | заявки формы; фильтр по среде и статусу |
-| GET | `/admin/forms/{key}/submissions/export` | staff |
-| GET | `/admin/submissions/{id}` | staff |
-| PATCH | `/admin/submissions/{id}/status` | staff |
-| POST | `/admin/submissions/{id}/archive` | staff |
+| GET | `/admin/forms/{key}/submissions?branchId={uuid}` | admin, moderator, staff, user | заявки формы с фильтрацией по ветке и параметрам списка ниже |
+| GET | `/admin/forms/{key}/submissions/export` | admin, moderator, staff, user |
+| GET | `/admin/submissions/{id}` | admin, moderator, staff, user |
+| PATCH | `/admin/submissions/{id}/status` | admin, moderator |
+| POST | `/admin/submissions/{id}/archive` | admin, moderator |
 | DELETE | `/admin/submissions/{id}` | только admin |
 
 Параметры списка:
@@ -312,110 +175,44 @@ JSON.
 - `include_archived=true`;
 - `limit`, `cursor`.
 
-Статус меняется телом `{"status":"in_progress"}`. `DELETE` — мягкое удаление; модератор
-может только архивировать.
+Статус меняется телом `{"status":"in_progress"}`. `DELETE` — мягкое удаление: запись
+остаётся tombstone в базе, но исключается из списка, экспорта и прямого `GET /submissions/{id}`
+для всех ролей, включая admin. Модератор может только архивировать.
 
 CSV-экспорт учитывает те же фильтры, значения с потенциальными формулами Excel
 экранируются. Максимум 10 000 строк за экспорт.
 
-## Сайт: релизы и среды
+## Сайт: статические ветки и снапшоты
 
-Новый runtime сайта публикуется feature builds и снапшотами через `/api/v2/admin`; полный контракт описан в [docs/FEATURE_SNAPSHOTS.md](FEATURE_SNAPSHOTS.md). Старые routes загрузки целого сайта и git-источников оставлены только на переходный период и не используются runtime-ом. API сред обслуживает CORS allow-list и публичный base URL.
+Ветки задаются оператором в конфигурации запуска и получают отдельные listeners. Порты, CORS и политика индексации принадлежат веткам; внешний URL и TLS назначает gateway, canonical-домен хранится в настройках сайта снапшота. Набор веток фиксирован конфигурацией. Назначение выполняется только в /snapshots/branches.
 
-### Feature builds и snapshots (новый runtime)
-
-| Метод | Маршрут | Доступ | Описание |
-| --- | --- | --- | --- |
-| GET | `/api/v2/admin/feature-builds` | user | Неизменяемые сборки фич |
-| POST | `/api/v2/admin/feature-builds` | staff | Импорт ESM ZIP-архива с `manifest.json` |
-| GET/PUT | `/api/v2/admin/site/draft` | user/staff | Читать и сохранять визуальную композицию по revision |
-| GET/PUT | `/api/v2/admin/site/design-system` | admin, moderator | Читать/сохранять типизированный черновик темы по revision |
-| GET | `/api/v2/admin/site/snapshots?limit=&beforeSequence=` | admin, moderator | Cursor-страницы истории и активные указатели dev/prod |
-| GET | `/api/v2/admin/site/snapshot-events?environment=dev\|prod&limit=&before=` | admin, moderator | Постраничная история назначений выбранной среды; `before` — `nextCursor` предыдущего ответа |
-| POST | `/api/v2/admin/site/snapshots` | admin, moderator | Создать новый immutable снапшот; активные среды не переключаются |
-| POST | `/api/v2/admin/site/snapshots/{id}/deploy` | admin, moderator | Развернуть любой снапшот напрямую в dev или production |
-| POST | `/api/v2/admin/site/snapshots/{id}/promote` | admin, moderator | Совместимое действие: prod только для текущего dev-снапшота |
-| POST | `/api/v2/admin/site/snapshots/{id}/rollback` | admin, moderator | Совместимое действие для выбора снапшота в dev или production |
-
-При создании снапшота payload `formatVersion: 3` включает сохранённую композицию страниц, точные версии feature builds, дизайн-систему и неизменяемый набор содержимого. Для одиночного слота и записей коллекций выбирается сохранённый draft, если он есть; иначе версия dev, а при её отсутствии версия production. Содержимое и его порядок входят в digest. Повторная идентичная версия может иметь тот же digest и всё равно создаёт отдельный снапшот. Заявки форм не входят в него.
-
-Список по умолчанию возвращает до 50 записей и `nextCursor` (положительный номер последнего элемента текущей страницы). Следующая страница запрашивается через `beforeSequence=<nextCursor>`. Ответ содержит `items`, `active` (`dev`/`prod` UUID или пустая строка), `activeSnapshots` и `nextCursor`.
-
-`POST /site/snapshots/{id}/deploy` принимает `{"environment":"dev"}` или `{"environment":"prod"}`. Он переключает выбранную среду на указанный снапшот без требования сначала активировать его в dev. Каждая среда может указывать на свою версию.
-
-Публичный runtime использует `GET /api/v2/runtime?path=...`, коллекции — `/api/v2/content/{key}/records`, формы — `POST /api/v2/forms/{key}/submissions`. Данные runtime, версии фич и дизайн-система берутся из активного снапшота.
-
-Каждая композиция может вернуть `themeStyleUrl` и `systemAssets.logoUrl`. Runtime загружает тему до показа фич. Неизменяемая тема снапшота доступна через `GET /api/v2/site-themes/snapshots/{snapshotId}`; CSS предпросмотра — через `/api/v2/site-themes/previews/{token}`. Общий логотип и шрифты WOFF2 выдаются через `GET /api/v2/system-assets/{mediaId}`. URL системных файлов same-origin, с CORS для публичных сред и долгим immutable-кешем. Старые снапшоты без `designSystem` продолжают использовать стили своих feature builds.
-
-В дизайн-систему загружаются WOFF2-файлы шрифтов, в том числе variable-шрифты. Для частей одного семейства можно указывать разные `unicodeRange`; семейство, вес, стиль и диапазон символов сериализуются в `@font-face`. ID выбранных файлов и `brandLogoMediaId` проверяются по существующим готовым медиаобъектам. Их нельзя удалить, пока на них ссылается черновик или сохранённый снапшот.
-
-Фон страницы задаётся как обязательный media-аргумент размещения фичи `background`. Поэтому разные страницы могут выбрать разные изображения. Поля `format: "media"` с `x-media` подготавливаются по профилю указанной версии сборки; для аргументов профиль можно запросить с `schemaKind=arguments` и `buildVersion`.
-
-Снапшот включает `designSystemRevision` и значения `designSystem`, включая ID шрифтов и общего логотипа. Сохранение темы само по себе не меняет сайт в среде; она применяется после создания и развёртывания снапшота. UI предпросмотра удалён; прежние preview API сохранены для совместимости старых клиентов.
-
-Неизменяемые zip-артефакты сайта выкатываются в две среды (`dev`, `prod`);
-legacy API ниже оставлен на переходный период.
-
-### Релизы
+Все маршруты ниже имеют префикс /api/v2/admin.
 
 | Метод | Маршрут | Доступ | Описание |
 | --- | --- | --- | --- |
-| GET | `/admin/releases?limit=&cursor=` | user | список релизов (новые первыми) |
-| POST | `/admin/releases` | staff | импорт zip-артефакта (multipart: `artifact`, `version`, `tag`) |
-| POST | `/admin/releases/{id}/activate` | user+caps | активация релиза в среде; dev — админ/модератор, prod — админ |
-| POST | `/admin/releases/{id}/rollback` | user+caps | откат среды на предыдущий релиз; те же права |
-| GET | `/admin/publication-events?limit=&entity_kind=&environment=&feature_id=&cursor=` | staff | журнал публикаций контента и релизов |
+| GET / POST | /feature-builds | site manager | Список неизменяемых ZIP и регистрация новой сборки |
+| GET | /branches | site manager | Настроенные ветки и их текущие назначения |
+| PUT | /branches/{id}/snapshot | site manager | Назначить снапшот ветке с проверкой ревизии |
+| GET | /site/snapshots?limit=&beforeSequence= | site manager | Cursor-страницы дерева снапшотов и веток |
+| POST | /site/snapshots | site manager | Создать независимый корень или потомка |
+| GET / DELETE | /site/snapshots/{id} | site manager | Прочитать или удалить разрешённый узел дерева |
+| GET / POST | /site/snapshots/{id}/design-system | site manager | Прочитать тему или создать потомка с её изменениями |
+| GET | /site/snapshot-events?branchId=&limit=&before= | site manager | История назначений указанной ветки |
+| GET | /content/snapshots | admin, moderator, staff, user | Снапшоты, доступные редактору контента |
+| GET / PUT | /content/snapshots/{id}/model | admin, moderator, staff, user | Прочитать или сохранить черновик записей и выборок с проверкой ревизии |
+| POST | /content/snapshots/{id}/model/publish | admin, moderator, staff, user | Опубликовать записи и выборки в том же снапшоте |
+| GET | /content/snapshots/{id}/model/history | admin, moderator, staff, user | История публикаций модельного контента |
+| POST | /content/snapshots/{id}/model/history/{publicationId}/restore | admin, moderator, staff, user | Восстановить публикацию в черновик с проверкой ревизии |
+| GET | /sitepack/limits | site manager | Настроенные ограничения импорта и экспорта |
+| GET / POST | /site/snapshots/{id}/export, /site/snapshots/import | site manager | Экспорт или импорт снапшота и модельного контента |
 
-Импорт принимает корректный zip c `index.html` в корне; 400 возвращается для
-архивов без `index.html`, с `..`-путями, symlink-ами и превышением
-`MAX_RELEASE_BYTES`.
+Структурная конфигурация, модель и bindings сохраняются новым снапшотом; контентные черновик и публикация имеют отдельные ревизии. Fork копирует опубликованные записи, draft, выборки и историю в независимое состояние ребёнка. Назначения веток не меняются автоматически. Снапшот, назначенный ветке, и его непосредственный родитель защищены от удаления.
 
-При активации создаётся событие с метаданными:
-
-```json
-{"release_version": "1.2.3", "feature_versions": {"features": [{"key": "pages", "type": "collection", "dev_version": 2, "prod_version": 1}]}}
-```
-
-### Среды
-
-| Метод | Маршрут | Доступ | Описание |
-| --- | --- | --- | --- |
-| GET | `/admin/site/environments` | user | состояние обеих сред |
-| PATCH | `/admin/site/environments/{dev\|prod}` | admin | частичное обновление настроек |
-
-PATCH — optimistic concurrency: в теле передаётся актуальная `revision`;
-иначе 409 с `current_revision` тела конфликта. Обновляются только переданные
-поля:
-
-```json
-{
-  "revision": 4,
-  "name": "Продакшен",
-  "public_base_url": "https://example.com",
-  "cors_origins": ["https://app.example"]
-}
-```
-
-Ошибки полей приходят кодом 400 (`validation_failed`). Изменения CORS
-применяются без перезапуска.
-
-### Источники релизов
-
-| Метод | Маршрут | Доступ | Описание |
-| --- | --- | --- | --- |
-| GET | `/admin/release-sources` | staff | список источников |
-| POST | `/admin/release-sources` | staff+caps | создать источник (`provider`, `repo_url`, `asset_pattern`, `token`, `enabled`) |
-| DELETE | `/admin/release-sources/{id}` | staff | удалить источник |
-| GET | `/admin/release-sources/{id}/releases` | staff | релизы провайдера (теги + активы) |
-| POST | `/admin/release-sources/{id}/sync` | staff+caps | импорт актива (`asset_url`, `version?`, `tag?`) |
-
-`token` шифруется (AES-GCM, ключ `RELEASE_MASTER_KEY`) и никогда не
-возвращается в ответах. `sync` скачивает указанный актив провайдером,
-валидирует его как zip-релиз и записывает релиз с `source_id`.
+Старые dev/prod release endpoints, per-feature CMS routes, contentRelations и legacy manifest schemas не входят в текущий контракт и не преобразуются.
 
 ## Настройки
 
-`GET /admin/settings` (staff) возвращает санитизированную конфигурацию runtime без
+`GET /admin/settings` (admin, moderator) возвращает санитизированную конфигурацию runtime без
 секретов: лимиты запросов и страниц, параметры публичного API, допустимые типы файлов и
 матрицу ролей. Значения берутся из реальной конфигурации процесса, поэтому раздел
 «Настройки» в админке показывает фактические ограничения, а не заглушки.
@@ -433,7 +230,6 @@ PATCH — optimistic concurrency: в теле передаётся актуал�
   },
   "public_api": {
     "runtime_path": "/api/v2/runtime?path={path}",
-    "collection_path": "/api/v2/content/{key}/records?field={field}&value={value}&offset={offset}&limit={limit}",
     "forms_path": "/api/v2/forms/{key}/submissions",
     "admin_path": "/api/v1/admin",
     "media_path": "/media/{id}",
@@ -446,35 +242,37 @@ PATCH — optimistic concurrency: в теле передаётся актуал�
     "image_variants": ["original", "thumbnail", "medium", "large"]
   },
   "roles": [
-    {
-      "id": "admin",
-      "label": "Администратор",
-      "summary": "Полный доступ ко всем административным разделам.",
-      "permissions": [{"resource": "Контент", "actions": ["просмотр", "редактирование", "публикация"]}],
-      "notes": ["Единственная роль, которой доступно удаление заявок."]
-    }
+    {"id":"admin","label":"Администратор"},
+    {"id":"moderator","label":"Модератор"},
+    {"id":"staff","label":"Сотрудник"},
+    {"id":"user","label":"Пользователь"}
   ]
 }
 ```
 
-Матрица ролей описывает текущее поведение сервера: она собрана из проверок middleware
-(`RequireStaff`, `RequireAdmin`) и проверок в доменных сервисах. Секреты (S3, `DATABASE_URL`,
+Пример сокращён: реальные объекты ролей также содержат `summary`, `permissions` и `notes`.
+Матрица ролей отражает согласованные права и серверные guards. Администратор и модератор
+управляют структурой сайта; все четыре роли редактируют и публикуют контент, читают и
+экспортируют заявки и работают с медиа; только администратор безвозвратно удаляет медиа и
+заявки. Секреты (S3, `DATABASE_URL`,
 `BOOTSTRAP_ADMIN_TOKEN`) в ответ не попадают.
+
+Публичный runtime получает связанные коллекции внутри композиции `GET /api/v2/runtime`; отдельного
+публичного маршрута коллекций нет. Поэтому настройки показывают только действующие адреса API.
 
 ## Медиа
 
 | Метод | Маршрут | Доступ |
 | --- | --- | --- |
-| POST | `/admin/media` | staff, `multipart/form-data`, поле `file` |
-| GET | `/admin/media?status=&type=image|video|pdf&q=&created_from=&created_to=&min_size=&max_size=&sort=&limit=&cursor=` | staff |
-| GET | `/admin/media/{id}` | staff |
-| PATCH | `/admin/media/{id}` | staff, `{"filename":"new-name.png"}` — меняет только отображаемое имя |
-| GET | `/admin/media/{id}/usage` | staff — записи и заявки, где используется объект |
-| POST | `/admin/media/{id}/retry` | staff |
-| DELETE | `/admin/media/{id}` | staff |
+| POST | `/admin/media` | admin, moderator, staff, user; `multipart/form-data`, поле `file` |
+| GET | `/admin/media?status=&type=image|video|pdf&q=&created_from=&created_to=&min_size=&max_size=&sort=&limit=&cursor=` | admin, moderator, staff, user |
+| GET | `/admin/media/{id}` | admin, moderator, staff, user |
+| PATCH | `/admin/media/{id}` | admin, moderator, staff, user; `{"filename":"new-name.png"}` — меняет только отображаемое имя |
+| POST | `/admin/media/{id}/retry` | admin, moderator, staff, user |
+| DELETE | `/admin/media/{id}` | только admin |
 | GET | `/media/{id}?variant=thumbnail` | публичный, 302 |
 | POST | `/api/v2/admin/media/{id}/renditions/prepare` | user, поставить профиль фичи в очередь |
-| GET | `/api/v2/admin/media/{id}/renditions/state?featureKey=&schemaKind=&fieldPath=&buildDigest=` | user, состояние обработки поля |
+| GET | `/api/v2/admin/media/{id}/renditions/state?snapshotId=&featureKey=&buildVersion=&schemaKind=&fieldPath=&buildDigest=` | user, состояние обработки поля |
 
 Допустимые типы: JPEG, PNG, GIF, WebP, безопасный SVG, PDF, MP4. Лимит по умолчанию 20 MiB
 (`MAX_UPLOAD_BYTES`). Новая загрузка сохраняет оригинал и сразу показывает его в медиатеке.
@@ -489,13 +287,15 @@ GIF, SVG, PDF и анимированные WebP остаются оригина
 `variants.json`; по умолчанию используется `original`. Рендишены ABI 2 выдаются по
 `/media/{id}?profile=<sha256>&variant=<name>`; публичный URL строится из ключа в БД.
 
-`POST /api/v2/admin/media/{id}/renditions/prepare` принимает JSON с `featureKey`,
-`schemaKind` (`content` или `settings`), JSON Pointer `fieldPath` и `buildDigest`. Движок
-сам находит профиль в манифесте активного dev-снапшота, поэтому клиент не передаёт и не
-редактирует параметры обработки. Ответ содержит `status: pending|processing|ready|failed`;
-задачи хранятся в PostgreSQL, повторяются после истечения lease и могут быть запущены
-повторно после ошибки. Оригинал можно сохранить в черновик во время обработки, публикация
-ждёт готовности профиля.
+`POST /api/v2/admin/media/{id}/renditions/prepare` принимает `snapshotId`, `featureKey`,
+`buildVersion`, `schemaKind` (`arguments` или `dataInputs`), JSON Pointer `fieldPath`
+и `buildDigest`. GET state принимает те же параметры в query string. Движок находит профиль
+только в манифесте сборки, закреплённой выбранным снапшотом; ветка не обязана быть назначена.
+Клиент не передаёт и не редактирует параметры обработки. Отсутствующий снапшот или сборка
+возвращают 404, устаревшие version/digest — 409, неверный путь/профиль — 422. Ответ содержит
+`status: pending|processing|ready|failed`; задачи хранятся в PostgreSQL, повторяются после
+истечения lease и могут быть запущены повторно после ошибки. Оригинал можно сохранить в
+черновик во время обработки, публикация ждёт готовности профиля.
 
 Медиа в контенте хранится как UUID (`format: "media"`), а не как URL.
 

@@ -20,13 +20,12 @@ type Limits struct {
 
 // PublicAPI describes the publicly reachable API surface.
 type PublicAPI struct {
-	RuntimePath    string   `json:"runtime_path"`
-	CollectionPath string   `json:"collection_path"`
-	FormsPath      string   `json:"forms_path"`
-	AdminPath      string   `json:"admin_path"`
-	MediaPath      string   `json:"media_path"`
-	CORSEnabled    bool     `json:"cors_enabled"`
-	CORSOrigins    []string `json:"cors_origins"`
+	RuntimePath string   `json:"runtime_path"`
+	FormsPath   string   `json:"forms_path"`
+	AdminPath   string   `json:"admin_path"`
+	MediaPath   string   `json:"media_path"`
+	CORSEnabled bool     `json:"cors_enabled"`
+	CORSOrigins []string `json:"cors_origins"`
 }
 
 // Media describes the accepted upload formats and the generated variants.

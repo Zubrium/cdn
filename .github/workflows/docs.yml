@@ -1,0 +1,56 @@
+name: Website Engine docs
+
+on:
+  pull_request:
+    paths:
+      - '.env.example'
+      - 'cmd/**'
+      - 'docs/**'
+      - 'feature-lab/**'
+      - 'features/**'
+      - 'frontend/src/**'
+      - 'pkg/**'
+      - 'presentation/http/**'
+      - 'prerender/**'
+      - 'docs-site/**'
+      - '.github/workflows/docs.yml'
+  push:
+    paths:
+      - '.env.example'
+      - 'cmd/**'
+      - 'docs/**'
+      - 'feature-lab/**'
+      - 'features/**'
+      - 'frontend/src/**'
+      - 'pkg/**'
+      - 'presentation/http/**'
+      - 'prerender/**'
+      - 'docs-site/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - name: Install documentation dependencies
+        working-directory: docs-site
+        run: npm ci
+      - name: Check generated references
+        working-directory: docs-site
+        run: npm run docs:check-generated
+      - name: Install Playwright Chromium
+        working-directory: docs-site
+        run: npx playwright install --with-deps chromium
+      - name: Build documentation
+        working-directory: docs-site
+        run: npm run docs:build
+      - name: Verify documentation in browser
+        working-directory: docs-site
+        run: npm run docs:qa

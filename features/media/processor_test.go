@@ -3,6 +3,8 @@ package media
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnimatedWebPDetection(t *testing.T) {
@@ -24,6 +27,19 @@ func TestAnimatedWebPDetection(t *testing.T) {
 	anim := append([]byte("RIFF\x00\x00\x00\x00WEBP"), []byte("ANIM\x00\x00\x00\x00")...)
 	if !isAnimatedWebP(anim) {
 		t.Fatal("ANIM chunk was not detected")
+	}
+}
+
+func TestRenditionWorkerRequiresExplicitTiming(t *testing.T) {
+	service := &Service{}
+	if err := service.SetRenditionWorkerConfig(0, time.Second); err == nil {
+		t.Fatal("zero lease accepted")
+	}
+	if err := service.SetRenditionWorkerConfig(time.Minute, 0); err == nil {
+		t.Fatal("zero polling interval accepted")
+	}
+	if err := service.SetRenditionWorkerConfig(20*time.Minute, time.Second); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -43,7 +59,7 @@ func TestCoverRenditionFilterUsesPositivePixelDimensions(t *testing.T) {
 }
 
 func TestFFmpegProcessorCreatesWebPWithoutUpscaling(t *testing.T) {
-	processor, err := NewFFmpegProcessor()
+	processor, err := NewFFmpegProcessor(15 * time.Minute)
 	if err != nil {
 		t.Skipf("ffmpeg unavailable: %v", err)
 	}
@@ -76,12 +92,26 @@ func TestFFmpegProcessorCreatesWebPWithoutUpscaling(t *testing.T) {
 	checkDimensions("square", 160, 160)
 }
 
+func TestFFmpegProcessorRejectsOversizedSourceDimensionsBeforeEncoding(t *testing.T) {
+	processor := &FFmpegProcessor{timeout: time.Minute, tempDir: t.TempDir()}
+	data := pngFixture(t, 1, 1)
+	binary.BigEndian.PutUint32(data[16:20], uint32(maxImagePixels))
+	binary.BigEndian.PutUint32(data[20:24], 2)
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+
+	profile := FieldProfile{Accept: "raster-image", Renditions: []Rendition{{Name: "small", Width: 320, Height: 240, Fit: "cover"}}}
+	_, err := processor.Process(context.Background(), Media{ContentType: "image/png"}, profile, data)
+	if err == nil || !strings.Contains(err.Error(), "dimensions are not supported") {
+		t.Fatalf("oversized source dimensions error=%v, want a clear pre-encode rejection", err)
+	}
+}
+
 func TestFFmpegProcessorEncodesVideoAndPoster(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("ffmpeg unavailable")
 	}
-	processor, err := NewFFmpegProcessor()
+	processor, err := NewFFmpegProcessor(15 * time.Minute)
 	if err != nil {
 		t.Skipf("ffmpeg processor unavailable: %v", err)
 	}
@@ -120,7 +150,7 @@ func TestFFmpegProcessorEncodesVideoAndPoster(t *testing.T) {
 }
 
 func TestFFmpegProcessorPreservesAnimatedAndVectorImages(t *testing.T) {
-	processor := &FFmpegProcessor{}
+	processor := &FFmpegProcessor{timeout: time.Minute, tempDir: t.TempDir()}
 	profile := FieldProfile{Accept: "raster-image", Renditions: []Rendition{{Name: "card", Width: 400, Height: 300, Fit: "cover"}}}
 	animatedWebP := []byte("RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00")
 	for name, input := range map[string]Media{
