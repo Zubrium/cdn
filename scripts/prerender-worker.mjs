@@ -190,6 +190,10 @@ try {
   // first viewport. During a Chromium render pass, traverse every root so the
   // captured HTML still contains fully rendered placements before readiness is
   // accepted and cached.
+  await page.waitForFunction(() => {
+    const root = document.getElementById("root");
+    return Boolean(root && !root.hidden && !document.getElementById("prerender-root"));
+  }, { timeout: input.timeoutMs });
   await page.evaluate(async () => {
     const roots = [...document.querySelectorAll("[data-engine-placement]")];
     for (const root of roots) {
