@@ -21,12 +21,13 @@ The Vitasil package script supplies `VITASIL_FRONTEND_DIR`. The listener is rest
 
 ## Feature runtimes
 
-Feature Lab discovers `src/features/<key>/manifest.json` and supports two ways to preview a feature:
+Feature Lab discovers `src/features/<key>/manifest.json` and supports source preview for the current manifests and built-artifact preview for the existing runtime contracts:
 
-- **Existing Vitasil source:** when `runtime` is absent, the lab loads the root `index.tsx`, `index.ts`, `index.jsx`, or `index.js` and uses the current React contract and Vitasil toolchain.
-- **Framework-neutral build:** set `runtime.abi` to `static-module-v1` or `static-html-v1` and point `runtime.entry` at a built file inside the feature directory. Optional CSS files go in `runtime.styles`. The `entry` and `styles` paths may point to a `dist/` directory.
+- **React source contract:** when `runtime` is absent, the lab loads the root `index.tsx`, `index.ts`, `index.jsx`, or `index.js` and uses the Vitasil React toolchain.
+- **`static-module-v1` source or artifact:** the lab loads the manifest's `runtime.entry`. For source preview this may be a TypeScript/JavaScript entry (the current Vitasil manifests use `index.ts`); Vite transpiles it and resolves imports using the configured Vitasil frontend toolchain. A prebuilt ESM entry and its `runtime.styles` can also be previewed. Paths must stay inside that feature directory.
+- **`static-html-v1` fragment:** the lab reads the manifest's `runtime.entry` as a literal HTML fragment and may load its `runtime.styles`.
 
-For example, a Vue, Svelte, Angular, React, or vanilla JS feature can be built by its own toolchain as a self-contained ESM bundle. The output must implement the framework-neutral `mount(root, context)` contract or be a static HTML fragment. Bundle framework dependencies with the feature; Feature Lab does not install or resolve framework packages for it. Run that toolchain's watch/build command alongside Feature Lab; updates to the declared entry and CSS files trigger a preview reload.
+Engine ZIPs still require the archive-ready browser assets described by the feature runtime spec. Feature Lab's source preview does not create those assets or replace the production feature build. For a prebuilt module preview, use a self-contained ESM artifact that implements `mount(root, context)`; the artifact must include its framework runtime as required by the Engine archive contract. Feature Lab does not install new packages or reach out to package/CDN URLs. Changes to declared entries, imported source, or styles reload the preview through Vite.
 
 ```json
 {
@@ -42,7 +43,7 @@ For example, a Vue, Svelte, Angular, React, or vanilla JS feature can be built b
 
 `static-html-v1` renders the literal fragment and styles without data binding or SDK calls. Feature Lab rejects scripts, embedded documents, inline event handlers, and `javascript:` URLs before insertion.
 
-Feature Lab does not compile framework source. Its `content` fixture represents the feature's typed runtime input shape and never replaces the Engine's snapshot data model or the generated `/content` editor. Keep the framework build command in the feature's own toolchain; the existing Vitasil `build-features.mjs` remains the React source builder. ZIP creation and disposable Engine integration checks are separate steps.
+Vite's source transpilation is only for local preview. It does not run Vitasil's production feature build or validate an Engine ZIP. The `content` fixture represents the feature's typed runtime input shape and never replaces the Engine's snapshot data model or the generated `/content` editor. Keep archive production in the feature's build toolchain (`build-features.mjs` for Vitasil React source). ZIP creation and disposable Engine integration checks are separate steps.
 
 ## Preview controls
 

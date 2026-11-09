@@ -1,6 +1,6 @@
 # Feature Lab
 
-Status: manifest format 2 and `dataInputs` fixtures are implemented. On 2026-11-09, the browser preview was rechecked against the current ten Vitasil feature sources after public document rendering moved to Go `html/template`. Feature Lab remains an independent source/runtime preview launched from the Vitasil frontend package; it is not the public document renderer.
+Status: manifest format 2 and `dataInputs` fixtures are implemented. The latest recorded browser preview on 2026-11-09 covered ten Vitasil source features after public document rendering moved to Go `html/template`. Later on 2026-11-09, `catalog` and `main-data` source/manifests changed and their ZIPs were rebuilt; the updated pair still needs a Feature Lab browser recheck. Feature Lab remains an independent source/runtime preview launched from the Vitasil frontend package; it is not the public document renderer.
 
 ## Purpose and boundaries
 
@@ -14,11 +14,11 @@ Feature Lab supports the existing `legacy-react-v1` source contract and the `sta
 
 ## Connection and configuration
 
-- Each feature directory contains `manifest.json`. When `runtime` is absent, Feature Lab keeps the existing discovery rule for a root `index.tsx`, `index.ts`, `index.jsx`, or `index.js` entry, in that priority order, and uses the Vitasil React toolchain.
-- When `manifest.runtime` is present, `runtime.abi` must be `static-module-v1` or `static-html-v1`. `runtime.entry` and each optional `runtime.styles` item must be a relative path to an existing file inside that feature directory. Compiled files such as `dist/entry.js` and `dist/styles.css` are supported; source compilation remains owned by the feature's own toolchain.
-- Framework-specific imports and runtime code must be bundled into local ESM assets. Feature Lab does not resolve remote URLs or install framework packages for static modules. Framework dependencies belong to the feature artifact, consistent with the Engine ABI.
+- Each feature directory contains `manifest.json`. When `runtime` is absent, Feature Lab keeps the existing discovery rule for a root `index.tsx`, `index.ts`, `index.jsx`, or `index.js` entry, in that priority order, and uses the Vitasil React toolchain for the existing `legacy-react-v1` source contract.
+- When `manifest.runtime` is present, `runtime.abi` must be `static-module-v1` or `static-html-v1`. `runtime.entry` and each optional `runtime.styles` item must be a relative path to an existing file inside that feature directory. The source preview accepts Vite-supported TypeScript/JavaScript entries, including current Vitasil `index.ts` module entries, and also accepts prebuilt files such as `dist/entry.js` and `dist/styles.css`.
+- Vite transpilation/import resolution in source-preview mode is a development convenience, not Engine archive behavior. It uses packages already installed in the configured Vitasil frontend; Feature Lab does not install packages or resolve remote URLs. For registered `static-module-v1` ZIPs, framework imports and runtime dependencies must be bundled into local ESM assets according to [SPEC-feature-runtime.md](SPEC-feature-runtime.md).
 - `VITASIL_FRONTEND_DIR` is required and identifies the Vitasil `frontend` directory. The launch script sets it to its current package directory. No machine-specific absolute path is committed.
-- Vite and Tailwind host tooling, and React packages used by the Feature Lab UI and legacy React adapter, are resolved from the Vitasil frontend package. Framework-neutral artifacts run their own bundled framework runtime. No package dependency is added.
+- Vite and Tailwind host tooling, and React packages used by the Feature Lab UI and React source/adapter, are resolved from the Vitasil frontend package. A static-module source entry is transformed and its local imports are resolved by Vite; a prebuilt archive artifact is expected to contain its runtime dependencies. No package dependency is added.
 - The Engine repository contains the application, Vite configuration, feature-discovery plugin and documentation under `feature-lab/`.
 
 ## Preview contract
@@ -42,11 +42,11 @@ Feature Lab imports the default export from a source feature entry and passes th
 
 ### Framework-neutral static module ABI
 
-- `runtime.abi` is `static-module-v1`; `runtime.entry` points to an already-built ESM file and `runtime.styles` optionally lists local CSS assets.
-- A framework's own watch/build command can write those files while Feature Lab runs; edits to the declared entry and styles trigger a preview reload.
+- `runtime.abi` is `static-module-v1`; `runtime.entry` points to the module source or prebuilt ESM file and `runtime.styles` optionally lists local CSS assets. The module implements the same `mount(root, context)` contract in both cases.
+- Source entries and their imports are transformed by Feature Lab's existing Vite dev server. A separate feature watch/build may also write the declared artifact files while Feature Lab runs; edits to the declared entry and styles trigger a preview reload.
 - Feature Lab passes the `FeatureContext` from [SPEC-feature-runtime.md](SPEC-feature-runtime.md) to the named `mount(root, context)` export. Its `sdk` uses local collection fixtures and logs form submissions in memory.
 - The preview waits for the returned `ready` promise. Context changes call `update()` only after readiness; updates are serialized to preserve their order. Switching feature or resetting preview state aborts the old signal and invokes `unmount()`.
-- The preview accepts any framework whose built artifact implements this ABI. The lab does not need framework-specific adapters or dependencies; authors include their framework runtime in the built feature artifact.
+- The preview accepts any framework whose module implements this ABI. Source preview can use dependencies already installed in Vitasil's frontend toolchain; the Engine-ready built artifact must include the framework runtime and satisfy the archive rules. The lab does not add framework-specific adapters or dependencies.
 
 ### Static HTML ABI
 
@@ -83,7 +83,7 @@ Fixtures are examples, not schema authoring. Manifest `dataInputs` describes onl
 
 ## Verification
 
-Verified against all nine current Vitasil source features: `background`, `catalog`, `catalog-detail`, `footer`, `form`, `header`, `hero`, `main-data`, and `not-found`. Additional disposable fixtures exercised the framework-neutral contracts.
+Historical source-preview verification covered nine Vitasil features before `legal-documents` was added. The 2026-11-09 regression later covered ten current source features; see the dated record below. Additional disposable fixtures exercised the framework-neutral contracts.
 
 - Browser smoke test: all nine modules imported and rendered; the valid-feature run had zero browser console errors and warnings.
 - `catalog` rendered three fixture records, requested `/catalog` through the local SDK mock, and loaded all three sample images. `catalog-detail` and `background` also loaded their sample media inside the frame.
@@ -97,7 +97,7 @@ Verified against all nine current Vitasil source features: `background`, `catalo
 - Delayed-ready and slow-update fixtures confirmed that the newest context is applied only after `ready`, and that successive `update()` calls run serially.
 - A `static-html-v1` fixture rendered its literal fragment and styles. An `onclick` fixture was blocked before insertion; the handler did not execute and the iframe remained empty.
 - Dot-segment, Windows-separator, and symlink escapes from a runtime entry were rejected within that feature's error card.
-- From `vitasil/frontend`, `pnpm typecheck`, `pnpm lint`, and `pnpm typecheck:feature-lab` passed using Node 20. All nine feature ZIPs built in a disposable copy and passed `unzip -t`; the live Vitasil `dist/feature-builds` directory was not modified.
+- From `vitasil/frontend`, `pnpm typecheck`, `pnpm lint`, and `pnpm typecheck:feature-lab` passed using Node 20. The recorded archive check covered nine feature ZIPs in a disposable copy and passed `unzip -t`; the live Vitasil `dist/feature-builds` directory was not modified.
 
 The Vitasil frontend package does not currently define a `test` script. Browser acceptance was run with the installed Playwright CLI; no test framework dependency was added. The generic ABI was exercised with plain ESM, not with separate Vue/Svelte/Angular toolchains. Feature Lab is a source-development harness, so tests against the Engine API, uploaded ZIP registration, and the public runtime remain separate integration checks and are not claimed here.
 
@@ -106,3 +106,5 @@ The Vitasil frontend package does not currently define a `test` script. Browser 
 The loopback Feature Lab at `http://127.0.0.1:5178` previewed all ten current Vitasil source features: `background`, `catalog`, `catalog-detail`, `footer`, `form`, `header`, `hero`, `legal-documents`, `main-data`, and `not-found`. Each preview rendered content or expected visual media, with no browser console errors and no `/api/*` requests. The form was completed in the iframe and emitted a local `sdk.submitForm` event without calling Engine. Collection fixtures now assign synthetic record IDs even though IDs are intentionally absent from manifest `dataInputs` field mappings, preventing React missing-key warnings. The Vitasil shared `Button` also selects native button semantics only when it renders a `<button>`, removing a Base UI warning when rendering links.
 
 Checks: Node 20 `npm run typecheck`, `npm run lint`, `npm run typecheck:feature-lab`, and `node --test scripts/feature-manifest-contract.test.mjs` (7/7) passed. ZIP integration checks are recorded separately in [QA_REPORT.md](QA_REPORT.md); source preview does not replace them. The Vite process pre-existed this check and was left running.
+
+The Vitasil source inventory has since advanced to `background@2.0.5`, `catalog@2.0.23`, `catalog-detail@2.0.8`, `footer@2.0.14`, `form@2.0.8`, `header@2.0.11`, `hero@2.0.13`, `legal-documents@1.0.7`, `main-data@2.0.14`, and `not-found@2.0.4`. All ten manifests declare `formatVersion: 2` and `runtime.abi: static-module-v1` with source entry `index.ts`. The most recent source/type/lint/manifest checks and ten ZIP build are recorded in the parent QA work; the local QA Engine at ports 28120/28122 was unavailable, so no live Engine registration or route result is implied. Browser preview of the two newest source changes remains pending in the final verification pass.
