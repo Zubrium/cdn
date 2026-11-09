@@ -26,6 +26,9 @@ func TestVitasilDetailSEOPublishedProductFieldsAcceptance(t *testing.T) {
 	if featureDir == "" {
 		t.Skip("set TEST_FEATURE_DIR to the current Vitasil feature ZIP directory")
 	}
+	if !externalFeatureArchiveExists(t, featureDir, "catalog-detail") {
+		t.Skip("current Vitasil intentionally has no product detail page; generic detail-route behavior is tested separately")
+	}
 	requireDisposableModelContentDatabase(t)
 	env := newTestEnv(t)
 

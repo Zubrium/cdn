@@ -43,10 +43,6 @@ func (s *SnapshotService) PageDocument(ctx context.Context, env environment.Envi
 		}
 	}
 	metadata = metadataWithQueryRobots(metadata, len(query) > 0)
-	shell, err := publicruntime.RenderShell(metadata)
-	if err != nil {
-		return publicruntime.Document{}, err
-	}
 	staticFeatures := make([]publicruntime.StaticHTMLFeature, 0)
 	for _, placement := range composition.Placements {
 		if placement.RuntimeABI != RuntimeABIStaticHTML {
@@ -92,27 +88,23 @@ func (s *SnapshotService) PageDocument(ctx context.Context, env environment.Envi
 			ID: placement.ID, Slot: placement.Slot, FeatureKey: placement.FeatureKey,
 		})
 	}
-	shell, err = publicruntime.RenderPlacementRoots(shell, composition.Page.Kind, composition.Snapshot.ID.String(), composition.Snapshot.ContentRevision, rootPlacements)
+	bootstrap, err := json.Marshal(composition)
 	if err != nil {
-		return publicruntime.Document{}, fmt.Errorf("render public placement roots: %w", err)
+		return publicruntime.Document{}, fmt.Errorf("encode resolved page composition: %w", err)
+	}
+	shell, err := publicruntime.RenderPageDocument(metadata, composition.Page.Kind, composition.Snapshot.ID.String(), composition.Snapshot.ContentRevision, rootPlacements, bootstrap)
+	if err != nil {
+		return publicruntime.Document{}, fmt.Errorf("render resolved page composition: %w", err)
 	}
 	if len(staticFeatures) > 0 {
 		staticStyles := append([]string(nil), composition.SharedStyleURLs...)
 		if composition.ThemeStyleURL != "" {
 			staticStyles = append(staticStyles, composition.ThemeStyleURL)
 		}
-		shell, err = publicruntime.RenderStaticHTMLFallback(shell, composition.Snapshot.ID.String(), composition.Snapshot.ContentRevision, composition.Page.Kind, staticStyles, staticFeatures)
+		shell, err = publicruntime.RenderStaticHTMLFallback(shell, staticStyles, staticFeatures)
 		if err != nil {
 			return publicruntime.Document{}, err
 		}
-	}
-	bootstrap, err := json.Marshal(composition)
-	if err != nil {
-		return publicruntime.Document{}, fmt.Errorf("encode resolved page composition: %w", err)
-	}
-	shell, err = publicruntime.AppendRuntimeBootstrap(shell, bootstrap)
-	if err != nil {
-		return publicruntime.Document{}, fmt.Errorf("render resolved page composition: %w", err)
 	}
 	// Cache identity follows the resolved runtime output, not the raw query
 	// string. This keeps tracking parameters and query ordering from creating

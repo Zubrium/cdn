@@ -31,9 +31,9 @@ import (
 
 // TestVitasilAllCurrentPlacementsBrowserAcceptance verifies the complete set
 // of current Vitasil format-2 builds against one isolated model-backed site.
-// Existing focused tests cover form submission, media upload/picking, product
-// detail resolution, and the not-found fallback; this test integrates their
-// feature placements in the browser without writing to the Vitasil runtime.
+// Existing focused tests cover form submission, media upload/picking, and the
+// not-found fallback; this test integrates the current placements in the
+// browser without writing to the Vitasil runtime.
 func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 	featureDir := strings.TrimSpace(os.Getenv("TEST_FEATURE_DIR"))
 	node := strings.TrimSpace(os.Getenv("PRERENDER_TEST_NODE"))
@@ -45,7 +45,7 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 	requireAllPlacementsBrowserDatabase(t)
 
 	env := newTestEnv(t)
-	featureKeys := []string{"background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"}
+	featureKeys := []string{"background", "catalog", "footer", "form", "header", "hero", "main-data", "not-found"}
 	manifests := make(map[string]sitebuilder.Manifest, len(featureKeys))
 	versions := make(map[string]string, len(featureKeys))
 	features := make([]sitebuilder.BuildRef, 0, len(featureKeys))
@@ -76,15 +76,14 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload disposable responsive Product image: %v", err)
 	}
-	model, productEntity, productFieldIDs, productFieldKeys := modelAcceptanceEntity("product", "Product", productPort, true)
+	model, productEntity, productFieldIDs, productFieldKeys := modelAcceptanceEntity("product", "Product", productPort, false)
 	entities := map[string]sitebuilder.DataModelEntity{"product": productEntity}
 	fieldIDs := map[string]map[string]string{"product": productFieldIDs}
 	fieldKeys := map[string]map[string]string{"product": productFieldKeys}
 	bindings := make(map[string]sitebuilder.DataInputBinding)
 	for key, portKey := range map[string]string{
-		"catalog":        "products",
-		"catalog-detail": "product",
-		"main-data":      "products",
+		"catalog":   "products",
+		"main-data": "products",
 	} {
 		port := modelAcceptancePort(t, manifests[key], portKey)
 		modelAcceptanceAssertSameOutputShape(t, productPort, port, key+"."+portKey)
@@ -147,6 +146,10 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 			ID: "vitasil-form", Build: sitebuilder.BuildRef{FeatureKey: "form", Version: versions["form"]}, Slot: "main",
 			DataBindings: []sitebuilder.DataInputBinding{bindings["form.form"], bindings["form.legalSettings"]},
 		},
+		"form-page": {
+			ID: "vitasil-form-page", Build: sitebuilder.BuildRef{FeatureKey: "form", Version: versions["form"]}, Slot: "main",
+			DataBindings: []sitebuilder.DataInputBinding{bindings["form.form"], bindings["form.legalSettings"]},
+		},
 		"footer": {
 			ID: "vitasil-footer", Build: sitebuilder.BuildRef{FeatureKey: "footer", Version: versions["footer"]}, Slot: "footer",
 			DataBindings: []sitebuilder.DataInputBinding{bindings["footer.footer"], bindings["footer.links"], bindings["footer.contacts"]},
@@ -158,12 +161,6 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 				"action": {Source: "literal", Value: json.RawMessage(`{"label":"Связаться QA","to":"/"}`)},
 			},
 			DataBindings: []sitebuilder.DataInputBinding{bindings["catalog.products"]},
-			DetailLink:   &sitebuilder.DetailLink{RouteID: "product-detail-route", Field: "slug", PathTemplate: "/catalog/{slug}"},
-		},
-		"catalog-detail": {
-			ID: "vitasil-product-detail", Build: sitebuilder.BuildRef{FeatureKey: "catalog-detail", Version: versions["catalog-detail"]}, Slot: "main",
-			Arguments:    map[string]sitebuilder.ArgumentBinding{"slug": {Source: "path", PathArg: "slug"}},
-			DataBindings: []sitebuilder.DataInputBinding{{InputKey: "product", EntityID: productEntity.ID, Fields: modelAcceptanceFieldBindings(modelAcceptancePort(t, manifests["catalog-detail"], "product"), productFieldIDs), Lookup: &sitebuilder.DataInputLookupBinding{Argument: "slug", FieldID: productFieldIDs["/slug"]}}},
 		},
 		"not-found": {
 			ID: "vitasil-not-found", Build: sitebuilder.BuildRef{FeatureKey: "not-found", Version: versions["not-found"]}, Slot: "main",
@@ -179,13 +176,13 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 		Pages: []sitebuilder.Page{
 			{ID: "home", Name: "Vitasil QA home", Kind: "page", Placements: []sitebuilder.Placement{placements["background"], placements["header"], placements["hero"], placements["main-data"], placements["form"], placements["footer"]}},
 			{ID: "catalog", Name: "Vitasil QA catalog", Kind: "collection-list", Placements: []sitebuilder.Placement{placements["catalog"]}},
-			{ID: "product", Name: "Vitasil QA product", Kind: "detail", Placements: []sitebuilder.Placement{placements["catalog-detail"]}},
+			{ID: "form", Name: "Vitasil QA form", Kind: "page", Placements: []sitebuilder.Placement{placements["form-page"]}},
 			{ID: "not-found", Name: "Vitasil QA not found", Kind: "page", Placements: []sitebuilder.Placement{placements["not-found"]}},
 		},
 		RouteTree: sitebuilder.RouteTreeNode{ID: "site", Type: "site", Children: []sitebuilder.RouteTreeNode{
 			{ID: "home-route", Type: "path", Path: "/", PageID: "home"},
 			{ID: "catalog-route", Type: "path", Path: "/catalog", PageID: "catalog"},
-			{ID: "product-detail-route", Type: "path", Path: "/catalog/:slug", PageID: "product"},
+			{ID: "form-route", Type: "path", Path: "/form", PageID: "form"},
 			{ID: "not-found-route", Type: "catchAll", Name: "path", PageID: "not-found"},
 		}},
 	}
@@ -221,8 +218,8 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 		return modelAcceptanceValues(fieldKeys[featureKey+"."+inputKey], values)
 	}
 	products := []sitebuilder.ModelContentRecord{
-		{EntityID: productEntity.ID, SortOrder: 0, Values: modelAcceptanceValues(productFieldKeys, map[string]any{"/slug": "rosehip", "/title": "Шиповник Vitasil QA", "/category": "Напитки QA", "/price": "100 ₽", "/description": "Шиповник description QA", "/imageSrc": mediaImage.ID.String()})},
-		{EntityID: productEntity.ID, SortOrder: 1, Values: modelAcceptanceValues(productFieldKeys, map[string]any{"/slug": "honey", "/title": "Мёд Vitasil QA", "/category": "Мёд QA", "/price": "200 ₽", "/description": "Мёд description QA", "/imageSrc": mediaImage.ID.String()})},
+		{EntityID: productEntity.ID, SortOrder: 0, Values: modelAcceptanceValues(productFieldKeys, map[string]any{"/title": "Шиповник Vitasil QA", "/category": "Напитки QA", "/price": "100 ₽", "/description": "Шиповник description QA", "/imageSrc": mediaImage.ID.String()})},
+		{EntityID: productEntity.ID, SortOrder: 1, Values: modelAcceptanceValues(productFieldKeys, map[string]any{"/title": "Мёд Vitasil QA", "/category": "Мёд QA", "/price": "200 ₽", "/description": "Мёд description QA", "/imageSrc": mediaImage.ID.String()})},
 	}
 	initial := []sitebuilder.ModelContentRecord{
 		products[0], products[1],
@@ -248,15 +245,15 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 		t.Fatalf("save all Vitasil model-backed records: %v", err)
 	}
 	recordIDs := make(map[string][]string)
-	productIDsBySlug := make(map[string]string)
+	productIDsByTitle := make(map[string]string)
 	for _, record := range draft.Records {
 		recordIDs[record.EntityID] = append(recordIDs[record.EntityID], record.ID)
 		if record.EntityID == productEntity.ID {
-			productIDsBySlug[record.Values[productFieldKeys["/slug"]].(string)] = record.ID
+			productIDsByTitle[record.Values[productFieldKeys["/title"]].(string)] = record.ID
 		}
 	}
-	if len(productIDsBySlug) != 2 {
-		t.Fatalf("expected two shared Product records, got %v", productIDsBySlug)
+	if len(productIDsByTitle) != 2 {
+		t.Fatalf("expected two shared Product records, got %v", productIDsByTitle)
 	}
 	selectOne := func(placementID, inputKey, entityKey string) sitebuilder.ModelContentSelection {
 		ids := recordIDs[entities[entityKey].ID]
@@ -272,13 +269,14 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 		selectOne("vitasil-main-data", "info", "main-data.info"),
 		selectOne("vitasil-main-data", "slider", "main-data.slider"),
 		{PlacementID: "vitasil-main-data", InputKey: "advantages", Mode: "ids", RecordIDs: recordIDs[entities["main-data.advantages"].ID]},
-		{PlacementID: "vitasil-main-data", InputKey: "products", Mode: "ids", RecordIDs: []string{productIDsBySlug["honey"]}},
+		{PlacementID: "vitasil-main-data", InputKey: "products", Mode: "ids", RecordIDs: []string{productIDsByTitle["Мёд Vitasil QA"]}},
 		selectOne("vitasil-footer", "footer", "footer.footer"),
 		{PlacementID: "vitasil-footer", InputKey: "links", Mode: "ids", RecordIDs: recordIDs[entities["footer.links"].ID]},
 		{PlacementID: "vitasil-footer", InputKey: "contacts", Mode: "ids", RecordIDs: recordIDs[entities["footer.contacts"].ID]},
 		selectOne("vitasil-form", "form", "form.form"),
+		selectOne("vitasil-form-page", "form", "form.form"),
 		selectOne("vitasil-not-found", "notFound", "not-found.notFound"),
-		{PlacementID: "vitasil-catalog", InputKey: "products", Mode: "ids", RecordIDs: []string{productIDsBySlug["rosehip"], productIDsBySlug["honey"]}},
+		{PlacementID: "vitasil-catalog", InputKey: "products", Mode: "ids", RecordIDs: []string{productIDsByTitle["Шиповник Vitasil QA"], productIDsByTitle["Мёд Vitasil QA"]}},
 	}
 	selected, err := env.snapshots.SaveModelContentWorkspace(context.Background(), actor, snapshotID, sitebuilder.ModelContentDraftInput{Revision: draft.Revision, Records: draft.Records, Selections: selections})
 	if err != nil {
@@ -333,32 +331,32 @@ func TestVitasilAllCurrentPlacementsBrowserAcceptance(t *testing.T) {
 		if os.Getenv("LIGHTHOUSE_PRERENDER") == "0" {
 			cacheStates = []string{"none"}
 		}
-		routes := []struct{ key, path string }{{"home", "/"}, {"catalog", "/catalog"}, {"detail", "/catalog/rosehip"}}
-			if rawRoutes := strings.TrimSpace(os.Getenv("LIGHTHOUSE_ROUTES")); rawRoutes != "" {
-				available := make(map[string]struct{}, len(routes))
+		routes := []struct{ key, path string }{{"home", "/"}, {"catalog", "/catalog"}, {"form", "/form"}}
+		if rawRoutes := strings.TrimSpace(os.Getenv("LIGHTHOUSE_ROUTES")); rawRoutes != "" {
+			available := make(map[string]struct{}, len(routes))
+			for _, route := range routes {
+				available[route.key] = struct{}{}
+			}
+			selected := make([]struct{ key, path string }, 0, len(routes))
+			for _, key := range strings.Split(rawRoutes, ",") {
+				key = strings.TrimSpace(key)
+				if key == "" {
+					continue
+				}
+				if _, ok := available[key]; !ok {
+					t.Fatalf("LIGHTHOUSE_ROUTES contains unsupported route %q", key)
+				}
 				for _, route := range routes {
-					available[route.key] = struct{}{}
-				}
-				selected := make([]struct{ key, path string }, 0, len(routes))
-				for _, key := range strings.Split(rawRoutes, ",") {
-					key = strings.TrimSpace(key)
-					if key == "" {
-						continue
-					}
-					if _, ok := available[key]; !ok {
-						t.Fatalf("LIGHTHOUSE_ROUTES contains unsupported route %q", key)
-					}
-					for _, route := range routes {
-						if route.key == key {
-							selected = append(selected, route)
-							break
-						}
+					if route.key == key {
+						selected = append(selected, route)
+						break
 					}
 				}
-				if len(selected) == 0 {
-					t.Fatal("LIGHTHOUSE_ROUTES must select home, catalog, and/or detail")
-				}
-				routes = selected
+			}
+			if len(selected) == 0 {
+				t.Fatal("LIGHTHOUSE_ROUTES must select home, catalog, and/or detail")
+			}
+			routes = selected
 		}
 		for _, route := range routes {
 			for _, profile := range []string{"mobile", "desktop"} {
@@ -569,14 +567,14 @@ const errors = [];
 const expected = {
   "/": ["background", "header", "hero", "main-data", "form", "footer"],
   "/catalog": ["catalog"],
-  "/catalog/rosehip": ["catalog-detail"],
+  "/form": ["form"],
   "/missing-vitasil-page": ["not-found"],
 };
-const slots = { background: "background", header: "header", hero: "main", "main-data": "main", form: "main", footer: "footer", catalog: "main", "catalog-detail": "main", "not-found": "main" };
+const slots = { background: "background", header: "header", hero: "main", "main-data": "main", form: "main", footer: "footer", catalog: "main", "not-found": "main" };
 const sentinel = {
 		header: "Каталог QA", hero: "Vitasil hero QA", "main-data": "Vitasil info QA",
   form: "Форма Vitasil QA", footer: "Vitasil footer QA", catalog: "Каталог Vitasil QA",
-  "catalog-detail": "Шиповник Vitasil QA", "not-found": "Страница не найдена QA",
+  "not-found": "Страница не найдена QA",
 };
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -608,6 +606,19 @@ try {
     const response = await page.goto(base + route, { waitUntil: "domcontentloaded" });
     if (!response) throw new Error(route + ": navigation returned no response");
     if (route === "/missing-vitasil-page" ? response.status() !== 404 : !response.ok()) throw new Error(route + ": unexpected HTTP status " + response.status());
+    await page.waitForFunction(() => {
+      const root = document.getElementById("root");
+      return Boolean(root && !root.hidden && !document.getElementById("prerender-root"));
+    }, { timeout: 30000 });
+    const initialHydration = await page.evaluate(() => [...document.querySelectorAll("[data-engine-placement]")]
+      .map(root => ({ id: root.getAttribute("data-engine-placement"), ready: root.hasAttribute("data-runtime-feature-ready") })));
+    for (const placement of initialHydration) {
+      if (!placement.id || placement.ready) continue;
+      await page.locator('[data-engine-placement="' + placement.id + '"]').evaluate(root => root.scrollIntoView({ block: "center" }));
+      await page.waitForFunction(id => [...document.querySelectorAll("[data-engine-placement]")]
+        .some(root => root.getAttribute("data-engine-placement") === id
+          && (root.hasAttribute("data-runtime-feature-ready") || root.hasAttribute("data-runtime-feature-error"))), placement.id, { timeout: 30000 });
+    }
     try {
       await page.waitForFunction(() => document.documentElement.dataset.engineReady === "true", { timeout: 30000 });
     } catch (error) {
@@ -648,14 +659,16 @@ try {
       const semanticIssues = [];
       if (route === "/") {
         if (!featureRoot("hero")?.querySelector("section h1")) semanticIssues.push("hero section/h1");
-        if (!featureRoot("main-data")?.querySelector('section[aria-label] > section[aria-labelledby="home-info-title"] h2')) semanticIssues.push("main-data labelled section/heading");
+        if (!featureRoot("main-data")?.querySelector('section[aria-label] section[aria-labelledby="home-info-title"] h2')) semanticIssues.push("main-data labelled section/heading");
         if (!featureRoot("main-data")?.querySelector('section[aria-labelledby="home-slider-title"] h2')) semanticIssues.push("main-data slider heading");
         if (!featureRoot("form")?.querySelector("section > form")) semanticIssues.push("form section/form");
         if (!featureRoot("footer")?.querySelector("footer")) semanticIssues.push("footer landmark");
       } else if (route === "/catalog") {
-        if (!featureRoot("catalog")?.querySelector('section[aria-labelledby="catalog-title"] ul > li [role="heading"][aria-level="2"] a')) semanticIssues.push("catalog section/list/linked item heading");
-      } else if (route === "/catalog/rosehip") {
-        if (!featureRoot("catalog-detail")?.querySelector("article h1, article [role=heading][aria-level='1']")) semanticIssues.push("product article/heading");
+        if (!featureRoot("catalog")?.querySelector('section[aria-labelledby="catalog-title"] ul > li article h2')) semanticIssues.push("catalog section/list/article heading");
+        if (featureRoot("catalog")?.querySelector('[data-slot="breadcrumb"], nav[aria-label="breadcrumb"]')) semanticIssues.push("catalog breadcrumb remains rendered");
+        if (featureRoot("catalog")?.querySelector('ul > li article a')) semanticIssues.push("catalog product card links to a detail page");
+      } else if (route === "/form") {
+        if (!featureRoot("form")?.querySelector("section > form")) semanticIssues.push("form page section/form");
       } else if (route === "/missing-vitasil-page") {
         if (!featureRoot("not-found")?.querySelector("section[aria-labelledby] h1")) semanticIssues.push("not-found section/h1");
       }
@@ -664,8 +677,8 @@ try {
     if (rendered.missing.length || rendered.unexpected.length || rendered.notReady.length || rendered.wrongSlots.length || rendered.wrongParents.length || rendered.nestedPlacements || rendered.extraSlotHosts.length || rendered.duplicateMainHosts || rendered.missingSentinels.length || rendered.semanticIssues.length || rendered.runtimeErrors || rendered.fileInputs || rendered.mainCount !== 1) {
       throw new Error(route + ": placements did not match the current manifest/runtime contract: " + JSON.stringify(rendered));
     }
-    if (route === "/catalog" && await page.getByRole("link", { name: /Шиповник Vitasil QA/ }).getAttribute("href") !== "/catalog/rosehip") throw new Error("catalog product link did not resolve through the configured detail route");
     const responsive = [];
+    await page.evaluate(() => window.scrollTo(0, 0));
     for (const width of [360, 390, 768, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await page.waitForTimeout(40);
@@ -682,12 +695,12 @@ try {
       responsive.push(metrics);
     }
     await page.setViewportSize({ width: 1280, height: 900 });
-    if (route === "/catalog/rosehip") {
+    if (route === "/catalog") {
       const imageState = async width => {
         await page.setViewportSize({ width, height: 900 });
         await page.waitForTimeout(150);
         return await page.evaluate(() => {
-          const picture = document.querySelector('[data-engine-feature="catalog-detail"] picture');
+          const picture = document.querySelector('[data-engine-feature="catalog"] picture');
           const image = picture?.querySelector("img");
           return {
             currentSrc: image?.currentSrc || "",
@@ -703,7 +716,7 @@ try {
       const mobileImage = await imageState(360);
       const desktopImage = await imageState(1280);
       if (!mobileImage.currentSrc || !desktopImage.currentSrc || mobileImage.currentSrc === desktopImage.currentSrc || mobileImage.sourceType !== "image/webp" || mobileImage.candidates < 3 || JSON.stringify(mobileImage.intrinsic) !== JSON.stringify(["1200", "900"])) {
-        throw new Error("catalog-detail did not select responsive Vitasil WebP renditions by viewport: " + JSON.stringify({ mobileImage, desktopImage }));
+        throw new Error("catalog did not select responsive Vitasil WebP renditions by viewport: " + JSON.stringify({ mobileImage, desktopImage }));
       }
       await page.setViewportSize({ width: 1280, height: 900 });
       console.log(JSON.stringify({ route, responsiveImage: { mobile: mobileImage, desktop: desktopImage } }));
@@ -734,7 +747,7 @@ try {
       branchAssignments: [...document.querySelectorAll('button')].filter(el => /назначить ветке/i.test(el.textContent || '')).length,
     };
   }, { token: process.env.VITASIL_ADMIN_TOKEN, snapshotID: process.env.VITASIL_SNAPSHOT_ID, branchID: process.env.VITASIL_BRANCH_ID });
-  if (JSON.stringify(adminState.featureKeys) !== JSON.stringify(["background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"].sort())) throw new Error("snapshot admin view omitted a current selected Vitasil feature: " + JSON.stringify(adminState));
+  if (JSON.stringify(adminState.featureKeys) !== JSON.stringify(["background", "catalog", "footer", "form", "header", "hero", "main-data", "not-found"].sort())) throw new Error("snapshot admin view omitted a current selected Vitasil feature: " + JSON.stringify(adminState));
   if (adminState.assignment !== process.env.VITASIL_SNAPSHOT_ID || adminState.fileInputs || adminState.branchControls || adminState.branchAssignments) throw new Error("site editor exposed upload/branch controls or changed branch assignment: " + JSON.stringify(adminState));
 
   await page.goto(adminBase + "/admin/content?snapshot=" + encodeURIComponent(process.env.VITASIL_SNAPSHOT_ID), { waitUntil: "domcontentloaded" });

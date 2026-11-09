@@ -25,7 +25,7 @@ func TestVitasilDesignSystemGraphicalWorkflowCreatesIndependentSnapshot(t *testi
 	}
 	env := newTestEnv(t)
 	ctx := context.Background()
-	keys := []string{"background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"}
+	keys := []string{"background", "catalog", "footer", "form", "header", "hero", "legal-documents", "main-data", "not-found"}
 	features := make([]any, 0, len(keys))
 	versions := make(map[string]string, len(keys))
 	manifests := make([]sitebuilder.Manifest, 0, len(keys))

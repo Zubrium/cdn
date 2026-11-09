@@ -22,7 +22,7 @@ child.stdin.end(JSON.stringify({
 }));
 const code = await new Promise((resolve) => child.on("close", resolve));
 server.close();
-if (code || !output.includes("Пререндер работает") || !output.includes('inert=""') || !output.includes("prerender-root")) {
+if (code || !output.includes("Пререндер работает") || !output.includes('inert=""') || !output.includes('id="root"') || !output.includes('id="engine-live-root" hidden=""') || output.includes("prerender-root")) {
   console.error(errors || output.slice(0, 1500));
   process.exit(1);
 }

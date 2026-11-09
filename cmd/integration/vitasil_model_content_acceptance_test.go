@@ -24,7 +24,7 @@ func TestVitasilAllCurrentDataModelBuildsAccepted(t *testing.T) {
 	}
 	requireDisposableModelContentDatabase(t)
 	env := newTestEnv(t)
-	keys := []string{"background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"}
+	keys := []string{"background", "catalog", "footer", "form", "header", "hero", "legal-documents", "main-data", "not-found"}
 	for _, key := range keys {
 		archive := modelAcceptanceReadArchive(t, featureDir, key)
 		verified, err := sitebuilder.VerifyArchive(archive, int64(len(archive)))
@@ -45,9 +45,9 @@ func TestVitasilAllCurrentDataModelBuildsAccepted(t *testing.T) {
 	}
 }
 
-// This acceptance registers the current Vitasil catalog, detail, and homepage
-// ZIPs and verifies that all three placements consume the same Product records.
-// The homepage slider is intentionally limited to an ordered subset.
+// This acceptance registers the current Vitasil catalog and homepage ZIPs and
+// verifies that both consume the same Product records. The homepage slider is
+// intentionally limited to an ordered subset.
 func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 	featureDir := strings.TrimSpace(os.Getenv("TEST_FEATURE_DIR"))
 	if featureDir == "" {
@@ -57,7 +57,7 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 	env := newTestEnv(t)
 
 	manifests := map[string]sitebuilder.Manifest{}
-	for _, key := range []string{"catalog", "catalog-detail", "main-data"} {
+	for _, key := range []string{"catalog", "main-data"} {
 		archive := modelAcceptanceReadArchive(t, featureDir, key)
 		verified, err := sitebuilder.VerifyArchive(archive, int64(len(archive)))
 		if err != nil {
@@ -75,17 +75,14 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 	}
 
 	productPort := modelAcceptancePort(t, manifests["catalog"], "products")
-	model, productEntity, productPathIDs, productPathKeys := modelAcceptanceEntity("product", "Товар", productPort, true)
+	model, productEntity, productPathIDs, productPathKeys := modelAcceptanceEntity("product", "Товар", productPort, false)
 	entityByInput := map[string]sitebuilder.DataModelEntity{
 		"product": productEntity,
 	}
 	fieldIDsByInput := map[string]map[string]string{"product": productPathIDs}
 	fieldKeysByInput := map[string]map[string]string{"product": productPathKeys}
-	for _, key := range []string{"catalog-detail", "main-data"} {
-		portKey := "product"
-		if key == "main-data" {
-			portKey = "products"
-		}
+	for _, key := range []string{"main-data"} {
+		portKey := "products"
 		port := modelAcceptancePort(t, manifests[key], portKey)
 		modelAcceptanceAssertSameOutputShape(t, productPort, port, key+"."+portKey)
 		entityByInput[key+"."+portKey] = productEntity
@@ -113,18 +110,10 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 		InputKey: "products", EntityID: productEntity.ID,
 		Fields: modelAcceptanceFieldBindings(productPort, productPathIDs),
 	}
-	detailPort := modelAcceptancePort(t, manifests["catalog-detail"], "product")
-	detailBinding := sitebuilder.DataInputBinding{
-		InputKey: "product", EntityID: productEntity.ID,
-		Fields: modelAcceptanceFieldBindings(detailPort, productPathIDs),
-		Lookup: &sitebuilder.DataInputLookupBinding{Argument: "slug", FieldID: productPathIDs["/slug"]},
-	}
-
 	catalogArguments := map[string]sitebuilder.ArgumentBinding{
-		"title":      {Source: "literal", Value: json.RawMessage(`"Каталог"`)},
-		"action":     {Source: "literal", Value: json.RawMessage(`{"label":"Задать вопрос","to":"/contacts"}`)},
+		"title":  {Source: "literal", Value: json.RawMessage(`"Каталог"`)},
+		"action": {Source: "literal", Value: json.RawMessage(`{"label":"Задать вопрос","to":"/contacts"}`)},
 	}
-	detailArguments := map[string]sitebuilder.ArgumentBinding{"slug": {Source: "path", PathArg: "slug"}}
 	config := sitebuilder.SiteConfig{
 		FormatVersion: 3,
 		DataModel:     &model,
@@ -135,17 +124,11 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 			{ID: "catalog", Name: "Каталог", Kind: "collection-list", Placements: []sitebuilder.Placement{{
 				ID: "catalog-products", Build: sitebuilder.BuildRef{FeatureKey: "catalog", Version: manifests["catalog"].Version}, Slot: "main", Arguments: catalogArguments,
 				DataBindings: []sitebuilder.DataInputBinding{catalogBinding},
-				DetailLink:   &sitebuilder.DetailLink{RouteID: "product-detail-route", Field: "slug", PathTemplate: "/catalog/{slug}"},
-			}}},
-			{ID: "product", Name: "Товар", Kind: "detail", Placements: []sitebuilder.Placement{{
-				ID: "product-detail", Build: sitebuilder.BuildRef{FeatureKey: "catalog-detail", Version: manifests["catalog-detail"].Version}, Slot: "main", Arguments: detailArguments,
-				DataBindings: []sitebuilder.DataInputBinding{detailBinding},
 			}}},
 		},
 		RouteTree: sitebuilder.RouteTreeNode{ID: "site", Type: "site", Children: []sitebuilder.RouteTreeNode{
 			{ID: "home-route", Type: "path", Path: "/", PageID: "home"},
 			{ID: "catalog-route", Type: "path", Path: "/catalog", PageID: "catalog"},
-			{ID: "product-detail-route", Type: "path", Path: "/catalog/:slug", PageID: "product"},
 		}},
 	}
 
@@ -167,9 +150,9 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 	}
 	userToken := userBody["token"].(string)
 
-	productRecord := func(order int, slug, title string) sitebuilder.ModelContentRecord {
+	productRecord := func(order int, title string) sitebuilder.ModelContentRecord {
 		values := map[string]any{
-			productPathKeys["/slug"]: slug, productPathKeys["/title"]: title,
+			productPathKeys["/title"]:    title,
 			productPathKeys["/category"]: "Напитки", productPathKeys["/price"]: "100 ₽",
 			productPathKeys["/description"]: title + " описание",
 		}
@@ -179,7 +162,7 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 	sliderEntity := entityByInput["main-data.slider"]
 	advantagesEntity := entityByInput["main-data.advantages"]
 	initialRecords := []sitebuilder.ModelContentRecord{
-		productRecord(0, "pear", "Груша"), productRecord(1, "apple", "Яблоко"), productRecord(2, "plum", "Слива"),
+		productRecord(0, "Груша"), productRecord(1, "Яблоко"), productRecord(2, "Слива"),
 		{EntityID: infoEntity.ID, SortOrder: 0, Values: modelAcceptanceValues(fieldKeysByInput["main-data.info"], map[string]any{"/title": "Натуральная забота"})},
 		{EntityID: sliderEntity.ID, SortOrder: 0, Values: modelAcceptanceValues(fieldKeysByInput["main-data.slider"], map[string]any{
 			"/eyebrow": "Ассортимент", "/title": "Популярные продукты", "/previousLabel": "Назад", "/nextLabel": "Вперёд",
@@ -199,7 +182,7 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 		t.Fatalf("model API response omitted records: %v", firstDraft)
 	}
 	var savedRecords []sitebuilder.ModelContentRecord
-	productIDsBySlug := map[string]string{}
+	productIDsByTitle := map[string]string{}
 	var infoID, sliderID string
 	for _, raw := range workspaceRecords {
 		encoded, err := json.Marshal(raw)
@@ -213,20 +196,20 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 		savedRecords = append(savedRecords, record)
 		switch record.EntityID {
 		case productEntity.ID:
-			productIDsBySlug[fmt.Sprint(record.Values[productPathKeys["/slug"]])] = record.ID
+			productIDsByTitle[fmt.Sprint(record.Values[productPathKeys["/title"]])] = record.ID
 		case infoEntity.ID:
 			infoID = record.ID
 		case sliderEntity.ID:
 			sliderID = record.ID
 		}
 	}
-	if len(productIDsBySlug) != 3 || infoID == "" || sliderID == "" {
+	if len(productIDsByTitle) != 3 || infoID == "" || sliderID == "" {
 		t.Fatalf("model content response omitted shared Product or main-data record IDs: %v", firstDraft["records"])
 	}
 	selections := []sitebuilder.ModelContentSelection{
 		{PlacementID: "home-data", InputKey: "info", Mode: "ids", RecordIDs: []string{infoID}},
 		{PlacementID: "home-data", InputKey: "slider", Mode: "ids", RecordIDs: []string{sliderID}},
-		{PlacementID: "home-data", InputKey: "products", Mode: "ids", RecordIDs: []string{productIDsBySlug["plum"], productIDsBySlug["pear"]}},
+		{PlacementID: "home-data", InputKey: "products", Mode: "ids", RecordIDs: []string{productIDsByTitle["Слива"], productIDsByTitle["Груша"]}},
 	}
 	status, selectedDraft, _ := env.request(http.MethodPut, base, userToken, sitebuilder.ModelContentDraftInput{Revision: 1, Records: savedRecords, Selections: selections})
 	if status != http.StatusOK || selectedDraft["revision"] != float64(2) {
@@ -243,16 +226,11 @@ func TestVitasilSharedProductModelContentAcceptance(t *testing.T) {
 	catalog := modelAcceptanceRuntimePlacement(t, env, env.devServer.URL, "/catalog")
 	catalogProducts := modelAcceptanceContentList(t, catalog, "products")
 	modelAcceptanceAssertTitles(t, catalogProducts, []string{"Груша", "Яблоко", "Слива"})
-	detail := modelAcceptanceRuntimePlacement(t, env, env.devServer.URL, "/catalog/apple")
-	detailProduct := modelAcceptanceContentObject(t, detail, "product")
-	if detailProduct["slug"] != "apple" || detailProduct["title"] != "Яблоко" {
-		t.Fatalf("Vitasil detail route did not resolve the shared Product model record: %v", detailProduct)
-	}
-	if productIDsBySlug["pear"] == productIDsBySlug["apple"] || productIDsBySlug["apple"] == productIDsBySlug["plum"] {
+	if productIDsByTitle["Груша"] == productIDsByTitle["Яблоко"] || productIDsByTitle["Яблоко"] == productIDsByTitle["Слива"] {
 		t.Fatal("Vitasil catalog records must retain independent generated identities")
 	}
 	modelAcceptanceRunAdminBrowser(t, env, snapshotID)
-	t.Log("Vitasil catalog, detail, and homepage slider use one published Product entity; catalog lists all three while slider uses its ordered two-record selection")
+	t.Log("Vitasil catalog and homepage slider use one published Product entity; catalog lists all three while slider uses its ordered two-record selection")
 }
 
 func modelAcceptanceRunAdminBrowser(t *testing.T, env *testEnv, snapshotID string) {

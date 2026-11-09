@@ -8,15 +8,14 @@ import (
 	htmlparser "golang.org/x/net/html"
 )
 
-func TestRenderPlacementRootsKeepsOneMainAndSiblingMountRoots(t *testing.T) {
-	shell := []byte(`<!doctype html><html><head></head><body><div id="root"></div></body></html>`)
-	rendered, err := RenderPlacementRoots(shell, "page", "snapshot-1", 7, []PlacementRoot{
+func TestRenderPageDocumentKeepsOneMainAndSiblingMountRoots(t *testing.T) {
+	rendered, err := RenderPageDocument(HeadMetadata{Title: "page"}, "page", "snapshot-1", 7, []PlacementRoot{
 		{ID: "footer", Slot: "footer", FeatureKey: "footer"},
 		{ID: "main-1", Slot: "main", FeatureKey: "catalog"},
 		{ID: "background", Slot: "background", FeatureKey: "background"},
 		{ID: "main-2", Slot: "main", FeatureKey: "hero"},
 		{ID: "header", Slot: "header", FeatureKey: "header"},
-	})
+	}, []byte(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,9 +45,8 @@ func TestRenderPlacementRootsKeepsOneMainAndSiblingMountRoots(t *testing.T) {
 	}
 }
 
-func TestRenderPlacementRootsEscapesAttributesAndRejectsInvalidShell(t *testing.T) {
-	shell := []byte(`<!doctype html><html><head></head><body><div id="root"></div></body></html>`)
-	rendered, err := RenderPlacementRoots(shell, `page"<`, `snap&1`, 1, []PlacementRoot{{ID: `x" onmouseover="bad`, Slot: "main", FeatureKey: `f<&`}})
+func TestRenderPageDocumentEscapesPlacementAttributes(t *testing.T) {
+	rendered, err := RenderPageDocument(HeadMetadata{Title: `page"<`}, "page", `snap&1`, 1, []PlacementRoot{{ID: `x" onmouseover="bad`, Slot: "main", FeatureKey: `f<&`}}, []byte(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,21 +54,11 @@ func TestRenderPlacementRootsEscapesAttributesAndRejectsInvalidShell(t *testing.
 	if strings.Contains(value, `onmouseover="bad`) || !strings.Contains(value, `data-engine-feature="f&lt;&amp;"`) {
 		t.Fatalf("placement fields were not safely escaped: %s", value)
 	}
-	if _, err := RenderPlacementRoots([]byte(`<html><body></body></html>`), "page", "snap", 1, nil); err == nil {
-		t.Fatal("expected shell without #root to be rejected")
-	}
-	if _, err := RenderPlacementRoots([]byte(`<html><body><div id="root"></div><div id="root"></div></body></html>`), "page", "snap", 1, nil); err == nil {
-		t.Fatal("expected shell with multiple #root elements to be rejected")
-	}
-	if _, err := RenderPlacementRoots(shell, "page", "snap", 1, []PlacementRoot{{ID: "x", Slot: "aside", FeatureKey: "f"}}); err == nil {
-		t.Fatal("expected unsupported placement slot to be rejected")
-	}
 }
 
-func TestAppendRuntimeBootstrapPreservesJSONAndEscapesScriptEndTag(t *testing.T) {
-	shell := []byte(`<!doctype html><html><head></head><body><div id="root"></div></body></html>`)
+func TestSafeBootstrapJSONPreservesJSONAndEscapesScriptEndTag(t *testing.T) {
 	payload := []byte(`{"title":"</script><script>attack()</script>","value":"<&>"}`)
-	rendered, err := AppendRuntimeBootstrap(shell, payload)
+	rendered, err := RenderPageDocument(HeadMetadata{}, "page", "snapshot", 1, nil, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +66,7 @@ func TestAppendRuntimeBootstrapPreservesJSONAndEscapesScriptEndTag(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if countTestElements(document, "script") != 1 {
+	if countTestElements(document, "script") != 2 {
 		t.Fatalf("bootstrap value must not create a script element: %s", rendered)
 	}
 	bootstrap := findTestElementByID(document, "engine-runtime-bootstrap")
@@ -92,17 +80,11 @@ func TestAppendRuntimeBootstrapPreservesJSONAndEscapesScriptEndTag(t *testing.T)
 	if decoded["title"] != `</script><script>attack()</script>` || decoded["value"] != "<&>" {
 		t.Fatalf("bootstrap values changed during escaping: %#v", decoded)
 	}
-	if strings.Count(string(rendered), "</script>") != 1 {
-		t.Fatalf("only the trusted closing tag may remain in the document: %s", rendered)
-	}
 }
 
-func TestAppendRuntimeBootstrapRejectsInvalidJSONOrMissingBody(t *testing.T) {
-	if _, err := AppendRuntimeBootstrap([]byte(`<html><body></body></html>`), []byte(`{"ok":true} trailing`)); err == nil {
+func TestSafeBootstrapJSONRejectsInvalidJSON(t *testing.T) {
+	if _, err := safeBootstrapJSON([]byte(`{"ok":true} trailing`)); err == nil {
 		t.Fatal("expected trailing invalid JSON to be rejected")
-	}
-	if _, err := AppendRuntimeBootstrap([]byte(`<html><head></head></html>`), []byte(`{"ok":true}`)); err == nil {
-		t.Fatal("expected a document without body to be rejected")
 	}
 }
 

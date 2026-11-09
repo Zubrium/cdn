@@ -186,6 +186,18 @@ try {
     throw new Error("navigation status mismatch");
   }
   stage("navigation");
+  // Live visits defer feature modules whose placement roots are outside the
+  // first viewport. During a Chromium render pass, traverse every root so the
+  // captured HTML still contains fully rendered placements before readiness is
+  // accepted and cached.
+  await page.evaluate(async () => {
+    const roots = [...document.querySelectorAll("[data-engine-placement]")];
+    for (const root of roots) {
+      root.scrollIntoView({ block: "center", inline: "nearest" });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    window.scrollTo(0, 0);
+  });
   const safetyMarginMs = Math.min(1500, Math.max(250, Math.floor(input.timeoutMs * 0.1)));
   const readinessTimeoutMs = input.timeoutMs - (Date.now() - workerStartedAt) - safetyMarginMs;
   const readinessStartedAt = Date.now();
@@ -331,10 +343,12 @@ try {
       // one copy in the serialized document. If prerendering fails, the server
       // response retains its readable static fallback.
       document.getElementById("engine-static-feature-fallback")?.remove();
-      root.id = "prerender-root";
+      // Keep the populated document tree under #root in the serialized
+      // response. The runtime renames it only after JS starts so no-JS clients
+      // and crawlers retain the canonical root and server-rendered markup.
       root.querySelectorAll("form").forEach((form) => { form.setAttribute("inert", ""); });
       const live = document.createElement("div");
-      live.id = "root";
+      live.id = "engine-live-root";
       live.hidden = true;
       root.after(live);
       document.documentElement.removeAttribute("data-engine-ready");

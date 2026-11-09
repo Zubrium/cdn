@@ -268,7 +268,11 @@ func NewPublicRouter(d Deps, env environment.Environment) http.Handler {
 	// handler is intentionally not part of this runtime path.
 	if d.SiteSnapshots != nil {
 		resolver := publicruntime.DocumentResolver(func(ctx context.Context, requestPath, rawQuery string) (publicruntime.Document, error) {
-			return d.SiteSnapshots.PageDocument(ctx, env, requestPath, rawQuery, indexable)
+			document, err := d.SiteSnapshots.PageDocument(ctx, env, requestPath, rawQuery, indexable)
+			if err != nil && d.Log != nil {
+				d.Log.Error("public_document_resolution_failed", "branch_id", env.String(), "path", requestPath, "error", err)
+			}
+			return document, err
 		})
 		mux.Handle("/", publicruntime.DocumentHandler(d.S3PublicBaseURL, resolver, d.Prerender[env], d.RuntimeAssetCacheTTL))
 	} else {

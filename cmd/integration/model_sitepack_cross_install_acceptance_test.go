@@ -71,7 +71,7 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 	}
 	archives := map[string][]byte{}
 	manifests := map[string]sitebuilder.Manifest{}
-	for _, key := range []string{"catalog", "catalog-detail", "main-data"} {
+	for _, key := range []string{"catalog", "main-data"} {
 		archive := modelAcceptanceReadArchive(t, featureDir, key)
 		verified, err := sitebuilder.VerifyArchive(archive, int64(len(archive)))
 		if err != nil {
@@ -93,7 +93,7 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 	sourceRenditionMedia := featuremedia.NewServiceWithProcessor(featuremedia.NewRepository(source.pool), source.store, 20<<20, &sitepackCrossInstallRenditionProcessor{})
 	configureMediaRenditionWorker(t, sourceRenditionMedia)
 	source.snapshots.SetMediaService(sourceRenditionMedia)
-	for _, key := range []string{"catalog", "catalog-detail", "main-data"} {
+	for _, key := range []string{"catalog", "main-data"} {
 		status, body, _ := source.rawRequest(http.MethodPost, "/api/v2/admin/feature-builds", source.adminToken, bytes.NewReader(archives[key]), "application/zip")
 		if status != http.StatusCreated && status != http.StatusOK {
 			t.Fatalf("register Vitasil source build %s@%s: status=%d body=%v", key, manifests[key].Version, status, body)
@@ -162,7 +162,7 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 		if childRecords[i].EntityID != ids["entity.product"] {
 			continue
 		}
-		if childRecords[i].Values[pathKeys["product:/slug"]] == "pear" {
+		if childRecords[i].Values[pathKeys["product:/title"]] == "Груша" {
 			childRecords[i].Values[pathKeys["product:/title"]] = "Груша: черновик ребёнка"
 			childRecords[i].Values[pathKeys["product:/imageSrc"]] = privateFile.ID.String()
 		}
@@ -505,11 +505,9 @@ func sitepackCrossInstallOptions(t *testing.T) sitebuilder.SitepackOptions {
 func sitepackCrossInstallVitasilConfig(t *testing.T, manifests map[string]sitebuilder.Manifest) (sitebuilder.DataModel, map[string]any, map[string]string, map[string]string) {
 	t.Helper()
 	catalog := modelAcceptancePort(t, manifests["catalog"], "products")
-	detail := modelAcceptancePort(t, manifests["catalog-detail"], "product")
 	mainProducts := modelAcceptancePort(t, manifests["main-data"], "products")
-	modelAcceptanceAssertSameOutputShape(t, catalog, detail, "catalog-detail.product")
 	modelAcceptanceAssertSameOutputShape(t, catalog, mainProducts, "main-data.products")
-	model, product, productIDs, productKeys := modelAcceptanceEntity("product", "Товар", catalog, true)
+	model, product, productIDs, productKeys := modelAcceptanceEntity("product", "Товар", catalog, false)
 	entityIDs := map[string]string{"entity.product": product.ID}
 	ids := map[string]string{"entity.product": product.ID}
 	pathKeys := map[string]string{}
@@ -560,23 +558,18 @@ func sitepackCrossInstallVitasilConfig(t *testing.T, manifests map[string]sitebu
 		}
 	}
 	catalogBinding := bindingsFor(catalog, product.ID, productIDs)
-	detailBinding := bindingsFor(detail, product.ID, productIDs)
-	detailBinding.Lookup = &sitebuilder.DataInputLookupBinding{Argument: "slug", FieldID: productIDs["/slug"]}
 	configValue := sitebuilder.SiteConfig{
 		FormatVersion: 3, DataModel: &model,
 		Pages: []sitebuilder.Page{
 			{ID: "home", Name: "Главная", Kind: "page", Placements: []sitebuilder.Placement{{ID: "home-data", Build: sitebuilder.BuildRef{FeatureKey: "main-data", Version: manifests["main-data"].Version}, Slot: "main", DataBindings: mainBindings}}},
 			{ID: "catalog", Name: "Каталог", Kind: "collection-list", Placements: []sitebuilder.Placement{{ID: "catalog-products", Build: sitebuilder.BuildRef{FeatureKey: "catalog", Version: manifests["catalog"].Version}, Slot: "main", Arguments: map[string]sitebuilder.ArgumentBinding{
-				"title":      {Source: "literal", Value: json.RawMessage(`"Каталог"`)},
-				"breadcrumb": {Source: "literal", Value: json.RawMessage(`{"homeLabel":"Главная","currentLabel":"Каталог"}`)},
-				"action":     {Source: "literal", Value: json.RawMessage(`{"label":"Задать вопрос","to":"/contacts"}`)},
-			}, DataBindings: []sitebuilder.DataInputBinding{catalogBinding}, DetailLink: &sitebuilder.DetailLink{RouteID: "product-detail-route", Field: "slug", PathTemplate: "/catalog/{slug}"}}}},
-			{ID: "product", Name: "Товар", Kind: "detail", Placements: []sitebuilder.Placement{{ID: "product-detail", Build: sitebuilder.BuildRef{FeatureKey: "catalog-detail", Version: manifests["catalog-detail"].Version}, Slot: "main", Arguments: map[string]sitebuilder.ArgumentBinding{"slug": {Source: "path", PathArg: "slug"}}, DataBindings: []sitebuilder.DataInputBinding{detailBinding}}}},
+				"title":  {Source: "literal", Value: json.RawMessage(`"Каталог"`)},
+				"action": {Source: "literal", Value: json.RawMessage(`{"label":"Задать вопрос","to":"/contacts"}`)},
+			}, DataBindings: []sitebuilder.DataInputBinding{catalogBinding}}}},
 		},
 		RouteTree: sitebuilder.RouteTreeNode{ID: "site", Type: "site", Children: []sitebuilder.RouteTreeNode{
 			{ID: "home-route", Type: "path", Path: "/", PageID: "home"},
 			{ID: "catalog-route", Type: "path", Path: "/catalog", PageID: "catalog"},
-			{ID: "product-detail-route", Type: "path", Path: "/catalog/:slug", PageID: "product"},
 		}},
 	}
 	raw, err := json.Marshal(configValue)
@@ -592,8 +585,8 @@ func sitepackCrossInstallVitasilConfig(t *testing.T, manifests map[string]sitebu
 
 func sitepackCrossInstallInitialRecords(ids, pathKeys map[string]string, publicID string) []sitebuilder.ModelContentRecord {
 	return []sitebuilder.ModelContentRecord{
-		{EntityID: ids["entity.product"], SortOrder: 0, Values: modelAcceptanceValues(sitepackCrossInstallProductKeys(pathKeys), map[string]any{"/slug": "pear", "/title": "Груша", "/category": "Фрукты", "/price": "100 ₽", "/imageSrc": publicID, "/description": "Спелая груша"})},
-		{EntityID: ids["entity.product"], SortOrder: 1, Values: modelAcceptanceValues(sitepackCrossInstallProductKeys(pathKeys), map[string]any{"/slug": "apple", "/title": "Яблоко", "/category": "Фрукты", "/price": "90 ₽", "/imageSrc": publicID, "/description": "Сочное яблоко"})},
+		{EntityID: ids["entity.product"], SortOrder: 0, Values: modelAcceptanceValues(sitepackCrossInstallProductKeys(pathKeys), map[string]any{"/title": "Груша", "/category": "Фрукты", "/price": "100 ₽", "/imageSrc": publicID, "/description": "Спелая груша"})},
+		{EntityID: ids["entity.product"], SortOrder: 1, Values: modelAcceptanceValues(sitepackCrossInstallProductKeys(pathKeys), map[string]any{"/title": "Яблоко", "/category": "Фрукты", "/price": "90 ₽", "/imageSrc": publicID, "/description": "Сочное яблоко"})},
 		{EntityID: ids["entity.category"], SortOrder: 0, Values: map[string]any{"name": "Фрукты"}},
 		{EntityID: ids["entity.info"], SortOrder: 0, Values: modelAcceptanceValues(sitepackCrossInstallPortKeys(pathKeys, "info"), map[string]any{"/title": "Натуральная забота"})},
 		{EntityID: ids["entity.advantages"], SortOrder: 0, Values: modelAcceptanceValues(sitepackCrossInstallPortKeys(pathKeys, "advantages"), map[string]any{"/icon": "quality", "/title": "Качество", "/description": "Натуральные ингредиенты"})},
@@ -653,8 +646,13 @@ func sitepackCrossInstallRecordIDs(t *testing.T, records []sitebuilder.ModelCont
 	category := ""
 	for _, record := range records {
 		if record.EntityID == ids["entity.product"] {
-			slug := fmt.Sprint(record.Values[pathKeys["product:/slug"]])
-			result["product:"+slug] = record.ID
+			title := fmt.Sprint(record.Values[pathKeys["product:/title"]])
+			switch {
+			case strings.HasPrefix(title, "Груша"):
+				result["product:pear"] = record.ID
+			case strings.HasPrefix(title, "Яблоко"):
+				result["product:apple"] = record.ID
+			}
 		}
 		if record.EntityID == ids["entity.category"] {
 			category = record.ID
@@ -1106,7 +1104,7 @@ func sitepackCrossInstallAssertRecords(t *testing.T, source, target []sitebuilde
 		field := ""
 		switch entityKey {
 		case "product":
-			field = pathKeys["product:/slug"]
+			field = pathKeys["product:/title"]
 		case "category":
 			field = "name"
 		case "main_data_info":
@@ -1119,7 +1117,16 @@ func sitepackCrossInstallAssertRecords(t *testing.T, source, target []sitebuilde
 		if field == "" {
 			return ""
 		}
-		return entityKey + ":" + fmt.Sprint(record.Values[field])
+		value := fmt.Sprint(record.Values[field])
+		if entityKey == "product" {
+			switch {
+			case strings.HasPrefix(value, "Груша"):
+				value = "pear"
+			case strings.HasPrefix(value, "Яблоко"):
+				value = "apple"
+			}
+		}
+		return entityKey + ":" + value
 	}
 	byKey := map[string]sitebuilder.ModelContentRecord{}
 	for _, record := range target {

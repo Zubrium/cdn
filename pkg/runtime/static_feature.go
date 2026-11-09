@@ -27,20 +27,12 @@ type StaticHTMLFeature struct {
 // RenderStaticHTMLFallback puts the verified static fragment directly into
 // its existing neutral placement root and includes immutable styles in the
 // document head. The same roots are used with and without JavaScript.
-func RenderStaticHTMLFallback(shell []byte, snapshotID string, contentRevision int64, pageKind string, sharedStyleURLs []string, features []StaticHTMLFeature) ([]byte, error) {
+func RenderStaticHTMLFallback(shell []byte, sharedStyleURLs []string, features []StaticHTMLFeature) ([]byte, error) {
 	if len(features) == 0 {
 		return shell, nil
 	}
 	if !hasRenderedPlacementRoots(shell) {
-		roots := make([]PlacementRoot, 0, len(features))
-		for _, feature := range features {
-			roots = append(roots, PlacementRoot{ID: feature.PlacementID, Slot: feature.Slot, FeatureKey: feature.FeatureKey})
-		}
-		var err error
-		shell, err = RenderPlacementRoots(shell, pageKind, snapshotID, contentRevision, roots)
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("static HTML fallback requires template-rendered placement roots")
 	}
 	document, err := htmlparser.Parse(bytes.NewReader(shell))
 	if err != nil {

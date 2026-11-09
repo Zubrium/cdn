@@ -6,8 +6,8 @@ import (
 )
 
 func TestRenderStaticHTMLFallback(t *testing.T) {
-	shell := []byte(`<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="/assets/runtime.js"></script></body></html>`)
-	rendered, err := RenderStaticHTMLFallback(shell, "snapshot-1", 7, "page", []string{"/theme.css"}, []StaticHTMLFeature{{
+	shell := staticHTMLTestDocument(t, "snapshot-1", 7, []PlacementRoot{{ID: "card-1", Slot: "main", FeatureKey: "catalog-card"}})
+	rendered, err := RenderStaticHTMLFallback(shell, []string{"/theme.css"}, []StaticHTMLFeature{{
 		FeatureKey: "catalog-card", PlacementID: "card-1", Slot: "main", Digest: strings.Repeat("a", 64), Entry: "dist/card.html",
 		HTML:      `<article><img src="./images/card.png" srcset="./images/card.png 1x, ./images/card@2x.png 2x" alt="Card"><h2>Static card</h2></article>`,
 		StyleURLs: []string{"/feature.css", "/theme.css"},
@@ -42,8 +42,11 @@ func TestRenderStaticHTMLFallback(t *testing.T) {
 func TestRenderStaticHTMLFallbackGroupsSiblingPlacementsBySlot(t *testing.T) {
 	const digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	rendered, err := RenderStaticHTMLFallback(
-		[]byte(`<!doctype html><html><head></head><body><div id="root"></div></body></html>`),
-		"snapshot", 1, "page", nil,
+		staticHTMLTestDocument(t, "snapshot", 1, []PlacementRoot{
+			{ID: "first", Slot: "main", FeatureKey: "first"},
+			{ID: "second", Slot: "main", FeatureKey: "second"},
+			{ID: "header", Slot: "header", FeatureKey: "site-header"},
+		}), nil,
 		[]StaticHTMLFeature{
 			{FeatureKey: "first", PlacementID: "first", Slot: "main", Digest: digest, Entry: "first.html", HTML: `<article>First</article>`},
 			{FeatureKey: "second", PlacementID: "second", Slot: "main", Digest: digest, Entry: "second.html", HTML: `<section>Second</section>`},
@@ -75,8 +78,7 @@ func TestRenderStaticHTMLFallbackGroupsSiblingPlacementsBySlot(t *testing.T) {
 
 func TestRenderStaticHTMLFallbackKeepsMainLandmarkOnChromeOnlyPage(t *testing.T) {
 	rendered, err := RenderStaticHTMLFallback(
-		[]byte(`<!doctype html><html><head></head><body><div id="root"></div></body></html>`),
-		"snapshot", 1, "page", nil,
+		staticHTMLTestDocument(t, "snapshot", 1, []PlacementRoot{{ID: "legal-footer", Slot: "footer", FeatureKey: "legal-documents"}}), nil,
 		[]StaticHTMLFeature{{FeatureKey: "legal-documents", PlacementID: "legal-footer", Slot: "footer", Digest: strings.Repeat("a", 64), Entry: "footer.html", HTML: `<footer>Legal links</footer>`}},
 	)
 	if err != nil {
@@ -95,10 +97,20 @@ func TestRenderStaticHTMLFallbackKeepsMainLandmarkOnChromeOnlyPage(t *testing.T)
 }
 
 func TestRenderStaticHTMLFallbackRejectsResourceEscapes(t *testing.T) {
-	_, err := RenderStaticHTMLFallback([]byte(`<!doctype html><html><head></head><body><div id="root"></div></body></html>`), "snapshot", 1, "page", nil, []StaticHTMLFeature{{
+	shell := staticHTMLTestDocument(t, "snapshot", 1, []PlacementRoot{{ID: "card-1", Slot: "main", FeatureKey: "catalog-card"}})
+	_, err := RenderStaticHTMLFallback(shell, nil, []StaticHTMLFeature{{
 		FeatureKey: "catalog-card", PlacementID: "card-1", Slot: "main", Digest: strings.Repeat("a", 64), Entry: "dist/card.html", HTML: `<img src="../../outside.png">`,
 	}})
 	if err == nil {
 		t.Fatal("expected a path escaping the feature entry directory to be rejected")
 	}
+}
+
+func staticHTMLTestDocument(t *testing.T, snapshot string, revision int64, roots []PlacementRoot) []byte {
+	t.Helper()
+	document, err := RenderPageDocument(HeadMetadata{Title: "test"}, "page", snapshot, revision, roots, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
 }

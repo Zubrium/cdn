@@ -16,6 +16,8 @@ export function mountRuntime(root: HTMLElement): () => void {
   const bootstrap = readRuntimeBootstrap();
   const mounted = new Map<string, MountedFeature>();
   const pendingMounts = new Map<string, { run: number; controller: AbortController; promise: Promise<MountedFeature> }>();
+  const deferredPlacementIds = new Set<string>();
+  let deferredObserver: IntersectionObserver | null = null;
   let composition: Composition | null = null;
   let path = window.location.pathname || "/";
   let search = window.location.search.slice(1);
@@ -23,6 +25,9 @@ export function mountRuntime(root: HTMLElement): () => void {
   let disposed = false;
 
   const unmountAll = () => {
+    deferredObserver?.disconnect();
+    deferredObserver = null;
+    deferredPlacementIds.clear();
     for (const pending of pendingMounts.values()) pending.controller.abort();
     pendingMounts.clear();
     for (const item of mounted.values()) {
@@ -35,6 +40,8 @@ export function mountRuntime(root: HTMLElement): () => void {
   const updateReady = (run: number) => {
     const allReady = composition !== null
       && mounted.size === composition.placements.length
+      && deferredPlacementIds.size === 0
+      && pendingMounts.size === 0
       && [...mounted.values()].every((item) => item.ready && !item.failed)
       && !root.querySelector(".runtime-loading, .runtime-feature-error");
     markDocumentReady(root, run, () => generation, allReady);
@@ -48,10 +55,35 @@ export function mountRuntime(root: HTMLElement): () => void {
     document.getElementById("prerender-root")?.remove();
   };
 
-  const renderComposition = async (next: Composition, expectedGeneration?: number) => {
+  const startPlacement = async (
+    placement: Composition["placements"][number],
+    placementRoot: HTMLDivElement,
+    run: number,
+    route: ReturnType<typeof routeFor>,
+    systemAssets: Composition["systemAssets"],
+  ) => {
+    const controller = new AbortController();
+    const promise = mountPlacement(placement, placementRoot, controller, route, systemAssets, (error) => reportError(run, error));
+    const request = { run, controller, promise };
+    pendingMounts.set(placement.id, request);
+    const item = await promise;
+    if (pendingMounts.get(placement.id) === request) pendingMounts.delete(placement.id);
+    if (run !== generation || disposed) {
+      item.controller.abort();
+      await Promise.resolve(item.instance?.unmount()).catch(() => undefined);
+      return;
+    }
+    mounted.set(placement.id, item);
+    updateReady(run);
+  };
+
+  const renderComposition = async (next: Composition, expectedGeneration?: number, deferOffscreen = false) => {
     if (disposed) return;
     const run = expectedGeneration ?? generation + 1;
     generation = run;
+    deferredObserver?.disconnect();
+    deferredObserver = null;
+    deferredPlacementIds.clear();
     for (const pending of pendingMounts.values()) pending.controller.abort();
     pendingMounts.clear();
     composition = next;
@@ -76,7 +108,10 @@ export function mountRuntime(root: HTMLElement): () => void {
       mounted.delete(id);
     }
     const route = routeFor(path, search, next);
-    const tasks = next.placements.map(async (placement) => {
+    const deferredRoots = new Map<string, { placement: Composition["placements"][number]; root: HTMLDivElement }>();
+    const eagerTasks: Promise<void>[] = [];
+    const canDeferOffscreen = deferOffscreen && typeof IntersectionObserver !== "undefined";
+    for (const placement of next.placements) {
       const placementRoot = roots.get(placement.id)!;
       configurePlacementRoot(placementRoot, placement);
       const identity = identityFor(placement);
@@ -88,24 +123,43 @@ export function mountRuntime(root: HTMLElement): () => void {
       }
       const current = mounted.get(placement.id);
       if (current) {
-        await updatePlacement(current, placement, route, next.systemAssets, (error) => reportError(run, error));
-        return;
+        eagerTasks.push(updatePlacement(current, placement, route, next.systemAssets, (error) => reportError(run, error)));
+        continue;
       }
-      const controller = new AbortController();
-      const promise = mountPlacement(placement, placementRoot, controller, route, next.systemAssets, (error) => reportError(run, error));
-      const request = { run, controller, promise };
-      pendingMounts.set(placement.id, request);
-      const item = await promise;
-      if (pendingMounts.get(placement.id) === request) pendingMounts.delete(placement.id);
-      if (run !== generation || disposed) {
-        item.controller.abort();
-        await Promise.resolve(item.instance?.unmount()).catch(() => undefined);
-        return;
+      const bounds = placementRoot.getBoundingClientRect();
+      const isNearViewport = bounds.bottom > -250 && bounds.top < window.innerHeight + 250;
+      if (canDeferOffscreen && !isNearViewport) {
+        deferredPlacementIds.add(placement.id);
+        deferredRoots.set(placement.id, { placement, root: placementRoot });
+        continue;
       }
-      mounted.set(placement.id, item);
-    });
-    await Promise.all(tasks);
-    updateReady(run);
+      eagerTasks.push(startPlacement(placement, placementRoot, run, route, next.systemAssets));
+    }
+    await Promise.all(eagerTasks);
+    if (run !== generation || disposed) return;
+    if (deferredRoots.size > 0) {
+      deferredObserver = new IntersectionObserver((entries) => {
+        if (run !== generation || disposed) return;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const id = (entry.target as HTMLElement).dataset.enginePlacement;
+          if (!id) continue;
+          const deferred = deferredRoots.get(id);
+          if (!deferred) continue;
+          deferredRoots.delete(id);
+          deferredPlacementIds.delete(id);
+          deferredObserver?.unobserve(entry.target);
+          void startPlacement(deferred.placement, deferred.root, run, route, next.systemAssets);
+        }
+      }, { rootMargin: "250px 0px" });
+      for (const { root: placementRoot } of deferredRoots.values()) deferredObserver.observe(placementRoot);
+    }
+    const allReady = mounted.size === next.placements.length
+      && deferredPlacementIds.size === 0
+      && pendingMounts.size === 0
+      && [...mounted.values()].every((item) => item.ready && !item.failed)
+      && !root.querySelector(".runtime-loading, .runtime-feature-error");
+    markDocumentReady(root, run, () => generation, allReady, deferOffscreen);
   };
 
   const loadRoute = async () => {
@@ -170,7 +224,7 @@ export function mountRuntime(root: HTMLElement): () => void {
         await new Promise<void>((resolve) => {
           window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
         });
-        if (!disposed && generation === initialGeneration) return renderComposition(bootstrap.composition!);
+        if (!disposed && generation === initialGeneration) return renderComposition(bootstrap.composition!, undefined, true);
       })
       .catch((error: unknown) => {
         if (disposed || generation !== initialGeneration) return;

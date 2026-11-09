@@ -16,10 +16,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     {{template "engineMetadata" .Metadata}}
-    <link rel="stylesheet" href="{{.StylesheetURL}}" />
+    {{if .ShellCSS}}<style>{{.ShellCSS}}</style>{{else if .StylesheetURL}}<link rel="stylesheet" href="{{.StylesheetURL}}" />{{end}}
 </head>
 <body>
-    <div id="root"></div>
+    {{template "pageRoot" .Groups}}
+    {{template "runtimeBootstrap" .Bootstrap}}
     <script type="module" src="{{.ScriptURL}}"></script>
 </body>
 </html>{{end}}

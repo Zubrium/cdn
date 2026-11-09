@@ -501,7 +501,7 @@
 - [ ] Сохранить no-JS fallback и один DOM tree, проверить static HTML safety/assets и не допускать второго `<main>` в feature markup.
 - [ ] Сохранить существующую реализацию и визуальное поведение Vitasil; адаптировать только сборку/экспорт фич для уже поддерживаемых ABI без введения новой версии ABI и без массовой переписи feature UI. Пересобрать актуальные ZIP и проверить их на disposable Engine, не записывая в рабочую Vitasil.
 - [ ] После implementation sweep запустить Go/frontend checks и disposable Chromium acceptance для всех ABI, page/root structure, формы, media, route/history, ошибок и prerender/cache miss/hit.
-- [ ] Достичь Lighthouse Performance median 100 на пяти warm runs для главной, каталога и detail на mobile и desktop; cold miss измерить отдельно. Не закрывать требование по baseline 99.
+- [ ] Достичь Lighthouse Performance median 100 на пяти warm runs для главной, каталога и формы на mobile и desktop; cold miss измерить отдельно. В актуальной Vitasil product detail page удалена, `/catalog/probif` должен возвращать 404. Не закрывать требование по baseline 99.
 
 Baseline 9 ноября: пять warm runs дали median 100 для home mobile/desktop, catalog desktop и detail mobile/desktop; catalog mobile — 99 из-за FCP/LCP (1.4/1.8 s). Cold scores: 99, 99, 99, 100, 99, 100. Отчёты/трассы и причина сохранены в [QA_REPORT.md](QA_REPORT.md). Добавлено inlining собранного base CSS и 100/100 median gate для каждого Lighthouse route/device/cache state; повторная матрица ещё не запускалась.
 

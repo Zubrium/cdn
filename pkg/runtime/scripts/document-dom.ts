@@ -143,10 +143,10 @@ export function renderState(root: HTMLElement, title: string, detail: string, re
   root.append(main);
 }
 
-export function markDocumentReady(root: HTMLElement, generation: number, currentGeneration: () => number, allReady: boolean) {
+export function markDocumentReady(root: HTMLElement, generation: number, currentGeneration: () => number, allReady: boolean, reveal = false) {
   if (generation !== currentGeneration()) return;
   document.documentElement.dataset.engineReady = String(allReady);
-  if (allReady) {
+  if (allReady || reveal) {
     root.hidden = false;
     document.getElementById("prerender-root")?.remove();
   }

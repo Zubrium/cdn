@@ -351,7 +351,7 @@ func TestExternalBackendBindingsVitasilArchiveCompatibility(t *testing.T) {
 	if featureDir == "" {
 		t.Skip("set TEST_FEATURE_DIR to the current Vitasil frontend/dist/feature-builds directory")
 	}
-	keys := []string{"background", "catalog", "catalog-detail", "footer", "form", "header", "hero", "main-data", "not-found"}
+	keys := []string{"background", "catalog", "footer", "form", "header", "hero", "legal-documents", "main-data", "not-found"}
 	for _, key := range keys {
 		t.Run(key, func(t *testing.T) {
 			archive, version := readExternalFeatureArchive(t, featureDir, key)

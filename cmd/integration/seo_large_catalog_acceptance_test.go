@@ -27,6 +27,9 @@ func TestVitasilPageIndexLargeCatalogAcceptance(t *testing.T) {
 	if featureDir == "" {
 		t.Fatal("TEST_FEATURE_DIR must point to current Vitasil v2 ZIPs")
 	}
+	if !externalFeatureArchiveExists(t, featureDir, "catalog-detail") {
+		t.Skip("current Vitasil has no product detail route to enumerate in the sitemap")
+	}
 	const recordCount = 50_000
 	env := newTestEnv(t)
 	manifests := make(map[string]sitebuilder.Manifest, 2)
@@ -55,8 +58,8 @@ func TestVitasilPageIndexLargeCatalogAcceptance(t *testing.T) {
 	catalogPlacement := sitebuilder.Placement{
 		ID: "large-catalog", Build: sitebuilder.BuildRef{FeatureKey: "catalog", Version: versions["catalog"]}, Slot: "main",
 		Arguments: map[string]sitebuilder.ArgumentBinding{
-			"title":      {Source: "literal", Value: json.RawMessage(`"Performance catalog"`)},
-			"action":     {Source: "literal", Value: json.RawMessage(`{"label":"Contact","to":"/contact"}`)},
+			"title":  {Source: "literal", Value: json.RawMessage(`"Performance catalog"`)},
+			"action": {Source: "literal", Value: json.RawMessage(`{"label":"Contact","to":"/contact"}`)},
 		},
 		DataBindings: []sitebuilder.DataInputBinding{{InputKey: catalogPort.Key, EntityID: product.ID, Fields: modelAcceptanceFieldBindings(catalogPort, fieldIDs)}},
 		DetailLink:   &sitebuilder.DetailLink{RouteID: "large-product-detail-route", Field: "slug", PathTemplate: "/catalog/{slug}"},

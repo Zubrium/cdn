@@ -1,5 +1,8 @@
 .git
 .gitignore
+.agents
+.codex
+.codegraph
 **/node_modules
 .pnpm-store
 **/.vite
@@ -7,3 +10,8 @@
 *.log
 .env
 .DS_Store
+.playwright-cli
+.playwright-mcp
+/artifacts
+/docs-site
+/output

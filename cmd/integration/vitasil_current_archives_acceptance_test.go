@@ -237,11 +237,33 @@ try {
   await noJs.goto(url, { waitUntil: "domcontentloaded" });
   if (await noJs.getByRole("heading", { level: 1, name: "ИССИТ" }).count() !== 1) throw new Error("no-JS page omitted the current Vitasil hero heading");
   const noJsAction = noJs.getByRole("link", { name: "Открыть каталог" });
-  if (await noJsAction.count() !== 1) throw new Error("no-JS page omitted the CTA link");
+  if (await noJsAction.count() !== 1) {
+    const state = await noJs.evaluate(() => ({
+      hero: document.querySelector('[data-engine-feature="hero"]')?.innerHTML || "",
+      root: document.getElementById("root")?.innerHTML.slice(0, 12000) || "",
+    }));
+    throw new Error("no-JS page omitted the CTA link: " + JSON.stringify(state));
+  }
   await noJsAction.waitFor({ state: "visible" });
   const noJsActionBox = await noJsAction.boundingBox();
   if (!noJsActionBox || noJsActionBox.y < 0 || noJsActionBox.y + noJsActionBox.height > 845 || await noJsAction.getAttribute("href") !== "/catalog") throw new Error("no-JS CTA is not fully visible or usable: " + JSON.stringify(noJsActionBox));
   if (await noJs.getByRole("navigation", { name: "Основная навигация" }).count() !== 1) throw new Error("no-JS page omitted the labeled navigation");
+  const noJsStructure = await noJs.evaluate(() => {
+    const root = document.getElementById("root");
+    const main = root?.querySelector(":scope > main");
+    const placements = [...document.querySelectorAll("[data-engine-placement]")];
+    return {
+      rootCount: document.querySelectorAll("#root").length,
+      rootHasSnapshot: Boolean(root?.hasAttribute("data-snapshot")),
+      liveMountHidden: document.getElementById("engine-live-root")?.hidden === true,
+      prerenderRootCount: document.querySelectorAll("#prerender-root").length,
+      mainCount: document.querySelectorAll("main").length,
+      placementsUnderRoot: placements.every((placement) => placement.parentElement === (placement.getAttribute("data-engine-slot") === "main" ? main : root)),
+    };
+  });
+  if (noJsStructure.rootCount !== 1 || !noJsStructure.rootHasSnapshot || !noJsStructure.liveMountHidden || noJsStructure.prerenderRootCount !== 0 || noJsStructure.mainCount !== 1 || !noJsStructure.placementsUnderRoot) {
+    throw new Error("no-JS response does not preserve the populated canonical #root: " + JSON.stringify(noJsStructure));
+  }
   await noJs.close();
 } finally { await browser.close(); }`
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

@@ -181,10 +181,13 @@ func TestPrerenderWorkerRendersAndRejectsSideEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"Published content", `id="prerender-root"`, `id="root" hidden=""`, `inert=""`} {
+	for _, text := range []string{"Published content", `id="root"`, `id="engine-live-root" hidden=""`, `inert=""`} {
 		if !strings.Contains(string(output), text) {
 			t.Fatalf("missing %q: %s", text, output)
 		}
+	}
+	if strings.Contains(string(output), `id="prerender-root"`) {
+		t.Fatalf("the HTTP document must keep prerendered content under #root until JavaScript starts: %s", output)
 	}
 	// A current snapshot/content identity is required; an old render cannot be
 	// cached as though it described the next publication.

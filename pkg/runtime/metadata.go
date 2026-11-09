@@ -3,10 +3,12 @@ package runtime
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	htmltemplate "html/template"
+	"io"
 	"io/fs"
-	"regexp"
 	"strings"
 	"sync"
 )
@@ -20,8 +22,7 @@ var (
 	runtimeTemplatesErr  error
 )
 
-// HeadMetadata is the small public metadata contract shared with the page
-// composer. Values are escaped before being written into the HTML document.
+// HeadMetadata is the public metadata rendered into the server document.
 type HeadMetadata struct {
 	Title         string `json:"title"`
 	Description   string `json:"description,omitempty"`
@@ -34,6 +35,16 @@ type HeadMetadata struct {
 	Language      string `json:"language,omitempty"`
 }
 
+type publicDocumentTemplateData struct {
+	Metadata      HeadMetadata
+	ScriptURL     string
+	StylesheetURL string
+	ShellCSS      htmltemplate.CSS
+	Groups        placementRootGroups
+	Bootstrap     htmltemplate.JS
+}
+
+// ErrorPageTitle returns the localized title used for a system HTTP response.
 func ErrorPageTitle(status int) string {
 	switch status {
 	case 400:
@@ -49,10 +60,11 @@ func ErrorPageTitle(status int) string {
 	}
 }
 
-var shellStylesheetTag = regexp.MustCompile(`(?is)<link\b[^>]*\brel\s*=\s*["']stylesheet["'][^>]*>`)
-var shellStylesheetHref = regexp.MustCompile(`(?i)\bhref\s*=\s*["']([^"']+\.css)["']`)
-
-func RenderShell(metadata HeadMetadata) ([]byte, error) {
+// RenderPageDocument builds the complete public HTML document in one named Go
+// template execution. Its inputs are resolved server state, typed placements,
+// metadata and JSON; callers never splice markup into a partially rendered
+// shell.
+func RenderPageDocument(metadata HeadMetadata, pageKind, snapshotID string, revision int64, placements []PlacementRoot, payload []byte) ([]byte, error) {
 	if metadata.FaviconURL == "" {
 		metadata.FaviconURL = "/favicon.svg"
 	}
@@ -62,24 +74,40 @@ func RenderShell(metadata HeadMetadata) ([]byte, error) {
 	if metadata.OGDescription == "" {
 		metadata.OGDescription = metadata.Description
 	}
-	parsed, err := loadRuntimeTemplates()
+
+	groups, err := groupPlacementRoots(pageKind, snapshotID, revision, placements)
 	if err != nil {
 		return nil, err
+	}
+	bootstrap, err := safeBootstrapJSON(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode public runtime bootstrap: %w", err)
 	}
 	scriptURL, stylesheetURL, err := publicRuntimeAssets()
 	if err != nil {
 		return nil, err
 	}
+	shellCSS, err := embeddedShellStyles(stylesheetURL)
+	if err != nil {
+		return nil, err
+	}
+	if len(shellCSS) > 0 {
+		stylesheetURL = ""
+	}
+
+	parsed, err := loadRuntimeTemplates()
+	if err != nil {
+		return nil, err
+	}
 	var rendered bytes.Buffer
-	data := struct {
-		Metadata      HeadMetadata
-		ScriptURL     string
-		StylesheetURL string
-	}{Metadata: metadata, ScriptURL: scriptURL, StylesheetURL: stylesheetURL}
+	data := publicDocumentTemplateData{
+		Metadata: metadata, ScriptURL: scriptURL, StylesheetURL: stylesheetURL,
+		ShellCSS: htmltemplate.CSS(shellCSS), Groups: groups, Bootstrap: bootstrap,
+	}
 	if err := parsed.ExecuteTemplate(&rendered, "publicDocument", data); err != nil {
 		return nil, fmt.Errorf("render public document template: %w", err)
 	}
-	return inlineEmbeddedShellStyles(rendered.Bytes()), nil
+	return rendered.Bytes(), nil
 }
 
 func publicRuntimeAssets() (scriptURL, stylesheetURL string, err error) {
@@ -113,41 +141,42 @@ func publicRuntimeAssets() (scriptURL, stylesheetURL string, err error) {
 	return scriptURL, stylesheetURL, nil
 }
 
-// inlineEmbeddedShellStyles embeds the small, app-owned base stylesheet so it
-// does not add a render-blocking request before the server-rendered page is
-// painted. Feature styles are handled separately by the prerender worker.
-func inlineEmbeddedShellStyles(document []byte) []byte {
-	match := shellStylesheetTag.FindIndex(document)
-	if match == nil {
-		return document
+func embeddedShellStyles(stylesheetURL string) ([]byte, error) {
+	if stylesheetURL == "" || !strings.HasPrefix(stylesheetURL, "/") || strings.Contains(stylesheetURL, "..") {
+		return nil, fmt.Errorf("invalid embedded runtime stylesheet path")
 	}
-	tag := document[match[0]:match[1]]
-	href := shellStylesheetHref.FindSubmatch(tag)
-	if len(href) != 2 {
-		return document
-	}
-	asset := string(href[1])
-	if asset != "/public-runtime.css" && asset != "/assets/public-runtime.css" &&
-		!(strings.HasPrefix(asset, "/assets/public-runtime-") && strings.HasSuffix(asset, ".css")) {
-		return document
-	}
-	css, err := fs.ReadFile(embedded, "dist"+asset)
-	if err != nil || len(css) > 8*1024 || bytes.Contains(bytes.ToLower(css), []byte("</style")) {
-		return document
-	}
-	parsed, err := loadRuntimeTemplates()
+	css, err := fs.ReadFile(embedded, "dist"+stylesheetURL)
 	if err != nil {
-		return document
+		return nil, fmt.Errorf("read embedded public runtime stylesheet: %w", err)
 	}
-	var style bytes.Buffer
-	if err := parsed.ExecuteTemplate(&style, "publicShellStyle", htmltemplate.CSS(css)); err != nil {
-		return document
+	if len(css) > 8*1024 || bytes.Contains(bytes.ToLower(css), []byte("</style")) {
+		return nil, nil
 	}
-	result := make([]byte, 0, len(document)-len(tag)+style.Len())
-	result = append(result, document[:match[0]]...)
-	result = append(result, style.Bytes()...)
-	result = append(result, document[match[1]:]...)
-	return result
+	return css, nil
+}
+
+func safeBootstrapJSON(payload []byte) (htmltemplate.JS, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return "", fmt.Errorf("bootstrap contains more than one JSON value")
+		}
+		return "", fmt.Errorf("bootstrap has trailing data: %w", err)
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(true)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	// encoding/json escapes characters that could end the inert script element.
+	return htmltemplate.JS(bytes.TrimSpace(encoded.Bytes())), nil
 }
 
 func loadRuntimeTemplates() (*htmltemplate.Template, error) {

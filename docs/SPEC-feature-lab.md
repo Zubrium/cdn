@@ -83,7 +83,7 @@ Fixtures are examples, not schema authoring. Manifest `dataInputs` describes onl
 
 ## Verification
 
-Historical source-preview verification covered nine Vitasil features before `legal-documents` was added. The 2026-11-09 regression later covered ten current source features; see the dated record below. Additional disposable fixtures exercised the framework-neutral contracts.
+Historical source-preview verification covered earlier Vitasil inventories, including the standalone `catalog-detail` feature before the product decision to remove detail pages. Additional disposable fixtures exercised the framework-neutral contracts. The current nine-feature inventory is recorded in Vitasil's [feature data input spec](../../vitasil/docs/SPEC-feature-data-inputs.md).
 
 - Browser smoke test: all nine modules imported and rendered; the valid-feature run had zero browser console errors and warnings.
 - `catalog` rendered three fixture records, requested `/catalog` through the local SDK mock, and loaded all three sample images. `catalog-detail` and `background` also loaded their sample media inside the frame.
@@ -103,8 +103,10 @@ The Vitasil frontend package does not currently define a `test` script. Browser 
 
 #### Current source browser regression — 9 November 2026
 
-The loopback Feature Lab at `http://127.0.0.1:5178` previewed all ten current Vitasil source features: `background`, `catalog`, `catalog-detail`, `footer`, `form`, `header`, `hero`, `legal-documents`, `main-data`, and `not-found`. Each preview rendered content or expected visual media, with no browser console errors and no `/api/*` requests. The form was completed in the iframe and emitted a local `sdk.submitForm` event without calling Engine. Collection fixtures now assign synthetic record IDs even though IDs are intentionally absent from manifest `dataInputs` field mappings, preventing React missing-key warnings. The Vitasil shared `Button` also selects native button semantics only when it renders a `<button>`, removing a Base UI warning when rendering links.
+The ten-feature run below is historical; `catalog-detail` was subsequently removed by product decision. The Vitasil shared `Button` selects native button semantics only when it renders a `<button>`, and collection fixtures assign synthetic record IDs without requiring IDs in manifest `dataInputs`.
 
 Checks: Node 20 `npm run typecheck`, `npm run lint`, `npm run typecheck:feature-lab`, and `node --test scripts/feature-manifest-contract.test.mjs` (7/7) passed. ZIP integration checks are recorded separately in [QA_REPORT.md](QA_REPORT.md); source preview does not replace them. The Vite process pre-existed this check and was left running.
 
-The Vitasil source inventory has since advanced to `background@2.0.5`, `catalog@2.0.23`, `catalog-detail@2.0.8`, `footer@2.0.14`, `form@2.0.8`, `header@2.0.11`, `hero@2.0.13`, `legal-documents@1.0.7`, `main-data@2.0.14`, and `not-found@2.0.4`. All ten manifests declare `formatVersion: 2` and `runtime.abi: static-module-v1` with source entry `index.ts`. The most recent source/type/lint/manifest checks and ten ZIP build are recorded in the parent QA work; the local QA Engine at ports 28120/28122 was unavailable, so no live Engine registration or route result is implied. Browser preview of the two newest source changes remains pending in the final verification pass.
+#### Current no-detail source preview — 9 November 2026
+
+The latest source previews loaded `catalog` and `main-data` from the loopback Feature Lab routes `http://127.0.0.1:5178/?feature=catalog` and `?feature=main-data`. Both used `static-module-v1`, rendered local fixtures, and showed no preview errors or Engine API requests. The catalog showed no breadcrumbs and no product-title navigation. The current isolated build versions are `background@2.0.5`, `catalog@2.0.26`, `footer@2.0.14`, `form@2.0.8`, `header@2.0.11`, `hero@2.0.18`, `legal-documents@1.0.7`, `main-data@2.0.16`, and `not-found@2.0.5`. The disposable Engine route checks are recorded in the Engine [QA report](QA_REPORT.md); Feature Lab preview remains a source-only check and does not imply Engine registration, content projection, or public HTML acceptance.
