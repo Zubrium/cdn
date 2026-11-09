@@ -242,10 +242,22 @@ try {
     ["/personal-data-consent", "LEGAL CONSENT DOCUMENT FROM SINGLETON QA 1B9D7"],
     ["/cookies", "LEGAL COOKIE DOCUMENT FROM SINGLETON QA 6A3E1"],
   ];
+  const hydrateVisiblePlacements = async () => {
+    const ids = await page.locator("[data-engine-placement]").evaluateAll(roots => roots.map(root => root.getAttribute("data-engine-placement")).filter(Boolean));
+    for (const id of ids) {
+      await page.evaluate(placementId => [...document.querySelectorAll("[data-engine-placement]")]
+        .find(root => root.getAttribute("data-engine-placement") === placementId)?.scrollIntoView({ block: "center" }), id);
+      await page.waitForFunction(placementId => [...document.querySelectorAll("[data-engine-placement]")]
+        .some(root => root.getAttribute("data-engine-placement") === placementId
+          && (root.hasAttribute("data-runtime-feature-ready") || root.hasAttribute("data-runtime-feature-error"))), id, { timeout: 30000 });
+    }
+    await page.waitForFunction(() => document.documentElement.dataset.engineReady === "true", { timeout: 30000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+  };
   for (const [route, text] of expected) {
     const response = await page.goto(base + route, { waitUntil: "domcontentloaded" });
     if (!response || response.status() !== 200) throw new Error(route + ": expected HTTP 200, got " + (response?.status() ?? "no response"));
-    await page.waitForFunction(() => document.documentElement.dataset.engineReady === "true", { timeout: 30000 });
+    await hydrateVisiblePlacements();
     if (!(await page.locator("body").innerText()).includes(text)) throw new Error(route + ": rendered body omitted expected model text " + text);
     const structure = await page.evaluate(() => {
       const placements = [...document.querySelectorAll("[data-engine-feature][data-engine-placement]")];
@@ -270,7 +282,7 @@ try {
   }
 
   await page.goto(base + "/", { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.documentElement.dataset.engineReady === "true", { timeout: 30000 });
+  await hydrateVisiblePlacements();
   const footer = page.locator('[data-engine-feature="legal-documents"] section[aria-label="Правовая информация"]');
   if (await footer.count() !== 1) throw new Error("legal footer region is missing or ambiguous");
   for (const [label, href] of [
@@ -302,7 +314,7 @@ try {
   if (preferenceRequests.length !== 0) throw new Error("cookie preference interaction caused network side effects: " + preferenceRequests.join(" | "));
   const preferenceSideEffects = preferenceRequests.length;
   await page.goto(base + "/cookies", { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.documentElement.dataset.engineReady === "true", { timeout: 30000 });
+  await hydrateVisiblePlacements();
   const cookieDocument = page.locator('[data-engine-feature="legal-documents"] article.legalDocument');
   await cookieDocument.getByRole("button", { name: "Принять", exact: true }).focus();
   await page.keyboard.press("Enter");
