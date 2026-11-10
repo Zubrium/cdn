@@ -569,7 +569,17 @@ export const api = {
     prepareRenditions(id: string, context: MediaRenditionContext): Promise<MediaRenditionState> {
       return request<MediaRenditionState>(
         `${ADMIN_V2_ROOT}/media/${encoded(id)}/renditions/prepare`,
-        { method: "POST", body: context },
+        {
+          method: "POST",
+          body: {
+            snapshotId: context.snapshotId,
+            featureKey: context.featureKey,
+            buildVersion: context.buildVersion,
+            schemaKind: context.schemaKind,
+            fieldPath: context.fieldPath,
+            buildDigest: context.buildDigest,
+          },
+        },
       );
     },
     renditionState(
