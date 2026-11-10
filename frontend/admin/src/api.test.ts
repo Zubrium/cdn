@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
+import type { MediaRenditionContext } from "./types";
 
 describe("branch snapshot API", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -25,5 +26,31 @@ describe("branch snapshot API", () => {
     expect(url.searchParams.get("branchId")).toBe(branchId);
     expect(url.searchParams.get("before")).toBe("cursor-id");
     expect(url.searchParams.has("environment")).toBe(false);
+  });
+
+  it("does not send picker accept metadata to the rendition endpoint", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ready" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost" },
+      localStorage: { getItem: () => null },
+      dispatchEvent: () => true,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.media.prepareRenditions("media-id", {
+      snapshotId: "snapshot-id",
+      featureKey: "product-card",
+      buildVersion: "2.1.0",
+      schemaKind: "dataInputs",
+      fieldPath: "/product/image",
+      buildDigest: "sha256:build",
+      accept: "raster-image",
+    } as MediaRenditionContext);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).not.toHaveProperty("accept");
   });
 });

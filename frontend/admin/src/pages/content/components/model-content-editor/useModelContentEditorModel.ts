@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { validateEntryFields } from "@/domains/content-editor/EntryForm";
-import type { MediaRenditionContext, ModelContentWorkspace } from "@/types";
+import type { MediaRenditionContext, ModelContentFieldProjection, ModelContentWorkspace } from "@/types";
 import type { ModelContentDraft } from "../model-content/types";
 import {
   duplicateUniqueModelValueIssues,
@@ -11,6 +11,23 @@ import {
   orphanedModelRecordData,
   selectedModelRecord,
 } from "../../model-content-workspace";
+
+type DeclaredMediaPreparation = NonNullable<ModelContentFieldProjection["preparations"]>[number];
+
+/** Keep manifest-only picker metadata out of the rendition API context. */
+export function mediaRenditionContext(
+  item: DeclaredMediaPreparation,
+  snapshotId: string,
+): MediaRenditionContext {
+  return {
+    snapshotId,
+    featureKey: item.featureKey,
+    buildVersion: item.buildVersion,
+    schemaKind: item.schemaKind,
+    fieldPath: item.fieldPath,
+    buildDigest: item.buildDigest,
+  };
+}
 
 /** Derives the active entity, validation, media rules and visible record list. */
 export function useModelContentEditorModel(
@@ -29,7 +46,7 @@ export function useModelContentEditorModel(
       for (const input of placement.inputs) {
         for (const field of input.fields) {
           if (field.type !== "media") continue;
-          const contexts = (field.preparations ?? []).map((item) => ({ ...item, snapshotId: workspace.snapshot.id }));
+          const contexts = (field.preparations ?? []).map((item) => mediaRenditionContext(item, workspace.snapshot.id));
           const current = preparations[field.fieldId] ?? [];
           const byKey = new Map(current.map((item) => [JSON.stringify(item), item]));
           contexts.forEach((item) => byKey.set(JSON.stringify(item), item));
