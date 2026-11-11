@@ -1,0 +1,86 @@
+name: Deploy Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine_image_tag:
+        description: "Published GHCR image tag: main, SemVer, or sha-<40 characters>"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-engine-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy selected Engine image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - name: Check out deployment source
+        uses: actions/checkout@3d3c42e2df4f41a76ea4b289a688f9b6e25f6a3c # v7.0.1
+        with:
+          ref: main
+
+      - name: Validate and prepare protected deployment files
+        id: prepare
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          DEPLOY_BECOME_PASSWORD: ${{ secrets.DEPLOY_BECOME_PASSWORD }}
+          ENGINE_ENV_CONFIG: ${{ vars.ENGINE_ENV_CONFIG }}
+          ENGINE_ENV_SECRETS: ${{ secrets.ENGINE_ENV_SECRETS }}
+          ENGINE_IMAGE_TAG: ${{ inputs.engine_image_tag }}
+        run: python3 deploy/ansible/prepare-deploy.py
+
+      - name: Verify the requested public GHCR image exists
+        env:
+          ENGINE_IMAGE_TAG: ${{ inputs.engine_image_tag }}
+        run: docker manifest inspect "ghcr.io/onix-fun/website-engine:${ENGINE_IMAGE_TAG}" >/dev/null
+
+      - name: Install password transport for SSH password authentication
+        if: steps.prepare.outputs.auth_method == 'password'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends sshpass
+
+      - name: Install pinned Ansible Core
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ansible-venv"
+          "$RUNNER_TEMP/ansible-venv/bin/python" -m pip install --disable-pip-version-check 'ansible-core==2.21.6'
+          echo "$RUNNER_TEMP/ansible-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Deploy with Ansible
+        env:
+          ANSIBLE_CONFIG: deploy/ansible/ansible.cfg
+          ANSIBLE_HOST_KEY_CHECKING: 'True'
+          ANSIBLE_INVENTORY_FILE: ${{ steps.prepare.outputs.inventory }}
+          ANSIBLE_CONNECTION_FILE: ${{ steps.prepare.outputs.connection_file }}
+          ENGINE_IMAGE_TAG: ${{ inputs.engine_image_tag }}
+          ENGINE_DEPLOY_ENV_FILE: ${{ steps.prepare.outputs.env_file }}
+        run: |
+          args=()
+          if [[ -n "$ANSIBLE_CONNECTION_FILE" ]]; then
+            args+=(--extra-vars "@$ANSIBLE_CONNECTION_FILE")
+          fi
+          ansible-playbook \
+            --inventory "$ANSIBLE_INVENTORY_FILE" \
+            "${args[@]}" \
+            deploy/ansible/deploy-engine.yml
+
+      - name: Remove runner-local deployment credentials
+        if: always()
+        env:
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
+        run: rm -rf -- "$RUNNER_TEMP_DIR/engine-deploy"

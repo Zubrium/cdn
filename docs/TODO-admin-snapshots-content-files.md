@@ -589,3 +589,10 @@ Baseline 9 ноября: пять warm runs дали median 100 для home mobi
 
 - [x] Проверить реальную CORS-политику, timeout/сетевой отказ и восстановление на отдельном контролируемом внешнем API.
   - 7 ноября `TestExternalBackendActualCORSAndRetryBrowserAcceptance` проверил настоящую Chromium CORS/CSP enforcement к отдельным controlled HTTP origins: точный разрешённый `Access-Control-Allow-Origin`, отсутствующий и чужой origin, retry после обоих сетевых отказов, HTTP 503, AbortController timeout и retry после timeout; незарегистрированный origin заблокирован CSP до запроса. Тест прошёл на disposable PostgreSQL и удалённом task-owned контейнере; точный результат и cleanup в [SPEC-external-backend-bindings.md](SPEC-external-backend-bindings.md). Это не проверка политики выбранного стороннего провайдера: такой endpoint не предоставлен, а ZIP Vitasil сейчас не объявляют backend bindings.
+
+## TODO 11. Автоматизировать деплой Engine из GHCR
+
+Спецификация: [SPEC-engine-deployment.md](SPEC-engine-deployment.md).
+
+- [ ] Настроить GitHub Environment `production` (SSH host/user/port, verified known_hosts, key или password auth, runtime config/secrets), выполнить ручной `workflow_dispatch` для выбранного GHCR-тега, подтвердить Ansible установку Docker/Compose, сохранность volumes и readiness на сервере `system.onix.fun`.
+  - Реализация подготовлена локально: `.github/workflows/deploy-engine.yml`, `deploy/ansible/deploy-engine.yml` и runner-side подготовитель безопасных переменных; конфигурация/секреты разделены между GitHub Variables и Secrets. Поддерживаются SSH key и password auth; ключ хоста проверяется строго, sudo password опционален. Пока сервер не подключался, GitHub Environment ещё не заполнен, workflow не запускался, и безопасность существующих серверных данных/портов не проверялась.

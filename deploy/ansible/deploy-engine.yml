@@ -1,0 +1,196 @@
+---
+- name: Deploy the published Website Engine image
+  hosts: engine
+  become: true
+  gather_facts: true
+
+  vars:
+    engine_deploy_dir: /opt/website-engine
+    engine_compose_project: website-engine
+    engine_image_tag: "{{ lookup('env', 'ENGINE_IMAGE_TAG') }}"
+    docker_distribution: "{{ ansible_distribution | lower }}"
+    docker_architecture: >-
+      {{ 'amd64' if ansible_architecture == 'x86_64' else
+         'arm64' if ansible_architecture == 'aarch64' else
+         'armhf' if ansible_architecture == 'armv7l' else
+         ansible_architecture }}
+
+  tasks:
+    - name: Restrict supported operating systems
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution in ['Debian', 'Ubuntu']
+        fail_msg: "The deployment currently supports Debian and Ubuntu hosts only."
+
+    - name: Restrict host architecture to images published by CI
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in ['x86_64', 'aarch64']
+        fail_msg: "The CI image is published for amd64 and arm64 hosts only."
+
+    - name: Validate requested GHCR image tag
+      ansible.builtin.assert:
+        that:
+          - engine_image_tag is match('^(main|[0-9]+\\.[0-9]+\\.[0-9]+|sha-[0-9a-f]{40})$')
+        fail_msg: "Use a published image tag: main, SemVer (for example 1.2.3), or sha-<40 hex characters>."
+
+    - name: Install Docker repository prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - python3-apt
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create APT keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install Docker repository signing key
+      ansible.builtin.get_url:
+        url: "https://download.docker.com/linux/{{ docker_distribution }}/gpg"
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Configure the official Docker APT repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ docker_architecture }} signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ docker_distribution }}
+          {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
+        name:
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-ce
+          - docker-ce-cli
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Enable Docker on boot
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create Engine deployment directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ engine_deploy_dir }}", mode: "0750" }
+        - { path: "{{ engine_deploy_dir }}/deploy", mode: "0750" }
+
+    - name: Install Engine Compose definition
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../compose.yaml"
+        dest: "{{ engine_deploy_dir }}/compose.yaml"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install Chromium seccomp profile
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../deploy/seccomp-prerender.json"
+        dest: "{{ engine_deploy_dir }}/deploy/seccomp-prerender.json"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Check whether an Engine environment already exists
+      ansible.builtin.stat:
+        path: "{{ engine_deploy_dir }}/.env"
+      register: previous_engine_env
+
+    - name: Preserve the previous runtime configuration for rollback
+      ansible.builtin.copy:
+        src: "{{ engine_deploy_dir }}/.env"
+        dest: "{{ engine_deploy_dir }}/.env.previous"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      when: previous_engine_env.stat.exists
+      no_log: true
+
+    - name: Install runtime configuration and secrets
+      ansible.builtin.copy:
+        src: "{{ lookup('env', 'ENGINE_DEPLOY_ENV_FILE') }}"
+        dest: "{{ engine_deploy_dir }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Validate Compose configuration without printing resolved values
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-name
+          - "{{ engine_compose_project }}"
+          - --file
+          - compose.yaml
+          - config
+          - --quiet
+      args:
+        chdir: "{{ engine_deploy_dir }}"
+      changed_when: false
+
+    - name: Pull only the selected Engine image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-name
+          - "{{ engine_compose_project }}"
+          - --file
+          - compose.yaml
+          - pull
+          - server
+      args:
+        chdir: "{{ engine_deploy_dir }}"
+      changed_when: true
+
+    - name: Apply the Engine stack while preserving named volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-name
+          - "{{ engine_compose_project }}"
+          - --file
+          - compose.yaml
+          - up
+          - --detach
+      args:
+        chdir: "{{ engine_deploy_dir }}"
+      changed_when: true
+
+    - name: Wait for Engine readiness
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/health/ready
+        method: GET
+        status_code: 200
+        return_content: false
+      register: engine_readiness
+      retries: 30
+      delay: 5
+      until: engine_readiness.status | default(0) == 200
