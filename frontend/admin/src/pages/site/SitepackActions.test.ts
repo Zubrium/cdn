@@ -1,9 +1,21 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { SitepackImportFailureDetails, SitepackImportItems } from "./SitepackActions";
+import { SitepackImportAction, SitepackImportFailureDetails, SitepackImportItems } from "./SitepackActions";
 
 describe("sitepack import feedback", () => {
+  it("opens the native archive picker through an associated label", () => {
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: queryClient }, createElement(SitepackImportAction)));
+    const inputId = html.match(/<input[^>]*id="([^"]+)"[^>]*type="file"/)?.[1];
+
+    expect(inputId).toBeTruthy();
+    expect(html).toContain(`<label for="${inputId}"`);
+    expect(html).not.toContain("onclick=");
+    queryClient.clear();
+  });
+
   it("shows the safe rejected item locator and controlled reason", () => {
     const html = renderToStaticMarkup(createElement(SitepackImportFailureDetails, {
       message: "Импорт отклонён целиком; новый снапшот не создан.",

@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useId, useRef, useState, type ChangeEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Download, FileArchive, Upload } from "lucide-react";
@@ -10,7 +10,7 @@ import type { ApiErrorDetail, SiteSnapshot } from "@/types";
 
 /** Import creates an unassigned snapshot; assignments always require a separate action. */
 export function SitepackImportAction() {
-  const picker = useRef<HTMLInputElement>(null);
+  const pickerId = useId();
   const abort = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
@@ -68,9 +68,11 @@ export function SitepackImportAction() {
           Импорт создаст отдельный снапшот. Пользователи, заявки и назначения веток в архив не входят.
         </p>
       </div>
-      <input ref={picker} type="file" accept=".sitepack,.zip,application/zip" onChange={selectFile} disabled={busy} tabIndex={-1} className="sr-only" aria-label="Архив снапшота" />
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" disabled={busy} onClick={() => picker.current?.click()}><FileArchive />Выбрать архив</Button>
+        <input id={pickerId} type="file" accept=".sitepack,.zip,application/zip" onChange={selectFile} disabled={busy} className="peer sr-only" aria-label="Архив снапшота" />
+        <Button asChild variant="outline" className={busy ? "pointer-events-none opacity-50" : "peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2"}>
+          <label htmlFor={pickerId} aria-disabled={busy}><FileArchive />Выбрать архив</label>
+        </Button>
         {file && <span className="max-w-full truncate text-sm text-muted-foreground">{file.name}</span>}
         {file && <Button type="button" disabled={busy} onClick={() => void importSnapshot()}><Upload />{busy ? "Импортируем…" : "Импортировать"}</Button>}
         {busy && <Button type="button" variant="ghost" onClick={() => abort.current?.abort()}>Прервать</Button>}

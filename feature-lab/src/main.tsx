@@ -141,6 +141,7 @@ function sampleValue(schema: JsonObject | undefined, key = "value", depth = 0, s
   if (type === "boolean") return true;
   if (type === "integer" || type === "number") return typeof schema.minimum === "number" ? schema.minimum : 1;
   if (schema.format === "email") return "dev@example.test";
+  if (normalizedKey === "eyebrow") return "";
   if (/(?:title|name|heading|label|eyebrow)$/.test(normalizedKey)) return `Example ${key}`;
   if (schema.format === "uri" || schema.format === "url" || /(?:url|path|href|to)$/.test(normalizedKey)) {
     return sequence > 1 ? `/example-${sequence}` : "/example";
@@ -162,12 +163,20 @@ function pointerParts(pointer: string): string[] {
 function dataInputSample(field: FeatureDataInputField, sequence: number): JsonValue {
   if (field.type === "enum") return field.values?.[0] ?? "sample";
   const key = pointerParts(field.path).at(-1)?.toLocaleLowerCase("en") ?? "value";
+  if (key === "cataloglinklabel") return "Вся продукция";
+  if (key === "cataloglinkto") return "/catalog";
+  if (key === "catalogactionlabel") return "Запросить прайс лист";
+  if (key === "catalogactionto") return "/form";
+  if (key === "itemslabel") return "Продукция";
+  if (key === "previouslabel") return "Предыдущий товар";
+  if (key === "nextlabel") return "Следующий товар";
   if (field.type === "media") return SAMPLE_IMAGE;
   if (field.type === "boolean") return true;
   if (field.type === "integer" || field.type === "number") return sequence;
   if (field.type === "date") return "2026-01-15";
   if (field.type === "dateTime") return "2026-01-15T12:00:00Z";
   if (field.type === "email" || key.includes("email")) return "dev@example.test";
+  if (key === "eyebrow") return "";
   if (field.type === "url" || /(?:url|path|href|to)$/.test(key)) return sequence > 1 ? `/example-${sequence}` : "/example";
   if (/slug$/.test(key)) return `sample-item-${sequence}`;
   if (/(?:title|name|heading|label|eyebrow)$/.test(key)) return `Example ${key}`;
@@ -205,8 +214,8 @@ function sampleInputRecord(input: Extract<FixtureDataInput, { kind: "record" | "
   // deliberately not part of a feature's dataInputs field mapping.
   result.id = `feature-lab-record-${sequence}`;
   if ("slug" in result) result.slug = `sample-item-${sequence}`;
-  if (typeof result.title === "string") result.title = `Example item ${sequence}`;
-  if (typeof result.name === "string") result.name = `Example item ${sequence}`;
+  if (typeof result.title === "string") result.title = `Sample item ${sequence}`;
+  if (typeof result.name === "string") result.name = `Sample item ${sequence}`;
   return result;
 }
 
