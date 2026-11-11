@@ -23,11 +23,11 @@ docker compose up -d --no-build
 
 ## Сборка и выпуск образа
 
-Workflow [engine-image.yml](.github/workflows/engine-image.yml) запускает проверки на pull request и push в `main`. Публикация в GHCR запускается при push SemVer-тега (`v1.2.3`) или публикации GitHub Release. Для стабильного релиза публикуются версии `1.2.3`, `1.2` и `latest`; push в `main` публикует `main`; каждый запуск публикации также получает immutable `sha-<полный commit SHA>`. Имя образа формируется из `GITHUB_REPOSITORY`: `ghcr.io/<owner>/<repository>`.
+Workflow [engine-image.yml](.github/workflows/engine-image.yml) запускает проверки на pull request и push в `main`. Публикация в GHCR запускается при push в `main`, push SemVer-тега (`v1.2.3`) или публикации GitHub Release. Push в `main` публикует `main` и `latest`; стабильный SemVer-релиз публикует версии `1.2.3`, `1.2` и `latest`; каждый запуск публикации также получает immutable `sha-<полный commit SHA>`. Имя образа формируется из `GITHUB_REPOSITORY`: `ghcr.io/<owner>/<repository>`.
 
 Чтобы выпустить версию, создайте SemVer-тег (`git tag v1.2.3 && git push origin v1.2.3`) либо опубликуйте GitHub Release с таким тегом. Чтобы обновить локальный движок до конкретного релиза, укажите его тег в `ENGINE_IMAGE` в `.env`, затем выполните `make compose-up`. Команда сначала получает образ из registry и запускает Compose без локальной сборки. Чтобы разрешить скачивание без входа в GHCR, после первой публикации сделайте package публичным в настройках GitHub Packages.
 
-Для ручного серверного деплоя используйте GitHub Actions [Deploy Engine](.github/workflows/deploy-engine.yml); Ansible-плейбук и список требуемых Environment Variables/Secrets описаны в [операционных инструкциях](docs/OPERATIONS.md#ручной-деплой-engine).
+Серверный деплой собранных образов и Ansible-конфигурация находятся в репозитории [Vitasil](https://github.com/onix-fun/vitasil/blob/main/DEPLOYMENT.md).
 
 ## Как собирается сайт
 

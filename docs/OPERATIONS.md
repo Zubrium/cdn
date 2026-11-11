@@ -2,14 +2,6 @@
 
 Список обязательных runtime-параметров и правила fail-fast собраны в [SPEC-configuration.md](SPEC-configuration.md). Возьмите ключи и примерные значения из `.env.example`, замените placeholders и передавайте секреты через окружение или secret files. Пропущенный обязательный параметр должен остановить запуск с указанием имени переменной. Настройки пулов БД, таймаутов, размеров страниц и лимитов хранилища также задаются явно; CLI-команды переименования веток и сервисов используют ту же конфигурацию БД.
 
-## Ручной деплой Engine
-
-Для деплоя уже опубликованного GHCR-образа используйте GitHub Actions workflow [Deploy Engine](../.github/workflows/deploy-engine.yml), запустив его из `main` с тегом `main`, SemVer или `sha-<полный commit SHA>`. Workflow проверяет наличие образа, затем Ansible устанавливает Docker Engine/Compose на Debian или Ubuntu, разворачивает Compose stack и ждёт `/health/ready`. Сборка на сервере не выполняется.
-
-Перед первым запуском заполните GitHub Environment `production`: Variables `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PORT` и `ENGINE_ENV_CONFIG`; Secrets `DEPLOY_KNOWN_HOSTS`, ровно один из `DEPLOY_SSH_KEY`/`DEPLOY_SSH_PASSWORD`, при необходимости `DEPLOY_BECOME_PASSWORD`, а также `ENGINE_ENV_SECRETS`. Для SSH password workflow устанавливает на runner `sshpass`; пароль и при необходимости sudo-пароль храните только в GitHub Secrets. Известный ключ хоста проверьте вне runner и включите в `DEPLOY_KNOWN_HOSTS`.
-
-`ENGINE_ENV_CONFIG` содержит несекретные настройки из `.env.example`; `ENGINE_ENV_SECRETS` — его секретные строки `KEY=VALUE`. Используйте все присваивания примера, распределив их по этим двум настройкам без дублирования. Workflow соединяет их только во временном файле с режимом `0600`, передаёт серверу в `/opt/website-engine/.env` с тем же режимом и удаляет runner-файлы в конце job. При обновлении предыдущий серверный `.env` сохраняется как `.env.previous` с режимом `0600`. Compose-обновление не выполняет `down`, не удаляет volumes и не удаляет orphan-контейнеры. Подробные инварианты и требования — в [спецификации деплоя](SPEC-engine-deployment.md).
-
 ## Переименование ветки или файлового сервиса
 
 ID ветки и сервиса генерирует Engine при регистрации. В конфиге и командах используются имена; ID вводить не нужно. Для сохранения связи с прежним назначением или файлами сначала остановите Engine, переименуйте запись в БД, затем обновите имя в конфигурации и запустите Engine.
