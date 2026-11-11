@@ -36,6 +36,15 @@ type Workspace = {
 
 const WorkspaceContext = createContext<Workspace | null>(null);
 const emptyDesignSystem: StructuredDesignSystem = {formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: []};
+const SNAPSHOT_NAME_LIMIT = 160;
+
+function childSnapshotName(snapshot: SiteSnapshot): string {
+  const base = snapshot.name.replace(/(?: · изменение(?: после #\d+)?)$/u, "").trim() || snapshot.name.trim();
+  const suffix = ` · изменение после #${snapshot.sequence}`;
+  const maxBaseLength = SNAPSHOT_NAME_LIMIT - Array.from(suffix).length;
+  const shortBase = Array.from(base).slice(0, maxBaseLength).join("").trimEnd();
+  return `${shortBase}${suffix}`;
+}
 
 export function useSiteWorkspace() {
   const value = useContext(WorkspaceContext);
@@ -256,7 +265,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
 	    }
 	  }
       const created = await api.siteBuilder.createSnapshotFrom({
-        name: name?.trim() || (snapshot ? `${snapshot.name} · изменение` : "Новый сайт"),
+        name: name?.trim() || (snapshot ? childSnapshotName(snapshot) : "Новый сайт"),
         ...(parentSnapshotRequest ?? {}),
         config: submitted,
         metadata: submittedMetadata,
