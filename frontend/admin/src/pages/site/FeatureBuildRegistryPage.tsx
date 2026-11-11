@@ -1,7 +1,8 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Boxes, CloudUpload, FileCode2, Fingerprint } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, PageHeader } from "@/components/common/page";
 import type { FeatureBuild } from "@/types";
@@ -16,6 +17,7 @@ export default function FeatureBuildRegistryPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = async () => {
     const result = await api.siteBuilder.featureBuilds();
@@ -73,10 +75,20 @@ export default function FeatureBuildRegistryPage() {
         title="Реестр фичей"
         description="Здесь хранятся версии сборок. Состав фич настраивается отдельно для каждого снапшота."
         actions={(
-          <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-sm bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-            <CloudUpload className="size-4" />{uploading ? "Загружаем сборку…" : "Загрузить ZIP"}
-            <input className="sr-only" type="file" accept=".zip,application/zip" disabled={uploading} onChange={upload} />
-          </label>
+          <>
+            <input
+              ref={fileInput}
+              className="sr-only"
+              type="file"
+              accept=".zip,application/zip"
+              disabled={uploading}
+              onChange={upload}
+              aria-label="Выбрать ZIP-сборку фичи"
+            />
+            <Button type="button" disabled={uploading} onClick={() => fileInput.current?.click()}>
+              <CloudUpload className="size-4" />{uploading ? "Загружаем сборку…" : "Загрузить ZIP"}
+            </Button>
+          </>
         )}
       />
       <Card>
