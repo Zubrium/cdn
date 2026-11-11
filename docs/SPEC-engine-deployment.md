@@ -36,7 +36,7 @@ Create/configure the `production` Environment in repository settings.
 - `DEPLOY_BECOME_PASSWORD`: optional sudo password when sudo is not passwordless.
 - `ENGINE_ENV_SECRETS`: multiline dotenv entries for credentials. At minimum provide `DATABASE_URL`, `POSTGRES_PASSWORD`, `S3_ACCESS_KEY`, and `S3_SECRET_KEY`; include any other secrets referenced by the chosen Engine configuration, such as bootstrap, signing, or external file-service keys.
 
-Use every assignment from `.env.example`, split between the two GitHub settings; the helper rejects missing sample keys, duplicate keys, sensitive keys placed in `ENGINE_ENV_CONFIG`, missing required Compose credentials, and a manually supplied `ENGINE_IMAGE`. It sets `ENGINE_IMAGE=ghcr.io/onix-fun/website-engine:<selected-tag>` itself. On an update, Ansible keeps the previous `.env` at `/opt/website-engine/.env.previous` with mode `0600` before installing the new configuration.
+Use every assignment from `.env.example`, split between the two GitHub settings; the helper rejects missing sample keys, duplicate keys, sensitive keys placed in `ENGINE_ENV_CONFIG`, missing required Compose credentials, and a manually supplied `ENGINE_IMAGE`. It sets `ENGINE_IMAGE` from the repository's canonical lowercase `ghcr.io/<owner>/<repository>` path and the selected tag. On an update, Ansible keeps the previous `.env` at `/opt/website-engine/.env.previous` with mode `0600` before installing the new configuration.
 
 The GHCR package must allow anonymous pulls from the target host. If it is private, configure a narrowly scoped read-only package credential and a remote Docker login before using this workflow; do not put a write token on the server.
 

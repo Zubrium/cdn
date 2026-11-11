@@ -11,7 +11,7 @@
 
 | Переменная | Пример из .env.example |
 | --- | --- |
-| `ENGINE_IMAGE` | `ghcr.io/onix-fun/website-engine:latest` |
+| `ENGINE_IMAGE` | `ghcr.io/zubrium/cdn:latest` |
 | `BOOTSTRAP_ADMIN_TOKEN` | `задайте через окружение или secret file` |
 | `RUNTIME_ASSET_CACHE_TTL` | `1h` |
 | `ENGINE_FILE_SIGNING_SECRET` | `задайте через окружение или secret file` |

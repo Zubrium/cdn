@@ -41,13 +41,17 @@ jobs:
           DEPLOY_BECOME_PASSWORD: ${{ secrets.DEPLOY_BECOME_PASSWORD }}
           ENGINE_ENV_CONFIG: ${{ vars.ENGINE_ENV_CONFIG }}
           ENGINE_ENV_SECRETS: ${{ secrets.ENGINE_ENV_SECRETS }}
+          ENGINE_IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
           ENGINE_IMAGE_TAG: ${{ inputs.engine_image_tag }}
         run: python3 deploy/ansible/prepare-deploy.py
 
       - name: Verify the requested public GHCR image exists
         env:
+          ENGINE_IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
           ENGINE_IMAGE_TAG: ${{ inputs.engine_image_tag }}
-        run: docker manifest inspect "ghcr.io/onix-fun/website-engine:${ENGINE_IMAGE_TAG}" >/dev/null
+        run: |
+          image_repository="$(printf '%s' "$ENGINE_IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          docker manifest inspect "${image_repository}:${ENGINE_IMAGE_TAG}" >/dev/null
 
       - name: Install password transport for SSH password authentication
         if: steps.prepare.outputs.auth_method == 'password'

@@ -68,6 +68,7 @@ def main() -> None:
     user = os.environ.get("DEPLOY_USER", "").strip()
     port_text = os.environ.get("DEPLOY_PORT", "22").strip() or "22"
     version = os.environ.get("ENGINE_IMAGE_TAG", "").strip()
+    image_repository = os.environ.get("ENGINE_IMAGE_REPOSITORY", "").strip().lower()
     known_hosts = os.environ.get("DEPLOY_KNOWN_HOSTS", "").strip()
     private_key = os.environ.get("DEPLOY_SSH_KEY", "")
     ssh_password = os.environ.get("DEPLOY_SSH_PASSWORD", "")
@@ -91,6 +92,8 @@ def main() -> None:
         fail("DEPLOY_PORT must be between 1 and 65535.")
     if not re.fullmatch(r"(?:main|[0-9]+\.[0-9]+\.[0-9]+|sha-[0-9a-f]{40})", version):
         fail("ENGINE_IMAGE_TAG must be main, a published SemVer tag, or sha-<40 lowercase hex characters>.")
+    if not re.fullmatch(r"ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*", image_repository):
+        fail("ENGINE_IMAGE_REPOSITORY must be a lowercase GHCR repository path.")
     if not known_hosts:
         fail("Set DEPLOY_KNOWN_HOSTS to a verified SSH known_hosts entry.")
     if bool(private_key.strip()) == bool(ssh_password.strip()):
@@ -128,7 +131,7 @@ def main() -> None:
     if missing_config:
         fail(f"Combined GitHub environment data is missing .env.example keys: {', '.join(missing_config)}")
 
-    env_content = "\n".join(config_lines + secret_lines + [f"ENGINE_IMAGE=ghcr.io/onix-fun/website-engine:{version}", ""])
+    env_content = "\n".join(config_lines + secret_lines + [f"ENGINE_IMAGE={image_repository}:{version}", ""])
     env_path = work_dir / "engine.env"
     write_private(env_path, env_content)
 
