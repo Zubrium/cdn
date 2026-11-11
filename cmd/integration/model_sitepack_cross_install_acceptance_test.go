@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ import (
 
 // TestModelSitepackCrossInstallAcceptance exercises the model-backed
 // Sitepack contract across independent source and target databases. It uses
-// the current Vitasil v2 catalog, detail, and homepage ZIPs, and requires a
+// the current Vitasil v2 catalog and homepage ZIPs, and requires a
 // task-owned local MinIO bucket for target storage. It never targets the live
 // Vitasil database, storage, or product stack.
 func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
@@ -164,7 +165,7 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 		}
 		if childRecords[i].Values[pathKeys["product:/title"]] == "Груша" {
 			childRecords[i].Values[pathKeys["product:/title"]] = "Груша: черновик ребёнка"
-			childRecords[i].Values[pathKeys["product:/imageSrc"]] = privateFile.ID.String()
+			childRecords[i].Values[pathKeys["product:/imageSrc"]] = publicFile.ID.String()
 		}
 	}
 	childSelections = sitepackCrossInstallSetSelection(childSelections, "catalog-products", "products", "ids", []string{childRecordIDs["product:pear"], childRecordIDs["product:apple"]})
@@ -172,6 +173,20 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 		sitebuilder.ModelContentDraftInput{Revision: 2, Records: childRecords, Selections: childSelections})
 	if status != http.StatusOK || childDraft["revision"] != float64(3) || childDraft["publishedRevision"] != float64(2) {
 		t.Fatalf("save independent child draft: status=%d body=%v", status, childDraft)
+	}
+	status, childPublished, _ := source.request(http.MethodPost, childBase+"/publish", source.adminToken, map[string]any{"revision": 3})
+	if status != http.StatusOK || childPublished["publishedRevision"] != float64(3) {
+		t.Fatalf("publish child model state for immutable history roundtrip: status=%d body=%v", status, childPublished)
+	}
+	for i := range childRecords {
+		if childRecords[i].EntityID == ids["entity.product"] && childRecords[i].Values[pathKeys["product:/title"]] == "Груша: черновик ребёнка" {
+			childRecords[i].Values[pathKeys["product:/imageSrc"]] = privateFile.ID.String()
+		}
+	}
+	status, childDraft, _ = source.request(http.MethodPut, childBase, source.adminToken,
+		sitebuilder.ModelContentDraftInput{Revision: 3, Records: childRecords, Selections: childSelections})
+	if status != http.StatusOK || childDraft["revision"] != float64(4) || childDraft["publishedRevision"] != float64(3) {
+		t.Fatalf("save independent private-media child draft after publication: status=%d body=%v", status, childDraft)
 	}
 
 	parentBefore := sitepackCrossInstallStateSignature(t, source.pool, parentID)
@@ -185,6 +200,14 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 	if exportHeader.Get("Content-Type") != "application/zip" || !strings.Contains(exportHeader.Get("Cache-Control"), "no-store") {
 		t.Fatalf("unexpected source export headers: %v", exportHeader)
 	}
+	archive = rewriteSitepackIndex(t, archive, func(index map[string]any) {
+		modelContent := index["modelContent"].(map[string]any)
+		history := modelContent["history"].([]any)
+		olderPublication := history[0].(map[string]any)
+		selections := olderPublication["selections"].([]any)
+		selection := selections[0].(map[string]any)
+		selection["placementId"] = "removed-placement-from-older-structure"
+	})
 	if after := sitepackCrossInstallStateSignature(t, source.pool, parentID); after != parentBefore {
 		t.Fatal("sitepack export changed parent snapshot or parent content")
 	}
@@ -273,8 +296,8 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 		t.Fatalf("import current model-backed Vitasil sitepack: status=%d body=%v", status, importBody)
 	}
 	firstReport := sitepackCrossInstallDecodeReport(t, importBody)
-	if firstReport.NewBuilds != 3 || firstReport.ReusedBuilds != 0 || firstReport.NewFiles != 2 || firstReport.ReusedFiles != 0 ||
-		firstReport.ModelPublishedRecords != 6 || firstReport.ModelDraftRecords != 6 || firstReport.ModelHistoryRevisions != 1 ||
+	if firstReport.NewBuilds != 2 || firstReport.ReusedBuilds != 0 || firstReport.NewFiles != 2 || firstReport.ReusedFiles != 0 ||
+		firstReport.ModelPublishedRecords != 6 || firstReport.ModelDraftRecords != 6 || firstReport.ModelHistoryRevisions != 2 ||
 		firstReport.RemappedModelEntityIDs != len(model.Entities) || firstReport.RemappedModelFieldIDs != sitepackCrossInstallFieldCount(model) ||
 		firstReport.RemappedModelRelationIDs != len(model.Relations) || firstReport.RemappedModelRecordIDs != 6 || len(firstReport.FileIDs) != 2 {
 		t.Fatalf("first import report omitted required model, history, build, or media transfer: %+v", firstReport)
@@ -299,7 +322,7 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 		t.Fatalf("repeat Sitepack import should reuse immutable builds/files and create a new independent snapshot: status=%d body=%v", status, repeatBody)
 	}
 	repeatReport := sitepackCrossInstallDecodeReport(t, repeatBody)
-	if repeatReport.Snapshot.ID == uuid.Nil || repeatReport.Snapshot.ID == firstSnapshotID || repeatReport.NewBuilds != 0 || repeatReport.ReusedBuilds != 3 || repeatReport.NewFiles != 0 || repeatReport.ReusedFiles != 2 {
+	if repeatReport.Snapshot.ID == uuid.Nil || repeatReport.Snapshot.ID == firstSnapshotID || repeatReport.NewBuilds != 0 || repeatReport.ReusedBuilds != 2 || repeatReport.NewFiles != 0 || repeatReport.ReusedFiles != 2 {
 		t.Fatalf("repeat import did not reuse matching target builds/files: %+v", repeatReport)
 	}
 	for sourceID, targetID := range firstReport.FileIDs {
@@ -311,7 +334,7 @@ func TestModelSitepackCrossInstallAcceptance(t *testing.T) {
 	if err := target.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM feature_builds),(SELECT count(*) FROM site_snapshots),(SELECT count(*) FROM media_objects WHERE status='ready')`).Scan(&targetBuilds, &targetSnapshots, &targetFilesCount); err != nil {
 		t.Fatal(err)
 	}
-	if targetBuilds != 3 || targetSnapshots != 2 || targetFilesCount != 2 {
+	if targetBuilds != 2 || targetSnapshots != 2 || targetFilesCount != 2 {
 		t.Fatalf("repeat import duplicated reusable installation data: builds=%d snapshots=%d files=%d", targetBuilds, targetSnapshots, targetFilesCount)
 	}
 
@@ -506,8 +529,25 @@ func sitepackCrossInstallVitasilConfig(t *testing.T, manifests map[string]sitebu
 	t.Helper()
 	catalog := modelAcceptancePort(t, manifests["catalog"], "products")
 	mainProducts := modelAcceptancePort(t, manifests["main-data"], "products")
-	modelAcceptanceAssertSameOutputShape(t, catalog, mainProducts, "main-data.products")
 	model, product, productIDs, productKeys := modelAcceptanceEntity("product", "Товар", catalog, false)
+	// A shared model entity may expose a superset of fields consumed by one
+	// feature. Current main-data also uses composition, packaging, and document
+	// media fields that the catalog does not render, so merge the typed inputs
+	// into Product rather than requiring identical output shapes.
+	for _, output := range mainProducts.Fields {
+		if fieldID, exists := productIDs[output.Path]; exists {
+			for _, field := range product.Fields {
+				if field.ID == fieldID && (field.Type != output.Type || !reflect.DeepEqual(field.Options, output.Values)) {
+					t.Fatalf("Vitasil shared Product field %s has incompatible contracts: model=%+v main-data=%+v", output.Path, field, output)
+				}
+			}
+			continue
+		}
+		field := sitebuilder.DataModelField{ID: uuid.NewString(), Key: fmt.Sprintf("field_%d", len(product.Fields)), Name: modelAcceptanceFieldName(output.Path), Type: output.Type, Options: append([]string(nil), output.Values...)}
+		product.Fields = append(product.Fields, field)
+		productIDs[output.Path], productKeys[output.Path] = field.ID, field.Key
+	}
+	model.Entities[0] = product
 	entityIDs := map[string]string{"entity.product": product.ID}
 	ids := map[string]string{"entity.product": product.ID}
 	pathKeys := map[string]string{}

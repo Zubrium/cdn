@@ -145,6 +145,60 @@ func TestValidateSitepackModelContentChecksHistoryAndAllStates(t *testing.T) {
 	}
 }
 
+func TestSitepackPreservesHistorySelectionsForRemovedPlacements(t *testing.T) {
+	index, old := sitepackModelFixture()
+	index.Payload.Config.Pages[0].Placements[0].DataBindings = nil
+	index.ModelContent.DraftSelections = nil
+	index.ModelContent.PublishedSelections = nil
+	index.ModelContent.History[0].Selections[0].PlacementID = "removed-placement"
+	index.ModelContent.Revision = 3
+	index.ModelContent.PublishedRevision = 2
+	index.ModelContent.ContentRevision = 2
+	latest := index.ModelContent.History[0]
+	latest.ID = uuid.New()
+	latest.DraftRevision = 2
+	latest.ContentRevision = 2
+	latest.CreatedAt = latest.CreatedAt.Add(time.Minute)
+	latest.Records = append([]ModelContentRecord(nil), latest.Records...)
+	latest.Selections = []ModelContentSelection{}
+	index.ModelContent.History = append(index.ModelContent.History, latest)
+	if err := validateSitepackModelContent(index); err != nil {
+		t.Fatalf("historical selection for a removed placement must not block export: %v", err)
+	}
+	if got := index.ModelContent.History[0].Selections[0].PlacementID; got != "removed-placement" {
+		t.Fatalf("historical placement reference was rewritten: %q", got)
+	}
+	mapping, err := remapSitepackModelIdentities(index)
+	if err != nil {
+		t.Fatalf("remap sitepack with a historical selection for a removed placement: %v", err)
+	}
+	if err := validateSitepackModelContent(index); err != nil {
+		t.Fatalf("import validation rejected round-tripped historical state: %v", err)
+	}
+	selection := index.ModelContent.History[0].Selections[0]
+	if selection.PlacementID != "removed-placement" || len(selection.RecordIDs) != 1 || selection.RecordIDs[0] != mapping.records[old["productRecord"]] {
+		t.Fatalf("historical selection was not preserved and remapped: %+v", selection)
+	}
+
+	broken := *index
+	content := *index.ModelContent
+	broken.ModelContent = &content
+	content.History = append([]packModelPublication(nil), index.ModelContent.History...)
+	content.History[0].Selections = append([]ModelContentSelection(nil), index.ModelContent.History[0].Selections...)
+	content.History[0].Selections[0].RecordIDs = []string{uuid.NewString()}
+	if err := validateSitepackModelContent(&broken); err == nil {
+		t.Fatal("historical selection of a record absent from its publication was accepted")
+	}
+
+	broken = *index
+	content = *index.ModelContent
+	broken.ModelContent = &content
+	content.DraftSelections = []ModelContentSelection{{PlacementID: "removed-placement", InputKey: "products", Mode: "ids", RecordIDs: []string{content.DraftRecords[0].ID}}}
+	if err := validateSitepackModelContent(&broken); err == nil {
+		t.Fatal("current draft selection for a removed placement must remain invalid")
+	}
+}
+
 func TestSitepackSeedsSingletonDraftWithoutPublishingIt(t *testing.T) {
 	entityID, fieldID := uuid.NewString(), uuid.NewString()
 	recordID := uuid.NewString()

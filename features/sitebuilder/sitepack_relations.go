@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -82,7 +83,7 @@ func validateSitepackModelContent(index *sitepackIndex) error {
 		}
 		publication.Records = nonNilModelRecords(publication.Records)
 		publication.Selections = nonNilModelSelections(publication.Selections)
-		if err := validateModelContentWithoutEntityCardinality(*model, placements, publication.Records, publication.Selections); err != nil {
+		if err := validateSitepackHistoricalModelState(*model, placements, publication.Records, publication.Selections); err != nil {
 			return fmt.Errorf("%w: history[%d]: %v", ErrInvalid, i, err)
 		}
 		seenPublicationIDs[publication.ID.String()] = true
@@ -119,6 +120,57 @@ func validateSitepackModelContent(index *sitepackIndex) error {
 			if !bytes.Equal(current, published) {
 				return fmt.Errorf("%w: current published model content differs from its latest history entry", ErrInvalid)
 			}
+		}
+	}
+	return nil
+}
+
+// Historical publication rows are immutable content snapshots. A later child
+// snapshot may remove placements or change a typed input's binding, so validate
+// historical selections by their intrinsic shape and record references without
+// requiring the old structural contract to still exist. Draft and published
+// workspace states always use strict current-payload checks.
+func validateSitepackHistoricalModelState(model DataModel, placements []ModelContentPlacement, records []ModelContentRecord, selections []ModelContentSelection) error {
+	if err := validateModelContentWithoutEntityCardinality(model, placements, records, nil); err != nil {
+		return err
+	}
+	recordsByID := make(map[string]ModelContentRecord, len(records))
+	for _, record := range records {
+		recordsByID[record.ID] = record
+	}
+	seen := make(map[string]bool, len(selections))
+	for index, selection := range selections {
+		path := fmt.Sprintf("modelContent.selections[%d]", index)
+		if strings.TrimSpace(selection.PlacementID) == "" || strings.TrimSpace(selection.InputKey) == "" {
+			return fmt.Errorf("%s: placementId and inputKey are required", path)
+		}
+		key := selection.PlacementID + "\x00" + selection.InputKey
+		if seen[key] {
+			return fmt.Errorf("%s: duplicate historical selection", path)
+		}
+		seen[key] = true
+		switch selection.Mode {
+		case "all":
+			if len(selection.RecordIDs) != 0 {
+				return fmt.Errorf("%s.recordIds: all mode must not list record IDs", path)
+			}
+		case "ids":
+			seenIDs := make(map[string]bool, len(selection.RecordIDs))
+			for recordIndex, recordID := range selection.RecordIDs {
+				recordPath := fmt.Sprintf("%s.recordIds[%d]", path, recordIndex)
+				if err := validateModelContentUUID(recordID); err != nil {
+					return fmt.Errorf("%s: %w", recordPath, err)
+				}
+				if seenIDs[recordID] {
+					return fmt.Errorf("%s: duplicate selected record ID %q", recordPath, recordID)
+				}
+				seenIDs[recordID] = true
+				if _, exists := recordsByID[recordID]; !exists {
+					return fmt.Errorf("%s: selected record does not exist", recordPath)
+				}
+			}
+		default:
+			return fmt.Errorf("%s.mode: must be all or ids", path)
 		}
 	}
 	return nil

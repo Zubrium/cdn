@@ -464,6 +464,8 @@
 
 Приёмка межинсталляционного переноса и S3 fault injection, 7 ноября: `TestSitepackCrossInstallationAcceptance` прошёл между двумя отдельными disposable PostgreSQL и MinIO. Проверены восстановление контента и relation overlays, перенос только использованного публичного файла, checksum байтов, отсутствие private-файла/заявок/credentials и назначения ветки, ID remap, повторное использование builds/files, rollback после S3 ответа-ошибки с сохранённым частичным объектом, retry cleanup после Delete-ошибки и повторный импорт. Перед обоими сбросами и после завершения сессии проверены имена БД и отсутствие других подключений. Production gateway/CDN остаются внешним инфраструктурным ограничением и не входят в проверенную локальную среду.
 
+11 ноября: экспорт snapshot `c4576126-c987-456a-b48a-b5a5e20d279a` из Vitasil preview исправлен и сохранён в `vitasil/snapshots/vitasil-snapshot-22.sitepack`; ZIP integrity прошла. Исправлены две актуальные fixture/validation проблемы: история сохраняет selections удалённых placements, а cross-install fixture объединяет superset-входы Vitasil `main-data.products` и `catalog.products` в общую сущность Product. Unit и cross-install acceptance прошли; точные команды и disposable resources записаны в [QA_REPORT.md](QA_REPORT.md). Полный regression suite не запускался.
+
 ## TODO 6. Добавить стандартные ошибки и системные страницы
 
 - [x] Определить стандартные состояния: 404, 403, 500, отсутствие активного снапшота («Сайт ещё не настроен»), ошибка загрузки данных и временная недоступность.
