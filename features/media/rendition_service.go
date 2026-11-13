@@ -387,13 +387,16 @@ func (s *Service) hydrateMedia(ctx context.Context, id uuid.UUID, schema map[str
 		return nil, err
 	}
 	if !hasProfile || !needsProcessing(profile) {
-		return ImageSource{ID: id.String(), Kind: "image", OriginalURL: "/media/" + id.String(), Src: "/media/" + id.String()}, nil
+		return originalImageSource(id), nil
 	}
 	hash, err := ProfileHash(profile)
 	if err != nil {
 		return nil, err
 	}
 	record, err := s.repo.GetRendition(ctx, id, hash)
+	if profile.Accept == "raster-image" {
+		return hydrateRasterMediaSource(id, profile, record, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("required media rendition is missing: %w", err)
 	}
@@ -410,6 +413,31 @@ func (s *Service) hydrateMedia(ctx context.Context, id uuid.UUID, schema map[str
 			posterURL = publicRenditionPath(id, hash, "poster")
 		}
 		return VideoSource{ID: id.String(), Kind: "video", OriginalURL: "/media/" + id.String(), SourceURL: publicRenditionPath(id, hash, "video"), MIMEType: video.MIMEType, PosterURL: posterURL}, nil
+	}
+	return nil, fmt.Errorf("unsupported media profile type %q", profile.Accept)
+}
+
+func originalImageSource(id uuid.UUID) ImageSource {
+	url := "/media/" + id.String()
+	return ImageSource{ID: id.String(), Kind: "image", OriginalURL: url, Src: url}
+}
+
+// hydrateRasterMediaSource keeps published pages available while an optional
+// responsive rendition is queued or retried. Once the ready record appears,
+// subsequent runtime projections automatically use its width-aware variants.
+func hydrateRasterMediaSource(id uuid.UUID, profile FieldProfile, record RenditionRecord, lookupErr error) (ImageSource, error) {
+	if lookupErr != nil {
+		if errors.Is(lookupErr, ErrNotFound) {
+			return originalImageSource(id), nil
+		}
+		return ImageSource{}, fmt.Errorf("required media rendition lookup failed: %w", lookupErr)
+	}
+	if record.Status != "ready" {
+		return originalImageSource(id), nil
+	}
+	hash, err := ProfileHash(profile)
+	if err != nil {
+		return ImageSource{}, err
 	}
 	variants := make(map[string]Output, len(profile.Renditions))
 	for name, output := range record.Outputs {
