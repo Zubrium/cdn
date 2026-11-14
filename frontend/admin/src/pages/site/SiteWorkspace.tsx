@@ -9,7 +9,6 @@ import { useConfirm } from "@/components/common/confirm";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import type { SiteConfig, SiteMetadata, SiteSnapshot } from "@/types";
-import { formatSnapshotDate, snapshotCreationLines, snapshotCreatorLabel } from "@/domains/snapshots/provenance";
 import { hasCompetingSiteDraftChange, parseSiteDraft, siteDraftKey } from "./workspace-draft";
 import type { StructuredDesignSystem } from "@/domains/design-system/types";
 import { featureVersionChanges, normalizeFeatureComposition } from "./feature-selection";
@@ -37,6 +36,14 @@ type Workspace = {
 const WorkspaceContext = createContext<Workspace | null>(null);
 const emptyDesignSystem: StructuredDesignSystem = {formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: []};
 const SNAPSHOT_NAME_LIMIT = 160;
+const siteEditorModes = [
+  ["/site/pages", "Канвас"],
+  ["/site/features", "Версии"],
+  ["/site/settings", "Настройки сайта"],
+  ["/site/design-system", "Дизайн-система"],
+  ["/site/data-model", "Модель данных"],
+] as const;
+const siteEditorModePaths = new Set<string>(siteEditorModes.map(([path]) => path));
 
 function childSnapshotName(snapshot: SiteSnapshot): string {
   const base = snapshot.name.replace(/(?: · изменение(?: после #\d+)?)$/u, "").trim() || snapshot.name.trim();
@@ -180,8 +187,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const allDirty = dirty || JSON.stringify(metadata) !== JSON.stringify(savedMetadata) || JSON.stringify(designSystem) !== JSON.stringify(savedDesignSystem);
   const guard = useUnsavedChangesGuard(allDirty, guardBypass, {
     allowPathChange: (current, next) => {
-      const workspaceModes = ["/site/pages", "/site/settings", "/site/design-system", "/site/data-model"];
-      return workspaceModes.includes(current) && workspaceModes.includes(next);
+      return siteEditorModePaths.has(current) && siteEditorModePaths.has(next);
     },
     protectSearch: (current, next) => new URLSearchParams(current).get("snapshot") !== new URLSearchParams(next).get("snapshot"),
   });
@@ -341,19 +347,11 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             </SelectContent>
           </Select>
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
-            {[["/site/pages", "Канвас"], ["/site/settings", "Настройки сайта"], ["/site/design-system", "Дизайн-система"], ["/site/data-model", "Модель данных"]].map(([path, label]) => <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={location.pathname === path ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${location.pathname === path ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>)}
+            {siteEditorModes.map(([path, label]) => <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={location.pathname === path ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${location.pathname === path ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>)}
           </nav>
           <Button type="button" size="sm" className="ml-auto" disabled={!allDirty || saving} onClick={() => void save()}>{saving ? "Сохраняем…" : allDirty ? "Сохранить" : "Сохранено"}</Button>
           {localSaveError && <span role="alert" className="text-xs text-destructive">Локальное автосохранение недоступно или копия изменена в другой вкладке. Сохраните изменения в снапшот.</span>}
         </div>}
-        {snapshot && <section aria-label="Сведения о снапшоте" className="mx-4 mt-3 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-          <p>Создан {formatSnapshotDate(snapshot.createdAt)} · Инициатор: {snapshotCreatorLabel(snapshot)} · {snapshot.parentSnapshotId
-            ? snapshot.parentSequence && snapshot.parentName ? `Родитель: #${snapshot.parentSequence} · ${snapshot.parentName}` : "Есть родительский снапшот"
-            : "Корневой снапшот"}</p>
-          {snapshot.creationSummary && <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-            {snapshotCreationLines(snapshot.creationSummary).map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
-          </ul>}
-        </section>}
         {snapshot?.warnings && snapshot.warnings.length > 0 && (
           <section role="alert" className="mx-4 mt-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
             <p className="font-medium">Проверьте совместимость содержимого</p>
