@@ -88,8 +88,8 @@ describe("DataInputBindingsEditor relation paths", () => {
     expect(markup).toContain("Товар → связь «Метки товара» → Метка → Название метки");
     expect(markup).toContain(`value="${productCategoryRelationID}|${categoryNameID}" selected=""`);
     expect(markup).toContain(`value="${productTagsRelationID}|${tagNameID}" selected=""`);
-    expect(markup).toContain("products → category → name");
-    expect(markup).toContain("products → tags → элемент списка → label");
+    expect(markup).toContain("Products → Category → Name");
+    expect(markup).toContain("Products → Tags → элемент списка → Label");
     expect(markup).not.toContain("/category/name");
     expect(markup).not.toContain("/tags/*/label");
     expect(markup).not.toContain("Загрузить");
@@ -105,7 +105,7 @@ describe("DataInputBindingsEditor relation paths", () => {
     }];
     const markup = render(ports, bindings);
 
-    expect(markup).toContain('aria-label="Поле модели для scalar subtitle"');
+    expect(markup).toContain('aria-label="Поле модели для Subtitle"');
     expect(markup).toContain("Товар → связь «Категория товара» → Категория → Название категории");
     expect(markup).toContain(`value="${productCategoryRelationID}|${categoryNameID}" selected=""`);
     expect(markup).not.toContain("Название метки");

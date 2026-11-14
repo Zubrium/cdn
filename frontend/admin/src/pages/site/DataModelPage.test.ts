@@ -39,12 +39,12 @@ import DataModelPage, {
   removeDataModelEntity,
   removeDataModelField,
   removeDataModelRelation,
+  RelationInspector,
   setDataModelEntityPosition,
   updateDataModelEntityCardinality,
   updateDataModelRelation,
 } from "./DataModelPage";
 import { DataModelGraphCanvas } from "./components/data-model/DataModelGraphCanvas";
-import type { DataModelEntityCardActions } from "./components/data-model/DataModelEntityCard";
 
 const productID = "11111111-1111-4111-8111-111111111111";
 const categoryID = "22222222-2222-4222-8222-222222222222";
@@ -385,21 +385,15 @@ describe("data model page accessibility", () => {
     mocks.useConfirm.mockReturnValue(vi.fn(async () => false));
   });
 
-  it("defaults to an editable keyboard list with named controls and optional CMS fields", () => {
+  it("renders only the ER canvas with the selected entity in the inspector", () => {
     const markup = renderToStaticMarkup(createElement(DataModelPage));
 
-    expect(markup).toContain('aria-label="Сущности модели, список"');
-    expect(markup).toContain('<ol class="grid list-none');
-    expect(markup).toContain('aria-pressed="true"');
-    expect(markup).toContain("Карточки модели");
-    expect(markup).toContain("ER-граф");
-    expect(markup).toContain("Переименование сохраняет системные ID и привязки.");
-    expect(markup).toContain("При удалении покажем затронутые размещения");
-    expect(markup).toContain("Один к одному");
-    expect(markup).toContain("Один ко многим");
-    expect(markup).toContain("Многие ко многим");
+    expect(markup).toContain('aria-label="ER-канвас модели данных"');
+    expect(markup).toContain('aria-label="Инспектор модели данных"');
+    expect(markup).not.toContain("Карточки модели");
+    expect(markup).not.toContain(">ER-граф<");
+    expect(markup).toContain("Создать связь");
     expect(markup).toContain(`aria-labelledby="data-model-entity-title-${productID}"`);
-    expect(markup).toContain(`id="data-model-entity-title-${productID}"`);
     expect(markup).toContain("Название сущности");
     expect(markup).toContain('aria-label="Количество записей сущности Товар"');
     expect(markup).toContain('<option value="many" selected="">Много записей</option>');
@@ -408,18 +402,13 @@ describe("data model page accessibility", () => {
     expect(markup).toContain("Тип поля");
     expect(markup).toContain(`aria-label="Варианты поля Статус сущности Товар"`);
     expect(markup).toContain(`aria-label="Удалить поле Статус из сущности Товар"`);
-    expect(markup).toContain(`aria-label="Удалить связь Товар — принадлежит — Категория"`);
-    expect(markup).toContain(`aria-label="Название связи Товар — Категория"`);
-    expect(markup).toContain(`aria-label="Тип связи Товар — принадлежит — Категория"`);
     expect(markup).toContain(`aria-label="Переместить поле Название выше"`);
     expect(markup).toContain(`aria-label="Переместить поле Статус ниже"`);
     expect(markup).toContain(`id="${dataModelEntityNameControlID(productID)}"`);
     expect(markup).toContain(`id="${dataModelFieldNameControlID(titleFieldID)}"`);
-    expect(markup).toContain(`id="${dataModelRelationNameControlID(relationID)}"`);
-    expect(markup).toContain('id="data-model-new-relation-from"');
-    expect(markup).toContain('id="data-model-new-relation-name"');
-    expect(markup).toContain("Все поля записей необязательны");
-    expect(markup).not.toContain("обязательность редактируются");
+    expect(markup).toContain('aria-label="Сдвинуть сущность Товар влево"');
+    expect(markup).toContain('aria-label="Сдвинуть сущность Товар вправо"');
+    expect(markup).not.toContain("Сущности модели, список");
   });
 
   it("associates duplicate relationship errors with fields and keeps the conflicting value visible", () => {
@@ -437,19 +426,17 @@ describe("data model page accessibility", () => {
         },
       ],
     };
-    mocks.useSiteWorkspace.mockReturnValue({ config: { ...config, dataModel: duplicate }, update: vi.fn() });
-
-    const markup = renderToStaticMarkup(createElement(DataModelPage));
+    const markup = renderToStaticMarkup(createElement(RelationInspector, {
+      relation: duplicate.relations![0]!,
+      model: duplicate,
+      onChangeName: () => {},
+      onChangeCardinality: () => {},
+      onRemove: () => {},
+    }));
     const firstErrorID = `data-model-relation-name-error-${relationID}`;
-    const secondRelationID = "99999999-9999-4999-8999-999999999999";
-    const secondErrorID = `data-model-relation-name-error-${secondRelationID}`;
 
     expect(markup).toContain(`id="${dataModelRelationNameControlID(relationID)}" required="" aria-invalid="true" aria-describedby="${firstErrorID}"`);
-    expect(markup).toContain(`aria-describedby="${firstErrorID}"`);
-    expect(markup).toContain(`id="${firstErrorID}" class="text-destructive" role="alert">Такая связь уже есть. Измените название или направление.</span>`);
-    expect(markup).toContain(`id="${dataModelRelationNameControlID(secondRelationID)}" required="" aria-invalid="true" aria-describedby="${secondErrorID}"`);
-    expect(markup).toContain(`aria-describedby="${secondErrorID}"`);
-    expect(markup).toContain(`id="${secondErrorID}" class="text-destructive" role="alert">Такая связь уже есть. Измените название или направление.</span>`);
+    expect(markup).toContain(`id="${firstErrorID}" class="text-xs text-destructive" role="alert">Такая связь уже есть. Измените название или направление.</span>`);
     expect(markup).toContain(`value="${duplicatedName}"`);
   });
 
@@ -483,27 +470,21 @@ describe("data model page accessibility", () => {
 });
 
 describe("data model graph component", () => {
-  it("renders labelled relations and keyboard movement controls", () => {
-    const noOp = () => {};
-    const actions: DataModelEntityCardActions = {
-      onAddField: noOp,
-      onChangeFieldType: noOp,
-      onChangeEntityCardinality: noOp,
-      onMoveEntity: noOp,
-      onMoveField: noOp,
-      onRemoveEntity: noOp,
-      onRemoveField: noOp,
-      onRenameEntity: noOp,
-      onRenameField: noOp,
-      onUpdateField: noOp,
-    };
-    const markup = renderToStaticMarkup(createElement(DataModelGraphCanvas, { model, ...actions }));
+  it("renders a compact editable ER canvas with human-readable labels", () => {
+    const markup = renderToStaticMarkup(createElement(DataModelGraphCanvas, {
+      model,
+      onSelectEntity: () => {},
+      onSelectRelation: () => {},
+      onMoveEntity: () => {},
+    }));
 
-    expect(markup).toContain('aria-label="Граф связей модели данных"');
-    expect(markup).toContain('aria-label="Схема связей. Для перемещения используйте кнопки на карточках"');
-    expect(markup).toContain("принадлежит · Один ко многим");
-    expect(markup).toContain('aria-label="Количество записей сущности Товар"');
-    expect(markup).toContain('aria-label="Сдвинуть сущность Товар влево"');
-    expect(markup).toContain('aria-label="Сдвинуть сущность Категория вправо"');
+    expect(markup).toContain('aria-label="ER-канвас модели данных"');
+    expect(markup).toContain('aria-label="Схема сущностей и связей"');
+    expect(markup).toContain("принадлежит");
+    expect(markup).toContain("Один ко многим");
+    expect(markup).toContain("Товар");
+    expect(markup).toContain("Категория");
+    expect(markup).not.toContain(productID);
+    expect(markup).not.toContain(categoryID);
   });
 });

@@ -98,7 +98,7 @@ export function DataModelEntityCard({
       <p className="text-xs text-muted-foreground">{entity.fields.length} {entity.fields.length === 1 ? "поле" : "полей"}</p>
 
       <div className="max-h-80 space-y-2 overflow-auto pr-1">
-        {entity.fields.map((field, fieldIndex) => <fieldset key={field.id} className="grid min-w-0 grid-cols-1 items-end gap-2 rounded-md border border-border p-2 sm:grid-cols-[minmax(0,1fr)_9rem_auto]">
+        {entity.fields.map((field, fieldIndex) => <fieldset key={field.id} className={`grid min-w-0 grid-cols-1 items-end gap-2 rounded-md border border-border p-2 ${graphView ? "sm:grid-cols-[minmax(0,1fr)_9rem_auto]" : ""}`}>
           <legend className="sr-only">Поле {field.name} сущности {entity.name || "без названия"}</legend>
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">
             <span>Название поля</span>

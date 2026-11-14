@@ -12,7 +12,6 @@ import type { SiteConfig, SiteMetadata, SiteSnapshot } from "@/types";
 import { hasCompetingSiteDraftChange, parseSiteDraft, siteDraftKey } from "./workspace-draft";
 import type { StructuredDesignSystem } from "@/domains/design-system/types";
 import { featureVersionChanges, normalizeFeatureComposition } from "./feature-selection";
-import { ExternalBackendSettings } from "./components/workspace/ExternalBackendSettings";
 
 type Workspace = {
   config: SiteConfig;
@@ -24,8 +23,6 @@ type Workspace = {
   saving: boolean;
   conflict: boolean;
   localSaveError: boolean;
-  pageEditorOpen: boolean;
-  setPageEditorOpen: (open: boolean) => void;
   update: (next: SiteConfig | ((current: SiteConfig) => SiteConfig)) => void;
   updateMetadata: (next: SiteMetadata | ((current: SiteMetadata) => SiteMetadata)) => void;
   updateDesignSystem: (next: StructuredDesignSystem | ((current: StructuredDesignSystem) => StructuredDesignSystem)) => void;
@@ -37,8 +34,9 @@ const WorkspaceContext = createContext<Workspace | null>(null);
 const emptyDesignSystem: StructuredDesignSystem = {formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: []};
 const SNAPSHOT_NAME_LIMIT = 160;
 const siteEditorModes = [
-  ["/site/pages", "Канвас"],
+  ["/site/pages", "Страницы"],
   ["/site/features", "Версии"],
+  ["/site/backend", "Бэкенд"],
   ["/site/settings", "Настройки сайта"],
   ["/site/design-system", "Дизайн-система"],
   ["/site/data-model", "Модель данных"],
@@ -91,7 +89,6 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [localSaveError, setLocalSaveError] = useState(false);
-  const [pageEditorOpen, setPageEditorOpen] = useState(false);
   const currentConfig = useRef<SiteConfig | null>(null);
   const currentMetadata = useRef<SiteMetadata>({formatVersion: 1, siteName: "Website", pages: {}});
   const currentDesignSystem = useRef<StructuredDesignSystem>(emptyDesignSystem);
@@ -329,10 +326,10 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
 
   const canvas = location.pathname === "/site/pages" || location.pathname === "/site/router" || location.pathname === "/site/data-model";
   return (
-    <WorkspaceContext.Provider value={{ config, metadata, designSystem, revision: snapshot?.sequence ?? 0, snapshot, dirty: allDirty, saving, conflict, localSaveError, pageEditorOpen, setPageEditorOpen, update, updateMetadata, updateDesignSystem, save, reload }}>
+    <WorkspaceContext.Provider value={{ config, metadata, designSystem, revision: snapshot?.sequence ?? 0, snapshot, dirty: allDirty, saving, conflict, localSaveError, update, updateMetadata, updateDesignSystem, save, reload }}>
       {guard.dialog}
       <div className={canvas ? "flex h-full min-h-0 flex-col" : "min-w-0"}>
-        {!pageEditorOpen && <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
+        <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
           <span className="text-xs text-muted-foreground">Снапшот</span>
           <Select value={selected || "new"} disabled={saving} onValueChange={async (value) => {
             if (allDirty && !(await confirm({ title: "Отбросить изменения?", description: "Несохранённые изменения редактора будут потеряны.", confirmLabel: "Отбросить", destructive: true }))) return;
@@ -349,9 +346,14 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
             {siteEditorModes.map(([path, label]) => <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={location.pathname === path ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${location.pathname === path ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>)}
           </nav>
-          <Button type="button" size="sm" className="ml-auto" disabled={!allDirty || saving} onClick={() => void save()}>{saving ? "Сохраняем…" : allDirty ? "Сохранить" : "Сохранено"}</Button>
+          <span role="status" aria-live="polite" className={`ml-auto text-xs ${allDirty ? "text-warning" : "text-success"}`}>{allDirty ? "Есть изменения" : "Сохранено"}</span>
+          {conflict && <Button type="button" size="sm" variant="outline" disabled={saving} onClick={async () => {
+            if (allDirty && !(await confirm({ title: "Загрузить актуальную версию?", description: "Несохранённые изменения локальной рабочей копии будут заменены.", confirmLabel: "Загрузить", cancelLabel: "Остаться", destructive: true }))) return;
+            await reload();
+          }}>Загрузить актуальную версию</Button>}
+          <Button type="button" size="sm" className="ml-auto" disabled={!allDirty || saving} onClick={() => void save()}>{saving ? "Сохраняем…" : "Сохранить"}</Button>
           {localSaveError && <span role="alert" className="text-xs text-destructive">Локальное автосохранение недоступно или копия изменена в другой вкладке. Сохраните изменения в снапшот.</span>}
-        </div>}
+        </div>
         {snapshot?.warnings && snapshot.warnings.length > 0 && (
           <section role="alert" className="mx-4 mt-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
             <p className="font-medium">Проверьте совместимость содержимого</p>
@@ -359,11 +361,6 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
           </section>
         )}
         <div className={canvas ? "min-h-0 flex-1" : ""}>{children ?? <Outlet />}</div>
-        {location.pathname === "/site/settings" && <ExternalBackendSettings
-          config={config}
-          onBackendsChange={(backends) => update((current) => ({ ...current, backends }))}
-          onConstantsChange={(publicConstants) => update((current) => ({ ...current, publicConstants }))}
-        />}
       </div>
     </WorkspaceContext.Provider>
   );

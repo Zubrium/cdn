@@ -31,6 +31,7 @@ const SnapshotsPage = lazy(() => import("@/pages/site/SnapshotsPage"));
 const BranchesPage = lazy(() => import("@/pages/site/BranchesPage"));
 const SiteWorkspace = lazy(() => import("@/pages/site/SiteWorkspace").then((module) => ({ default: module.SiteWorkspace })));
 const SiteMetadataPage = lazy(() => import("@/pages/content/SiteMetadataPage"));
+const BackendPage = lazy(() => import("@/pages/site/BackendPage"));
 
 function RedirectWithSearch({ to }: { to: string }) {
   const location = useLocation();
@@ -133,6 +134,7 @@ export const router = createBrowserRouter(
                   { index: true, element: <Navigate to="pages" replace /> },
                   { path: "router", element: <Navigate to="../pages" replace /> },
                   { path: "features", element: <FeatureRegistryPage /> },
+                  { path: "backend", element: <BackendPage /> },
                   { path: "pages", element: <RouterPage /> },
                   { path: "settings", element: <SiteMetadataPage /> },
                   { path: "design-system", element: <DesignSystemPage /> },

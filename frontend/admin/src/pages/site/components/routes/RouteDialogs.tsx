@@ -6,6 +6,8 @@ import type { RouteTreeNode, SitePage } from "@/types";
 import { describeRoutes } from "../../route-tree";
 import type { RouteDialogState } from "./route-types";
 import { childNodeFromSegment, comparableRootPath, currentNode, defaultRootPath, isDescendant, pageName, parseAbsolutePath, readRootPath, readRouteSegment, suggestedName } from "./route-utils";
+import { RouteBuilder } from "./RouteBuilder";
+import { duplicateRouteCaptures, routeCapturePreview } from "./route-builder";
 
 export function RouteEditorDialog({
   state,
@@ -28,6 +30,14 @@ export function RouteEditorDialog({
   const [name, setName] = useState("");
   const [kind, setKind] = useState<SitePage["kind"]>("page");
   const [error, setError] = useState("");
+  const capturePreview = routeCapturePreview(value);
+  const inheritedCaptures =
+    state?.mode === "child"
+      ? describeRoutes(tree).find((route) => route.id === state.parentId)?.captures ?? []
+      : descriptor?.parentId
+        ? describeRoutes(tree).find((route) => route.id === descriptor.parentId)?.captures ?? []
+        : [];
+  const duplicateCaptures = duplicateRouteCaptures(inheritedCaptures, value);
 
   useEffect(() => {
     if (!state) return;
@@ -41,6 +51,10 @@ export function RouteEditorDialog({
 
   const submit = () => {
     if (!state) return;
+    if (duplicateCaptures.length) {
+      setError(`Имена значений из пути должны быть уникальными: ${duplicateCaptures.join(", ")}.`);
+      return;
+    }
     const id = node?.id ?? `route-${crypto.randomUUID().slice(0, 8)}`;
     const selectedPage = pageTarget !== "__new" && pageTarget !== "__none" ? pages.find((page) => page.id === pageTarget) : undefined;
     const page = pageTarget === "__new" ? { id: `page-${crypto.randomUUID().slice(0, 8)}`, name: name.trim() || suggestedName(value), kind, placements: [] } satisfies SitePage : undefined;
@@ -89,7 +103,13 @@ export function RouteEditorDialog({
     }}>
       <DialogHeader><DialogTitle>{state?.mode === "edit" ? "Настроить маршрут" : state?.mode === "child" ? "Добавить дочерний маршрут" : "Добавить самостоятельный маршрут"}</DialogTitle><DialogDescription>{isRoot ? "Корень задаёт полный URL. Дочерние узлы продолжат его следующими сегментами." : "Укажите один сегмент, который добавится к пути родителя."}</DialogDescription></DialogHeader>
       <div className="space-y-4">
-        <div className="space-y-1.5"><Label htmlFor="route-value">{isRoot ? "Полный URL" : "Сегмент"}</Label><Input className="min-h-11" id="route-value" value={value} onChange={(event) => { setValue(event.currentTarget.value); if (pageTarget === "__new") setName(suggestedName(event.currentTarget.value)); setError(""); }} placeholder={isRoot ? "/about" : "products, :slug, ~(?<id>[0-9]+), *path"} /><p className="text-xs leading-5 text-muted-foreground">Статический текст · :параметр · ~regex-сегмент · *catch-all. Catch-all может быть только последним.</p></div>
+        <div className="space-y-1.5">
+          <Label htmlFor="route-value">{isRoot ? "Маршрут страницы" : "Сегмент маршрута"}</Label>
+          <Input className="min-h-11 font-mono text-sm" id="route-value" value={value} onChange={(event) => { setValue(event.currentTarget.value); if (pageTarget === "__new") setName(suggestedName(event.currentTarget.value)); setError(""); }} placeholder={isRoot ? "/products/:slug" : ":slug"} />
+          <p className="text-xs leading-5 text-muted-foreground">{isRoot ? "Введите весь URL или соберите его из понятных сегментов ниже." : "Введите один сегмент или соберите его без знания регулярных выражений."}</p>
+          <p role="status" className="text-xs text-muted-foreground">{capturePreview.length ? `Из пути будут извлечены значения: ${capturePreview.join(", ")}.` : "Маршрут статический; параметры пути не извлекаются."}</p>
+          <RouteBuilder isRoot={isRoot} value={value} onChange={(next) => { setValue(next); if (pageTarget === "__new") setName(suggestedName(next)); setError(""); }} />
+        </div>
         <div className="space-y-1.5"><Label htmlFor="route-page">Страница</Label><select id="route-page" className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm" value={pageTarget} onChange={(event) => { setPageTarget(event.currentTarget.value); setError(""); }}><option value="__new">Создать страницу</option>{pageTarget === "__select" && <option value="__select" disabled>Выберите страницу</option>}{state?.mode === "edit" && Boolean(node?.children?.length) && <option value="__none">Оставить узел без страницы</option>}{pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></div>
         {pageTarget === "__new" && <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]"><div className="space-y-1.5"><Label htmlFor="route-page-name">Название страницы</Label><Input className="min-h-11" id="route-page-name" value={name} onChange={(event) => setName(event.currentTarget.value)} /></div><label className="space-y-1.5 text-sm"><span className="font-medium">Тип страницы</span><select className="h-11 w-full rounded-md border border-input bg-background px-3" value={kind} onChange={(event) => setKind(event.currentTarget.value as SitePage["kind"])}><option value="page">Обычная страница</option><option value="collection-list">Список коллекции</option><option value="detail">Карточка записи</option></select></label></div>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

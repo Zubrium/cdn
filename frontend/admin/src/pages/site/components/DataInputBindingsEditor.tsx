@@ -1,11 +1,13 @@
 import { Link } from "react-router-dom";
 import type { DataInputBinding, DataInputField, DataInputFieldBinding, DataInputPort, DataModel, DataModelField, FeatureArgumentBinding } from "@/types";
+import type { SchemaField } from "./page-editor/schema";
 
 type Props = {
   ports: DataInputPort[];
   dataModel?: DataModel;
   bindings: DataInputBinding[];
   arguments?: Record<string, FeatureArgumentBinding>;
+  argumentFields?: Record<string, SchemaField>;
   routeCaptures: string[];
   snapshotId: string;
   onChange: (bindings: DataInputBinding[]) => void;
@@ -121,7 +123,29 @@ function compatibleRelationFieldsIgnoringCardinality(model: DataModel, rootEntit
 
 function readableInputPath(portKey: string, path: string): string {
   const segments = path.split("/").slice(1).map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
-  return [portKey, ...segments.map((segment) => segment === "*" ? "элемент списка" : segment)].join(" → ");
+  return [readableName(portKey), ...segments.map((segment) => segment === "*" ? "элемент списка" : readableName(segment))].join(" → ");
+}
+
+function readableName(value: string): string {
+  const spaced = value.replace(/[_-]+/gu, " ").replace(/([a-z0-9])([A-Z])/gu, "$1 $2").trim();
+  return spaced ? spaced.charAt(0).toLocaleUpperCase("ru") + spaced.slice(1) : "Значение";
+}
+
+function fieldTypeLabel(type: DataModelField["type"] | undefined): string {
+  const labels: Partial<Record<DataModelField["type"], string>> = {
+    text: "текст",
+    longText: "длинный текст",
+    integer: "целое число",
+    number: "число",
+    boolean: "да или нет",
+    date: "дата",
+    dateTime: "дата и время",
+    url: "ссылка",
+    email: "email",
+    enum: "варианты",
+    media: "файл",
+  };
+  return type ? labels[type] ?? type : "значение";
 }
 
 function sameRelationPath(left: string[] | undefined, right: string[]): boolean {
@@ -133,7 +157,7 @@ function bindingFor(bindings: DataInputBinding[], key: string): DataInputBinding
   return bindings.find((binding) => binding.inputKey === key);
 }
 
-export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments: argumentBindings, routeCaptures, snapshotId, onChange }: Props) {
+export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments: argumentBindings, argumentFields = {}, routeCaptures, snapshotId, onChange }: Props) {
   const entities = dataModel?.entities ?? [];
   const pathArguments = Object.entries(argumentBindings ?? {}).filter(([, binding]) => binding.source === "path" && binding.pathArg && routeCaptures.includes(binding.pathArg));
 
@@ -167,22 +191,29 @@ export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments:
       );
       return <section key={port.key} className="space-y-3 rounded-md border border-border p-3" aria-labelledby={`${controlID}-title`}>
         <div>
-          <h4 id={`${controlID}-title`} className="text-sm font-medium">{port.key}</h4>
-          <p className="mt-0.5 text-xs text-muted-foreground">{port.kind === "collection" ? "Коллекция записей" : port.kind === "record" ? "Одна запись" : `Одно поле · ${port.type ?? ""}`}</p>
+          <h4 id={`${controlID}-title`} className="text-sm font-medium">{readableName(port.key)}</h4>
+          <p className="mt-0.5 text-xs text-muted-foreground">{port.kind === "collection" ? "Коллекция записей" : port.kind === "record" ? "Одна запись" : `Одно поле · ${fieldTypeLabel(port.type)}`}</p>
         </div>
         <label className="block space-y-1.5 text-sm">
           <span className="text-muted-foreground">Сущность модели</span>
           <select id={`${controlID}-entity`} className={selectClass} aria-invalid={invalidEntity} aria-describedby={entityErrorID} required value={binding?.entityId ?? ""} disabled={!entities.length} onChange={(event) => { const entityId = event.currentTarget.value; setBinding({ inputKey: port.key, entityId, ...(port.kind === "record" && binding?.lookup ? { lookup: binding.lookup } : {}) }); }}>
             <option value="">Выберите сущность</option>
-            {entities.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.key}</option>)}
+            {entities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
           <span id={entityErrorID} className={invalidEntity ? "block text-xs text-warning" : "sr-only"} role={invalidEntity ? "alert" : undefined}>
             {invalidEntity ? (binding?.entityId ? "Сохранённая сущность больше не существует в этой модели. Выберите доступную сущность." : "Выберите сущность для этого входа.") : ""}
           </span>
         </label>
+        {entity && <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {port.kind === "collection"
+            ? `Источник: опубликованные записи сущности «${entity.name}». Выбор и порядок записей настраиваются в «Контенте».`
+            : port.kind === "record"
+              ? `Источник: одна запись сущности «${entity.name}». ${binding?.lookup ? "Она определяется по параметру маршрута." : "Запись выбирается в «Контенте»."}`
+              : `Источник: одно поле записи сущности «${entity.name}». Публикуется владельцем записи.`}
+        </p>}
         {binding && entity && (port.kind === "scalar" ? <label className="block space-y-1.5 text-sm">
-          <span className="text-muted-foreground">Поле модели · {port.type}</span>
-          <select aria-label={`Поле модели для scalar ${port.key}`} className={selectClass} aria-invalid={!selectedScalarChoice} aria-describedby={`${controlID}-scalar-field-error`} value={selectedScalarChoice ? fieldChoiceValue(selectedScalarChoice.field.id, selectedScalarChoice.relationIds) : ""} onChange={(event) => {
+          <span className="text-muted-foreground">Поле модели · {fieldTypeLabel(port.type)}</span>
+          <select aria-label={`Поле модели для ${readableName(port.key)}`} className={selectClass} aria-invalid={!selectedScalarChoice} aria-describedby={`${controlID}-scalar-field-error`} value={selectedScalarChoice ? fieldChoiceValue(selectedScalarChoice.field.id, selectedScalarChoice.relationIds) : ""} onChange={(event) => {
             const value = event.currentTarget.value;
             const selected = scalarCandidates.find((choice) => fieldChoiceValue(choice.field.id, choice.relationIds) === value);
             if (selected) {
@@ -215,7 +246,7 @@ export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments:
             const inputLabel = readableInputPath(port.key, declared.path);
             const mappingErrorID = `${controlID}-mapping-${fieldIndex}-error`;
             return <label key={declared.path} className="grid gap-1.5 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
-              <span className="min-w-0"><span className="block truncate font-medium">{inputLabel}</span><span className="text-xs text-muted-foreground">{declared.type}</span></span>
+              <span className="min-w-0"><span className="block truncate font-medium">{inputLabel}</span><span className="text-xs text-muted-foreground">{fieldTypeLabel(declared.type)}</span></span>
               <select aria-label={`Поле модели для ${inputLabel}`} className={selectClass} aria-invalid={!selectedChoice} aria-describedby={mappingErrorID} value={selectedChoice ? fieldChoiceValue(selectedChoice.field.id, selectedChoice.relationIds) : ""} onChange={(event) => {
                 const value = event.currentTarget.value;
                 const nextFields = (binding.fields ?? []).filter((item) => item.inputPath !== declared.path);
@@ -254,13 +285,13 @@ export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments:
               setBinding({ ...binding, lookup: { argument, fieldId } });
             }}>
               <option value="">Выбирать запись в /content</option>
-              {pathArguments.map(([key, value]) => <option key={key} value={key}>{key} ← {value.pathArg}</option>)}
+              {pathArguments.map(([key, value]) => <option key={key} value={key}>{argumentFields[key]?.title ?? "Параметр фичи"} ← {value.pathArg}</option>)}
             </select>
           </label>
           {binding.lookup && <label className="block space-y-1 text-sm"><span className="text-muted-foreground">Уникальное поле модели</span>
             <select className={selectClass} aria-invalid={!hasCompatibleLookupField} aria-describedby={`${controlID}-lookup-field-error`} value={lookupFieldID ?? ""} onChange={(event) => { const fieldId = event.currentTarget.value; setBinding({ ...binding, lookup: { ...binding.lookup!, fieldId } }); }}>
               <option value="">Выберите уникальное поле</option>
-              {entity.fields.filter((field) => field.unique && stringFieldTypes.has(field.type)).map((field) => <option key={field.id} value={field.id}>{field.name} · {field.key}</option>)}
+              {entity.fields.filter((field) => field.unique && stringFieldTypes.has(field.type)).map((field) => <option key={field.id} value={field.id}>{field.name}</option>)}
             </select>
             <span id={`${controlID}-lookup-field-error`} className={!hasCompatibleLookupField ? "block text-xs text-warning" : "sr-only"} role={!hasCompatibleLookupField ? "alert" : undefined}>{!hasCompatibleLookupField ? hasUniqueLookupField ? "Сохранённое поле маршрута больше не является уникальным и совместимым." : "Добавьте уникальное текстовое поле в модели данных." : ""}</span>
           </label>}

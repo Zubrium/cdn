@@ -294,7 +294,7 @@ function SidebarContent({
 
 export function AppShell() {
   const location = useLocation();
-  const routeCanvas = location.pathname === "/site/pages" || location.pathname === "/site/router";
+  const routeCanvas = location.pathname === "/site/pages" || location.pathname === "/site/router" || location.pathname === "/site/data-model";
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(SIDEBAR_KEY) === "true";

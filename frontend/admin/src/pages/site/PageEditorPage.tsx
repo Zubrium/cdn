@@ -1,7 +1,7 @@
 import { removePlacement, selectedFeatures } from "./feature-selection";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,6 @@ import { Label } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState } from "@/components/common/page";
-import { useConfirm } from "@/components/common/confirm";
 import { MediaPickerDialog } from "@/domains/media/MediaPickerDialog";
 import type { FeatureBuild, SiteMetadataOverride, SitePage, SitePlacement } from "@/types";
 import { useSiteWorkspace } from "./SiteWorkspace";
@@ -23,11 +22,17 @@ export { addArgumentArrayItem, ArgumentField, moveArgumentArrayItem, removeArgum
 export { DetailSEOFieldsEditor, updateDetailSEOField } from "./components/page-editor/StructuralBindingsEditor";
 export type { SchemaField } from "./components/page-editor/schema";
 
-export default function PageEditorPage({ pageId, onBack }: { pageId: string; onBack: () => void }) {
-  const { config, metadata, updateMetadata, update, dirty, saving, conflict, localSaveError, revision, reload, save } = useSiteWorkspace();
+export default function PageEditorPage({ pageId, embedded = false, onBack, onDeleted, onRouteEdit, onReparentRoute }: {
+  pageId: string;
+  embedded?: boolean;
+  onBack?: () => void;
+  onDeleted?: () => void;
+  onRouteEdit?: (routeId?: string) => void;
+  onReparentRoute?: (routeId: string) => void;
+}) {
+  const { config, metadata, updateMetadata, update } = useSiteWorkspace();
   const [searchParams] = useSearchParams();
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const confirm = useConfirm();
   const [registryBuilds, setBuilds] = useState<FeatureBuild[]>([]);
   const [buildsLoading, setBuildsLoading] = useState(true);
   const selected = selectedFeatures(config);
@@ -77,7 +82,8 @@ export default function PageEditorPage({ pageId, onBack }: { pageId: string; onB
     const nextConfig = { ...config, pages: config.pages.filter((item) => item.id !== id), routeTree: nextRouteTree };
     if (!window.confirm(`Удалить страницу «${page?.name ?? ""}»? Маршруты останутся и станут самостоятельными без страницы.`)) return;
     update(nextConfig);
-    onBack();
+    onBack?.();
+    onDeleted?.();
   };
   const addPlacement = () => {
     if (!page) return;
@@ -102,35 +108,21 @@ export default function PageEditorPage({ pageId, onBack }: { pageId: string; onB
     }
   };
 
-  const refreshAfterConflict = async () => {
-    if (dirty && !(await confirm({
-      title: "Заменить текущие изменения?",
-      description: "Загрузка актуальной версии заменит текущую локальную рабочую копию редактора.",
-      confirmLabel: "Загрузить актуальную версию",
-      cancelLabel: "Остаться в редакторе",
-    }))) return;
-    await reload();
-  };
-
   if (error) return <ErrorState error={error} title="Не удалось загрузить сборки фич" onRetry={() => void retryBuilds()} />;
-  if (!page) return <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center"><p className="text-sm text-muted-foreground">Эта страница уже удалена или недоступна.</p><Button type="button" variant="outline" className="min-h-11" onClick={onBack}><ArrowLeft />К маршрутам</Button></div>;
-  return <div className="h-full min-h-0 overflow-y-auto bg-background px-4 py-4 sm:px-7 sm:py-6">
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="sticky top-0 z-20 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm sm:-mx-7 sm:-mt-6 sm:px-7 sm:py-4">
+  if (!page) return <div className="flex min-h-64 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card p-6 text-center"><p className="text-sm text-muted-foreground">Эта страница уже удалена или недоступна.</p>{onBack && <Button type="button" variant="outline" className="min-h-11" onClick={onBack}>К страницам</Button>}</div>;
+  return <div className={`${embedded ? "rounded-xl border border-border bg-card" : "min-h-full bg-background px-4 py-4 sm:px-7 sm:py-6"} min-w-0`}>
+    <div className={embedded ? "space-y-5 p-4 sm:p-5" : "mx-auto max-w-5xl space-y-5"}>
+      <div className={`flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4 ${embedded ? "" : "sticky top-0 z-20 bg-background/95 pt-1 backdrop-blur-sm"}`}>
         <div className="flex min-w-0 items-start gap-3">
-          <Button type="button" size="icon" variant="outline" className="size-11 shrink-0" aria-label="Вернуться к маршрутам" onClick={onBack}><ArrowLeft /></Button>
-          <div className="min-w-0"><p className="text-xs text-muted-foreground">Страницы и маршруты · ревизия {revision}</p><h1 className="truncate text-2xl font-semibold tracking-tight">{page.name}</h1><p className="mt-1 text-sm text-muted-foreground">Соберите страницу из фич и настройте аргументы их размещения.</p></div>
+          <div className="min-w-0"><p className="text-xs text-muted-foreground">Настройки страницы</p><h2 className="truncate text-2xl font-semibold tracking-tight">{page.name}</h2><p className="mt-1 text-sm text-muted-foreground">Маршруты, порядок фич и источники данных размещения.</p></div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span role="status" aria-live="polite" className={`flex items-center gap-1.5 text-xs ${dirty ? "text-warning" : "text-success"}`}><span aria-hidden="true" className={`size-1.5 rounded-full ${dirty ? "bg-warning" : "bg-success"}`} />{dirty ? "Есть изменения" : "Сохранено"}</span>
-          <Button type="button" size="sm" className="min-h-11" disabled={!dirty || saving} onClick={() => void save()}>{saving ? "Сохраняем…" : "Сохранить"}</Button>
-          {localSaveError && <span role="alert" className="max-w-64 text-xs text-destructive">Локальная копия недоступна или изменена в другой вкладке.</span>}
-          {conflict && <><span role="status" className="hidden items-center gap-1 text-xs text-destructive sm:flex"><AlertTriangle className="size-3.5" />Конфликт ревизий</span><Button type="button" size="sm" className="min-h-11" variant="outline" disabled={saving} onClick={() => void refreshAfterConflict()}><RotateCcw />Загрузить актуальную версию</Button></>}
-          <Button type="button" size="sm" variant="outline" className="min-h-11 text-destructive" onClick={() => removePage(page.id)}><Trash2 />Удалить</Button>
-        </div>
+        <Button type="button" size="sm" variant="outline" className="min-h-11 text-destructive" onClick={() => removePage(page.id)}><Trash2 />Удалить страницу</Button>
       </div>
 
-      <Card><CardHeader className="pb-3"><CardTitle className="text-base">Адреса страницы</CardTitle><CardDescription>Несколько маршрутов могут открывать одну и ту же страницу.</CardDescription></CardHeader><CardContent className="flex flex-wrap gap-2">{pageRoutes.length ? pageRoutes.map((route) => <code key={route.id} className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-sm">{route.path}</code>) : <p className="text-sm text-warning">У страницы пока нет маршрута. Вернитесь на канвас и создайте для неё корневой путь.</p>}</CardContent></Card>
+      <Card><CardHeader className="pb-3"><CardTitle className="text-base">Адреса страницы</CardTitle><CardDescription>Несколько маршрутов могут открывать одну и ту же страницу.</CardDescription></CardHeader><CardContent className="flex flex-wrap gap-2">{pageRoutes.length ? pageRoutes.map((route) => <span key={route.id} className="inline-flex overflow-hidden rounded-md border border-border bg-muted/40">
+        <button type="button" className="min-h-10 px-2.5 text-sm font-medium hover:bg-accent" onClick={() => onRouteEdit?.(route.id)}><Pencil className="mr-1 inline size-3.5" />{route.path}</button>
+        <button type="button" className="min-h-10 border-l border-border px-2.5 text-xs text-muted-foreground hover:bg-accent" onClick={() => onReparentRoute?.(route.id)}>Переместить</button>
+      </span>) : <button type="button" className="rounded-md border border-dashed border-warning/60 px-3 py-2 text-sm text-warning hover:bg-warning/10" onClick={() => onRouteEdit?.()}>Добавить маршрут</button>}</CardContent></Card>
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)} className="min-w-0">
         <TabsList aria-label="Разделы страницы" className="h-auto w-full justify-start overflow-x-auto">
@@ -144,7 +136,7 @@ export default function PageEditorPage({ pageId, onBack }: { pageId: string; onB
             <CardHeader className="space-y-3">
               <div><CardTitle className="text-base">Фичи страницы</CardTitle><CardDescription>Выберите фичу в списке, чтобы настроить её справа. Версии сгруппированы под одной фичей; у уже включённой фичи используется версия снапшота.</CardDescription></div>
               <div className="flex flex-wrap gap-2">
-                <label className="min-w-0 flex-1"><span className="sr-only">Фича и версия сборки</span><select className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={newBuildId} disabled={buildsLoading || buildGroups.length === 0} onChange={(event) => setNewBuildId(event.currentTarget.value)}><option value="">{buildsLoading ? "Загружаем реестр сборок…" : buildGroups.length ? "Выберите фичу из реестра" : "В реестре пока нет сборок"}</option>{buildGroups.map((group) => <optgroup key={group.key} label={`${group.name} · ${group.key}`}>{group.versions.map((build) => <option key={build.id} value={build.id}>v{build.version}{!selected.has(group.key) && build.id === group.latest.id ? " · последняя по SemVer" : ""}</option>)}</optgroup>)}</select></label>
+                <label className="min-w-0 flex-1"><span className="sr-only">Фича и версия сборки</span><select className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={newBuildId} disabled={buildsLoading || buildGroups.length === 0} onChange={(event) => setNewBuildId(event.currentTarget.value)}><option value="">{buildsLoading ? "Загружаем реестр сборок…" : buildGroups.length ? "Выберите фичу из реестра" : "В реестре пока нет сборок"}</option>{buildGroups.map((group) => <optgroup key={group.key} label={group.name}>{group.versions.map((build) => <option key={build.id} value={build.id}>Версия {build.version}{!selected.has(group.key) && build.id === group.latest.id ? " · последняя" : ""}</option>)}</optgroup>)}</select></label>
                 <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!newBuildId} onClick={addPlacement}><Plus />Добавить фичу</Button>
               </div>
               {!buildsLoading && buildGroups.length === 0 && <p className="text-sm text-muted-foreground">Загрузите ZIP фичи в <Link className="underline underline-offset-4" to={`/snapshots/registry${snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : ""}`}>реестр сборок</Link>, чтобы добавить её к странице.</p>}
@@ -153,9 +145,9 @@ export default function PageEditorPage({ pageId, onBack }: { pageId: string; onB
               <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)]">
                 <div className="min-w-0 space-y-2">
                   {page.placements.length === 0 ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Добавьте первую фичу из реестра.</p> : page.placements.map((placement, index) => <div key={placement.id} className="flex min-w-0 items-center gap-1 rounded-md border border-border p-1">
-                    <Button type="button" variant={selectedPlacementId === placement.id ? "secondary" : "ghost"} className="min-h-11 min-w-0 flex-1 justify-start" aria-pressed={selectedPlacementId === placement.id} onClick={() => setSelectedPlacementId(placement.id)}><span className="truncate">{buildFor(builds, placement)?.name ?? placement.build.featureKey}</span></Button>
-                    <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" aria-label={`Поднять фичу ${buildFor(builds, placement)?.name ?? placement.build.featureKey}`} disabled={index === 0} onClick={() => { const placements = [...page.placements]; [placements[index - 1], placements[index]] = [placements[index], placements[index - 1]]; changePage(page.id, { placements }); }}><ArrowUp /></Button>
-                    <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" aria-label={`Опустить фичу ${buildFor(builds, placement)?.name ?? placement.build.featureKey}`} disabled={index === page.placements.length - 1} onClick={() => { const placements = [...page.placements]; [placements[index], placements[index + 1]] = [placements[index + 1], placements[index]]; changePage(page.id, { placements }); }}><ArrowDown /></Button>
+                    <Button type="button" variant={selectedPlacementId === placement.id ? "secondary" : "ghost"} className="min-h-11 min-w-0 flex-1 justify-start" aria-pressed={selectedPlacementId === placement.id} onClick={() => setSelectedPlacementId(placement.id)}><span className="truncate">{buildFor(builds, placement)?.name ?? "Неизвестная фича"}</span></Button>
+                    <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" aria-label={`Поднять фичу ${buildFor(builds, placement)?.name ?? "без названия"}`} disabled={index === 0} onClick={() => { const placements = [...page.placements]; [placements[index - 1], placements[index]] = [placements[index], placements[index - 1]]; changePage(page.id, { placements }); }}><ArrowUp /></Button>
+                    <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" aria-label={`Опустить фичу ${buildFor(builds, placement)?.name ?? "без названия"}`} disabled={index === page.placements.length - 1} onClick={() => { const placements = [...page.placements]; [placements[index], placements[index + 1]] = [placements[index + 1], placements[index]]; changePage(page.id, { placements }); }}><ArrowDown /></Button>
                   </div>)}
                 </div>
                 <div className="min-w-0" aria-live="polite">

@@ -181,7 +181,9 @@ describe("PageEditorPage argument value editor", () => {
       preparation,
     });
     expect(markup).toContain('data-media-field-path="/gallery/items/image"');
-    expect(markup).toContain('aria-label="Выбрать медиа для Галерея · элемент 1 · image"');
+    expect(markup).toContain('aria-label="Заменить медиа для Галерея · элемент 1 · image"');
+    expect(markup).toContain("Файл выбран · заменить");
+    expect(markup).not.toContain("media-1");
     expect(markup).not.toContain("type=\"file\"");
 
     const queryMarkup = renderArgument({

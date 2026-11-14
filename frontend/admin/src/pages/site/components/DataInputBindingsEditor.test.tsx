@@ -59,7 +59,7 @@ describe("DataInputBindingsEditor", () => {
     ], lookup: { argument: "slug", fieldId: slugID } }]);
 
     expect(markup).toContain("Запись из параметра маршрута");
-    expect(markup).toContain("slug ← slug");
+    expect(markup).toContain("Параметр фичи ← slug");
     expect(markup).toContain("Уникальное поле модели");
   });
 

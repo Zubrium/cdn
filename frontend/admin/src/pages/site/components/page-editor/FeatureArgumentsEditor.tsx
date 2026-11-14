@@ -229,7 +229,7 @@ function MediaArgumentValue({ schema, value, label, required, controlID, describ
   return <div className="space-y-2 rounded-md border border-border p-3">
     <p id={`${controlID}-label`} className="text-sm font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</p>
     {schema.description && <p id={`${controlID}-description`} className="text-xs text-muted-foreground">{schema.description}</p>}
-    <Button id={controlID} aria-label={`Выбрать медиа для ${label}`} aria-labelledby={`${controlID}-label`} aria-describedby={describedBy} type="button" variant="outline" className="min-h-11 w-full justify-start" onClick={() => setPickerOpen(true)}>{selectedValue ? `Выбрано медиа: ${selectedValue}` : "Выбрать файл"}</Button>
+    <Button id={controlID} aria-label={`${selectedValue ? "Заменить" : "Выбрать"} медиа для ${label}`} aria-labelledby={`${controlID}-label`} aria-describedby={describedBy} type="button" variant="outline" className="min-h-11 w-full justify-start" onClick={() => setPickerOpen(true)}>{selectedValue ? "Файл выбран · заменить" : "Выбрать файл"}</Button>
     <MediaPickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={(items) => { const selected = items[0]; if (selected) onChange(selected.id); }} accept={schema["x-media"]?.accept === "raster-image" ? "raster-image" : "image"} initialSelected={selectedValue ? [selectedValue] : []} preparation={preparation} />
     <OptionalValueClear value={value || undefined} label={label} required={required} onChange={onChange} />
   </div>;
