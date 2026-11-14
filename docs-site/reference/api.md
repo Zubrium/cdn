@@ -37,8 +37,8 @@
 | `GET` | `/api/v1/admin/submissions` | Административный API v1 | Авторизованный пользователь | `Forms.List` |
 | `DELETE` | `/api/v1/admin/submissions/{id}` | Административный API v1 | Только администратор | `Forms.Delete` |
 | `GET` | `/api/v1/admin/submissions/{id}` | Административный API v1 | Авторизованный пользователь | `Forms.Get` |
-| `POST` | `/api/v1/admin/submissions/{id}/archive` | Административный API v1 | Авторизованный пользователь | `Forms.Archive` |
-| `PATCH` | `/api/v1/admin/submissions/{id}/status` | Административный API v1 | Авторизованный пользователь | `Forms.UpdateStatus` |
+| `POST` | `/api/v1/admin/submissions/{id}/archive` | Административный API v1 | Администратор или модератор | `Forms.Archive` |
+| `PATCH` | `/api/v1/admin/submissions/{id}/status` | Административный API v1 | Администратор или модератор | `Forms.UpdateStatus` |
 | `GET` | `/api/v1/admin/submissions/export` | Административный API v1 | Авторизованный пользователь | `Forms.Export` |
 | `GET` | `/api/v1/admin/tokens` | Административный API v1 | Администратор или модератор | `Auth.ListTokens` |
 | `POST` | `/api/v1/admin/tokens` | Административный API v1 | Администратор или модератор | `Auth.CreateToken` |
@@ -51,7 +51,7 @@
 | `PUT` | `/api/v2/admin/content/snapshots/{id}/model` | Управление сайтом v2 | Авторизованный пользователь | `SiteSnapshots.SaveModelContentWorkspace` |
 | `GET` | `/api/v2/admin/content/snapshots/{id}/model/history` | Управление сайтом v2 | Авторизованный пользователь | `SiteSnapshots.ModelContentHistory` |
 | `POST` | `/api/v2/admin/content/snapshots/{id}/model/history/{publicationId}/restore` | Управление сайтом v2 | Авторизованный пользователь | `SiteSnapshots.RestoreModelContentPublication` |
-| `POST` | `/api/v2/admin/content/snapshots/{id}/model/publish` | Управление сайтом v2 | Администратор или модератор | `SiteSnapshots.PublishModelContentWorkspace` |
+| `POST` | `/api/v2/admin/content/snapshots/{id}/model/publish` | Управление сайтом v2 | Авторизованный пользователь | `SiteSnapshots.PublishModelContentWorkspace` |
 | `GET` | `/api/v2/admin/feature-builds` | Управление сайтом v2 | Администратор или модератор | `FeatureBuilds.List` |
 | `POST` | `/api/v2/admin/feature-builds` | Управление сайтом v2 | Администратор или модератор | `FeatureBuilds.Import` |
 | `GET` | `/api/v2/admin/files` | Управление сайтом v2 | Авторизованный пользователь | `Files.list` |

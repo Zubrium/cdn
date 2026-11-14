@@ -79,6 +79,7 @@
 | `id` | `string` | Нет |
 | `key` | `string` | Нет |
 | `name` | `string` | Нет |
+| `cardinality` | `DataModelEntityCardinality` | Да |
 | `fields` | `[]DataModelField` | Нет |
 
 ### `DataModelField`
