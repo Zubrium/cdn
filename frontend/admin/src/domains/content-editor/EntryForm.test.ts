@@ -37,6 +37,15 @@ it("renders nested objects and arrays inside object-array rows", () => {
   const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, form));
   expect(html).toContain("Nested value");
   expect(html).toContain('value="tag"');
+  expect(html).toContain("Перетащить");
+});
+
+it("renders accessible drag handles for scalar arrays", () => {
+  const fields = parsedSchema({ type: "object", properties: { tags: { type: "array", title: "Tags", items: { type: "string" } } } }).fields;
+  const form = createElement(EntryFieldsForm, { fields, metadata: { tags: ["first", "second"] }, onChange: () => {}, issues: [] });
+  const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, form));
+  expect(html).toContain("Перетащить Tags, элемент 1");
+  expect(html).toContain("Перетащить Tags, элемент 2");
 });
 
 it("clears a media array selection without bypassing minItems", () => {

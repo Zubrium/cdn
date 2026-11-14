@@ -1,7 +1,8 @@
-import { ArrowDown, ArrowUp, Copy, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, GripVertical, Plus, Trash2 } from "lucide-react";
 import type { JsonValue } from "@/types";
 import type { SchemaFieldNode } from "@/domains/content-schema/types";
 import { Button } from "@/components/ui/button";
+import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import type { MediaPickTarget } from "./types";
 import { clearMediaArraySelection, cloneOriginal, entryFieldAnchorId, mediaAccept } from "./helpers";
 import { MediaValue, ScalarControl } from "./field-controls";
@@ -35,6 +36,15 @@ export function ScalarArrayList({
     copy.splice(index + 1, 0, cloneOriginal(value[index]));
     onChange(copy);
   };
+  const itemIDs = value.map((_, index) => `index:${index}`);
+  const reorderItems = (orderedIDs: string[]) => {
+    const byID = new Map(itemIDs.map((id, index) => [id, value[index]!]));
+    const next = orderedIDs.flatMap((id) => {
+      const item = byID.get(id);
+      return item === undefined ? [] : [item];
+    });
+    if (next.length === value.length) onChange(next);
+  };
   const itemField: SchemaFieldNode = {
     ...field,
     id: `${field.id}-item`,
@@ -47,14 +57,34 @@ export function ScalarArrayList({
   };
   return (
     <div className="space-y-2">
-      {value.map((item, index) => {
-        const itemPath = `${path}.${index}`;
-        const error = errorsByPath.get(itemPath);
-        const errorId = error ? `${entryFieldAnchorId(itemPath)}-error` : undefined;
-        if (field.itemType === "media" || field.itemType === "file") {
-          return (
-            <div key={index} className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
+      <SortableList
+        items={itemIDs}
+        onReorder={reorderItems}
+        getItemLabel={(id) => {
+          const index = itemIDs.indexOf(id);
+          return index >= 0 ? `${field.label || field.key}, элемент ${index + 1}` : "элемент";
+        }}
+      >
+        <ol className="space-y-2" aria-label={`Порядок элементов ${field.label || field.key}`}>
+          {value.map((item, index) => {
+            const itemPath = `${path}.${index}`;
+            const error = errorsByPath.get(itemPath);
+            const errorId = error ? `${entryFieldAnchorId(itemPath)}-error` : undefined;
+            const itemKey = itemIDs[index]!;
+            if (field.itemType === "media" || field.itemType === "file") {
+              return <SortableItem key={itemKey} id={itemKey} disabled={disabled}>{(handle) => <div className="flex items-start gap-1">
+                <Button
+                  ref={handle.setActivatorNodeRef}
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="mt-1 touch-none cursor-grab text-muted-foreground active:cursor-grabbing"
+                  aria-label={`Перетащить ${field.label || field.key}, элемент ${index + 1}`}
+                  disabled={disabled}
+                  {...handle.attributes}
+                  {...handle.listeners}
+                ><GripVertical className="h-4 w-4" /></Button>
+                <div className="min-w-0 flex-1">
                 <MediaValue
                   mediaId={typeof item === "string" ? item : ""}
                   variant={field.itemType === "file" ? "file" : "image"}
@@ -79,24 +109,33 @@ export function ScalarArrayList({
                   onClear={() => onChange(clearMediaArraySelection(value, index))}
                 />
                 {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
-              </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="mt-1 text-destructive hover:text-destructive"
+                  aria-label="Удалить"
+                  disabled={disabled || !canRemove}
+                  onClick={() => onChange(value.filter((_, i) => i !== index))}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>}</SortableItem>;
+            }
+            return <SortableItem key={itemKey} id={itemKey} disabled={disabled}>{(handle) => <div className="flex items-start gap-1">
               <Button
+                ref={handle.setActivatorNodeRef}
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                className="mt-1 text-destructive hover:text-destructive"
-                aria-label="Удалить"
-                disabled={disabled || !canRemove}
-                onClick={() => onChange(value.filter((_, i) => i !== index))}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-          );
-        }
-        return (
-          <div key={index} className="flex items-start gap-2">
-            <div className="min-w-0 flex-1">
+                className="mt-1 touch-none cursor-grab text-muted-foreground active:cursor-grabbing"
+                aria-label={`Перетащить ${field.label || field.key}, элемент ${index + 1}`}
+                disabled={disabled}
+                {...handle.attributes}
+                {...handle.listeners}
+              ><GripVertical className="h-4 w-4" /></Button>
+              <div className="min-w-0 flex-1">
               <ScalarControl
                 field={itemField}
                 value={item}
@@ -114,8 +153,8 @@ export function ScalarArrayList({
                 accessibleLabel={`${field.label || field.key}, элемент ${index + 1}`}
               />
               {error && <p id={errorId} className="mt-1 text-2xs text-destructive">{error}</p>}
-            </div>
-            <div className="flex items-center gap-0.5">
+              </div>
+              <div className="flex items-center gap-0.5">
               <Button
                 type="button"
                 variant="ghost"
@@ -165,10 +204,11 @@ export function ScalarArrayList({
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
-            </div>
-          </div>
-        );
-      })}
+              </div>
+            </div>}</SortableItem>;
+          })}
+        </ol>
+      </SortableList>
       <div className="flex items-center justify-between gap-2">
         {!canAdd && (
           <p className="text-2xs text-muted-foreground">

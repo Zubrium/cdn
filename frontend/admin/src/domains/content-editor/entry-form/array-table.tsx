@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
-import { ArrowDown, ArrowUp, Copy, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, GripVertical, Plus, Trash2 } from "lucide-react";
 import type { JsonObject, JsonValue } from "@/types";
 import type { SchemaFieldNode } from "@/domains/content-schema/types";
 import { Button } from "@/components/ui/button";
+import { SortableList, SortableTableRow } from "@/components/ui/sortable-list";
 import { assignArrayItemRecordID } from "@/domains/content-schema/record-identity";
 import { starterValue } from "../blocks";
 import type { ArrayFieldRendererProps } from "./array-field-types";
@@ -63,6 +64,15 @@ export function ArrayTable({
       if (child.required || child.defaultValue) row[child.key] = starterValue(child);
     });
     onChange([...rows, assignArrayItemRecordID(row, rowFields, true)]);
+  };
+  const itemIDs = rows.map((row, index) => arrayItemKey(row, index, rowFields));
+  const reorderRows = (orderedIDs: string[]) => {
+    const byID = new Map(itemIDs.map((id, index) => [id, rows[index]!]));
+    const next = orderedIDs.flatMap((id) => {
+      const row = byID.get(id);
+      return row === undefined ? [] : [row];
+    });
+    if (next.length === rows.length) onChange(next);
   };
 
   const compactControlFor = (
@@ -130,14 +140,25 @@ export function ArrayTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => {
-              const record = isRecordValue(row) ? row : {};
-              return (
-                <tr
-                  key={arrayItemKey(row, index, rowFields)}
-                  data-array-item-index={`${path}:${index}`}
+            <SortableList
+              items={itemIDs}
+              onReorder={reorderRows}
+              getItemLabel={(id) => {
+                const index = itemIDs.indexOf(id);
+                return index >= 0 ? `${field.label || field.key}, строка ${index + 1}` : "строка";
+              }}
+            >
+              {rows.map((row, index) => {
+                const record = isRecordValue(row) ? row : {};
+                const itemKey = itemIDs[index]!;
+                return <SortableTableRow
+                  key={itemKey}
+                  id={itemKey}
+                  disabled={disabled}
+                  dataArrayItemIndex={`${path}:${index}`}
                   className={errorsByPath.has(`${path}.${index}`) ? "bg-destructive/5" : undefined}
                 >
+                  {(handle) => <>
                   {children.map((child) => {
                     const cellPath = `${path}.${index}.${child.key}`;
                     const cell = compactControlFor(
@@ -166,6 +187,19 @@ export function ArrayTable({
                   })}
                   <td className="align-top px-2 py-2">
                     <div className="flex items-center justify-end gap-0.5">
+                      <Button
+                        ref={handle.setActivatorNodeRef}
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="touch-none cursor-grab text-muted-foreground active:cursor-grabbing"
+                        aria-label={`Перетащить ${field.label || field.key}, строка ${index + 1}`}
+                        disabled={disabled}
+                        {...handle.attributes}
+                        {...handle.listeners}
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -209,9 +243,10 @@ export function ArrayTable({
                       </Button>
                     </div>
                   </td>
-                </tr>
-              );
-            })}
+                  </>}
+                </SortableTableRow>;
+              })}
+            </SortableList>
             {rows.length === 0 && (
               <tr>
                 <td colSpan={children.length + 1} className="px-3 py-4 text-center text-xs text-muted-foreground">

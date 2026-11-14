@@ -1,9 +1,10 @@
-import { ArrowDown, ArrowUp, Copy, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, GripVertical, Plus, Trash2 } from "lucide-react";
 import type { JsonObject, JsonValue } from "@/types";
 import type { SchemaFieldNode } from "@/domains/content-schema/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import { assignArrayItemRecordID } from "@/domains/content-schema/record-identity";
 import { starterValue } from "../blocks";
 import type { ArrayFieldRendererProps } from "./array-field-types";
@@ -73,6 +74,15 @@ export function ArrayCards({
     });
     onChange([...rows, assignArrayItemRecordID(row, rowField.children, true)]);
   };
+  const itemIDs = rows.map((row, index) => arrayItemKey(row, index, rowField.children));
+  const reorderRows = (orderedIDs: string[]) => {
+    const byID = new Map(itemIDs.map((id, index) => [id, rows[index]!]));
+    const next = orderedIDs.flatMap((id) => {
+      const row = byID.get(id);
+      return row === undefined ? [] : [row];
+    });
+    if (next.length === rows.length) onChange(next);
+  };
 
   const rowTitle = (row: JsonValue, index: number): string => {
     const record = isRecordValue(row) ? row as JsonObject : {};
@@ -86,27 +96,46 @@ export function ArrayCards({
 
   return (
     <div ref={rowFocus.rootRef} onFocusCapture={rowFocus.onFocusCapture} className="space-y-2">
-      {rows.map((row, index) => {
-        const rowPath = `${path}.${index}`;
-        const rowError = errorsByPath.has(rowPath);
-        const headingId = `${entryFieldAnchorId(rowPath)}-heading`;
-        const itemKey = arrayItemKey(row, index, rowField.children);
-        return (
-          <section
-            key={itemKey}
-            data-array-item-index={`${path}:${index}`}
-            aria-labelledby={headingId}
-            className={cn(
-              "space-y-3 rounded-lg border p-3",
-              rowError ? "border-destructive/40 bg-destructive/5" : "border-border bg-muted/20",
-            )}
-          >
-            <header className="flex items-center gap-2">
-              <h4 id={headingId} className="min-w-0 flex-1 truncate text-sm font-medium">
-                {rowTitle(row, index)}
-              </h4>
-              {rowError && <Badge variant="destructive">Ошибки</Badge>}
-              <div className="flex shrink-0 items-center gap-0.5">
+      <SortableList
+        items={itemIDs}
+        onReorder={reorderRows}
+        getItemLabel={(id) => {
+          const index = itemIDs.indexOf(id);
+          return index >= 0 ? rowTitle(rows[index]!, index) : "элемент";
+        }}
+      >
+        <ol className="space-y-2" aria-label={`Порядок элементов ${field.label || field.key}`}>
+          {rows.map((row, index) => {
+            const rowPath = `${path}.${index}`;
+            const rowError = errorsByPath.has(rowPath);
+            const headingId = `${entryFieldAnchorId(rowPath)}-heading`;
+            const itemKey = itemIDs[index]!;
+            return <SortableItem key={itemKey} id={itemKey} disabled={disabled}>
+              {(handle) => <section
+                data-array-item-index={`${path}:${index}`}
+                aria-labelledby={headingId}
+                className={cn(
+                  "space-y-3 rounded-lg border p-3",
+                  rowError ? "border-destructive/40 bg-destructive/5" : "border-border bg-muted/20",
+                )}
+              >
+                <header className="flex items-center gap-1">
+                  <Button
+                    ref={handle.setActivatorNodeRef}
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="touch-none cursor-grab text-muted-foreground active:cursor-grabbing"
+                    aria-label={`Перетащить ${rowTitle(row, index)}`}
+                    disabled={disabled}
+                    {...handle.attributes}
+                    {...handle.listeners}
+                  ><GripVertical className="h-4 w-4" /></Button>
+                  <h4 id={headingId} className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {rowTitle(row, index)}
+                  </h4>
+                  {rowError && <Badge variant="destructive">Ошибки</Badge>}
+                  <div className="flex shrink-0 items-center gap-0.5">
                 <Button
                   type="button"
                   variant="ghost"
@@ -148,22 +177,24 @@ export function ArrayCards({
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
-              </div>
-            </header>
-            <RenderFieldValue
-              field={rowField}
-              value={isRecordValue(row) ? row as JsonObject : {}}
-              onChange={(next) => setRow(index, next as JsonObject)}
-              onPickMedia={onPickMedia}
-              disabled={disabled}
-              compact={false}
-              errorsByPath={errorsByPath}
-              path={rowPath}
-              schemaPath={`${schemaPath}/items`}
-            />
-          </section>
-        );
-      })}
+                  </div>
+                </header>
+                <RenderFieldValue
+                  field={rowField}
+                  value={isRecordValue(row) ? row as JsonObject : {}}
+                  onChange={(next) => setRow(index, next as JsonObject)}
+                  onPickMedia={onPickMedia}
+                  disabled={disabled}
+                  compact={false}
+                  errorsByPath={errorsByPath}
+                  path={rowPath}
+                  schemaPath={`${schemaPath}/items`}
+                />
+              </section>}
+            </SortableItem>;
+          })}
+        </ol>
+      </SortableList>
       {rows.length === 0 && (
         <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
           Пока нет элементов

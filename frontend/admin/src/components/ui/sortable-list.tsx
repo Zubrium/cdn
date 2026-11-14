@@ -110,3 +110,41 @@ export function SortableItem({
     {children({ attributes, listeners, setActivatorNodeRef })}
   </li>;
 }
+
+export function SortableTableRow({
+  id,
+  disabled = false,
+  className,
+  dataArrayItemIndex,
+  children,
+}: {
+  id: string;
+  disabled?: boolean;
+  className?: string;
+  dataArrayItemIndex?: string;
+  children: (handle: SortableDragHandleProps) => ReactNode;
+}) {
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id, disabled });
+
+  return <tr
+    ref={setNodeRef}
+    style={{
+      transform: CSS.Transform.toString(transform),
+      transition,
+      position: "relative",
+      zIndex: isDragging ? 1 : undefined,
+    }}
+    className={cn(className, isDragging && "opacity-70 shadow-lg")}
+    data-array-item-index={dataArrayItemIndex}
+  >
+    {children({ attributes, listeners, setActivatorNodeRef })}
+  </tr>;
+}
