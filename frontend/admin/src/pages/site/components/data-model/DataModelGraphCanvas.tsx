@@ -1,32 +1,88 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { DataModel, DataModelEntity, DataModelRelation, DataModelField } from "@/types";
-import { cardinalities, positionFor } from "./model-operations";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  Background,
+  BackgroundVariant,
+  Controls,
+  Handle,
+  MarkerType,
+  Position,
+  ReactFlow,
+  ReactFlowProvider,
+  applyEdgeChanges,
+  applyNodeChanges,
+  useReactFlow,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type Node,
+  type NodeChange,
+  type NodeProps,
+  type NodeTypes,
+} from "@xyflow/react";
+import { Plus, Table2 } from "lucide-react";
+import "@xyflow/react/dist/style.css";
+import type { DataModel, DataModelEntity, DataModelField } from "@/types";
+import { DATA_MODEL_ADD_ENTITY_CONTROL_ID, positionFor } from "./model-operations";
 
-interface Position {
-  x: number;
-  y: number;
+type EntityNodeData = {
+  entity: DataModelEntity;
+};
+
+type EntityFlowNode = Node<EntityNodeData, "entity">;
+
+function fieldTypeLabel(field: DataModelField): string {
+  const labels: Record<DataModelField["type"], string> = {
+    text: "text",
+    longText: "long text",
+    integer: "integer",
+    number: "number",
+    boolean: "boolean",
+    date: "date",
+    dateTime: "datetime",
+    url: "url",
+    email: "email",
+    enum: "enum",
+    media: "file",
+  };
+  return labels[field.type];
 }
 
-interface DragState {
-  id: string;
-  pointerId: number;
-  clientX: number;
-  clientY: number;
-  originX: number;
-  originY: number;
-}
+const DataModelTableNode = memo(function DataModelTableNode({ data, selected }: NodeProps<EntityFlowNode>) {
+  const { entity } = data;
+  const visibleFields = entity.fields.slice(0, 6);
+  return <article className={`w-60 overflow-hidden rounded-md border bg-background shadow-sm transition-[border-color,box-shadow] ${selected ? "border-primary shadow-md" : "border-border"}`}>
+    <Handle type="target" position={Position.Left} className="!size-2.5 !border-2 !border-background !bg-muted-foreground" />
+    <div className="border-b border-border bg-muted/45 px-3 py-2.5">
+      <p className="truncate text-sm font-semibold">{entity.name || "Без названия"}</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">{entity.cardinality === "singleton" ? "Одна запись" : "Много записей"} · {entity.fields.length} пол.</p>
+    </div>
+    <div className="divide-y divide-border/70">
+      {visibleFields.map((field) => <div key={field.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+        <span className={`min-w-0 flex-1 truncate ${field.unique ? "font-medium" : ""}`}>{field.name || "Без названия"}</span>
+        <span className="shrink-0 text-muted-foreground">{fieldTypeLabel(field)}</span>
+        {field.unique && <span className="text-[10px] text-warning">unique</span>}
+      </div>)}
+      {entity.fields.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">Нет полей</p>}
+      {entity.fields.length > visibleFields.length && <p className="px-3 py-1.5 text-[11px] text-muted-foreground">Ещё {entity.fields.length - visibleFields.length}</p>}
+    </div>
+    <Handle type="source" position={Position.Right} className="!size-2.5 !border-2 !border-background !bg-foreground" />
+  </article>;
+});
 
-interface PreviewPosition extends Position {
-  id: string;
-}
+const nodeTypes: NodeTypes = {
+  entity: DataModelTableNode,
+};
 
-export function DataModelGraphCanvas({
+function DataModelFlow({
   model,
   selectedEntityId,
   selectedRelationId,
   onSelectEntity,
   onSelectRelation,
   onMoveEntity,
+  onCreateEntity,
+  onCreateRelation,
+  onOpenRelationDialog,
 }: {
   model: DataModel;
   selectedEntityId?: string;
@@ -34,148 +90,127 @@ export function DataModelGraphCanvas({
   onSelectEntity: (entityId: string) => void;
   onSelectRelation: (relationId: string) => void;
   onMoveEntity: (entityId: string, x: number, y: number) => void;
+  onCreateEntity: (x: number, y: number) => void;
+  onCreateRelation: (sourceEntityId: string, targetEntityId: string) => void;
+  onOpenRelationDialog: () => void;
 }) {
-  const [dragging, setDragging] = useState<DragState | null>(null);
-  const [preview, setPreview] = useState<PreviewPosition | null>(null);
-  const draggingPointer = useRef<number | null>(null);
-  const positioned = model.entities.map((entity, index) => ({ entity, position: positionFor(model, entity, index) }));
-  const canvasWidth = Math.max(940, ...positioned.map(({ position }) => position.x + 320));
-  const canvasHeight = Math.max(620, ...positioned.map(({ position }) => position.y + 250));
+  const [colorMode, setColorMode] = useState<"light" | "dark">(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
+  const { screenToFlowPosition } = useReactFlow();
+  const initialNodes = useMemo<EntityFlowNode[]>(() => model.entities.map((entity, index) => ({
+    id: entity.id,
+    type: "entity",
+    position: positionFor(model, entity, index),
+    data: { entity },
+    selected: entity.id === selectedEntityId,
+  })), [model, selectedEntityId]);
+  const initialEdges = useMemo<Edge[]>(() => (model.relations ?? []).map((relation) => ({
+    id: relation.id,
+    source: relation.fromEntityId,
+    target: relation.toEntityId,
+    type: "smoothstep",
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+    label: relation.name,
+    selected: relation.id === selectedRelationId,
+    style: { strokeWidth: relation.id === selectedRelationId ? 2.5 : 1.6 },
+    labelStyle: { fontSize: 11 },
+    labelBgPadding: [5, 3],
+  })), [model.relations, selectedRelationId]);
+  const [nodes, setNodes] = useState<EntityFlowNode[]>(initialNodes);
+  const [edges, setEdges] = useState<Edge[]>(initialEdges);
+  const [contextMenu, setContextMenu] = useState<{ clientX: number; clientY: number; flowX: number; flowY: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const beginDrag = (event: ReactPointerEvent<HTMLDivElement>, entity: DataModelEntity, position: Position) => {
-    if (event.button !== 0) return;
-    onSelectEntity(entity.id);
-    draggingPointer.current = event.pointerId;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDragging({
-      id: entity.id,
-      pointerId: event.pointerId,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      originX: position.x,
-      originY: position.y,
-    });
-  };
-  const move = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dragging || dragging.pointerId !== event.pointerId) return;
-    setPreview({
-      id: dragging.id,
-      x: Math.max(0, dragging.originX + event.clientX - dragging.clientX),
-      y: Math.max(0, dragging.originY + event.clientY - dragging.clientY),
-    });
-  };
-  const finishDrag = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
-    if (draggingPointer.current !== event.pointerId) return;
-    if (dragging && preview && !cancelled) onMoveEntity(preview.id, preview.x, preview.y);
-    draggingPointer.current = null;
-    setDragging(null);
-    setPreview(null);
-  };
-
-  const relationGeometry = (relation: DataModelRelation) => {
-    const fromIndex = model.entities.findIndex((entity) => entity.id === relation.fromEntityId);
-    const toIndex = model.entities.findIndex((entity) => entity.id === relation.toEntityId);
-    if (fromIndex < 0 || toIndex < 0) return null;
-    const fromEntity = model.entities[fromIndex]!;
-    const toEntity = model.entities[toIndex]!;
-    const from = preview?.id === relation.fromEntityId ? preview : positionFor(model, fromEntity, fromIndex);
-    const to = preview?.id === relation.toEntityId ? preview : positionFor(model, toEntity, toIndex);
-    const startX = from.x + 280;
-    const startY = from.y + 72;
-    const endX = to.x;
-    const endY = to.y + 72;
-    const midX = Math.round((startX + endX) / 2);
-    return {
-      path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
-      labelX: midX,
-      labelY: Math.min(startY, endY) - 18,
+  useEffect(() => setNodes(initialNodes), [initialNodes]);
+  useEffect(() => setEdges(initialEdges), [initialEdges]);
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined") return;
+    const root = document.documentElement;
+    const sync = () => setColorMode(root.classList.contains("dark") ? "dark" : "light");
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = (event: Event) => {
+      if (event.type === "keydown" && (event as KeyboardEvent).key !== "Escape") return;
+      if (event.type === "pointerdown" && event.target instanceof Element && event.target.closest("[data-model-context-menu]")) return;
+      setContextMenu(null);
     };
+    const frame = requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus());
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [contextMenu]);
+
+  const onNodesChange = useCallback((changes: NodeChange<EntityFlowNode>[]) => setNodes((current) => applyNodeChanges(changes, current)), []);
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => setEdges((current) => applyEdgeChanges(changes, current)), []);
+  const onConnect = useCallback((connection: Connection) => {
+    if (connection.source && connection.target && connection.source !== connection.target) onCreateRelation(connection.source, connection.target);
+  }, [onCreateRelation]);
+  const paneContextMenu = (event: MouseEvent | ReactMouseEvent) => {
+    event.preventDefault();
+    const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    setContextMenu({ clientX: event.clientX, clientY: event.clientY, flowX: point.x, flowY: point.y });
   };
 
-  return <section aria-label="ER-канвас модели данных" className="h-full min-h-[32rem] overflow-auto rounded-xl border border-border bg-muted/10">
-    <div
-      role="group"
-      aria-label="Схема сущностей и связей"
-      className="relative"
-      style={{ width: canvasWidth, height: canvasHeight }}
-      onPointerMove={move}
-      onPointerUp={(event) => finishDrag(event)}
-      onPointerCancel={(event) => finishDrag(event, true)}
-      onLostPointerCapture={(event) => finishDrag(event, true)}
+  return <section className="relative h-full min-h-0 w-full" aria-label="ER-канвас модели данных">
+    <ReactFlow<EntityFlowNode, Edge>
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      colorMode={colorMode}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      onNodeClick={(_, node) => { setContextMenu(null); onSelectEntity(node.id); }}
+      onEdgeClick={(_, edge) => { setContextMenu(null); onSelectRelation(edge.id); }}
+      onNodeDragStop={(_, node) => onMoveEntity(node.id, Math.round(node.position.x), Math.round(node.position.y))}
+      onPaneClick={() => setContextMenu(null)}
+      onPaneContextMenu={paneContextMenu}
+      fitView
+      fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
+      minZoom={0.2}
+      maxZoom={1.6}
+      defaultEdgeOptions={{ type: "smoothstep" }}
+      proOptions={{ hideAttribution: true }}
+      selectionOnDrag={false}
+      panOnDrag={[0, 1, 2]}
+      zoomOnScroll={false}
+      className="bg-transparent"
     >
-      <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full overflow-visible">
-        <defs>
-          <marker id="data-model-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-            <path d="M0 0 L9 4.5 L0 9 z" className="fill-primary" />
-          </marker>
-        </defs>
-        {(model.relations ?? []).map((relation) => {
-          const geometry = relationGeometry(relation);
-          if (!geometry) return null;
-          return <path key={relation.id} d={geometry.path} fill="none" stroke="hsl(var(--primary) / .62)" strokeWidth={selectedRelationId === relation.id ? 3 : 2} markerEnd="url(#data-model-arrow)" />;
-        })}
-      </svg>
+      <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+      <Controls position="bottom-left" showInteractive={false} />
+    </ReactFlow>
 
-      {(model.relations ?? []).map((relation) => {
-        const geometry = relationGeometry(relation);
-        if (!geometry) return null;
-        return <button
-          key={relation.id}
-          type="button"
-          className={`absolute z-10 max-w-52 -translate-x-1/2 rounded-md border bg-card px-2 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectedRelationId === relation.id ? "border-primary text-foreground" : "border-border text-muted-foreground hover:border-primary/60"}`}
-          style={{ left: geometry.labelX, top: geometry.labelY }}
-          onClick={() => onSelectRelation(relation.id)}
-        >
-          <span className="block truncate font-medium">{relation.name}</span>
-          <span className="block truncate">{cardinalities.find((item) => item.value === relation.cardinality)?.label}</span>
-        </button>;
-      })}
-
-      {positioned.map(({ entity, position }) => {
-        const shown = preview?.id === entity.id ? preview : position;
-        const selected = selectedEntityId === entity.id;
-        return <div
-          key={entity.id}
-          role="group"
-          aria-label={`Сущность ${entity.name || "без названия"}`}
-          className={`absolute w-[17.5rem] touch-none select-none overflow-hidden rounded-xl border bg-card shadow-sm ${selected ? "border-primary ring-2 ring-primary/20" : "border-border"}`}
-          style={{ left: shown.x, top: shown.y }}
-          onPointerDown={(event) => beginDrag(event, entity, position)}
-        >
-          <button type="button" className="flex w-full cursor-grab items-center justify-between gap-3 border-b border-border bg-muted/30 px-3 py-3 text-left active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelectEntity(entity.id)}>
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold">{entity.name || "Без названия"}</span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">{entity.cardinality === "singleton" ? "Одна запись" : "Коллекция записей"}</span>
-            </span>
-            <span className="rounded bg-background px-2 py-1 text-xs tabular-nums text-muted-foreground">{entity.fields.length} пол.</span>
-          </button>
-          <div className="space-y-1 px-3 py-3">
-            {entity.fields.slice(0, 5).map((field) => <div key={field.id} className="flex items-center justify-between gap-2 text-xs">
-              <span className="truncate">{field.name || "Поле без названия"}</span>
-              <span className="shrink-0 text-muted-foreground">{fieldTypeLabel(field)}</span>
-            </div>)}
-            {entity.fields.length === 0 && <p className="text-xs text-muted-foreground">Полей пока нет</p>}
-            {entity.fields.length > 5 && <p className="text-xs text-muted-foreground">Ещё {entity.fields.length - 5}</p>}
-          </div>
-        </div>;
-      })}
+    <div className="pointer-events-none absolute left-4 top-4 z-20 flex gap-1">
+      <button id={DATA_MODEL_ADD_ENTITY_CONTROL_ID} type="button" className="pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-background/95 px-3 text-sm font-medium shadow-sm hover:bg-muted" onClick={() => onCreateEntity(80, 80)}><Plus className="size-4" />Таблица</button>
+      <button type="button" className="pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-background/95 px-3 text-sm shadow-sm hover:bg-muted" disabled={model.entities.length < 2} onClick={onOpenRelationDialog}><Table2 className="size-4" />Связь</button>
     </div>
+    <div className="pointer-events-none absolute bottom-5 right-5 z-20 max-w-64 text-right text-xs leading-5 text-muted-foreground">
+      ПКМ по пустому месту создаёт таблицу. Потяните точку справа к точке слева другой таблицы, чтобы создать связь.
+    </div>
+
+    {contextMenu && <div ref={menuRef} data-model-context-menu role="menu" aria-label="Действия на канвасе" className="fixed z-50 min-w-52 rounded-md border border-border bg-popover p-1 shadow-lg" style={{ left: contextMenu.clientX, top: contextMenu.clientY }}>
+      <button type="button" role="menuitem" className="flex min-h-11 w-full items-center gap-2 rounded px-3 text-left text-sm hover:bg-accent" onClick={() => {
+        onCreateEntity(Math.round(contextMenu.flowX), Math.round(contextMenu.flowY));
+        setContextMenu(null);
+      }}><Plus className="size-4" />Создать таблицу</button>
+      <button type="button" role="menuitem" className="flex min-h-11 w-full items-center gap-2 rounded px-3 text-left text-sm hover:bg-accent disabled:opacity-50" disabled={model.entities.length < 2} onClick={() => {
+        setContextMenu(null);
+        onOpenRelationDialog();
+      }}><Table2 className="size-4" />Создать связь</button>
+    </div>}
   </section>;
 }
 
-function fieldTypeLabel(field: DataModelField): string {
-  const labels: Record<DataModelField["type"], string> = {
-    text: "Текст",
-    longText: "Длинный текст",
-    integer: "Целое",
-    number: "Число",
-    boolean: "Да/нет",
-    date: "Дата",
-    dateTime: "Дата и время",
-    url: "URL",
-    email: "Email",
-    enum: "Варианты",
-    media: "Файл",
-  };
-  return labels[field.type];
+export function DataModelGraphCanvas(props: Parameters<typeof DataModelFlow>[0]) {
+  return <ReactFlowProvider><DataModelFlow {...props} /></ReactFlowProvider>;
 }

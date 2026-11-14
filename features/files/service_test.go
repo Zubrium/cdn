@@ -507,17 +507,63 @@ func TestHTTPConditionalRequestsRespectVisibilityAndCachePolicy(t *testing.T) {
 		t.Fatalf("matching If-Range response: status=%d body=%q range=%q", resp.StatusCode, body, resp.Header.Get("Content-Range"))
 	}
 
+	var privateRouteFileID uuid.UUID
+	routeMux := http.NewServeMux()
+	routeMux.HandleFunc("GET /public/{mode}", func(w http.ResponseWriter, r *http.Request) {
+		h.ServePublicFile(w, r, publicFile.ID, r.PathValue("mode"))
+	})
+	routeMux.HandleFunc("HEAD /public/{mode}", func(w http.ResponseWriter, r *http.Request) {
+		h.ServePublicFile(w, r, publicFile.ID, r.PathValue("mode"))
+	})
+	routeMux.HandleFunc("GET /private", func(w http.ResponseWriter, r *http.Request) {
+		h.ServePublicFile(w, r, privateRouteFileID, "attachment")
+	})
+	routeServer := httptest.NewServer(routeMux)
+	defer routeServer.Close()
+	routeRequest := func(method, path, rangeHeader string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(method, routeServer.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rangeHeader != "" {
+			req.Header.Set("Range", rangeHeader)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	resp = routeRequest(http.MethodGet, "/public/attachment", "")
+	if body = readBody(resp); resp.StatusCode != http.StatusOK || string(body) != "public body" || !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("attachment route response: status=%d body=%q disposition=%q", resp.StatusCode, body, resp.Header.Get("Content-Disposition"))
+	}
+	resp = routeRequest(http.MethodHead, "/public/attachment", "")
+	if body = readBody(resp); resp.StatusCode != http.StatusOK || len(body) != 0 || resp.Header.Get("ETag") != publicETag {
+		t.Fatalf("attachment route HEAD: status=%d body=%q etag=%q", resp.StatusCode, body, resp.Header.Get("ETag"))
+	}
+	resp = routeRequest(http.MethodGet, "/public/attachment", "bytes=0-2")
+	if body = readBody(resp); resp.StatusCode != http.StatusPartialContent || string(body) != "pub" || resp.Header.Get("Content-Range") != "bytes 0-2/11" {
+		t.Fatalf("attachment route range: status=%d body=%q range=%q", resp.StatusCode, body, resp.Header.Get("Content-Range"))
+	}
+
 	privateUpload := upload(t, f, []byte("private body"), "private")
 	privateFile, err := f.service.Commit(ctx, f.a, privateUpload.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateRouteFileID = privateFile.ID
 	privatePath := "/api/v2/files/objects/" + privateFile.ID.String() + "/content"
 	resp = request(http.MethodGet, privatePath, os.Getenv("FILES_TEST_KEY_A"), "", "", "")
 	_ = readBody(resp)
 	privateETag := resp.Header.Get("ETag")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("private owner response: status=%d cache=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+	}
+	resp = routeRequest(http.MethodGet, "/private", "")
+	if body = readBody(resp); resp.StatusCode != http.StatusNotFound || len(body) == 0 {
+		t.Fatalf("private route response: status=%d body=%q", resp.StatusCode, body)
 	}
 	resp = request(http.MethodGet, privatePath, "", privateETag, "", "")
 	if body = readBody(resp); resp.StatusCode != http.StatusNotFound || len(body) == 0 || resp.Header.Get("ETag") != "" {

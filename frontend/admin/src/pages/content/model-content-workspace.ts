@@ -97,6 +97,24 @@ export function reorderModelRecords(
   return records.map((record) => orders.has(record.id) ? { ...record, sortOrder: orders.get(record.id)! } : record);
 }
 
+export function reorderModelRecordsById(
+  records: ModelContentRecord[],
+  entityId: string,
+  orderedRecordIds: string[],
+): ModelContentRecord[] {
+  const entityRecords = records.filter((record) => record.entityId === entityId);
+  if (orderedRecordIds.length !== entityRecords.length) return records;
+  const byID = new Map(entityRecords.map((record) => [record.id, record]));
+  const ordered = orderedRecordIds.flatMap((recordId) => {
+    const record = byID.get(recordId);
+    return record ? [record] : [];
+  });
+  if (ordered.length !== entityRecords.length) return records;
+  if (ordered.every((record, index) => record.id === entityRecords[index]?.id)) return records;
+  const orders = new Map(ordered.map((record, sortOrder) => [record.id, sortOrder]));
+  return records.map((record) => orders.has(record.id) ? { ...record, sortOrder: orders.get(record.id)! } : record);
+}
+
 export function setModelContentSelection(
   selections: ModelContentSelection[],
   placementId: string,
@@ -305,6 +323,14 @@ export function reorderSelectedRecords(recordIds: string[], recordId: string, di
   if (index < 0 || nextIndex < 0 || nextIndex >= next.length) return recordIds;
   [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
   return next;
+}
+
+export function reorderSelectedRecordsById(recordIds: string[], orderedRecordIds: string[]): string[] {
+  if (recordIds.length !== orderedRecordIds.length) return recordIds;
+  const available = new Set(recordIds);
+  if (orderedRecordIds.some((recordId) => !available.has(recordId))) return recordIds;
+  if (orderedRecordIds.every((recordId, index) => recordId === recordIds[index])) return recordIds;
+  return [...orderedRecordIds];
 }
 
 export function deleteModelRecord(

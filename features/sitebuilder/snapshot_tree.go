@@ -164,6 +164,9 @@ func (s *SnapshotService) CreateSnapshot(ctx context.Context, actor uuid.UUID, i
 			return SnapshotRecord{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 	}
+	if err := s.validateRouteFileTargets(ctx, tx, payload.Config.RouteTree); err != nil {
+		return SnapshotRecord{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
 	if payload.DesignSystem == nil {
 		value := NewDesignSystem()
 		payload.DesignSystem = &value

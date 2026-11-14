@@ -5,6 +5,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 
 	"websiteengine/features/auth"
@@ -274,7 +276,30 @@ func NewPublicRouter(d Deps, env environment.Environment) http.Handler {
 			}
 			return document, err
 		})
-		mux.Handle("/", publicruntime.DocumentHandler(d.S3PublicBaseURL, resolver, d.Prerender[env], d.RuntimeAssetCacheTTL))
+		documentHandler := publicruntime.DocumentHandler(d.S3PublicBaseURL, resolver, d.Prerender[env], d.RuntimeAssetCacheTTL)
+		if d.Media != nil {
+			mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet || r.Method == http.MethodHead {
+					clean := path.Clean("/" + r.URL.Path)
+					if strings.HasPrefix(clean, "/assets/") {
+						documentHandler.ServeHTTP(w, r)
+						return
+					}
+					fileRoute, matched, err := d.SiteSnapshots.FileRoute(r.Context(), env, clean)
+					if err != nil {
+						if d.Log != nil {
+							d.Log.Error("public_file_route_resolution_failed", "branch_id", env.String(), "path", clean, "error", err)
+						}
+					} else if matched {
+						d.Media.ServePublicFile(w, r, fileRoute.FileID, fileRoute.Disposition)
+						return
+					}
+				}
+				documentHandler.ServeHTTP(w, r)
+			}))
+		} else {
+			mux.Handle("/", documentHandler)
+		}
 	} else {
 		resolver := publicruntime.DocumentResolver(func(context.Context, string, string) (publicruntime.Document, error) {
 			return publicruntime.SystemDocument(http.StatusServiceUnavailable), nil

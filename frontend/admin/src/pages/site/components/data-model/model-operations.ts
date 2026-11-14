@@ -236,6 +236,19 @@ export function moveDataModelField(model: DataModel, entityID: string, fieldID: 
   return updateDataModelEntity(model, entityID, (current) => ({ ...current, fields }));
 }
 
+export function reorderDataModelFields(model: DataModel, entityID: string, orderedFieldIDs: string[]): DataModel {
+  const entity = model.entities.find((item) => item.id === entityID);
+  if (!entity || orderedFieldIDs.length !== entity.fields.length) return model;
+  const byID = new Map(entity.fields.map((field) => [field.id, field]));
+  const fields = orderedFieldIDs.flatMap((fieldID) => {
+    const field = byID.get(fieldID);
+    return field ? [field] : [];
+  });
+  if (fields.length !== entity.fields.length) return model;
+  if (fields.every((field, index) => field.id === entity.fields[index]?.id)) return model;
+  return updateDataModelEntity(model, entityID, (current) => ({ ...current, fields }));
+}
+
 export function addDataModelRelation(
   model: DataModel,
   relation: Omit<DataModelRelation, "id">,

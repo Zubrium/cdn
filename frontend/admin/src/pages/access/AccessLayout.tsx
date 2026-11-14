@@ -33,7 +33,7 @@ export default function AccessLayout() {
               to={tab.to}
               className={({ isActive }) =>
                 cn(
-                  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "inline-flex min-h-11 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   isActive
                     ? "bg-background text-foreground shadow-sm"
                     : "hover:text-foreground",

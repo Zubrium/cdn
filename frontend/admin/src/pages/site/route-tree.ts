@@ -212,10 +212,11 @@ function pathToSegments(path: string, route: RouteTreeNode): RouteTreeNode | nul
   parts.forEach((part, index) => {
     const last = index === parts.length - 1;
     let segment: RouteTreeNode;
-    if (part.startsWith(":")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "param", name: part.slice(1), ...(last ? { pageId: route.pageId } : {}), children: [] };
-    else if (part.startsWith("*")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "catchAll", name: part.slice(1), ...(last ? { pageId: route.pageId } : {}), children: [] };
-    else if (part.startsWith("~")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "regex", pattern: part.slice(1), ...(last ? { pageId: route.pageId } : {}), children: [] };
-    else segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "static", value: part, ...(last ? { pageId: route.pageId } : {}), children: [] };
+    const target = last ? { ...(route.pageId ? { pageId: route.pageId } : {}), ...(route.fileId ? { fileId: route.fileId, fileDisposition: route.fileDisposition } : {}) } : {};
+    if (part.startsWith(":")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "param", name: part.slice(1), ...target, children: [] };
+    else if (part.startsWith("*")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "catchAll", name: part.slice(1), ...target, children: [] };
+    else if (part.startsWith("~")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "regex", pattern: part.slice(1), ...target, children: [] };
+    else segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "static", value: part, ...target, children: [] };
     if (!first) first = segment;
     if (current) current.children = [segment];
     current = segment;
@@ -233,12 +234,20 @@ function asRootRoute(node: RouteTreeNode): RouteTreeNode | null {
   const path = token.startsWith("{") && token.endsWith("}")
     ? node.type === "regex" ? `/~${node.pattern ?? ""}` : node.type === "catchAll" ? `/*${node.name ?? "path"}` : `/:${node.name ?? "param"}`
     : `/${token}`;
-  return { id: node.id, type: "path", path, ...(node.pageId ? { pageId: node.pageId } : {}), children: node.children ?? [] };
+  return {
+    id: node.id,
+    type: "path",
+    path,
+    ...(node.pageId ? { pageId: node.pageId } : {}),
+    ...(node.fileId ? { fileId: node.fileId, fileDisposition: node.fileDisposition } : {}),
+    children: node.children ?? [],
+  };
 }
 
 export function reparentRoute(tree: RouteTreeNode, sourceId: string, targetId: string | null): { tree?: RouteTreeNode; error?: string } {
   const source = findRoute(tree, sourceId);
   if (!source || source.type === "site") return { error: "Маршрут не найден" };
+  if (source.fileId && targetId) return { error: "Файловый маршрут должен оставаться самостоятельным." };
   if (targetId && containsRoute(source, targetId)) return { error: "Нельзя вложить маршрут в самого себя" };
   const target = targetId ? findRoute(tree, targetId) : undefined;
   if (targetId && !target) return { error: "Родительский маршрут не найден" };

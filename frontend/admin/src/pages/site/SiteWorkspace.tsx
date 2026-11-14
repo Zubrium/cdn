@@ -42,6 +42,9 @@ const siteEditorModes = [
   ["/site/data-model", "Модель данных"],
 ] as const;
 const siteEditorModePaths = new Set<string>(siteEditorModes.map(([path]) => path));
+function isSiteEditorPath(pathname: string): boolean {
+  return siteEditorModePaths.has(pathname) || pathname.startsWith("/site/pages/");
+}
 
 function childSnapshotName(snapshot: SiteSnapshot): string {
   const base = snapshot.name.replace(/(?: · изменение(?: после #\d+)?)$/u, "").trim() || snapshot.name.trim();
@@ -184,7 +187,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const allDirty = dirty || JSON.stringify(metadata) !== JSON.stringify(savedMetadata) || JSON.stringify(designSystem) !== JSON.stringify(savedDesignSystem);
   const guard = useUnsavedChangesGuard(allDirty, guardBypass, {
     allowPathChange: (current, next) => {
-      return siteEditorModePaths.has(current) && siteEditorModePaths.has(next);
+      return isSiteEditorPath(current) && isSiteEditorPath(next);
     },
     protectSearch: (current, next) => new URLSearchParams(current).get("snapshot") !== new URLSearchParams(next).get("snapshot"),
   });
@@ -324,7 +327,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   if (loading || snapshots.isLoading || (!selected && Boolean(snapshots.data?.items.length))) return <p className="p-8 text-sm text-muted-foreground">Загружаем снапшот…</p>;
   if (error || !config) return <ErrorState error={error} title="Не удалось загрузить снапшот" onRetry={() => void reload()} />;
 
-  const canvas = location.pathname === "/site/pages" || location.pathname === "/site/router" || location.pathname === "/site/data-model";
+  const canvas = location.pathname.startsWith("/site/pages") || location.pathname === "/site/router" || location.pathname === "/site/data-model";
   return (
     <WorkspaceContext.Provider value={{ config, metadata, designSystem, revision: snapshot?.sequence ?? 0, snapshot, dirty: allDirty, saving, conflict, localSaveError, update, updateMetadata, updateDesignSystem, save, reload }}>
       {guard.dialog}
@@ -344,7 +347,10 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             </SelectContent>
           </Select>
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
-            {siteEditorModes.map(([path, label]) => <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={location.pathname === path ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${location.pathname === path ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>)}
+            {siteEditorModes.map(([path, label]) => {
+              const active = location.pathname === path || path === "/site/pages" && location.pathname.startsWith("/site/pages/");
+              return <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
+            })}
           </nav>
           <span role="status" aria-live="polite" className={`ml-auto text-xs ${allDirty ? "text-warning" : "text-success"}`}>{allDirty ? "Есть изменения" : "Сохранено"}</span>
           {conflict && <Button type="button" size="sm" variant="outline" disabled={saving} onClick={async () => {
@@ -360,7 +366,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             <ul className="mt-1 list-disc pl-5">{snapshot.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul>
           </section>
         )}
-        <div className={canvas ? "min-h-0 flex-1" : ""}>{children ?? <Outlet />}</div>
+        <div className={canvas ? "min-h-0 flex-1 overflow-hidden" : ""}>{children ?? <Outlet />}</div>
       </div>
     </WorkspaceContext.Provider>
   );

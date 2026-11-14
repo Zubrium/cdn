@@ -10,5 +10,6 @@ output/
 .pnpm-store/
 frontend/dist/
 pkg/static/dist/assets/
+pkg/static/dist/favicon.svg
 pkg/runtime/dist/*
 !pkg/runtime/dist/.gitkeep

@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/input";
+import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import { MediaPickerDialog } from "@/domains/media/MediaPickerDialog";
 import type { FeatureArgumentBinding, JsonValue, MediaRenditionContext } from "@/types";
 import { appendSchemaPath, initialValue, pointerSegment, type SchemaField } from "./schema";
@@ -27,6 +28,17 @@ export function moveArgumentArrayItem(values: JsonValue[], index: number, direct
   const next = [...values];
   [next[index], next[target]] = [next[target]!, next[index]!];
   return next;
+}
+
+export function reorderArgumentArrayItems(values: JsonValue[], order: number[]): JsonValue[] {
+  if (order.length !== values.length) return values;
+  const seen = new Set<number>();
+  const next = order.flatMap((index) => {
+    if (!Number.isInteger(index) || index < 0 || index >= values.length || seen.has(index)) return [];
+    seen.add(index);
+    return [values[index]!];
+  });
+  return next.length === values.length ? next : values;
 }
 
 function enumValueKey(value: JsonValue): string {
@@ -173,39 +185,65 @@ function ArgumentArrayValue({ schema, value, label, required, argumentPath, prep
     update(moveArgumentArrayItem(values, index, direction));
     setStatus(`Элемент перемещён на позицию ${target + 1}`);
   };
+  const reorderItems = (orderedKeys: string[]) => {
+    const order = orderedKeys.map((key) => itemKeys.current.indexOf(key));
+    const next = reorderArgumentArrayItems(values, order);
+    if (next === values) return;
+    itemKeys.current = orderedKeys;
+    update(next);
+    setStatus("Порядок элементов изменён");
+  };
 
-  return <fieldset className="min-w-0 space-y-3 rounded-md border border-border p-3" aria-describedby={schema.description ? `${id}-description` : undefined}>
+  return <fieldset className="min-w-0 space-y-3 border-l-2 border-border pl-3" aria-describedby={schema.description ? `${id}-description` : undefined}>
     <legend className="px-1 text-sm font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</legend>
     {schema.description && <p id={`${id}-description`} className="text-xs text-muted-foreground">{schema.description}</p>}
-    <ol aria-label={`Элементы ${label}`} className="space-y-3">
-      {values.map((item, index) => {
-        const itemLabel = `${label} · элемент ${index + 1}`;
-        const itemPath = appendSchemaPath(argumentPath, "items");
-        const itemKey = itemKeys.current[index]!;
-        return <li key={itemKey} className="min-w-0 rounded-md bg-muted/20 p-3">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-medium text-muted-foreground">Элемент {index + 1}</p>
-            <div className="flex flex-wrap gap-1">
-              <Button type="button" variant="outline" className="min-h-11" aria-label={`Переместить ${itemLabel} выше`} disabled={index === 0} onClick={() => moveItem(index, -1)}><ArrowUp /><span className="sr-only">Выше</span></Button>
-              <Button type="button" variant="outline" className="min-h-11" aria-label={`Переместить ${itemLabel} ниже`} disabled={index === values.length - 1} onClick={() => moveItem(index, 1)}><ArrowDown /><span className="sr-only">Ниже</span></Button>
-              <Button type="button" variant="ghost" className="min-h-11" aria-label={`Удалить ${itemLabel}`} ref={(node) => {
-                if (node) removeButtons.current.set(itemKey, node);
-                else removeButtons.current.delete(itemKey);
-              }} onClick={() => removeItem(index)}><Trash2 /><span className="sr-only">Удалить</span></Button>
+    <SortableList
+      items={itemKeys.current.slice(0, values.length)}
+      onReorder={reorderItems}
+      getItemLabel={(id) => {
+        const index = itemKeys.current.indexOf(id);
+        return index >= 0 ? `${label}, элемент ${index + 1}` : "элемент";
+      }}
+    >
+      <ol aria-label={`Элементы ${label}`} className="space-y-3">
+        {values.map((item, index) => {
+          const itemLabel = `${label} · элемент ${index + 1}`;
+          const itemPath = appendSchemaPath(argumentPath, "items");
+          const itemKey = itemKeys.current[index]!;
+          return <SortableItem key={itemKey} id={itemKey} className="border-l-2 border-border/70 pl-3">{(handle) => <div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium text-muted-foreground">Элемент {index + 1}</p>
+              <div className="flex flex-wrap gap-1">
+                <Button
+                  ref={handle.setActivatorNodeRef}
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 touch-none cursor-grab active:cursor-grabbing"
+                  aria-label={`Перетащить ${itemLabel}`}
+                  {...handle.attributes}
+                  {...handle.listeners}
+                ><GripVertical /><span className="sr-only">Перетащить</span></Button>
+                <Button type="button" variant="outline" className="min-h-11" aria-label={`Переместить ${itemLabel} выше`} disabled={index === 0} onClick={() => moveItem(index, -1)}><ArrowUp /><span className="sr-only">Выше</span></Button>
+                <Button type="button" variant="outline" className="min-h-11" aria-label={`Переместить ${itemLabel} ниже`} disabled={index === values.length - 1} onClick={() => moveItem(index, 1)}><ArrowDown /><span className="sr-only">Ниже</span></Button>
+                <Button type="button" variant="ghost" className="min-h-11" aria-label={`Удалить ${itemLabel}`} ref={(node) => {
+                  if (node) removeButtons.current.set(itemKey, node);
+                  else removeButtons.current.delete(itemKey);
+                }} onClick={() => removeItem(index)}><Trash2 /><span className="sr-only">Удалить</span></Button>
+              </div>
             </div>
-          </div>
-          <ArgumentValueEditor
-            schema={itemSchema}
-            value={item}
-            label={itemLabel}
-            required
-            argumentPath={itemPath}
-            preparation={preparation ? { ...preparation, fieldPath: itemPath } : undefined}
-            onChange={(next) => update(updateArgumentArrayItem(values, index, next ?? initialValue(itemSchema)))}
-          />
-        </li>;
-      })}
-    </ol>
+            <ArgumentValueEditor
+              schema={itemSchema}
+              value={item}
+              label={itemLabel}
+              required
+              argumentPath={itemPath}
+              preparation={preparation ? { ...preparation, fieldPath: itemPath } : undefined}
+              onChange={(next) => update(updateArgumentArrayItem(values, index, next ?? initialValue(itemSchema)))}
+            />
+          </div>}</SortableItem>;
+        })}
+      </ol>
+    </SortableList>
     <div className="flex flex-wrap items-center gap-2">
       <Button type="button" variant="outline" className="min-h-11" aria-label={`Добавить элемент в ${label}`} ref={addButton} onClick={addItem}><Plus />Добавить элемент</Button>
       <OptionalValueClear value={value} label={label} required={required} onChange={onChange} />
@@ -226,7 +264,7 @@ function MediaArgumentValue({ schema, value, label, required, controlID, describ
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const selectedValue = value || undefined;
-  return <div className="space-y-2 rounded-md border border-border p-3">
+  return <div className="space-y-2 border-t border-border/70 pt-3">
     <p id={`${controlID}-label`} className="text-sm font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</p>
     {schema.description && <p id={`${controlID}-description`} className="text-xs text-muted-foreground">{schema.description}</p>}
     <Button id={controlID} aria-label={`${selectedValue ? "Заменить" : "Выбрать"} медиа для ${label}`} aria-labelledby={`${controlID}-label`} aria-describedby={describedBy} type="button" variant="outline" className="min-h-11 w-full justify-start" onClick={() => setPickerOpen(true)}>{selectedValue ? "Файл выбран · заменить" : "Выбрать файл"}</Button>
@@ -252,7 +290,7 @@ export function ArgumentField({ schema, argumentKey, binding, captures, required
   const hasStaleMediaSource = isMediaArgument && binding !== undefined && binding.source !== "literal";
   const rootPath = `/${pointerSegment(argumentKey)}`;
   const literalChange = (next: JsonValue | undefined) => onChange(next === undefined ? undefined : { source: "literal", value: next });
-  return <div className="space-y-3 rounded-md border border-border p-3">
+  return <div className="space-y-3 border-t border-border/70 pt-3">
     <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium leading-none">{name}{required && <span className="ml-1 text-destructive">· обязательно</span>}</p>{source !== "literal" && schema.description && <p id={descriptionId} className="mt-1 text-xs text-muted-foreground">{schema.description}</p>}</div>{schema.format !== "media" && <select aria-label={`Источник аргумента ${name}`} className="min-h-11 rounded-md border border-input bg-background px-2 text-xs" value={source} onChange={(event) => {
       const next = event.currentTarget.value;
       if (next === "path") onChange({ source: "path", pathArg: captures[0] });
@@ -289,7 +327,7 @@ function ArgumentValueEditor({ schema, value, label, required, argumentPath, pre
     const current = selectedValue !== null && typeof selectedValue === "object" && !Array.isArray(selectedValue) ? selectedValue : {};
     const children = schema.properties ?? {};
     const requiredChildren = new Set(schema.required ?? []);
-    return <fieldset className="min-w-0 space-y-3 rounded-md border border-border p-3" aria-describedby={describedBy}>
+    return <fieldset className="min-w-0 space-y-3 border-l-2 border-border pl-3" aria-describedby={describedBy}>
       <legend className="px-1 text-sm font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</legend>
       {schema.description && <p id={descriptionID} className="text-xs text-muted-foreground">{schema.description}</p>}
       {Object.entries(children).length ? <div className="space-y-3">
@@ -323,7 +361,7 @@ function ArgumentValueEditor({ schema, value, label, required, argumentPath, pre
 
   if (schema.enum?.length) {
     const selectedKey = selectedValue !== undefined ? enumValueKey(selectedValue) : "";
-    return <div className="space-y-2 rounded-md border border-border p-3">
+    return <div className="space-y-2 border-t border-border/70 pt-3">
       <label className="block space-y-1.5 text-sm" htmlFor={controlID}>
         <span className="block font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</span>
         <select id={controlID} className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm" value={selectedKey} required={required} aria-describedby={describedBy} onChange={(event) => {
@@ -341,7 +379,7 @@ function ArgumentValueEditor({ schema, value, label, required, argumentPath, pre
 
   if (schema.type === "boolean") {
     const selected = typeof selectedValue === "boolean" ? String(selectedValue) : "";
-    return <div className="space-y-2 rounded-md border border-border p-3">
+    return <div className="space-y-2 border-t border-border/70 pt-3">
       <label className="block space-y-1.5 text-sm" htmlFor={controlID}>
         <span className="block font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</span>
         <select id={controlID} className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm" value={selected} required={required} aria-describedby={describedBy} onChange={(event) => onChange(event.currentTarget.value === "" ? undefined : event.currentTarget.value === "true")}>
@@ -356,7 +394,7 @@ function ArgumentValueEditor({ schema, value, label, required, argumentPath, pre
   }
 
   if (schema.type === "integer" || schema.type === "number") {
-    return <div className="space-y-2 rounded-md border border-border p-3">
+    return <div className="space-y-2 border-t border-border/70 pt-3">
       <NumericArgumentInput schema={schema} value={typeof value === "number" ? value : undefined} label={label} required={required} descriptionId={describedBy} onChange={onChange} />
       {schema.description && <p id={descriptionID} className="text-xs text-muted-foreground">{schema.description}</p>}
       <OptionalValueClear value={value} label={label} required={required} onChange={onChange} />
@@ -371,7 +409,7 @@ function ArgumentValueEditor({ schema, value, label, required, argumentPath, pre
   if (schema.type === "string" || schema.type === undefined) {
     const stringValue = typeof selectedValue === "string" ? selectedValue : "";
     const inputType = schema.format === "email" ? "email" : schema.format === "uri" || schema.format === "url" ? "url" : schema.format === "date" ? "date" : "text";
-    return <div className="space-y-2 rounded-md border border-border p-3">
+    return <div className="space-y-2 border-t border-border/70 pt-3">
       <label className="block space-y-1.5 text-sm" htmlFor={controlID}>
         <span className="block font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</span>
         <Input id={controlID} type={inputType} className="min-h-11" value={stringValue} required={required} aria-describedby={describedBy} onChange={(event) => onChange(event.currentTarget.value)} />

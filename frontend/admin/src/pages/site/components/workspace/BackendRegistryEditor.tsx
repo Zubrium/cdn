@@ -25,7 +25,7 @@ export function BackendRegistryEditor({ config, backends, onChange }: {
 
   return <div className="grid min-w-0 gap-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="text-sm font-medium">Backend-адреса</h3>
+      <h2 className="text-sm font-medium">Backend-адреса</h2>
       <Button type="button" variant="outline" className="min-h-11" onClick={addBackend}>Добавить backend</Button>
     </div>
     {backends.length === 0 && <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">Зарегистрированных адресов пока нет. Запросы текущего сайта можно настраивать без регистрации.</p>}

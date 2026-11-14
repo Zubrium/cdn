@@ -189,7 +189,7 @@ export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments:
       const selectedScalarChoice = scalarCandidates.find((choice) =>
         choice.field.id === binding?.fieldId && sameRelationPath(binding.relationIds, choice.relationIds),
       );
-      return <section key={port.key} className="space-y-3 rounded-md border border-border p-3" aria-labelledby={`${controlID}-title`}>
+      return <section key={port.key} className="space-y-3 border-t border-border/70 pt-4" aria-labelledby={`${controlID}-title`}>
         <div>
           <h4 id={`${controlID}-title`} className="text-sm font-medium">{readableName(port.key)}</h4>
           <p className="mt-0.5 text-xs text-muted-foreground">{port.kind === "collection" ? "Коллекция записей" : port.kind === "record" ? "Одна запись" : `Одно поле · ${fieldTypeLabel(port.type)}`}</p>
@@ -271,7 +271,7 @@ export function DataInputBindingsEditor({ ports, dataModel, bindings, arguments:
           })}
           {declaredFields.some((declared) => (dataModel ? compatibleRelationFieldChoices(dataModel, entity.id, declared).length : 0) === 0) && <p className="text-xs text-muted-foreground">Выбирайте поле по его типу и пути связей. Направление каждой связи видно в вариантах выбора.</p>}
         </div>)}
-        {binding && entity && port.kind === "record" && <fieldset className="space-y-2 rounded-md bg-muted/30 p-3">
+        {binding && entity && port.kind === "record" && <fieldset className="space-y-2 border-l-2 border-border pl-3">
           <legend className="px-1 text-xs font-medium">Запись из параметра маршрута (необязательно)</legend>
           <p className="text-xs text-muted-foreground">Без этого сопоставления запись выбирается в редакторе контента. Для detail-страницы выберите аргумент, связанный с параметром пути, и уникальное поле модели.</p>
           <label className="block space-y-1 text-sm"><span className="text-muted-foreground">Аргумент пути</span>

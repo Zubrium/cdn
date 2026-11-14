@@ -22,6 +22,9 @@ const UsersPage = lazy(() => import("@/pages/access/UsersPage"));
 const RolesPage = lazy(() => import("@/pages/access/RolesPage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const RouterPage = lazy(() => import("@/pages/site/RouterPage"));
+const PageDetailPage = lazy(() => import("@/pages/site/PageDetailPage"));
+const FeatureEditorPage = lazy(() => import("@/pages/site/FeatureEditorPage"));
+const FileRoutePage = lazy(() => import("@/pages/site/FileRoutePage"));
 const FeatureRegistryPage = lazy(() => import("@/pages/site/FeatureRegistryPage"));
 const DesignSystemPage = lazy(() => import("@/pages/site/DesignSystemPage"));
 const DataModelPage = lazy(() => import("@/pages/site/DataModelPage"));
@@ -136,6 +139,9 @@ export const router = createBrowserRouter(
                   { path: "features", element: <FeatureRegistryPage /> },
                   { path: "backend", element: <BackendPage /> },
                   { path: "pages", element: <RouterPage /> },
+                  { path: "pages/files/:routeId", element: <FileRoutePage /> },
+                  { path: "pages/:pageId", element: <PageDetailPage /> },
+                  { path: "pages/:pageId/features/:placementId", element: <FeatureEditorPage /> },
                   { path: "settings", element: <SiteMetadataPage /> },
                   { path: "design-system", element: <DesignSystemPage /> },
                   { path: "data-model", element: <DataModelPage /> },

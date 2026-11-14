@@ -22,6 +22,7 @@ import (
 
 type FileHandler interface {
 	ServeMedia(http.ResponseWriter, *http.Request)
+	ServePublicFile(http.ResponseWriter, *http.Request, uuid.UUID, string)
 	UploadAdminMedia(http.ResponseWriter, *http.Request)
 	DeleteAdminMedia(http.ResponseWriter, *http.Request)
 	AdminMediaAccess(http.ResponseWriter, *http.Request) bool
@@ -410,6 +411,26 @@ func (h *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", redirectCacheControl(h.redirectCacheTTL))
 	w.Header().Set("Location", url)
 	w.WriteHeader(http.StatusFound)
+}
+
+func (h *Handler) ServePublicFile(w http.ResponseWriter, r *http.Request, id uuid.UUID, disposition string) {
+	if h.files == nil {
+		item, err := h.service.Get(r.Context(), id)
+		if err != nil || item.Visibility != "public" || item.Status != "ready" {
+			response.Error(w, r, http.StatusNotFound, "not_found", "Публичный файл не найден")
+			return
+		}
+		url, err := h.service.RedirectURL(r.Context(), id, "")
+		if err != nil {
+			response.Error(w, r, http.StatusNotFound, "not_found", "Публичный файл не найден")
+			return
+		}
+		w.Header().Set("Cache-Control", redirectCacheControl(h.redirectCacheTTL))
+		w.Header().Set("Location", url)
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+	h.files.ServePublicFile(w, r, id, disposition)
 }
 
 func redirectCacheControl(ttl time.Duration) string {

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { FeatureArgumentBinding } from "@/types";
-import { ArgumentField } from "./FeatureArgumentsEditor";
+import { ArgumentField, reorderArgumentArrayItems } from "./FeatureArgumentsEditor";
 
 vi.mock("@/domains/media/MediaPickerDialog", () => ({
   MediaPickerDialog: () => null,
@@ -20,6 +20,12 @@ function renderArgument(schema: Parameters<typeof ArgumentField>[0]["schema"], b
 }
 
 describe("feature argument dynamic sources", () => {
+  it("reorders array values only for a complete permutation", () => {
+    expect(reorderArgumentArrayItems(["a", "b", "c"], [2, 0, 1])).toEqual(["c", "a", "b"]);
+    expect(reorderArgumentArrayItems(["a", "b"], [0])).toEqual(["a", "b"]);
+    expect(reorderArgumentArrayItems(["a", "b"], [0, 0])).toEqual(["a", "b"]);
+  });
+
   it("offers query values only for route-coercible scalars and arrays of scalars", () => {
     const object = renderArgument({ type: "object", properties: { title: { type: "string" } } });
     const objectArray = renderArgument({ type: "array", items: { type: "object", properties: { title: { type: "string" } } } });

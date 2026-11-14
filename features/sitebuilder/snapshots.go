@@ -301,6 +301,9 @@ func (s *SnapshotService) runtimeForMatchedRoute(ctx context.Context, env enviro
 	if state == nil {
 		state = &runtimeReadState{}
 	}
+	if route.PageID == "" {
+		return RuntimeComposition{}, ErrNotFound
+	}
 	systemPage404Override := routeTreeNodeIsCatchAll(payload.Config.RouteTree, route.ID) && payload.Config.SystemPages["404"] == route.PageID
 	var page Page
 	for _, candidate := range payload.Config.Pages {

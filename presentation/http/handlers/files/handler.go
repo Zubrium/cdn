@@ -262,7 +262,7 @@ func (h *Handler) Content(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.serve(w, r, id, nil)
+	h.serve(w, r, id, nil, false, "")
 }
 func (h *Handler) AdminContent(w http.ResponseWriter, r *http.Request) {
 	id, ok := id(w, r)
@@ -270,7 +270,7 @@ func (h *Handler) AdminContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := h.service.AdminOwner()
-	h.serve(w, r, id, &owner)
+	h.serve(w, r, id, &owner, false, "")
 }
 func (h *Handler) ServeMedia(w http.ResponseWriter, r *http.Request) {
 	raw := r.PathValue("key")
@@ -282,9 +282,17 @@ func (h *Handler) ServeMedia(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, files.ErrNotFound)
 		return
 	}
-	h.serve(w, r, id, nil)
+	h.serve(w, r, id, nil, false, "")
 }
-func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id uuid.UUID, admin *files.Owner) {
+
+// ServePublicFile streams the selected immutable public object through a
+// configured site route. It never upgrades private files through an
+// Authorization header or an expiring object link.
+func (h *Handler) ServePublicFile(w http.ResponseWriter, r *http.Request, id uuid.UUID, disposition string) {
+	h.serve(w, r, id, nil, true, disposition)
+}
+
+func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id uuid.UUID, admin *files.Owner, publicOnly bool, dispositionOverride string) {
 	key := h.anonymousKey(r)
 	var authenticatedOwner *files.Owner
 	if admin != nil {
@@ -305,6 +313,10 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id uuid.UUID, ad
 	f, e := h.service.PublicFile(r.Context(), id)
 	if e != nil {
 		h.error(w, r, e)
+		return
+	}
+	if publicOnly && f.Visibility != "public" {
+		h.error(w, r, files.ErrNotFound)
 		return
 	}
 	authorized := f.Visibility == "public"
@@ -350,8 +362,17 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id uuid.UUID, ad
 	}
 	w.Header().Set("Content-Type", contentType)
 	disposition := "attachment"
-	if files.InlineSafe(contentType) && r.URL.Query().Get("download") != "1" {
-		disposition = "inline"
+	switch dispositionOverride {
+	case "inline":
+		if files.InlineSafe(contentType) {
+			disposition = "inline"
+		}
+	case "attachment":
+		disposition = "attachment"
+	default:
+		if files.InlineSafe(contentType) && r.URL.Query().Get("download") != "1" {
+			disposition = "inline"
+		}
 	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": f.Name}))
 	rawRange := r.Header.Get("Range")

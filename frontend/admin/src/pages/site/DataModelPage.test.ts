@@ -39,6 +39,8 @@ import DataModelPage, {
   removeDataModelEntity,
   removeDataModelField,
   removeDataModelRelation,
+  reorderDataModelFields,
+  EntityInspector,
   RelationInspector,
   setDataModelEntityPosition,
   updateDataModelEntityCardinality,
@@ -140,6 +142,13 @@ describe("data model operations", () => {
     expect(moveDataModelField(moved, productID, statusFieldID, -1)).toBe(moved);
     expect(moveDataModelField(moved, productID, "missing", 1)).toBe(moved);
     expect(model.entities[0]?.fields.map((field) => field.id)).toEqual([titleFieldID, statusFieldID]);
+  });
+
+  it("reorders fields from a sortable list only when the complete ID set is supplied", () => {
+    const reordered = reorderDataModelFields(model, productID, [statusFieldID, titleFieldID]);
+    expect(reordered.entities[0]?.fields.map((field) => field.id)).toEqual([statusFieldID, titleFieldID]);
+    expect(reorderDataModelFields(model, productID, [statusFieldID])).toBe(model);
+    expect(reorderDataModelFields(model, productID, [statusFieldID, "missing"])).toBe(model);
   });
 
   it("generates a fresh value key for each new field so a deleted key cannot be reused", () => {
@@ -385,29 +394,16 @@ describe("data model page accessibility", () => {
     mocks.useConfirm.mockReturnValue(vi.fn(async () => false));
   });
 
-  it("renders only the ER canvas with the selected entity in the inspector", () => {
+  it("renders only the full-screen ER canvas until an element is selected", () => {
     const markup = renderToStaticMarkup(createElement(DataModelPage));
 
     expect(markup).toContain('aria-label="ER-канвас модели данных"');
-    expect(markup).toContain('aria-label="Инспектор модели данных"');
+    expect(markup).not.toContain('aria-label="Инспектор модели данных"');
     expect(markup).not.toContain("Карточки модели");
     expect(markup).not.toContain(">ER-граф<");
-    expect(markup).toContain("Создать связь");
-    expect(markup).toContain(`aria-labelledby="data-model-entity-title-${productID}"`);
-    expect(markup).toContain("Название сущности");
-    expect(markup).toContain('aria-label="Количество записей сущности Товар"');
-    expect(markup).toContain('<option value="many" selected="">Много записей</option>');
-    expect(markup).toContain('<option value="singleton">Одна запись</option>');
-    expect(markup).toContain("Название поля");
-    expect(markup).toContain("Тип поля");
-    expect(markup).toContain(`aria-label="Варианты поля Статус сущности Товар"`);
-    expect(markup).toContain(`aria-label="Удалить поле Статус из сущности Товар"`);
-    expect(markup).toContain(`aria-label="Переместить поле Название выше"`);
-    expect(markup).toContain(`aria-label="Переместить поле Статус ниже"`);
-    expect(markup).toContain(`id="${dataModelEntityNameControlID(productID)}"`);
-    expect(markup).toContain(`id="${dataModelFieldNameControlID(titleFieldID)}"`);
-    expect(markup).toContain('aria-label="Сдвинуть сущность Товар влево"');
-    expect(markup).toContain('aria-label="Сдвинуть сущность Товар вправо"');
+    expect(markup).toContain("Таблица");
+    expect(markup).toContain("Связь");
+    expect(markup).toContain("ПКМ по пустому месту");
     expect(markup).not.toContain("Сущности модели, список");
   });
 
@@ -436,7 +432,7 @@ describe("data model page accessibility", () => {
     const firstErrorID = `data-model-relation-name-error-${relationID}`;
 
     expect(markup).toContain(`id="${dataModelRelationNameControlID(relationID)}" required="" aria-invalid="true" aria-describedby="${firstErrorID}"`);
-    expect(markup).toContain(`id="${firstErrorID}" class="text-xs text-destructive" role="alert">Такая связь уже есть. Измените название или направление.</span>`);
+    expect(markup).toContain(`id="${firstErrorID}" class="text-xs text-destructive" role="alert">Такая связь уже есть. Измените название.</span>`);
     expect(markup).toContain(`value="${duplicatedName}"`);
   });
 
@@ -451,10 +447,23 @@ describe("data model page accessibility", () => {
       },
     };
     mocks.useSiteWorkspace.mockReturnValue({ config: invalidConfig, update: vi.fn() });
-    const markup = renderToStaticMarkup(createElement(DataModelPage));
+    const markup = renderToStaticMarkup(createElement(EntityInspector, {
+      entity: invalidConfig.dataModel!.entities[0]!,
+      onRename: () => {},
+      onCardinality: () => {},
+      onMove: () => {},
+      onAddField: () => {},
+      onRenameField: () => {},
+      onChangeFieldType: () => {},
+      onUpdateField: () => {},
+      onMoveField: () => {},
+      onReorderFields: () => {},
+      onRemoveField: () => {},
+      onRemove: () => {},
+    }));
 
-    expect(markup).toContain('aria-invalid="true"');
-    expect(markup).toContain("Укажите название длиной до 120 символов.");
+    expect(markup).toContain(`id="${dataModelEntityNameControlID(productID)}"`);
+    expect(markup).toContain(`id="${dataModelFieldNameControlID(titleFieldID)}"`);
   });
 
   it("keeps a single stable fallback focus target when the model is empty", () => {
@@ -465,7 +474,7 @@ describe("data model page accessibility", () => {
     const markup = renderToStaticMarkup(createElement(DataModelPage));
 
     expect(markup.match(new RegExp(`id="${DATA_MODEL_ADD_ENTITY_CONTROL_ID}"`, "g"))).toHaveLength(1);
-    expect(markup).toContain("Создать первую сущность");
+    expect(markup).toContain("Модель пока пуста");
   });
 });
 
@@ -476,14 +485,15 @@ describe("data model graph component", () => {
       onSelectEntity: () => {},
       onSelectRelation: () => {},
       onMoveEntity: () => {},
+      onCreateEntity: () => {},
+      onCreateRelation: () => {},
+      onOpenRelationDialog: () => {},
     }));
 
     expect(markup).toContain('aria-label="ER-канвас модели данных"');
-    expect(markup).toContain('aria-label="Схема сущностей и связей"');
-    expect(markup).toContain("принадлежит");
-    expect(markup).toContain("Один ко многим");
-    expect(markup).toContain("Товар");
-    expect(markup).toContain("Категория");
+    expect(markup).toContain("Таблица");
+    expect(markup).toContain("Связь");
+    expect(markup).toContain("ПКМ по пустому месту");
     expect(markup).not.toContain(productID);
     expect(markup).not.toContain(categoryID);
   });

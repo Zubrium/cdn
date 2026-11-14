@@ -21,7 +21,9 @@ import {
   orphanedModelContentSelections,
   orphanedModelRecordData,
   reorderModelRecords,
+  reorderModelRecordsById,
   reorderSelectedRecords,
+  reorderSelectedRecordsById,
   remapLocalRecordIDs,
   removeOrphanedModelRecordData,
   setModelContentSelection,
@@ -88,12 +90,17 @@ describe("model-backed content helpers", () => {
     const initial = [record("a", "products", 0, "А"), record("b", "products", 1, "Б"), record("other", "categories", 0, "X")];
     const reordered = reorderModelRecords(initial, "products", "b", -1);
     expect(reordered.filter((item) => item.entityId === "products").sort((a, b) => a.sortOrder - b.sortOrder).map((item) => item.id)).toEqual(["b", "a"]);
+    const dragReordered = reorderModelRecordsById(initial, "products", ["b", "a"]);
+    expect(dragReordered.filter((item) => item.entityId === "products").sort((a, b) => a.sortOrder - b.sortOrder).map((item) => item.id)).toEqual(["b", "a"]);
+    expect(reorderModelRecordsById(initial, "products", ["a"])).toBe(initial);
     expect(initial[0]?.id).toBe("a");
 
     const selections: ModelContentSelection[] = [];
     const selected = setModelContentSelection(selections, "placement", "products", "ids", ["a", "b"]);
     expect(setModelContentSelection(selected, "placement", "products", "ids", ["b", "a"])[0]?.recordIds).toEqual(["b", "a"]);
     expect(reorderSelectedRecords(["a", "b"], "b", -1)).toEqual(["b", "a"]);
+    expect(reorderSelectedRecordsById(["a", "b"], ["b", "a"])).toEqual(["b", "a"]);
+    expect(reorderSelectedRecordsById(["a", "b"], ["b", "missing"])).toEqual(["a", "b"]);
     const linked = { ...record("p1", "products", 0, "Связанный товар"), relations: { "product-category": ["c1"] } };
     const sortedLinks = reorderModelRecords([linked, record("p2", "products", 1, "Другой товар")], "products", "p2", -1);
     expect(sortedLinks.find((item) => item.id === "p1")?.relations?.["product-category"]).toEqual(["c1"]);

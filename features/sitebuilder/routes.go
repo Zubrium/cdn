@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dlclark/regexp2"
+	"github.com/google/uuid"
 
 	"websiteengine/pkg/platform/validate"
 )
@@ -19,9 +20,11 @@ import (
 const routeMatchTimeout = 25 * time.Millisecond
 
 type Route struct {
-	ID      string `json:"id"`
-	Pattern string `json:"pattern"`
-	PageID  string `json:"pageId"`
+	ID              string `json:"id"`
+	Pattern         string `json:"pattern"`
+	PageID          string `json:"pageId,omitempty"`
+	FileID          string `json:"fileId,omitempty"`
+	FileDisposition string `json:"fileDisposition,omitempty"`
 }
 
 type CompiledRoute struct {
@@ -33,8 +36,22 @@ type CompiledRoute struct {
 // CompileRoute validates a PCRE/.NET-compatible route expression. Matching is
 // anchored to the complete URL path, while named capture groups become args.
 func CompileRoute(route Route) (CompiledRoute, error) {
-	if strings.TrimSpace(route.ID) == "" || strings.TrimSpace(route.PageID) == "" {
-		return CompiledRoute{}, errors.New("route id and pageId are required")
+	if strings.TrimSpace(route.ID) == "" {
+		return CompiledRoute{}, errors.New("route id is required")
+	}
+	if (route.PageID == "") == (route.FileID == "") {
+		return CompiledRoute{}, errors.New("route must reference exactly one page or file")
+	}
+	if route.FileDisposition != "" && route.FileDisposition != "inline" && route.FileDisposition != "attachment" {
+		return CompiledRoute{}, errors.New("file disposition must be inline or attachment")
+	}
+	if route.FileDisposition != "" && route.FileID == "" {
+		return CompiledRoute{}, errors.New("file disposition requires a file route")
+	}
+	if route.FileID != "" {
+		if _, err := uuid.Parse(route.FileID); err != nil {
+			return CompiledRoute{}, errors.New("file route id must be a UUID")
+		}
 	}
 	if len(route.Pattern) == 0 || len(route.Pattern) > 500 {
 		return CompiledRoute{}, errors.New("route pattern must contain between 1 and 500 characters")
@@ -56,6 +73,9 @@ func CompileRoute(route Route) (CompiledRoute, error) {
 			return CompiledRoute{}, fmt.Errorf("route capture name %q is invalid", name)
 		}
 		captures = append(captures, name)
+	}
+	if route.FileID != "" && len(captures) > 0 {
+		return CompiledRoute{}, errors.New("file route must be static and cannot expose path captures")
 	}
 	return CompiledRoute{Route: route, compiled: re, captures: captures}, nil
 }
@@ -231,6 +251,12 @@ func CompileRouteTree(root RouteTreeNode) ([]CompiledRoute, error) {
 		if strings.TrimSpace(node.ID) == "" || seen[node.ID] {
 			return fmt.Errorf("route node id %q is missing or duplicated", node.ID)
 		}
+		if node.PageID != "" && node.FileID != "" {
+			return fmt.Errorf("route node %q cannot reference both a page and a file", node.ID)
+		}
+		if node.FileID != "" && len(node.Children) > 0 {
+			return fmt.Errorf("file route node %q must be terminal", node.ID)
+		}
 		seen[node.ID] = true
 		pattern := prefix
 		captures := cloneSet(inherited)
@@ -301,14 +327,20 @@ func CompileRouteTree(root RouteTreeNode) ([]CompiledRoute, error) {
 		default:
 			return fmt.Errorf("route node %q has unknown type %q", node.ID, node.Type)
 		}
-		if node.PageID != "" {
+		if node.PageID != "" || node.FileID != "" {
 			matchPattern := pattern
 			if matchPattern == "" {
 				matchPattern = "/"
 			}
-			routes = append(routes, Route{ID: node.ID, Pattern: "^" + matchPattern + "$", PageID: node.PageID})
+			routes = append(routes, Route{
+				ID:              node.ID,
+				Pattern:         "^" + matchPattern + "$",
+				PageID:          node.PageID,
+				FileID:          node.FileID,
+				FileDisposition: node.FileDisposition,
+			})
 		} else if len(node.Children) == 0 {
-			return fmt.Errorf("route leaf %q must reference a page", node.ID)
+			return fmt.Errorf("route leaf %q must reference a page or file", node.ID)
 		}
 		for _, child := range node.Children {
 			if err := walk(child, pattern, captures, false); err != nil {
@@ -318,7 +350,7 @@ func CompileRouteTree(root RouteTreeNode) ([]CompiledRoute, error) {
 		return nil
 	}
 	if root.Type == "site" {
-		if strings.TrimSpace(root.ID) == "" || root.PageID != "" || root.Path != "" || root.Value != "" || root.Name != "" || root.Pattern != "" {
+		if strings.TrimSpace(root.ID) == "" || root.PageID != "" || root.FileID != "" || root.FileDisposition != "" || root.Path != "" || root.Value != "" || root.Name != "" || root.Pattern != "" {
 			return nil, errors.New("site route tree root must be an unrendered virtual node")
 		}
 		seen[root.ID] = true

@@ -136,12 +136,12 @@ export function PageHeader({
           <h1 className="break-words text-balance text-[1.6rem] font-semibold leading-tight tracking-[-0.035em] sm:text-[1.8rem]">
             {title}
           </h1>
+          {description && (
+            <div className="mt-2 max-w-3xl text-pretty text-sm leading-6 text-muted-foreground">
+              {description}
+            </div>
+          )}
         </div>
-        {description && (
-          <ContextHelp label="Подсказка по разделу" side="right" buttonClassName="mt-1.5 size-7">
-            {description}
-          </ContextHelp>
-        )}
       </div>
       {actions && (
         <div className="flex min-w-0 flex-wrap items-center gap-2 xl:shrink-0 xl:justify-end">
@@ -175,7 +175,7 @@ export function EmptyState({
       <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full border border-border bg-muted/50">
         <Icon className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
       </div>
-      <h3 className="text-base font-semibold">{title}</h3>
+      <h2 className="text-base font-semibold">{title}</h2>
       {description && (
         <div className="mt-1.5 max-w-md text-sm leading-6 text-muted-foreground">
           {description}

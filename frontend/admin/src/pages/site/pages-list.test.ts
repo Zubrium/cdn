@@ -49,42 +49,46 @@ const tree: RouteTreeNode = {
       ],
     },
     { id: "catalog-alias", type: "path", path: "/products", pageId: "catalog" },
+    { id: "price-file", type: "path", path: "/files/price.pdf", fileId: "11111111-1111-4111-8111-111111111111", fileDisposition: "attachment" },
   ],
 };
 
 describe("pages list", () => {
   it("keeps one entry per page with its primary and additional routes", () => {
     const entries = pageListEntries(tree, pages);
-    const catalog = entries.find((entry) => entry.page.id === "catalog");
+    const catalog = entries.find((entry) => entry.kind === "page" && entry.page.id === "catalog");
 
-    expect(entries).toHaveLength(4);
+    expect(entries).toHaveLength(5);
     expect(catalog?.primaryRoute?.path).toBe("/catalog");
     expect(catalog?.routes.map((route) => route.path)).toEqual(["/catalog", "/products"]);
-    expect(entries.find((entry) => entry.page.id === "draft")?.groupLabel).toBe("Без маршрута");
+    expect(entries.find((entry) => entry.kind === "page" && entry.page.id === "draft")?.groupLabel).toBe("Без маршрута");
+    expect(entries.find((entry) => entry.kind === "file")?.name).toBe("Публичный файл");
   });
 
   it("searches page names, routes, feature keys, and registered feature labels", () => {
     const entries = pageListEntries(tree, pages, new Map([["catalog", "Каталог продукции"]]));
+    const withFileName = pageListEntries(tree, pages, new Map([["catalog", "Каталог продукции"]]), new Map([["11111111-1111-4111-8111-111111111111", "Прайс-лист"]]));
 
-    expect(filterPageEntries(entries, "карточка").map((entry) => entry.page.id)).toEqual(["product"]);
-    expect(filterPageEntries(entries, "/products").map((entry) => entry.page.id)).toEqual(["catalog"]);
-    expect(filterPageEntries(entries, "catalog").map((entry) => entry.page.id)).toEqual(["catalog", "product"]);
-    expect(filterPageEntries(entries, "продукции").map((entry) => entry.page.id)).toEqual(["catalog"]);
+    expect(filterPageEntries(entries, "карточка").map((entry) => entry.name)).toEqual(["Карточка товара"]);
+    expect(filterPageEntries(entries, "/products").map((entry) => entry.name)).toEqual(["Каталог"]);
+    expect(filterPageEntries(entries, "catalog").map((entry) => entry.name)).toEqual(["Каталог", "Карточка товара"]);
+    expect(filterPageEntries(entries, "продукции").map((entry) => entry.name)).toEqual(["Каталог"]);
+    expect(filterPageEntries(withFileName, "прайс").map((entry) => entry.kind)).toEqual(["file"]);
   });
 
   it("sorts view entries without changing stored route priority", () => {
     const entries = pageListEntries(tree, pages);
-    const original = entries.map((entry) => entry.page.id);
+    const original = entries.map((entry) => entry.name);
     const sorted = sortPageEntries(entries, "name");
 
-    expect(sorted.map((entry) => entry.page.name)).toEqual(["Главная", "Карточка товара", "Каталог", "Черновик"]);
-    expect(entries.map((entry) => entry.page.id)).toEqual(original);
+    expect(sorted.map((entry) => entry.name)).toEqual(["Главная", "Карточка товара", "Каталог", "Публичный файл", "Черновик"]);
+    expect(entries.map((entry) => entry.name)).toEqual(original);
   });
 
   it("groups by the first route section and places unrouted pages last", () => {
     const groups = groupPageEntries(pageListEntries(tree, pages));
 
-    expect(groups.map((group) => group.label)).toEqual(["Главная", "/catalog", "Без маршрута"]);
-    expect(groups.at(-1)?.entries.map((entry) => entry.page.id)).toEqual(["draft"]);
+    expect(groups.map((group) => group.label)).toEqual(["Главная", "/catalog", "/files", "Без маршрута"]);
+    expect(groups.at(-1)?.entries.map((entry) => entry.name)).toEqual(["Черновик"]);
   });
 });

@@ -161,6 +161,36 @@ func TestCompileSiteRouteForestSupportsIndependentRootsAndAliases(t *testing.T) 
 	}
 }
 
+func TestCompileRouteTreeSupportsStaticPublicFileTargets(t *testing.T) {
+	fileID := "11111111-1111-4111-8111-111111111111"
+	routes, err := CompileRouteTree(RouteTreeNode{ID: "site", Type: "site", Children: []RouteTreeNode{
+		{ID: "download", Type: "path", Path: "/files/price-list.pdf", FileID: fileID, FileDisposition: "attachment"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, _, matched, err := MatchRoute(routes, "/files/price-list.pdf")
+	if err != nil || !matched {
+		t.Fatalf("file route did not match: matched=%v err=%v", matched, err)
+	}
+	if route.FileID != fileID || route.FileDisposition != "attachment" || route.PageID != "" {
+		t.Fatalf("unexpected file route: %#v", route)
+	}
+
+	for name, node := range map[string]RouteTreeNode{
+		"dynamic file route": {ID: "dynamic", Type: "path", Path: "/files/:name", FileID: fileID},
+		"file route with child": {
+			ID: "file", Type: "path", Path: "/download", FileID: fileID,
+			Children: []RouteTreeNode{{ID: "child", Type: "static", Value: "child", PageID: "page"}},
+		},
+		"page and file": {ID: "both", Type: "path", Path: "/both", PageID: "page", FileID: fileID},
+	} {
+		if _, err := CompileRouteTree(RouteTreeNode{ID: "site", Type: "site", Children: []RouteTreeNode{node}}); err == nil {
+			t.Fatalf("%s should have been rejected", name)
+		}
+	}
+}
+
 func TestCompileSiteRootPathSupportsTypedSegmentsAndRejectsInvalidPaths(t *testing.T) {
 	routes, err := CompileRouteTree(RouteTreeNode{ID: "site", Type: "site", Children: []RouteTreeNode{
 		{ID: "root", Type: "path", Path: "/catalog/~(?<category>[a-z]+)/:slug", PageID: "product"},

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	builderservice "websiteengine/features/sitebuilder"
 	"websiteengine/pkg/environment"
 	publicruntime "websiteengine/pkg/runtime"
 )
@@ -16,6 +17,10 @@ func (h *SnapshotsHandler) PageDocument(ctx context.Context, env environment.Env
 		return publicruntime.SystemDocument(http.StatusBadRequest), nil
 	}
 	return h.service.PageDocument(ctx, env, requestPath, query, indexable)
+}
+
+func (h *SnapshotsHandler) FileRoute(ctx context.Context, env environment.Environment, requestPath string) (builderservice.PublicFileRoute, bool, error) {
+	return h.service.ResolveFileRoute(ctx, env, requestPath)
 }
 
 func (h *SnapshotsHandler) Robots(indexable bool) http.HandlerFunc {

@@ -33,7 +33,7 @@ function RequestDestinationEditor({ destination, request, fields, captures, conf
   const clearBinding = () => onChange({ ...request, bindings: (request.bindings ?? []).filter((item) => item.destination.kind !== destination.kind || item.destination.key !== destination.key) });
   const compatibleArguments = Object.entries(fields).filter(([, schema]) => argumentFitsRequest(schema, destination));
   const compatibleConstants = (config.publicConstants ?? []).filter((constant) => constantFitsRequest(constant, destination));
-  return <div className="grid min-w-0 gap-2 rounded-md border border-border p-3 sm:grid-cols-[minmax(9rem,0.8fr)_minmax(0,1fr)]">
+  return <div className="grid min-w-0 gap-2 border-t border-border/70 pt-3 sm:grid-cols-[minmax(9rem,0.8fr)_minmax(0,1fr)]">
     <div><p className="text-sm font-medium">{destination.label}{destination.required ? " · обязательно" : ""}</p><p className="mt-1 text-xs text-muted-foreground">{destination.kind === "path" ? `Сегмент пути · {${destination.key}}` : destination.kind === "query" ? `Query · ${destination.key}` : destination.kind === "body" ? `Поле JSON body · ${destination.key}` : `Заголовок · ${destination.key}`}{destination.type === "array" ? " · массив, повторяющиеся query-ключи сохраняются" : ""}</p></div>
     <div className="grid min-w-0 gap-2">
       <label className="space-y-1 text-sm"><span>Источник</span><select aria-label={`Источник ${destination.label}`} className="h-11 w-full rounded-md border border-input bg-background px-3" value={sourceKind} onChange={(event) => {
@@ -69,7 +69,7 @@ function BackendRequestEditor({ slot, placement, fields, captures, config, onCha
     else delete backendRequests[slot.key];
     onChange({ ...placement, backendRequests: Object.keys(backendRequests).length ? backendRequests : undefined });
   };
-  return <fieldset className="space-y-3 rounded-md border border-border p-3">
+  return <fieldset className="space-y-4 border-t border-border pt-4">
     <legend className="px-1 text-sm font-medium">{slot.label}</legend>
     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
       <label className="space-y-1.5 text-sm"><span>Публичный backend</span><select className="h-11 w-full rounded-md border border-input bg-background px-3" value={request.backendId ?? ""} onChange={(event) => setRequest({ ...request, backendId: event.currentTarget.value || undefined })}><option value="">Текущий сайт · same-origin</option>{(config.backends ?? []).map((backend) => <option key={backend.id} value={backend.id}>{backend.name || backend.baseUrl}</option>)}</select><span className="block text-xs text-muted-foreground">Внешний API должен разрешать origin сайта в CORS.</span></label>

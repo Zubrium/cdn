@@ -1,11 +1,13 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/input";
+import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import type { DataModel, ModelContentSelection, ModelContentWorkspace } from "@/types";
 import {
   modelRecordTitle,
   removeModelContentSelection,
   reorderSelectedRecords,
+  reorderSelectedRecordsById,
   setModelContentSelection,
 } from "../../model-content-workspace";
 import type { ModelContentDraft, ModelContentDraftUpdater } from "./types";
@@ -120,13 +122,38 @@ export function PlacementSelections({
               <ul className="max-h-64 space-y-1 overflow-auto" aria-label={`Выбор записей для ${inputLabel}`}>
                 {candidates.map((record) => { const persisted = persistedIDs.has(record.id); return <li key={record.id}><label className="flex min-h-11 min-w-0 items-center gap-3 rounded-md px-2 hover:bg-muted/50"><input type="checkbox" checked={selectedIds.includes(record.id)} disabled={disabled || !persisted} onChange={() => setSelection("ids", selectedIds.includes(record.id) ? selectedIds.filter((id) => id !== record.id) : singleton ? [record.id] : [...selectedIds, record.id])} /><span className="min-w-0 truncate text-sm">{modelRecordTitle(record, entity)}{persisted ? "" : <span className="text-muted-foreground"> · сначала сохраните</span>}</span></label></li>; })}
               </ul>
-              {!singleton && selectedIds.length > 0 && <ol className="space-y-1 border-t border-border pt-2" aria-label={`Порядок записей для ${inputLabel}`}>
-                {selectedIds.map((id, index) => {
-                  const record = candidates.find((item) => item.id === id);
-                  if (!record) return null;
-                  return <li key={id} className="flex min-w-0 items-center gap-2"><span className="w-6 text-center text-xs text-muted-foreground">{index + 1}</span><span className="min-w-0 flex-1 truncate text-sm">{modelRecordTitle(record, entity)}</span><Button type="button" size="icon-sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`Переместить ${modelRecordTitle(record, entity)} выше в списке`} disabled={disabled || index === 0} onClick={() => setSelection("ids", reorderSelectedRecords(selectedIds, id, -1))}><ArrowUp /></Button><Button type="button" size="icon-sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`Переместить ${modelRecordTitle(record, entity)} ниже в списке`} disabled={disabled || index === selectedIds.length - 1} onClick={() => setSelection("ids", reorderSelectedRecords(selectedIds, id, 1))}><ArrowDown /></Button></li>;
-                })}
-              </ol>}
+              {!singleton && selectedIds.length > 0 && <SortableList
+                items={selectedIds}
+                onReorder={(orderedIDs) => setSelection("ids", reorderSelectedRecordsById(selectedIds, orderedIDs))}
+                getItemLabel={(id) => {
+                  const selectedRecord = candidates.find((item) => item.id === id);
+                  return selectedRecord ? modelRecordTitle(selectedRecord, entity) : "запись";
+                }}
+              >
+                <ol className="space-y-1 border-t border-border pt-2" aria-label={`Порядок записей для ${inputLabel}`}>
+                  {selectedIds.map((id, index) => {
+                    const record = candidates.find((item) => item.id === id);
+                    if (!record) return null;
+                    return <SortableItem key={id} id={id}>{(handle) => <div className="flex min-w-0 items-center gap-1">
+                      <Button
+                        ref={handle.setActivatorNodeRef}
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        className="min-h-11 min-w-11 touch-none cursor-grab text-muted-foreground active:cursor-grabbing"
+                        aria-label={`Перетащить ${modelRecordTitle(record, entity)}`}
+                        disabled={disabled}
+                        {...handle.attributes}
+                        {...handle.listeners}
+                      ><GripVertical /></Button>
+                      <span className="w-6 text-center text-xs text-muted-foreground">{index + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm">{modelRecordTitle(record, entity)}</span>
+                      <Button type="button" size="icon-sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`Переместить ${modelRecordTitle(record, entity)} выше в списке`} disabled={disabled || index === 0} onClick={() => setSelection("ids", reorderSelectedRecords(selectedIds, id, -1))}><ArrowUp /></Button>
+                      <Button type="button" size="icon-sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`Переместить ${modelRecordTitle(record, entity)} ниже в списке`} disabled={disabled || index === selectedIds.length - 1} onClick={() => setSelection("ids", reorderSelectedRecords(selectedIds, id, 1))}><ArrowDown /></Button>
+                    </div>}</SortableItem>;
+                  })}
+                </ol>
+              </SortableList>}
             </div>)}
           </div>
         )}

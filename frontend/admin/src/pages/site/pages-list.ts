@@ -1,16 +1,28 @@
 import type { RouteTreeNode, SitePage } from "@/types";
-import { routeCapturesForPage, type RouteDescriptor } from "./route-tree";
+import { describeRoutes, routeCapturesForPage, type RouteDescriptor } from "./route-tree";
 
 export type PageListSort = "manual" | "name" | "route" | "kind";
 
-export type PageListEntry = {
-  page: SitePage;
+type PageListEntryBase = {
+  name: string;
+  kindLabel: string;
   routes: RouteDescriptor[];
   primaryRoute?: RouteDescriptor;
-  featureNames: string[];
+  searchText: string;
   groupKey: string;
   groupLabel: string;
 };
+
+export type PageListEntry =
+  | (PageListEntryBase & {
+      kind: "page";
+      page: SitePage;
+    })
+  | (PageListEntryBase & {
+      kind: "file";
+      route: RouteDescriptor;
+      kindLabel: "Файл";
+    });
 
 export type PageListGroup = {
   key: string;
@@ -39,31 +51,48 @@ export function pageListEntries(
   tree: RouteTreeNode,
   pages: SitePage[],
   featureNames: ReadonlyMap<string, string> = new Map(),
+  fileNames: ReadonlyMap<string, string> = new Map(),
 ): PageListEntry[] {
-  return pages.map((page) => {
+  const pageEntries: PageListEntry[] = pages.map((page) => {
     const routes = routeCapturesForPage(tree, page.id);
     const group = pathGroup(routes[0]?.path);
+    const features = page.placements.map((placement) => featureNames.get(placement.build.featureKey) ?? "");
     return {
+      kind: "page",
       page,
+      name: page.name,
+      kindLabel: pageKindLabel(page.kind),
       routes,
       primaryRoute: routes[0],
-      featureNames: page.placements.map((placement) => featureNames.get(placement.build.featureKey) ?? ""),
+      searchText: `${page.name} ${pageKindLabel(page.kind)} ${routes.map((route) => route.path).join(" ")} ${page.placements.map((placement) => placement.build.featureKey).join(" ")} ${features.join(" ")}`,
       groupKey: group.key,
       groupLabel: group.label,
     };
   });
+  const fileEntries: PageListEntry[] = describeRoutes(tree)
+    .filter((route) => Boolean(route.node.fileId) && !route.node.pageId)
+    .map((route) => {
+      const group = pathGroup(route.path);
+      const name = fileNames.get(route.node.fileId!) ?? "Публичный файл";
+      return {
+        kind: "file",
+        route,
+        name,
+        kindLabel: "Файл",
+        routes: [route],
+        primaryRoute: route,
+        searchText: `${name} файл публичный файл ${route.path} ${route.node.fileDisposition ?? "inline"}`,
+        groupKey: group.key,
+        groupLabel: group.label,
+      };
+    });
+  return [...pageEntries, ...fileEntries];
 }
 
 export function filterPageEntries(entries: PageListEntry[], query: string): PageListEntry[] {
   const needle = query.trim().toLocaleLowerCase("ru");
   if (!needle) return entries;
-  return entries.filter(({ page, routes, featureNames }) => {
-    const routeText = routes.map((route) => route.path).join(" ");
-    const featureText = `${page.placements.map((placement) => placement.build.featureKey).join(" ")} ${featureNames.join(" ")}`;
-    return `${page.name} ${pageKindLabel(page.kind)} ${routeText} ${featureText}`
-      .toLocaleLowerCase("ru")
-      .includes(needle);
-  });
+  return entries.filter((entry) => entry.searchText.toLocaleLowerCase("ru").includes(needle));
 }
 
 export function sortPageEntries(entries: PageListEntry[], sort: PageListSort): PageListEntry[] {
@@ -74,12 +103,12 @@ export function sortPageEntries(entries: PageListEntry[], sort: PageListSort): P
       "ru",
       { numeric: true },
     );
-    if (sort === "route") return byRoute || left.page.name.localeCompare(right.page.name, "ru");
+    if (sort === "route") return byRoute || left.name.localeCompare(right.name, "ru");
     if (sort === "kind") {
-      const byKind = pageKindLabel(left.page.kind).localeCompare(pageKindLabel(right.page.kind), "ru");
+      const byKind = left.kindLabel.localeCompare(right.kindLabel, "ru");
       return byKind || byRoute;
     }
-    return left.page.name.localeCompare(right.page.name, "ru", { numeric: true }) || byRoute;
+    return left.name.localeCompare(right.name, "ru", { numeric: true }) || byRoute;
   });
 }
 

@@ -44,7 +44,7 @@ export function PublicConstantsEditor({ config, constants, onChange }: {
   return <div className="grid min-w-0 gap-3 border-t border-border pt-5">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h3 className="text-sm font-medium">Публичные константы снапшота</h3>
+        <h2 className="text-sm font-medium">Публичные константы снапшота</h2>
         <p className="mt-1 text-xs text-muted-foreground">Эти открытые значения могут попадать в аргументы запросов. Не сохраняйте здесь ключи и пароли.</p>
       </div>
       <Button type="button" variant="outline" className="min-h-11" onClick={addConstant}>Добавить значение</Button>

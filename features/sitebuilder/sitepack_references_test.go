@@ -76,3 +76,27 @@ func TestSitepackRequiresAllReferencedFiles(t *testing.T) {
 		t.Fatal("missing media mapping accepted")
 	}
 }
+
+func TestSitepackRewritesPublicFileRouteTargets(t *testing.T) {
+	oldID, newID := uuid.NewString(), uuid.NewString()
+	index := sitepackIndex{Payload: SnapshotPayload{Config: SiteConfig{
+		FormatVersion: 4,
+		RouteTree: RouteTreeNode{ID: "site", Type: "site", Children: []RouteTreeNode{
+			{ID: "price", Type: "path", Path: "/price.pdf", FileID: oldID, FileDisposition: "attachment"},
+		}},
+	}}}
+	refs, err := checkPackReferences(&index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].String() != oldID {
+		t.Fatalf("file route refs: %v", refs)
+	}
+	if err := rewritePackReferences(&index, map[string]string{oldID: newID}); err != nil {
+		t.Fatal(err)
+	}
+	route := index.Payload.Config.RouteTree.Children[0]
+	if route.FileID != newID || route.FileDisposition != "attachment" {
+		t.Fatalf("unexpected remapped file route: %#v", route)
+	}
+}

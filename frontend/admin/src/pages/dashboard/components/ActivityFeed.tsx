@@ -7,7 +7,7 @@ const activityMeta: Record<
   OverviewActivity["kind"],
   { icon: typeof Layers; label: string; to: string }
 > = {
-  feature: { icon: Layers, label: "Сборка", to: "/site/registry" },
+  feature: { icon: Layers, label: "Сборка", to: "/site/features" },
   content: { icon: FileText, label: "Данные модели", to: "/content" },
   submission: { icon: Inbox, label: "Заявка", to: "/submissions" },
   media: { icon: Image, label: "Файлы", to: "/media" },

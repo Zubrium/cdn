@@ -168,7 +168,7 @@ function NavSectionLabel({
       <p
         aria-hidden={collapsed}
         className={cn(
-          "truncate text-xs font-semibold text-sidebar-muted transition-opacity duration-150 motion-reduce:transition-none",
+          "truncate text-xs font-medium text-sidebar-muted transition-opacity duration-150 motion-reduce:transition-none",
           collapsed ? "opacity-0" : "opacity-100",
         )}
       >
@@ -294,7 +294,7 @@ function SidebarContent({
 
 export function AppShell() {
   const location = useLocation();
-  const routeCanvas = location.pathname === "/site/pages" || location.pathname === "/site/router" || location.pathname === "/site/data-model";
+  const routeCanvas = location.pathname.startsWith("/site/pages") || location.pathname === "/site/router" || location.pathname === "/site/data-model";
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(SIDEBAR_KEY) === "true";
@@ -316,6 +316,11 @@ export function AppShell() {
       // ignore persistence failures
     }
   }, [collapsed]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("admin-route-canvas", routeCanvas);
+    return () => document.documentElement.classList.remove("admin-route-canvas");
+  }, [routeCanvas]);
 
   return (
     <div className={`flex bg-background ${routeCanvas ? "h-dvh min-h-0 overflow-hidden" : "min-h-dvh"}`}>

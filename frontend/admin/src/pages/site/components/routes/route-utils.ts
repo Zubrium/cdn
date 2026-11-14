@@ -1,37 +1,5 @@
 import type { RouteTreeNode, SitePage } from "@/types";
 import { describeRoutes } from "../../route-tree";
-import type { RoutePosition } from "./route-types";
-
-const NODE_WIDTH = 286;
-const NODE_HEIGHT = 106;
-const COLUMN_GAP = 370;
-const ROW_GAP = 158;
-
-export function collectPositions(tree: RouteTreeNode): RoutePosition[] {
-  const positions: RoutePosition[] = [];
-  const descriptions = new Map(describeRoutes(tree).map((route) => [route.id, route]));
-  let row = 0;
-  const visit = (node: RouteTreeNode, depth: number, parentId: string | undefined): number => {
-    const description = descriptions.get(node.id);
-    const children = node.children ?? [];
-    const childRows = children.map((child) => visit(child, depth + 1, node.id));
-    const nodeRow = childRows.length ? childRows.reduce((sum, value) => sum + value, 0) / childRows.length : row++;
-    positions.push({
-      node,
-      path: description?.path ?? "/",
-      captures: description?.captures ?? [],
-      x: 40 + depth * COLUMN_GAP,
-      y: 48 + nodeRow * ROW_GAP,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
-      parentId,
-    });
-    return nodeRow;
-  };
-  const roots = tree.type === "site" ? tree.children ?? [] : [tree];
-  roots.forEach((root) => visit(root, 0, undefined));
-  return positions;
-}
 
 export function currentNode(tree: RouteTreeNode, id?: string): RouteTreeNode | undefined {
   if (!id) return undefined;
@@ -43,6 +11,7 @@ export function pageName(pages: SitePage[], id?: string) {
 }
 
 export function displayNodeType(node: RouteTreeNode) {
+  if (node.fileId) return "Файл";
   switch (node.type) {
     case "path": return "Корневой адрес";
     case "index": return "Главная";
@@ -52,6 +21,16 @@ export function displayNodeType(node: RouteTreeNode) {
     case "catchAll": return "Catch-all";
     case "site": return "Сайт";
   }
+}
+
+export function parseStaticFilePath(value: string): { path?: string; error?: string } {
+  const parsed = parseAbsolutePath(value);
+  if (parsed.error || !parsed.path) return parsed;
+  const dynamicSegment = parsed.path.split("/").find((segment) => /^[:~*]/.test(segment));
+  if (dynamicSegment) {
+    return { error: "Файловый маршрут должен быть фиксированным: параметры, regex и catch-all не поддерживаются." };
+  }
+  return parsed;
 }
 
 export function readRouteSegment(node: RouteTreeNode): string {

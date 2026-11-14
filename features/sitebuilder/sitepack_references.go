@@ -223,6 +223,25 @@ func (r *packReferences) theme(value *DesignSystem) error {
 	return nil
 }
 
+func (r *packReferences) routeTree(value *RouteTreeNode) error {
+	if value == nil {
+		return nil
+	}
+	if value.FileID != "" {
+		fileID, err := r.mediaID(value.FileID)
+		if err != nil {
+			return err
+		}
+		value.FileID = fileID
+	}
+	for index := range value.Children {
+		if err := r.routeTree(&value.Children[index]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *packReferences) transform(index *sitepackIndex) error {
 	manifests := map[string]Manifest{}
 	for _, build := range index.Payload.Builds {
@@ -243,6 +262,9 @@ func (r *packReferences) transform(index *sitepackIndex) error {
 	}
 	if err := r.theme(index.Payload.DesignSystem); err != nil {
 		return err
+	}
+	if err := r.routeTree(&index.Payload.Config.RouteTree); err != nil {
+		return fmt.Errorf("route file target: %w", err)
 	}
 	for pi := range index.Payload.Config.Pages {
 		for li := range index.Payload.Config.Pages[pi].Placements {

@@ -76,7 +76,7 @@ export function ModelContentRecordDetailsPanel({
 
     {orphaned.unknownFieldKeys.length > 0 || orphaned.unknownRelationIds.length > 0 ? <section role="alert" aria-labelledby="orphaned-record-data-title" className="space-y-3 rounded-lg border border-warning/50 bg-warning/10 p-3">
       <div>
-        <h3 id="orphaned-record-data-title" className="text-sm font-semibold">Унаследованные данные вне модели</h3>
+        <h2 id="orphaned-record-data-title" className="text-sm font-semibold">Унаследованные данные вне модели</h2>
         <p className="text-sm text-muted-foreground">Данные сохранены в черновике, но новые фичи и публичный runtime их не читают. Удалите их здесь явно или восстановите соответствующие поля и связи в модели.</p>
       </div>
       {orphaned.unknownFieldKeys.length > 0 && <ul className="space-y-1 text-sm">{orphaned.unknownFieldKeys.map((key) => <li key={key} className="break-all"><span className="font-medium">Поле «{key}»:</span> <span className="text-muted-foreground">{JSON.stringify(selectedRecord.values[key])}</span></li>)}</ul>}

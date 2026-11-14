@@ -25,14 +25,16 @@ type SiteConfig struct {
 // URL, while its children append individual segments. Any node may resolve a
 // page and still have children, so /section and /section/item can share a prefix.
 type RouteTreeNode struct {
-	ID       string          `json:"id"`
-	Type     string          `json:"type"`
-	Path     string          `json:"path,omitempty"`
-	Value    string          `json:"value,omitempty"`
-	Name     string          `json:"name,omitempty"`
-	Pattern  string          `json:"pattern,omitempty"`
-	PageID   string          `json:"pageId,omitempty"`
-	Children []RouteTreeNode `json:"children,omitempty"`
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	Path            string          `json:"path,omitempty"`
+	Value           string          `json:"value,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	Pattern         string          `json:"pattern,omitempty"`
+	PageID          string          `json:"pageId,omitempty"`
+	FileID          string          `json:"fileId,omitempty"`
+	FileDisposition string          `json:"fileDisposition,omitempty"`
+	Children        []RouteTreeNode `json:"children,omitempty"`
 }
 
 type Page struct {
@@ -205,18 +207,20 @@ func (cfg SiteConfig) Validate(builds BuildLookup) error {
 	routeByID := make(map[string]CompiledRoute, len(routes))
 	pageRouteCaptures := make(map[string][]string)
 	for _, route := range routes {
-		if _, ok := pages[route.PageID]; !ok {
-			return fmt.Errorf("route %q references missing page %q", route.ID, route.PageID)
+		if route.PageID != "" {
+			if _, ok := pages[route.PageID]; !ok {
+				return fmt.Errorf("route %q references missing page %q", route.ID, route.PageID)
+			}
+			captures := route.CaptureNames()
+			if previous, ok := pageRouteCaptures[route.PageID]; ok {
+				if !sameStrings(previous, captures) {
+					return fmt.Errorf("all routes for page %q must expose the same path parameters", route.PageID)
+				}
+			} else {
+				pageRouteCaptures[route.PageID] = captures
+			}
 		}
 		routeByID[route.ID] = route
-		captures := route.CaptureNames()
-		if previous, ok := pageRouteCaptures[route.PageID]; ok {
-			if !sameStrings(previous, captures) {
-				return fmt.Errorf("all routes for page %q must expose the same path parameters", route.PageID)
-			}
-		} else {
-			pageRouteCaptures[route.PageID] = captures
-		}
 	}
 	if builds == nil {
 		return nil

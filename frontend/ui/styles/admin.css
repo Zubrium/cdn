@@ -34,7 +34,7 @@
     --sidebar-muted: 0 0% 42%;
     --sidebar-accent: 0 0% 93%;
     --sidebar-border: 0 0% 88%;
-    --radius: 0.75rem;
+    --radius: 0.625rem;
     --header-height: 3.75rem;
     --sidebar-width: 15.5rem;
     --sidebar-collapsed: 4.25rem;
@@ -155,6 +155,11 @@
     -webkit-text-size-adjust: 100%;
   }
 
+  html.admin-route-canvas,
+  html.admin-route-canvas body {
+    overflow: hidden;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     font-family: Inter, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
@@ -220,7 +225,7 @@
   }
 
   .sidebar-link {
-    @apply relative flex h-9 items-center gap-3 rounded-md px-3 text-sm font-medium text-sidebar-muted transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar;
+    @apply relative flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-sidebar-muted transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar;
   }
 
   .sidebar-link[data-active="true"] {
@@ -293,7 +298,7 @@
   }
 
   .field-row {
-    @apply flex items-start gap-3 rounded-sm border border-border bg-card p-3;
+    @apply flex items-start gap-3 border-b border-border bg-transparent py-3 last:border-b-0;
   }
 
   .field-row[data-selected="true"] {
@@ -301,7 +306,7 @@
   }
 
   .table-wrap {
-    @apply overflow-x-auto rounded-md border border-border bg-card;
+    @apply overflow-x-auto border-y border-border bg-card;
   }
 
   .data-table {
