@@ -4,26 +4,31 @@
 
 ## Полный security и UI проход — 15 ноября 2026 — незавершён
 
-Пользовательский охват этого прохода: аудит Website Engine, подтверждение критичных проблем, проверка общей визуальной системы админки и исправление подтверждённых дефектов. Исходное дерево было чистым на `dev` (`076fb69`, совпадало с `origin/dev`). Все нижеуказанные результаты относятся к этому source ref.
+Охват запроса: системный security review, исправление подтверждённых критичных проблем и целостность дизайн-системы админки. Исходное дерево было чистым на `dev` (`47f3da7`, после отправки первой статусной записи). Для security review создан отдельный run-4 вне репозитория.
 
-### Выполнено
+### Source review и независимая проверка
 
-- Прочитаны предыдущие результаты security run-3 и их coverage ledger. Run-3 уже зафиксировал 11 невалидированных fingerprint-кандидатов и 6 незавершённых coverage units; ни один кандидат не получил подтверждённую severity. Между его source ref `9bbb4ad` и текущим `076fb69` менялись Feature Lab filesystem policy, auth/token lifecycle, runtime/prerender, middleware, sitebuilder archive и sitepack, поэтому предыдущие source traces требуют повторной независимой проверки.
-- Выполнен read-only source review текущих React route guards и shell, хранения admin token, `ClientIP`/rate limiter, Feature Lab filesystem resolution, runtime lifecycle и prerender request allowlist. В этих просмотренных фрагментах критичный boundary bypass не доказан; это не означает, что остальные candidates безопасны.
-- Статический осмотр admin stylesheet и компонентов подтвердил использование semantic HSL tokens и общих компонентов; поиск one-off hex цветов и `transition: all` в admin UI совпадений не дал. Получены актуальные Web Interface Guidelines; в просмотренном shell и общих контрактах явных нарушений не установлено. Это не визуальное подтверждение всех экранов.
-- `git diff --check` до этого документа прошёл без замечаний.
+- Run-1, run-2 и run-3 были прочитаны как prior evidence; при этом между их source refs и run-4 менялись auth/token lifecycle, Feature Lab path policy, runtime/prerender, middleware, media, archive/Sitepack и workflow code.
+- Четыре разведочных и пять hunter проходов проверили основные границы auth/roles, public runtime, Feature Lab, workflows, forms/files/media, ZIP/Sitepack и admin UI. В текущем source не подтверждён критичный security bypass.
+- Три свежих независимых Phase 3 и отдельные Phase 5 verifiers сохранили без severity три условные записи `needs_validation`: same-origin доступ feature module к admin token; право создания release tags и публикации релизов; forwarded IP spoofing при явно включённом `TRUST_PROXY_HEADERS`.
+- WebRTC egress отклонён как security finding: repository считает feature builds доверенным site-manager контентом, и lower-trust автора не установлено. Ограничение сетевого доступа prerender worker остаётся defense-in-depth gap.
+- Source review отклонил прежние claims по стабильным Feature Lab symlink paths, docs workflow token scope, query-variant prerender, data-input quadratic work, публичной visibility files, CSV formula injection, media pixel/video budgets, SVG активному содержимому, snapshot theme CSS и чтению soft-deleted submission. Sitepack cleanup race оставлен отдельным reliability/integrity сценарием без подтверждённого security impact.
+- Coverage run-4: **13 covered, 3 candidate, 1 blocked, 11 deferred** из 28 units. По правилам security-аудита это не complete coverage; exact candidates, deferred units и blockers находятся в [run-4/REPORT.md](../../security-audit-skill/website-engine/run-4/REPORT.md) в локальном audit directory, не в Git.
 
-### Не выполнено и почему
+### UI review
 
-- **Security execution и полная проверка кандидатов:** не запускались. Инструкция `security-audit` допускает target-controlled тесты/сборки только в OS-enforced sandbox с пустым allowlist environment, без внешней сети, read-only target/toolchain, scratch-only writes и явными низкими CPU, memory, process, file, disk и wall-clock limits. В доступной для этого прохода среде весь этот набор гарантий недоступен. Нет независимых fresh verifier, необходимых для оценки каждого кандидата и финального coverage review. 11 кандидатов и 6 units из run-3 остаются незакрытыми; текущий source ref не позволяет переносить на них прошлое предположение.
-- **Browser E2E и role matrix:** не запускались. Доступный local Engine на `127.0.0.1:8083` сообщает image revision `85aba05`, тогда как проверяемый checkout — `076fb69`; это несовпадающая версия API/UI. Инстанс оставлен без изменений. Для актуального браузерного прохода нужен disposable Engine, построенный из текущего source, с проверенными уникальными БД и storage.
-- **Полный visual/accessibility QA:** не выполнен. Нет свежих скриншотов всех маршрутов, тем и viewport размеров, а также полного keyboard/screen-reader прохода. Статический обзор токенов и общих компонентов этого не заменяет.
-- **Production/gateway/provider acceptance:** не выполнялся; не проверялись proxy topology и forwarded-header policy, identity provider, production CDN/gateway и storage-provider ACL/cache behavior.
-- **Кодовые исправления:** не вносились, потому что в доступных source-only свидетельствах не подтверждена конкретная уязвимость или воспроизводимый дефект, а UI изменения без просмотра текущих экранов и доступного актуального API были бы непроверяемой переделкой.
+- Admin использует общие semantic HSL tokens, light/dark/system themes, reduced-motion стили, базовые focus states и общие Radix-компоненты. Скан не нашёл one-off hex цветов или `transition: all` в admin UI; это не доказывает контраст отрендеренных экранов.
+- Обнаружены три малых touch target: help control 24×24 px в `frontend/admin/src/components/common/page.tsx:77-89`, login token toggle 28×28 px в `frontend/admin/src/app/pages/LoginPage.tsx:211-218`, users search clear 28×28 px в `frontend/admin/src/pages/access/UsersPage.tsx:124-131`. Исправление не внесено: сначала нужен failing regression test и browser verification.
 
-### Вывод
+### Что блокирует завершение
 
-Это незавершённый source-review и проверка доступности локального окружения, а не полный security audit, regression pass или UI redesign. Подтверждённых критичных находок в просмотренных фрагментах нет; оставшиеся кандидаты нельзя считать ни подтверждёнными, ни отклонёнными. Не запускались `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `go test ./...`, `go vet ./...` или browser tests на текущем source. Для завершения нужны совместимая изолированная среда с указанными sandbox-контролями, независимые security verifiers, disposable backend на `076fb69` и реальные браузерные проверки всех admin workflows.
+- Security skill разрешает запуск target-controlled сборок/тестов/browser только в OS-enforced sandbox с пустым allowlist environment, external-network isolation, read-only source/toolchain, scratch-only writes и ограничениями CPU, memory, process, file, disk и wall time. Полный такой набор в текущей среде недоступен; Go/frontend tests и Browser E2E на текущем source не запускались.
+- Доступный локальный Engine image на `127.0.0.1:8083` — revision `85aba05`, а проверяемый source run — `47f3da7`. Несовпадающий API оставлен без изменений; он не подходит для проверки текущего UI.
+- Не выполнена полная browser role matrix, visual QA по всем маршрутам/темам/ширинам, клавиатурный и ручной screen-reader проход. Также не проверены внешние tag rulesets, gateway/proxy, IDP, CDN и S3 ACL/cache policy.
+- Sitepack reliability hypothesis требует воспроизводимого race acceptance на disposable PostgreSQL/MinIO: stale deletion reservation, same-key import, cleanup между PUT и DB commit. Тест не запускался.
+- Нет подтверждённых security findings, поэтому production fixes не менялись. Подтверждённый UI touch-target issue зафиксирован, но не исправлен без обязательного TDD red/green и browser verification.
+
+Этот проход — независимый source review, но **не** полный security audit, regression pass или UI redesign. Не запускались `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `go test ./...`, `go vet ./...` и browser tests на текущем source. TODO остаётся открытым до завершения deferred проверки и исправления/верификации UI touch targets.
 
 ## Экспорт snapshot 22 и cross-install Sitepack — 11 ноября 2026
 
