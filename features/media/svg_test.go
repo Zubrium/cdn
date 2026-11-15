@@ -6,13 +6,14 @@ import (
 )
 
 func TestSanitizeSVGKeepsLocalIllustrationAndEmbeddedRaster(t *testing.T) {
-	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10" onload="alert(1)"><defs><linearGradient id="sky"><stop offset="0" stop-color="#fff"/></linearGradient></defs><rect width="10" height="10" fill="url(#sky)"/><image xlink:href="data:image/png;base64,aGVsbG8=" width="2" height="2"/></svg>`)
+	const embeddedPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10" onload="alert(1)"><defs><linearGradient id="sky"><stop offset="0" stop-color="#fff"/></linearGradient></defs><rect width="10" height="10" fill="url(#sky)"/><image xlink:href="data:image/png;base64,` + embeddedPNG + `" width="2" height="2"/></svg>`)
 	clean, err := sanitizeSVG(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(clean)
-	if strings.Contains(text, "onload") || strings.Contains(text, "xlink:") || !strings.Contains(text, `href="data:image/png;base64,aGVsbG8="`) {
+	if strings.Contains(text, "onload") || strings.Contains(text, "xlink:") || !strings.Contains(text, `href="data:image/png;base64,`+embeddedPNG+`"`) {
 		t.Fatalf("unexpected sanitized SVG: %s", text)
 	}
 	if !looksLikeSVG(clean) {

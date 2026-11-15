@@ -160,6 +160,12 @@ export default function SettingsPage() {
               >
                 {limits.submission_export_max_rows}
               </SettingRow>
+              <SettingRow
+                label="Максимальный объём экспорта заявок"
+                hint="Совокупный объём JSON в CSV-выгрузке"
+              >
+                {Math.floor(limits.submission_export_max_bytes / (1024 * 1024))} МиБ
+              </SettingRow>
             </dl>
           </CardContent>
         </Card>

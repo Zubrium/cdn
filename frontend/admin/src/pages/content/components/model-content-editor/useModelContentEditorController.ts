@@ -7,7 +7,7 @@ import { useUnsavedChangesGuard } from "@/components/common/page";
 import { useConfirm } from "@/components/common/confirm";
 import { errorMessage } from "@/lib/errors";
 import { canPublishContent } from "@/lib/permissions";
-import type { JsonValue, ModelContentRecord, ModelContentSelection, ModelContentWorkspace } from "@/types";
+import type { DataModelEntity, JsonValue, ModelContentRecord, ModelContentSelection, ModelContentWorkspace } from "@/types";
 import type { ModelContentDraft, ModelContentRevisionConflict, ModelContentSaveState } from "../model-content/types";
 import { useModelContentEditorModel } from "./useModelContentEditorModel";
 import {
@@ -69,8 +69,12 @@ function downloadDraft(snapshotId: string, draft: LocalModelDraft): void {
 
 export function useModelContentEditorController({
   workspace,
+  requestedEntityKey = "",
+  requestedRecordId = "",
 }: {
   workspace: ModelContentWorkspace;
+  requestedEntityKey?: string;
+  requestedRecordId?: string;
 }) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -97,8 +101,10 @@ export function useModelContentEditorController({
     local: recoveryDraft?.baseRevision ?? workspace.revision,
     server: workspace.revision,
   } : null);
-  const [entityId, setEntityId] = useState(workspace.dataModel?.entities[0]?.id ?? "");
-  const [recordId, setRecordId] = useState("");
+  const initialEntityId = workspace.dataModel?.entities.find((entity) => entity.key === requestedEntityKey)?.id
+    ?? (requestedEntityKey ? "" : workspace.dataModel?.entities[0]?.id ?? "");
+  const [entityId, setEntityId] = useState(initialEntityId);
+  const [recordId, setRecordId] = useState(requestedRecordId);
   const [search, setSearch] = useState("");
   const {
     model, entities, mediaEditorProps, selectedEntity, recordsForEntity,
@@ -119,8 +125,31 @@ export function useModelContentEditorController({
   });
 
   useEffect(() => {
+    if (requestedEntityKey) return;
     if (!entities.some((entity) => entity.id === entityId)) setEntityId(entities[0]?.id ?? "");
-  }, [entities, entityId]);
+  }, [entities, entityId, requestedEntityKey]);
+
+  useEffect(() => {
+    if (!requestedEntityKey) return;
+    const requested = entities.find((entity) => entity.key === requestedEntityKey);
+    if (!requested) {
+      if (entityId) setEntityId("");
+      if (recordId) setRecordId("");
+      return;
+    }
+    if (requested.id !== entityId) {
+      setEntityId(requested.id);
+      setRecordId(requestedRecordId);
+      setSearch("");
+    }
+  }, [entities, entityId, recordId, requestedEntityKey, requestedRecordId]);
+
+  useEffect(() => {
+    if (!requestedRecordId || requestedEntityKey === "") return;
+    if (recordsForEntity.some((record) => record.id === requestedRecordId) && recordId !== requestedRecordId) {
+      setRecordId(requestedRecordId);
+    }
+  }, [recordId, recordsForEntity, requestedEntityKey, requestedRecordId]);
 
   useEffect(() => {
     if (selectedEntity?.cardinality !== "singleton") return;
@@ -241,21 +270,20 @@ export function useModelContentEditorController({
     }
   }, [dirty, initialServerDraft, workspace.revision]);
 
-  const addRecord = () => {
-    if (!selectedEntity || selectedEntity.cardinality === "singleton") return;
+  const addRecord = (): ModelContentRecord | null => {
+    if (!selectedEntity || selectedEntity.cardinality === "singleton") return null;
     const nextOrder = recordsForEntity.reduce((max, item) => Math.max(max, item.sortOrder), -1) + 1;
     const item = createModelRecord(selectedEntity.id, nextOrder);
     updateDraft((current) => ({ ...current, records: [...current.records, item] }));
     setRecordId(item.id);
+    return item;
   };
 
-  const removeRecord = async (record: ModelContentRecord) => {
-    if (entities.find((entity) => entity.id === record.entityId)?.cardinality === "singleton") return;
+  const removeRecord = async (record: ModelContentRecord): Promise<boolean> => {
+    if (entities.find((entity) => entity.id === record.entityId)?.cardinality === "singleton") return false;
     const title = selectedEntity ? modelRecordTitle(record, selectedEntity) : "эту запись";
     const impact = model ? modelRecordDeletionImpact(draftRef.current.records, draftRef.current.selections, model, record.id, workspace.placements) : null;
     const consequences = impact ? [
-      impact.incomingRelations > 0 ? `Связи из других записей, в которых будет очищена ссылка: ${impact.incomingRelations}.` : "",
-      impact.outgoingRelations > 0 ? `Исходящие связи этой записи, которые будут удалены: ${impact.outgoingRelations}.` : "",
       impact.placementSelections > 0 ? `Выборы размещений, из которых будет убрана запись: ${impact.placementSelections}.` : "",
       impact.affectedFeatureInputs > 0 ? `Входы фич, которые используют эту запись и потеряют её: ${impact.affectedFeatureInputs}.` : "",
       impact.mediaReferences > 0 ? `Ссылки записи на файлы в медиатеке: ${impact.mediaReferences}; сами файлы останутся.` : "",
@@ -266,12 +294,13 @@ export function useModelContentEditorController({
       confirmLabel: "Удалить запись",
       destructive: true,
     });
-    if (!accepted) return;
+    if (!accepted) return false;
     setDeletePending(true);
-    const result = deleteModelRecord(draftRef.current.records, draftRef.current.selections, { relations: model?.relations ?? [] }, record.id);
+    const result = deleteModelRecord(draftRef.current.records, draftRef.current.selections, record.id);
     updateDraft((current) => ({ ...current, ...result }));
     if (recordId === record.id) setRecordId("");
     setDeletePending(false);
+    return true;
   };
 
   const clearSingletonRecord = async (record: ModelContentRecord) => {
@@ -279,8 +308,8 @@ export function useModelContentEditorController({
     if (entity?.cardinality !== "singleton" || selectedRecord?.id !== record.id) return;
     const accepted = await confirm({
       title: "Очистить данные единственной записи?",
-      description: `Все поля и исходящие связи записи «${modelRecordTitle(record, entity)}» будут очищены в черновике. Системный ID записи сохранится, файлы в медиатеке не удалятся. Публичные страницы изменятся только после отдельной публикации.`,
-      confirmLabel: "Очистить поля и связи",
+      description: `Все поля записи «${modelRecordTitle(record, entity)}» будут очищены в черновике. ID записи сохранится, файлы в медиатеке не удалятся. Публичные страницы изменятся только после отдельной публикации.`,
+      confirmLabel: "Очистить поля",
       destructive: true,
     });
     if (!accepted) return;
@@ -296,7 +325,7 @@ export function useModelContentEditorController({
     });
     if (!accepted) return;
     setDeletePending(true);
-    const next = deleteModelRecord(draftRef.current.records, draftRef.current.selections, model ?? { relations: [] }, record.id);
+    const next = deleteModelRecord(draftRef.current.records, draftRef.current.selections, record.id);
     updateDraft((current) => ({ ...current, ...next }));
     setDeletePending(false);
   };
@@ -304,12 +333,9 @@ export function useModelContentEditorController({
   const cleanOrphanedRecordData = async (record: ModelContentRecord) => {
     if (!model) return;
     const orphaned = orphanedModelRecordData(record, model);
-    const count = orphaned.unknownFieldKeys.length + orphaned.unknownRelationIds.length;
+    const count = orphaned.unknownFieldKeys.length;
     if (count === 0) return;
-    const details = [
-      ...orphaned.unknownFieldKeys.map((key) => `поле «${key}»`),
-      ...orphaned.unknownRelationIds.map((id) => `связь ${id}`),
-    ];
+    const details = orphaned.unknownFieldKeys.map((key) => `поле «${key}»`);
     const accepted = await confirm({
       title: "Удалить данные без определения в модели?",
       description: `Из черновика записи будут удалены: ${details.join(", ")}. Публичные данные изменятся только после отдельной публикации. Родительские снапшоты не меняются.`,
@@ -325,18 +351,13 @@ export function useModelContentEditorController({
     updateDraft((current) => ({ ...current, records: updateModelRecordField(current.records, selectedRecord.id, key, value) }));
   };
 
-  const selectEntity = (nextEntityId: string) => {
+  const selectEntity = (nextEntityId: string): DataModelEntity | null => {
     setEntityId(nextEntityId);
     const nextEntity = entities.find((entity) => entity.id === nextEntityId);
     const nextRecords = draftRef.current.records.filter((record) => record.entityId === nextEntityId);
     setRecordId(nextEntity?.cardinality === "singleton" && nextRecords.length === 1 ? nextRecords[0]!.id : "");
     setSearch("");
-  };
-
-  const openTargetRecord = (record: ModelContentRecord) => {
-    setEntityId(record.entityId);
-    setRecordId(record.id);
-    setSearch("");
+    return nextEntity ?? null;
   };
 
   const publish = async () => {
@@ -448,7 +469,7 @@ export function useModelContentEditorController({
     draft, savedDraft, revision, revisionConflict, saveState, saveError, dirty,
     invalidCount, publishPending, deletePending, historyOpen, setHistoryOpen,
     entityId, recordId, setRecordId, search, setSearch,
-    selectEntity, openTargetRecord,
+    selectEntity,
     selectedEntity, selectedRecord, recordsForEntity, visibleRecords,
     orphanedEntityRecords, orphanedSelections, validation,
     unsavedDialog, historyQuery, updateDraft, confirm,

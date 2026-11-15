@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"websiteengine/pkg/principal"
+	"websiteengine/pkg/response"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -108,19 +109,43 @@ func (s *Service) Create(ctx context.Context, actor Principal, name, role string
 	return NewToken{Token: token, Secret: secret}, nil
 }
 
-func (s *Service) List(ctx context.Context, actor Principal) ([]Token, error) {
+func (s *Service) List(ctx context.Context, actor Principal, cursor string) ([]Token, string, error) {
 	if !IsStaff(actor.Role) {
-		return nil, ErrForbidden
+		return nil, "", ErrForbidden
 	}
 	if s.listLimit < 1 {
-		return nil, errors.New("token list limit is not configured")
+		return nil, "", errors.New("token list limit is not configured")
 	}
 	var creator *uuid.UUID
 	if actor.Role == RoleModerator {
 		id := actor.TokenID
 		creator = &id
 	}
-	return s.repo.List(ctx, creator, s.listLimit)
+	var beforeCreatedAt *time.Time
+	var beforeID *uuid.UUID
+	if cursor != "" {
+		decoded, ok := response.DecodeCursor(cursor)
+		if !ok {
+			return nil, "", ErrValidation
+		}
+		id, err := uuid.Parse(decoded.ID)
+		if err != nil {
+			return nil, "", ErrValidation
+		}
+		beforeCreatedAt = &decoded.CreatedAt
+		beforeID = &id
+	}
+	items, err := s.repo.List(ctx, creator, beforeCreatedAt, beforeID, s.listLimit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(items) > s.listLimit {
+		items = items[:s.listLimit]
+		last := items[len(items)-1]
+		next = response.EncodeCursor(last.CreatedAt, last.ID)
+	}
+	return items, next, nil
 }
 
 func (s *Service) SetListLimit(limit int) error {

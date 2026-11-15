@@ -50,7 +50,6 @@ type ModelContentFieldSummary struct {
 	Path         string                         `json:"path"`
 	FieldID      string                         `json:"fieldId"`
 	Type         string                         `json:"type"`
-	RelationIDs  []string                       `json:"relationIds,omitempty"`
 	Preparations []ModelContentMediaPreparation `json:"preparations,omitempty"`
 }
 
@@ -151,7 +150,7 @@ func modelContentPlacementSummaries(payload SnapshotPayload) ([]ModelContentPlac
 				}
 				input := ModelContentInputSummary{InputKey: port.Key, Kind: port.Kind, EntityID: binding.EntityID, Fields: make([]ModelContentFieldSummary, 0)}
 				if port.Kind == "scalar" {
-					field := ModelContentFieldSummary{FieldID: binding.FieldID, Type: port.Type, RelationIDs: append([]string(nil), binding.RelationIDs...)}
+					field := ModelContentFieldSummary{FieldID: binding.FieldID, Type: port.Type}
 					if port.Type == "media" && port.Profile != nil {
 						field.Preparations = []ModelContentMediaPreparation{{FeatureKey: placement.Build.FeatureKey, BuildVersion: versions[placement.Build.FeatureKey], SchemaKind: "dataInputs", FieldPath: "/" + port.Key, BuildDigest: digests[placement.Build.FeatureKey], Accept: port.Profile.Accept}}
 					}
@@ -167,7 +166,7 @@ func modelContentPlacementSummaries(payload SnapshotPayload) ([]ModelContentPlac
 							break
 						}
 					}
-					field := ModelContentFieldSummary{Path: mapped.InputPath, FieldID: mapped.FieldID, Type: fieldType, RelationIDs: append([]string(nil), mapped.RelationIDs...)}
+					field := ModelContentFieldSummary{Path: mapped.InputPath, FieldID: mapped.FieldID, Type: fieldType}
 					if fieldType == "media" && mediaProfile != nil {
 						segments, err := parseJSONPointer(mapped.InputPath)
 						if err != nil {
@@ -356,17 +355,14 @@ func prepareModelContentDraftRecords(input []ModelContentRecord, known map[strin
 		if records[i].Values == nil {
 			records[i].Values = map[string]any{}
 		}
-		if records[i].Relations == nil {
-			records[i].Relations = map[string][]string{}
-		}
 	}
 	return records, nil
 }
 
 // preserveSingletonDraftRecordIDs binds every existing singleton row to its
 // current identity before the generic record preparation step. This keeps a
-// cleared form from silently replacing the record that relations and history
-// refer to, even when a client omits the ID while serializing the form.
+// cleared form from silently replacing the record that history and placement
+// selections refer to, even when a client omits the ID while serializing it.
 func preserveSingletonDraftRecordIDs(model DataModel, input, existingDraft []ModelContentRecord) ([]ModelContentRecord, error) {
 	result := append([]ModelContentRecord(nil), input...)
 	existing := make(map[string]string)
@@ -410,7 +406,7 @@ func dataModelEntityByID(model DataModel, id string) (DataModelEntity, bool) {
 
 // seedSingletonDraftRecords adds one generated, empty draft row for every
 // singleton missing from the supplied state. Existing rows are copied as-is
-// so their IDs, values, relation targets and sort order remain stable.
+// so their IDs, values and sort order remain stable.
 func seedSingletonDraftRecords(model DataModel, records []ModelContentRecord) ([]ModelContentRecord, bool, error) {
 	if err := validateModelContentEntityCardinality(model, records, false); err != nil {
 		return nil, false, fmt.Errorf("%w: %v", ErrInvalid, err)
@@ -427,7 +423,7 @@ func seedSingletonDraftRecords(model DataModel, records []ModelContentRecord) ([
 		}
 		result = append(result, ModelContentRecord{
 			ID: uuid.NewString(), EntityID: entity.ID, SortOrder: 0,
-			Values: map[string]any{}, Relations: map[string][]string{},
+			Values: map[string]any{},
 		})
 		seeded = true
 	}

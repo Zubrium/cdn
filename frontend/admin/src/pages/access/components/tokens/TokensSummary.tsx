@@ -2,11 +2,12 @@ type TokensSummaryProps = {
   total: number;
   active: number;
   revoked: number;
+  totalLabel?: string;
 };
 
-export function TokensSummary({ total, active, revoked }: TokensSummaryProps) {
+export function TokensSummary({ total, active, revoked, totalLabel = "Всего" }: TokensSummaryProps) {
   const items = [
-    { label: "Всего", value: total },
+    { label: totalLabel, value: total },
     { label: "Активных", value: active },
     { label: "Отозвано", value: revoked },
   ];

@@ -28,6 +28,7 @@ const FileRoutePage = lazy(() => import("@/pages/site/FileRoutePage"));
 const FeatureRegistryPage = lazy(() => import("@/pages/site/FeatureRegistryPage"));
 const DesignSystemPage = lazy(() => import("@/pages/site/DesignSystemPage"));
 const DataModelPage = lazy(() => import("@/pages/site/DataModelPage"));
+const DataModelEntityPage = lazy(() => import("@/pages/site/DataModelEntityPage"));
 const SnapshotManagementLayout = lazy(() => import("@/pages/site/SnapshotManagementLayout"));
 const FeatureBuildRegistryPage = lazy(() => import("@/pages/site/FeatureBuildRegistryPage"));
 const SnapshotsPage = lazy(() => import("@/pages/site/SnapshotsPage"));
@@ -114,6 +115,9 @@ export const router = createBrowserRouter(
           children: [
             { index: true, element: <DashboardPage /> },
             { path: "content", element: <ContentHomePage /> },
+            { path: "content/entities/:entityKey", element: <ContentHomePage /> },
+            { path: "content/entities/:entityKey/records/:recordId", element: <ContentHomePage /> },
+            { path: "content/placements", element: <ContentHomePage /> },
             { path: "site-metadata", element: <RequireSiteManager><RedirectWithSearch to="/site/settings" /></RequireSiteManager> },
             { path: "snapshots", element: <RequireSiteManager><SnapshotManagementLayout /></RequireSiteManager>, children: [
               { index: true, element: <Navigate to="tree" replace /> },
@@ -145,6 +149,7 @@ export const router = createBrowserRouter(
                   { path: "settings", element: <SiteMetadataPage /> },
                   { path: "design-system", element: <DesignSystemPage /> },
                   { path: "data-model", element: <DataModelPage /> },
+                  { path: "data-model/:model", element: <DataModelEntityPage /> },
                 ],
               }],
             },

@@ -45,7 +45,7 @@ func TestSingletonDraftPreparationSeedsEmptyRowsAndPreservesExistingIdentity(t *
 		{ID: manyID, Key: "products", Name: "Products"},
 	}}
 	existingID := uuid.NewString()
-	existing := ModelContentRecord{ID: existingID, EntityID: manyID, SortOrder: 2, Values: map[string]any{"title": "Keep me"}, Relations: map[string][]string{}}
+	existing := ModelContentRecord{ID: existingID, EntityID: manyID, SortOrder: 2, Values: map[string]any{"title": "Keep me"}}
 	seeded, changed, err := seedSingletonDraftRecords(model, []ModelContentRecord{existing})
 	if err != nil {
 		t.Fatalf("seed missing singleton: %v", err)
@@ -54,7 +54,7 @@ func TestSingletonDraftPreparationSeedsEmptyRowsAndPreservesExistingIdentity(t *
 		t.Fatalf("seeding must preserve existing rows and add exactly one singleton: changed=%v rows=%+v", changed, seeded)
 	}
 	newRow := seeded[1]
-	if newRow.EntityID != singletonID || len(newRow.Values) != 0 || len(newRow.Relations) != 0 || newRow.SortOrder != 0 {
+	if newRow.EntityID != singletonID || len(newRow.Values) != 0 || newRow.SortOrder != 0 {
 		t.Fatalf("generated singleton row should be empty: %+v", newRow)
 	}
 	if _, err := uuid.Parse(newRow.ID); err != nil || newRow.ID == "" {

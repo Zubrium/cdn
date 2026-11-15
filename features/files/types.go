@@ -36,10 +36,11 @@ type File struct {
 	ObjectKey   string    `json:"-"`
 }
 type UploadInput struct {
-	Name       string `json:"name"`
-	Size       int64  `json:"size"`
-	SHA256     string `json:"sha256"`
-	Visibility string `json:"visibility"`
+	Name         string    `json:"name"`
+	Size         int64     `json:"size"`
+	SHA256       string    `json:"sha256"`
+	Visibility   string    `json:"visibility"`
+	ReservedByID uuid.UUID `json:"-"`
 }
 type Part struct {
 	Number    int    `json:"number"`

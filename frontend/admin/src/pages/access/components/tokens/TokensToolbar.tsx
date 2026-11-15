@@ -35,7 +35,7 @@ export function TokensToolbar({
           type="search"
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="Поиск по названию, роли или ID"
+          placeholder="Поиск по названию или роли"
           aria-label="Поиск токенов"
           className="pl-9 pr-9"
         />

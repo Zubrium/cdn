@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
@@ -54,9 +54,12 @@ export default function TokensPage() {
     );
   };
 
-  const tokensQuery = useQuery({
-    queryKey: queryKeys.tokens.list(),
-    queryFn: ({ signal }) => api.tokens.list(signal),
+  const tokensQuery = useInfiniteQuery({
+    queryKey: queryKeys.tokens.list(principal?.id ?? ""),
+    queryFn: ({ pageParam, signal }) => api.tokens.list(pageParam, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
+    enabled: Boolean(principal),
   });
 
   const revokeMutation = useMutation({
@@ -68,7 +71,10 @@ export default function TokensPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
 
-  const all = useMemo(() => tokensQuery.data?.items ?? [], [tokensQuery.data?.items]);
+  const all = useMemo(
+    () => tokensQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [tokensQuery.data],
+  );
   const tokens = useMemo(() => {
     const query = search.trim().toLowerCase();
     return all.filter((token) => {
@@ -138,7 +144,17 @@ export default function TokensPage() {
         </Button>
       </header>
 
-      <TokensSummary total={all.length} active={activeCount} revoked={revokedCount} />
+      <TokensSummary
+        total={all.length}
+        active={activeCount}
+        revoked={revokedCount}
+        totalLabel={tokensQuery.hasNextPage ? "Загружено" : "Всего"}
+      />
+      {tokensQuery.hasNextPage && (
+        <p className="text-sm text-muted-foreground">
+          Сводка рассчитана по загруженным записям. Загрузите следующие страницы для полного списка.
+        </p>
+      )}
 
       <TokensToolbar
         search={search}
@@ -181,6 +197,20 @@ export default function TokensPage() {
           isRevoking={revokeMutation.isPending}
           onRevoke={(token) => void requestRevoke(token)}
         />
+      )}
+
+      {tokensQuery.hasNextPage && (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-11"
+            loading={tokensQuery.isFetchingNextPage}
+            onClick={() => void tokensQuery.fetchNextPage()}
+          >
+            Загрузить ещё токены
+          </Button>
+        </div>
       )}
 
       <InlineAlert tone="info" title="Безопасность">

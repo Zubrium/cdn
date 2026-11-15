@@ -2,6 +2,7 @@ package media
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -13,6 +14,16 @@ func TestProfileAtSchemaNestedArrayMediaField(t *testing.T) {
 	}
 	if !found || profile.Accept != "raster-image" || len(profile.Renditions) != 1 || profile.Renditions[0].Name != "card" {
 		t.Fatalf("unexpected profile: found=%t profile=%+v", found, profile)
+	}
+}
+
+func TestFieldProfileRejectsExcessiveRenditionCount(t *testing.T) {
+	renditions := make([]Rendition, MaxRenditions+1)
+	for index := range renditions {
+		renditions[index] = Rendition{Name: fmt.Sprintf("size_%02d", index), Width: 100 + index, Height: 100, Fit: "cover"}
+	}
+	if err := (FieldProfile{Accept: "raster-image", Renditions: renditions}).Validate(); err == nil {
+		t.Fatalf("profile with %d renditions must be rejected", len(renditions))
 	}
 }
 

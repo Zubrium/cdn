@@ -91,7 +91,7 @@ export default function RolesPage() {
         выпустите новый с нужной ролью. <Link to="/access/tokens" className="underline">Перейти к токенам</Link>.
       </InlineAlert>
 
-      <div className="grid gap-3 lg:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {roles.map((role) => {
           const current = principal?.role === role.id;
           return (
@@ -102,20 +102,14 @@ export default function RolesPage() {
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle className="text-base">{role.label}</CardTitle>
-                  <div className="flex items-center gap-1.5">
-                    {current && <Badge variant="default">Ваша роль</Badge>}
-                    <code className="text-2xs text-muted-foreground">{role.id}</code>
-                  </div>
+                  {current && <Badge variant="default">Ваша роль</Badge>}
                 </div>
                 <CardDescription>{role.summary}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="space-y-2">
                   {role.permissions.map((permission) => (
-                    <div
-                      key={permission.resource}
-                      className="rounded-md border border-border bg-muted/20 p-2"
-                    >
+                    <div key={permission.resource} className="border-b border-border/70 pb-2 last:border-b-0 last:pb-0">
                       <p className="text-xs font-medium">{permission.resource}</p>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {permission.actions.map((action) => (

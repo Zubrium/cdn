@@ -11,6 +11,7 @@ import (
 )
 
 const ProcessorVersion = "ffmpeg-web-v1"
+const MaxRenditions = 32
 
 var renditionNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
@@ -98,6 +99,9 @@ func (p FieldProfile) Validate() error {
 	}
 	if len(p.Renditions) > 0 && p.Accept != "raster-image" {
 		return errors.New("x-media.renditions require accept=raster-image")
+	}
+	if len(p.Renditions) > MaxRenditions {
+		return fmt.Errorf("x-media.renditions accepts at most %d entries", MaxRenditions)
 	}
 	seen := make(map[string]bool, len(p.Renditions))
 	for _, rendition := range p.Renditions {

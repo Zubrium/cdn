@@ -81,7 +81,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
     <Link
       to="/"
       className={cn(
-        "flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex min-h-11 min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         compact && "size-11 justify-center",
       )}
       aria-label="ZUBRIUM — на главную"

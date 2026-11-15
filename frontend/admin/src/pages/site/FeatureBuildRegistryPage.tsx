@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { Boxes, CloudUpload, FileCode2, Fingerprint } from "lucide-react";
+import { Boxes, CloudUpload, FileCode2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ErrorState, PageHeader } from "@/components/common/page";
+import { ErrorState, PageHeader, useDocumentTitle } from "@/components/common/page";
 import type { FeatureBuild } from "@/types";
 import { groupFeatureBuilds } from "./feature-builds";
 
@@ -13,6 +13,7 @@ function errorMessage(error: unknown) {
 }
 
 export default function FeatureBuildRegistryPage() {
+  useDocumentTitle("Реестр фичей");
   const [items, setItems] = useState<FeatureBuild[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -112,14 +113,14 @@ export default function FeatureBuildRegistryPage() {
                         <span className="mt-0.5 block truncate text-xs text-muted-foreground">{group.key} · версий: {group.versions.length} · последняя v{group.latest.version}</span>
                       </span>
                     </span>
-                    <span className="flex items-center gap-2 text-xs text-muted-foreground"><Fingerprint className="size-3.5" />{group.latest.digest.slice(0, 16)}</span>
+                    <span className="text-xs text-muted-foreground">Последняя v{group.latest.version}</span>
                   </summary>
                   <div className="mt-3 space-y-2 border-t border-border pt-3">
                     {group.versions.map((build) => (
                       <details className="rounded-md border border-border p-3" key={build.id}>
                         <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                           <span className="text-sm font-medium">v{build.version}{build.version === group.latest.version ? " · последняя по SemVer" : ""}</span>
-                          <span className="flex items-center gap-2 text-xs text-muted-foreground"><span>{build.manifest.dataInputs?.length ? `Входов данных: ${build.manifest.dataInputs.length}` : "Без модельных данных"}</span><Fingerprint className="size-3.5" />{build.digest.slice(0, 16)}</span>
+                          <span className="text-xs text-muted-foreground">{build.manifest.dataInputs?.length ? `Входов данных: ${build.manifest.dataInputs.length}` : "Без модельных данных"}</span>
                         </summary>
                         <div className="mt-3 grid gap-4 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,.8fr)]">
                           <div className="space-y-3 text-sm">

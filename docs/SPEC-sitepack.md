@@ -1,49 +1,54 @@
-# Перенос снапшота через sitepack
+# Sitepack transfer contract
 
-## Действующий контракт
+Status: current flat-model contract, 15 November 2026. Sitepack version 1, manifest format 1, per-feature CMS payloads, `contentRelations`, relation envelopes, legacy collection-source data, and unconverted per-feature bindings are rejected.
 
-Статус на 8 ноября 2026: sitepack version 2 переносит snapshot payload, закреплённые ZIP фич, используемые файлы и snapshot-scoped model content. Индекс содержит modelContent с опубликованными и черновыми записями, выборками и историей публикаций; структурный payload содержит config.dataModel и bindings. Импорт валидирует ссылки до записи в S3, переназначает системные идентификаторы и создаёт новый корневой снапшот без назначения ветке.
+## Exported state
 
-Manifest format 1, старые per-feature данные, contentRelations, relationEnvelope, collectionSource и contentBindings не читаются и не конвертируются. Sitepack version 1 отклоняется. Пользователи, токены, заявки, история назначений и сами назначения веток не экспортируются. Публичные и приватные медиа проходят те же правила владельца и доступа, что и файловый сервис.
+A sitepack includes the selected snapshot payload, pinned feature builds and assets, public media required by references, model structure, placement bindings, draft and published model records, placement selections, and immutable model-content history. Users, access tokens, submissions, branch history, and branch assignments are not exported.
 
-Сборки фич хранят исходный ZIP и digest. Импорт не меняет исходный снапшот и использует атомарную регистрацию данных снапшота. Подготовленные content-addressed сборки могут безопасно повторно использоваться; новые media objects имеют namespaced keys и удаляются через очередь, если транзакция БД завершается ошибкой. Лимиты, временные каталоги и S3-параметры задаются явной конфигурацией.
+The flat model contains entities, ordered fields, optional legacy layout positions, and model-content records with own `values`. It contains no model relations or record relation maps. `positions` remains in the serialized contract for compatibility but is not used by the editor.
 
-`TestModelSitepackCrossInstallAcceptance` прошёл между двумя disposable Engine/PostgreSQL установками и MinIO с текущими `catalog@2.0.0`, `catalog-detail@2.0.0` и `main-data@2.0.1`. Проверены перенос draft/published/history/selections, remap UUID, public/private media ACL, повторный импорт, preflight без записи и immutable-build conflict. Этот результат предшествует текущей singleton-реализации: автосоздание singleton draft, сохранение many-history и отказ несовместимого restore в этом интеграционном прогоне ещё не проверялись. Смотри точные disposable identifiers в [QA_REPORT.md](QA_REPORT.md).
+Public and private files retain owner/access checks. Only explicitly referenced public media is transferred. Secrets and private service files never enter the archive.
 
-## Исторические проверки переходного sitepack и relation-модели
+## Identity remapping
 
-Следующие разделы фиксируют проверки переходного sitepack и старой relation-модели. Они не определяют текущий формат. Действующий modelContent-контракт и более поздняя cross-install приёмка описаны выше и в разделе «Snapshot-scoped ER records, selections and history».
+Import creates a new snapshot and regenerates IDs for model entities, fields, records, and publication-history rows. It updates:
 
-## Приёмка переноса между инсталляциями и S3-сбоев
+- entity and field references in placement `dataInputs`;
+- direct scalar `fieldId` mappings;
+- record `inputPath`/`fieldId` mappings;
+- unique-field route lookup and detail SEO mappings;
+- record `entityId`, draft/published record IDs, and selection record IDs;
+- historical records and selection IDs;
+- legacy `positions` keys;
+- public media/file references and packaged renditions.
 
-Перенос проверяется между двумя независимыми инсталляциями с уникальными disposable PostgreSQL и отдельными loopback S3/MinIO buckets. Перед каждым `newTestEnv` проверяются URL/имя БД, точное совпадение `current_database()` и отсутствие посторонних активных подключений; после очистки обоих окружений повторно проверяется отсутствие сессий. Source содержит закреплённые feature builds, опубликованный контент, черновик, relation selection/overlay, использованный public admin file, незадействованный private service file, отдельную form submission и известный тестовый credential. В target проверяются восстановленные байты медиа по SHA-256, remap file/Entry IDs и relation/overlay ссылок, число builds/files/content в отчёте, отсутствие source submission/credential/private-file байтов и отсутствие назначения snapshot любой ветке. Повторный импорт должен повторно использовать builds и public file, создавая отдельный root snapshot.
+Placement IDs, page/route structures, feature keys, versions, and selected builds retain their source identities. The source archive and source snapshot are not modified.
 
-Fault acceptance внедряет ошибку ответа `Put` после записи нового namespaced `sitepacks/<uuid>/...` объекта. Import обязан вернуть ошибку без snapshot/build/file rows, а ключ должен оказаться в `file_object_deletions`. Обычная file cleanup очередь должна пережить временный отказ `Delete`, успешно удалить объект при повторе и оставаться идемпотентной при следующем проходе. Порядок сохраняется: feature build ZIP/assets имеют content-addressed ключи, загружаются до транзакции и после неудачи могут остаться без DB row для безопасного повторного использования; новые media objects namespaced, регистрируются атомарно и убираются через очередь. Приёмка не требует удалять или менять общие content-addressed объекты, которые могут совпадать с другим импортом.
+## Compatibility and rejection
 
-Команда dedicated теста использует `TEST_SITEPACK_SOURCE_DATABASE_URL`, `TEST_SITEPACK_TARGET_DATABASE_URL`, отдельные `TEST_SITEPACK_SOURCE_S3_ENDPOINT`/`TEST_SITEPACK_TARGET_S3_ENDPOINT` и уникальные bucket names с префиксом `sitepack-transfer-qa-`; credentials передаются только через environment. Для неё создаются только контейнеры с nonce и ephemeral storage. Запуск и фактические результаты фиксируются после проверки compile stability в QA report; до этого межинсталляционная и реальная S3 fault приёмка не считается пройденной.
+The importer accepts absent, `null`, or empty legacy relation fields:
 
-### Межинсталляционный S3 acceptance, 7 ноября 2026
+- `dataModel.relations` with zero entries;
+- record `relations` with an empty object;
+- placement `relationIds` with zero entries.
 
-`TestSitepackCrossInstallationAcceptance` прошёл между двумя независимыми disposable PostgreSQL и MinIO установками. Source содержал три настоящие ZIP-сборки fixture, published и draft записи, relation selection/overlay, публичный admin-файл, незадействованный private service-файл, тестовую заявку и credentials. Target проверил ID remapping и SHA-256 импортированного файла, перенос опубликованного и чернового контента и relations, отсутствие private-файла/байтов заявки/credentials, отсутствие назначений веток и повторное использование builds/files при повторном импорте.
+Any non-empty retired relation field causes controlled rejection with `legacy_model_relations_not_supported`. Non-empty relation data is never silently removed or converted. Rejection happens during complete preflight, before snapshot rows, file rows, objects, or build registrations are written.
 
-В тесте внедрены: ошибка ответа S3 после записи объекта, которая должна откатить строки БД и поместить namespaced key в `file_object_deletions`; разовый отказ `Delete`, после которого обычный file cleanup сохраняет retry-row, повторно удаляет файл и остаётся идемпотентным. Перед каждым `newTestEnv` сверялись точная БД и отсутствие других сессий; после теста повторно проверены ноль сессий. Для успешного rerun общий integration reset добавил `file_object_deletions` в `TRUNCATE`, чтобы состояния предыдущих попыток на той же disposable БД не загрязняли результат.
+No relation ID map, relation endpoints, relation diagnostic, relation report item, or relation-specific report count exists in the current format.
 
-Команда: `go test -count=1 -v ./cmd/integration -run '^TestSitepackCrossInstallationAcceptance$'` при раздельных `TEST_SITEPACK_SOURCE_DATABASE_URL`, `TEST_SITEPACK_TARGET_DATABASE_URL`, endpoints MinIO `127.0.0.1:39050`/`:39051`, свежих уникальных bucket names и временных контейнерах с nonce. Первая попытка упала до ожидаемого инварианта из-за трёх очередей от предыдущих прогонов в повторно используемой тестовой БД; после исправления reset fixture focused test завершился `PASS`. Это проверяет локальный MinIO/S3 и два Engine service instances, но не production S3, gateway, CDN, полную интеграцию через DNS/TLS или детальный per-item отчёт по преобразованным/отклонённым элементам.
+## Preflight and atomicity
 
-### Per-item отчёт импорта, 7 ноября 2026
+Archive checks cover size, entry count, path safety, checksums, schema/version, feature manifest contract, build conflicts, model validation, direct bindings, referenced media, rendition data, records, selections, and publication history. The complete package is staged and validated before storage writes.
 
-Успешный ответ существующего POST import дополнен `items` и необязательным `itemsTruncated`. Список ограничен первыми 100 элементами. Элемент сообщает тип, фиксированный locator, действие, короткое сообщение и, для remap, source/target ID или число связей. Отчёт перечисляет поэлементно зарегистрированные/повторно использованные сборки, созданные/повторно использованные файлы и переназначенные ID опубликованных записей и черновиков. Для файлов прямо указывается, что их медиа-ссылки перенаправлены; для sidecar — количество переназначенных ссылок в selection и overlay. Агрегаты в отчёте охватывают весь импорт и при усечении списка не меняются. В отчёт не включаются контентные значения, имена файлов, credentials и произвольные пути из архива.
+A failed validation returns the standard `invalid_sitepack` error envelope with a fixed safe locator such as `files[2].renditions[0]`, `builds[1]`, `publishedContent[0]`, or `dataModel.relations`. Error details do not contain content values, credentials, filenames, or arbitrary archive paths. Database/storage failures return a bounded request-identified error without raw internal messages.
 
-Проверяемый отказ предварительной валидации возвращается стандартным error envelope с `code=invalid_sitepack` и безопасным `details[]` (`path`, `code`, `message`). Locator использует фиксированные пути вида `files[2].renditions[0]`, `builds[1]`, `publishedContent[0]`, `relations` и не повторяет содержимое входного поля. Причина объясняет категорию отказа, например checksum, schema, ABI/build conflict, media reference или relation validation. Архив по-прежнему отклоняется целиком; error details не означают частичного импорта, и snapshot/file/build строки не регистрируются до полного preflight. Неожиданный storage/SQL сбой возвращает общее сообщение `sitepack_import_failed` с request ID, без raw текста ошибки в API. UI показывает агрегаты, ограниченный список remap/build/file/relation результатов, усечение списка и безопасный locator отказа.
+Repeated import may reuse already registered builds and files, but always creates a new root snapshot. Existing branch assignments do not change.
 
-Unit acceptance: `go test ./features/sitebuilder -run '^TestSitepack(PreflightFailureCreatesNoSnapshotOrObjects|ReportItemsDescribeIDAndRelationRemaps|ReportItemListIsBounded)$'` проверяет, что отказ preflight не возвращает частичный отчёт и не делает object-store Put, что source/target UUID и relation counts видны без контентных значений, а успешный список ограничен. `go test ./presentation/http/handlers/sitebuilder -run '^TestSitepackImportError'` проверяет error envelope, request ID и отсутствие утечки raw неизвестной ошибки. `frontend` Vitest проверяет UI успешного remap и безопасный locator отказа. Cross-installation DB/S3 atomic rollback остаётся покрыт `TestSitepackCrossInstallationAcceptance`; интеграционные тесты для этой итерации не запускались, их следует выполнять последовательно на disposable окружении.
+## Report
 
-### Snapshot-scoped ER records, selections and history
+The response reports registered/reused builds, created/reused files, published/draft record counts, history revisions, and remapped entity, field, and record counts. The item list is bounded and may be marked truncated. Reports contain no content values, credentials, source/target IDs, relation fields, or branch assignments.
 
-`sitepack.json` can include `modelContent` alongside the structural `payload.config.dataModel`. It contains workspace `revision` and `publishedRevision`, snapshot `contentRevision`, current draft and published `records` and placement `selections`, plus every immutable publication in `history` with its original timestamp and state. A model-bearing archive without this optional sidecar is interpreted as an empty model workspace; non-empty model content without a snapshot model is rejected.
+## Verification
 
-Import creates a new snapshot and regenerates UUIDs for every model entity, field, relation, generic record, and publication-history row. It updates relation endpoints, canvas position keys, placement bindings, record entity/relation keys, relation targets, ordered record selections, and every historic state from the same maps. Placement IDs and feature keys remain those of the imported structural payload. The source archive and source snapshot are not changed. Local access-token IDs are not exported; imported history retains timestamps and content revisions but has no actor token because the identity belongs to the source installation.
-
-Preflight validates the model, current draft and published content, every history state, references, revision ordering, and agreement between the newest publication and current published state before object-store writes begin. Current draft and published selections must resolve against the current placements and typed inputs. Immutable historical selections are validated for shape, unique placement/input pairs, and references to records in that publication; removed placements or changed typed-input bindings do not invalidate the archive or rewrite historical selections. A restore still validates the selected publication against the current snapshot structure before applying it. Media inventory traverses only fields typed `media` in draft, published, and all historic records; UUID-looking text in other fields is not treated as a file reference. During import, those typed media values are rewritten through the same file remap as legacy content, while original visibility and file-owner rules continue to apply. Model workspaces, publication rows, and the imported snapshot content revision are inserted in the same database transaction.
-
-Ранее focused unit coverage `sitepack_model_content_test.go` и cross-install DB/MinIO acceptance подтверждали remap схемы/записей/истории, media inventory, selection и round-trip modelContent. Новые singleton history исключения описаны в [SPEC-data-model.md](SPEC-data-model.md) и покрыты добавленными focused unit tests, но после этих текущих изменений их ещё не запускали; требуется повторить их вместе с singleton API acceptance на disposable среде.
+Focused Go tests cover flat-model schema validation, empty and non-empty legacy relation compatibility, direct scalar/record/collection bindings, runtime projection, record/history remapping, and sitepack report identity. Frontend tests cover direct binding controls and absence of relation UI. Full disposable cross-installation DB/S3 transfer remains part of the broader acceptance matrix in [TODO-admin-snapshots-content-files.md](TODO-admin-snapshots-content-files.md).

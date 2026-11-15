@@ -1,7 +1,6 @@
 import type {
   DataModelEntity,
   DataModelField,
-  DataModelRelation,
   DataModel,
   JsonValue,
   ModelContentRecord,
@@ -73,12 +72,12 @@ export function selectedModelRecord(
 export function createModelRecord(entityId: string, sortOrder: number): ModelContentRecord {
   // This key is local to the unsaved editor row; it is stripped from PUT so
   // the service can generate the canonical record UUID.
-  return { id: `local:${crypto.randomUUID()}`, entityId, sortOrder, values: {}, relations: {} };
+  return { id: `local:${crypto.randomUUID()}`, entityId, sortOrder, values: {} };
 }
 
 export function clearModelRecordData(records: ModelContentRecord[], recordId: string): ModelContentRecord[] {
   return records.map((record) => record.id === recordId
-    ? { ...record, values: {}, relations: {} }
+    ? { ...record, values: {} }
     : record);
 }
 
@@ -104,6 +103,7 @@ export function reorderModelRecordsById(
 ): ModelContentRecord[] {
   const entityRecords = records.filter((record) => record.entityId === entityId);
   if (orderedRecordIds.length !== entityRecords.length) return records;
+  if (new Set(orderedRecordIds).size !== orderedRecordIds.length) return records;
   const byID = new Map(entityRecords.map((record) => [record.id, record]));
   const ordered = orderedRecordIds.flatMap((recordId) => {
     const record = byID.get(recordId);
@@ -169,8 +169,6 @@ export function cleanOrphanedModelContentSelections(
 }
 
 export interface ModelRecordDeletionImpact {
-  incomingRelations: number;
-  outgoingRelations: number;
   placementSelections: number;
   affectedFeatureInputs: number;
   mediaReferences: number;
@@ -184,12 +182,8 @@ export function modelRecordDeletionImpact(
   placements: ModelContentWorkspace["placements"] = [],
 ): ModelRecordDeletionImpact {
   const target = records.find((record) => record.id === recordId);
-  if (!target) return { incomingRelations: 0, outgoingRelations: 0, placementSelections: 0, affectedFeatureInputs: 0, mediaReferences: 0 };
+  if (!target) return { placementSelections: 0, affectedFeatureInputs: 0, mediaReferences: 0 };
   const entity = model.entities.find((item) => item.id === target.entityId);
-  const incomingRelations = records.reduce((total, record) => total + Object.values(record.relations ?? {})
-    .reduce((count, ids) => count + ids.filter((id) => id === recordId).length, 0), 0);
-  const outgoingRelations = Object.values(target.relations ?? {})
-    .reduce((count, ids) => count + ids.length, 0);
   const placementSelections = selections.reduce((total, selection) =>
     total + (selection.recordIds ?? []).filter((id) => id === recordId).length, 0);
   const selectionByInput = new Map(selections.map((selection) => [`${selection.placementId}\u0000${selection.inputKey}`, selection]));
@@ -204,7 +198,7 @@ export function modelRecordDeletionImpact(
   const mediaReferences = entity?.fields.filter((field) => field.type === "media"
     && typeof target.values[field.key] === "string"
     && Boolean((target.values[field.key] as string).trim())).length ?? 0;
-  return { incomingRelations, outgoingRelations, placementSelections, affectedFeatureInputs, mediaReferences };
+  return { placementSelections, affectedFeatureInputs, mediaReferences };
 }
 
 export interface UniqueModelValueIssue {
@@ -251,71 +245,6 @@ export function duplicateUniqueModelValueIssues(
   return [...issues.values()];
 }
 
-export interface ModelContentRelationIssue {
-  recordId: string;
-  relationId: string;
-  message: string;
-}
-
-export function modelContentRelationIssues(
-  records: ModelContentRecord[],
-  model: DataModel,
-): ModelContentRelationIssue[] {
-  const relations = new Map((model.relations ?? []).map((relation) => [relation.id, relation]));
-  const recordsByID = new Map(records.map((record) => [record.id, record]));
-  const issues = new Map<string, ModelContentRelationIssue>();
-  const owners = new Map<string, Set<string>>();
-  const addIssue = (recordId: string, relationId: string, message: string) => {
-    issues.set(`${recordId}\u0000${relationId}\u0000${message}`, { recordId, relationId, message });
-  };
-
-  for (const record of records) {
-    for (const [relationId, targetIDs] of Object.entries(record.relations ?? {})) {
-      const relation = relations.get(relationId);
-      if (!relation || relation.fromEntityId !== record.entityId || relation.cardinality === "many-to-many") continue;
-      for (const targetID of targetIDs) {
-        const key = `${relationId}\u0000${targetID}`;
-        const targetOwners = owners.get(key) ?? new Set<string>();
-        targetOwners.add(record.id);
-        owners.set(key, targetOwners);
-      }
-    }
-  }
-
-  for (const record of records) {
-    for (const [relationId, targetIDs] of Object.entries(record.relations ?? {})) {
-      const relation = relations.get(relationId);
-      if (!relation || relation.fromEntityId !== record.entityId) continue;
-      if (relation.cardinality === "one-to-one" && targetIDs.length > 1) {
-        addIssue(record.id, relationId, "Для связи 1:1 выбрана более чем одна запись.");
-      }
-      const seenTargets = new Set<string>();
-      for (const targetID of targetIDs) {
-        if (seenTargets.has(targetID)) addIssue(record.id, relationId, "Одна запись выбрана несколько раз.");
-        seenTargets.add(targetID);
-        const target = recordsByID.get(targetID);
-        if (!target) {
-          addIssue(record.id, relationId, "Связанная запись не найдена.");
-          continue;
-        }
-        if (target.entityId !== relation.toEntityId) {
-          addIssue(record.id, relationId, "Связь указывает на запись другой сущности.");
-          continue;
-        }
-        if (relation.cardinality === "many-to-many") continue;
-        const targetOwners = owners.get(`${relationId}\u0000${targetID}`);
-        if (targetOwners && targetOwners.size > 1) {
-          addIssue(record.id, relationId, "Запись уже связана с другой исходной записью.");
-          for (const ownerID of targetOwners) {
-            addIssue(ownerID, relationId, "Запись уже связана с другой исходной записью.");
-          }
-        }
-      }
-    }
-  }
-  return [...issues.values()];
-}
-
 export function reorderSelectedRecords(recordIds: string[], recordId: string, direction: -1 | 1): string[] {
   const next = [...recordIds];
   const index = next.indexOf(recordId);
@@ -327,6 +256,7 @@ export function reorderSelectedRecords(recordIds: string[], recordId: string, di
 
 export function reorderSelectedRecordsById(recordIds: string[], orderedRecordIds: string[]): string[] {
   if (recordIds.length !== orderedRecordIds.length) return recordIds;
+  if (new Set(orderedRecordIds).size !== orderedRecordIds.length) return recordIds;
   const available = new Set(recordIds);
   if (orderedRecordIds.some((recordId) => !available.has(recordId))) return recordIds;
   if (orderedRecordIds.every((recordId, index) => recordId === recordIds[index])) return recordIds;
@@ -336,7 +266,6 @@ export function reorderSelectedRecordsById(recordIds: string[], orderedRecordIds
 export function deleteModelRecord(
   records: ModelContentRecord[],
   selections: ModelContentSelection[],
-  _model: { relations?: DataModelRelation[] },
   recordId: string,
 ): { records: ModelContentRecord[]; selections: ModelContentSelection[] } {
   const deleted = records.find((record) => record.id === recordId);
@@ -351,15 +280,8 @@ export function deleteModelRecord(
   }
   return {
     records: remaining.map((record) => {
-      const relations = { ...(record.relations ?? {}) };
-      let changed = record.sortOrder !== orderByID.get(record.id);
-      for (const relationId of Object.keys(relations)) {
-        const ids = relations[relationId];
-        if (!ids?.includes(recordId)) continue;
-        relations[relationId] = ids.filter((id) => id !== recordId);
-        changed = true;
-      }
-      return changed ? { ...record, sortOrder: orderByID.get(record.id) ?? record.sortOrder, relations } : record;
+      const sortOrder = orderByID.get(record.id) ?? record.sortOrder;
+      return record.sortOrder === sortOrder ? record : { ...record, sortOrder };
     }),
     selections: selections.map((selection) => (selection.recordIds ?? []).includes(recordId)
       ? { ...selection, recordIds: (selection.recordIds ?? []).filter((id) => id !== recordId) }
@@ -369,19 +291,14 @@ export function deleteModelRecord(
 
 export interface OrphanedModelRecordData {
   unknownFieldKeys: string[];
-  unknownRelationIds: string[];
 }
 
 export function orphanedModelRecordData(record: ModelContentRecord, model: DataModel): OrphanedModelRecordData {
   const entity = model.entities.find((item) => item.id === record.entityId);
-  if (!entity) return { unknownFieldKeys: Object.keys(record.values), unknownRelationIds: Object.keys(record.relations ?? {}) };
+  if (!entity) return { unknownFieldKeys: Object.keys(record.values) };
   const fieldKeys = new Set(entity.fields.map((field) => field.key));
-  const relationIds = new Set((model.relations ?? [])
-    .filter((relation) => relation.fromEntityId === entity.id)
-    .map((relation) => relation.id));
   return {
     unknownFieldKeys: Object.keys(record.values).filter((key) => !fieldKeys.has(key)),
-    unknownRelationIds: Object.keys(record.relations ?? {}).filter((id) => !relationIds.has(id)),
   };
 }
 
@@ -396,12 +313,10 @@ export function removeOrphanedModelRecordData(
   if (!entity) return records;
   const orphans = orphanedModelRecordData(record, model);
   const invalidFields = new Set(orphans.unknownFieldKeys);
-  const invalidRelations = new Set(orphans.unknownRelationIds);
   return records.map((item) => {
     if (item.id !== recordId) return item;
     const values = Object.fromEntries(Object.entries(item.values).filter(([key]) => !invalidFields.has(key)));
-    const relations = Object.fromEntries(Object.entries(item.relations ?? {}).filter(([id]) => !invalidRelations.has(id)));
-    return { ...item, values, relations };
+    return { ...item, values };
   });
 }
 
@@ -418,17 +333,6 @@ export function updateModelRecordField(
     else values[fieldKey] = value;
     return { ...record, values };
   });
-}
-
-export function updateModelRecordRelation(
-  records: ModelContentRecord[],
-  recordId: string,
-  relationId: string,
-  recordIds: string[],
-): ModelContentRecord[] {
-  return records.map((record) => record.id === recordId
-    ? { ...record, relations: { ...(record.relations ?? {}), [relationId]: [...new Set(recordIds)] } }
-    : record);
 }
 
 export function modelRecordsEqual(left: ModelContentRecord[], right: ModelContentRecord[]): boolean {
@@ -455,7 +359,6 @@ export function apiModelRecordInput(record: ModelContentRecord): Omit<ModelConte
       entityId: record.entityId,
       sortOrder: record.sortOrder,
       values: record.values,
-      ...(record.relations ? { relations: record.relations } : {}),
     };
   }
   return record;
@@ -487,10 +390,7 @@ export function remapLocalRecordIDs(
   return {
     records: draft.records.map((record) => {
       const id = idMap.get(record.id) ?? record.id;
-      const relations = record.relations
-        ? Object.fromEntries(Object.entries(record.relations).map(([key, ids]) => [key, ids.map((itemID) => idMap.get(itemID) ?? itemID)]))
-        : undefined;
-      return { ...record, id, ...(relations ? { relations } : {}) };
+      return { ...record, id };
     }),
     selections: draft.selections.map((selection) => ({ ...selection, recordIds: (selection.recordIds ?? []).map((id) => idMap.get(id) ?? id) })),
   };

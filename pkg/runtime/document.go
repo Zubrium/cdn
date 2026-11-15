@@ -75,7 +75,8 @@ func DocumentHandler(mediaBase string, resolve DocumentResolver, worker *Prerend
 			http.NotFound(w, r)
 			return
 		}
-		if worker != nil && document.SnapshotID != "" && !document.SkipPrerender && !worker.IsWorkerRequest(r) {
+		preRenderable := document.Cacheable || r.URL.RawQuery == ""
+		if worker != nil && document.SnapshotID != "" && preRenderable && !document.SkipPrerender && !worker.IsWorkerRequest(r) {
 			html, renderErr := worker.Render(r.Context(), document, clean, r.URL.RawQuery)
 			if renderErr == nil {
 				document.HTML = html

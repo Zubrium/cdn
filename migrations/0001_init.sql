@@ -182,6 +182,7 @@ CREATE TABLE public.file_upload_sessions (
     id uuid NOT NULL,
     file_id uuid NOT NULL,
     owner_id uuid NOT NULL,
+    reserved_by_id uuid NOT NULL,
     name text NOT NULL,
     size_bytes bigint NOT NULL,
     sha256 text NOT NULL,
@@ -428,6 +429,8 @@ CREATE TABLE public.form_submissions (
 CREATE UNIQUE INDEX file_owners_one_admin ON public.file_owners USING btree (kind) WHERE (kind = 'admin'::text);
 
 CREATE INDEX file_upload_sessions_cleanup ON public.file_upload_sessions USING btree (state, expires_at);
+
+CREATE INDEX file_upload_sessions_reserved_by ON public.file_upload_sessions USING btree (reserved_by_id, state, expires_at);
 
 CREATE INDEX idx_access_tokens_active ON public.access_tokens USING btree (role, expires_at) WHERE (revoked_at IS NULL);
 

@@ -4,7 +4,7 @@ import { Plus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { useConfirm } from "@/components/common/confirm";
-import { ErrorState, LoadingPage } from "@/components/common/page";
+import { ErrorState, LoadingPage, useDocumentTitle } from "@/components/common/page";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { BrandAssetEditor } from "@/domains/design-system/BrandAssetEditor";
@@ -27,6 +27,7 @@ function ParentDifference({ difference }: { difference?: ParentTokenDifference }
 }
 
 export default function DesignSystemPage() {
+  useDocumentTitle("Дизайн-система");
   const confirm = useConfirm();
   const { designSystem: theme, updateDesignSystem, snapshot, saving } = useSiteWorkspace();
   const snapshotId = snapshot?.id ?? "";

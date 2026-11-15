@@ -4,6 +4,11 @@ const manifestKeys = new Set([
 ]);
 const inputTypes = new Set(["text", "longText", "integer", "number", "boolean", "date", "dateTime", "url", "email", "enum", "media"]);
 const profileAccepts = new Set(["image", "raster-image", "video", "file"]);
+const maxDataInputPorts = 128;
+const maxDataInputFieldsPerPort = 64;
+const maxDataInputFieldsTotal = 512;
+const maxDataInputPathSegments = 32;
+const maxRenditions = 32;
 
 function assertObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -46,6 +51,7 @@ function validateProfile(value, fieldType, label) {
   if (value.video !== undefined) throw new Error(`${label}.profile.video is only valid for video inputs`);
   if (value.renditions !== undefined) {
     if (value.accept !== "raster-image" || !Array.isArray(value.renditions)) throw new Error(`${label}.profile.renditions require raster-image and an array`);
+    if (value.renditions.length > maxRenditions) throw new Error(`${label}.profile.renditions accepts at most ${maxRenditions} entries`);
     const names = new Set();
     for (const [index, rendition] of value.renditions.entries()) {
       validateRendition(rendition, `${label}.profile.renditions[${index}]`);
@@ -92,7 +98,9 @@ export function validateDataInputManifest(manifest) {
   assertKeys(manifest, manifestKeys, "manifest");
   if (manifest.formatVersion !== 2) throw new Error("only manifest formatVersion 2 is supported");
   if (!Array.isArray(manifest.dataInputs)) throw new Error("dataInputs must be an array, including [] when the feature consumes no model data");
+  if (manifest.dataInputs.length > maxDataInputPorts) throw new Error(`dataInputs accepts at most ${maxDataInputPorts} ports`);
   const keys = new Set();
+  let totalFields = 0;
   for (const [index, input] of manifest.dataInputs.entries()) {
     const label = `dataInputs[${index}]`;
     assertObject(input, label);
@@ -107,12 +115,16 @@ export function validateDataInputManifest(manifest) {
     if (input.kind !== "record" && input.kind !== "collection") throw new Error(`${label}.kind must be scalar, record, or collection`);
     assertKeys(input, new Set(["key", "kind", "fields"]), label);
     if (!Array.isArray(input.fields) || input.fields.length === 0) throw new Error(`${label}.fields must contain at least one typed field`);
+    if (input.fields.length > maxDataInputFieldsPerPort) throw new Error(`${label}.fields accepts at most ${maxDataInputFieldsPerPort} entries`);
+    totalFields += input.fields.length;
+    if (totalFields > maxDataInputFieldsTotal) throw new Error(`dataInputs accepts at most ${maxDataInputFieldsTotal} fields in total`);
     const paths = [];
     for (const [fieldIndex, field] of input.fields.entries()) {
       const fieldLabel = `${label}.fields[${fieldIndex}]`;
       assertObject(field, fieldLabel);
       assertKeys(field, new Set(["path", "type", "values", "profile"]), fieldLabel);
       const parts = decodePath(field.path, `${fieldLabel}.path`);
+      if (parts.length > maxDataInputPathSegments) throw new Error(`${fieldLabel}.path accepts at most ${maxDataInputPathSegments} segments`);
       if (paths.some(({ source, parts: existing }) => source === field.path || pathsOverlap(existing, parts))) {
         throw new Error(`${label} contains duplicate or overlapping field path ${field.path}`);
       }

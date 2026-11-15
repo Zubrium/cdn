@@ -8,6 +8,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	"image/png"
+	"io"
 
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
@@ -27,7 +28,22 @@ var imageVariants = []struct {
 const maxImagePixels = 40_000_000
 
 func inspectImage(data []byte) (image.Config, error) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	cfg, err := decodeBoundedRasterConfig(bytes.NewReader(data))
+	if err != nil {
+		return image.Config{}, err
+	}
+	return cfg, nil
+}
+
+// ValidateRasterReader enforces the same decoded-dimension ceiling before
+// original public media is persisted or served inline.
+func ValidateRasterReader(reader io.Reader) error {
+	_, err := decodeBoundedRasterConfig(reader)
+	return err
+}
+
+func decodeBoundedRasterConfig(reader io.Reader) (image.Config, error) {
+	cfg, _, err := image.DecodeConfig(reader)
 	if err != nil {
 		return image.Config{}, fmt.Errorf("decode image header: %w", err)
 	}

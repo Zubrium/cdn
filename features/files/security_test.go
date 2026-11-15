@@ -1,9 +1,28 @@
 package files
 
 import (
+	"bytes"
+	"encoding/binary"
+	"hash/crc32"
+	"image"
+	"image/png"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestValidateOriginalRasterRejectsOversizedDimensions(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	data := encoded.Bytes()
+	binary.BigEndian.PutUint32(data[16:20], 40_000_000)
+	binary.BigEndian.PutUint32(data[20:24], 2)
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	if err := validateOriginalRaster("image/png", data); err == nil {
+		t.Fatal("oversized public raster was accepted")
+	}
+}
 
 func TestSanitizeNameRemovesHeaderControlsAndPathSegments(t *testing.T) {
 	got := sanitizeName("folder\\subfolder/unsafe\r\n\u0085name\u007f.sh")

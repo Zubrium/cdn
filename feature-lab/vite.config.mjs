@@ -1,7 +1,8 @@
 import path from "node:path";
 import { createRequire } from "node:module";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveAllowedRealPath, resolveFeatureFile } from "./filesystem-policy.mjs";
 import { validateDataInputManifest } from "./manifest-validation.mjs";
 
 const labRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -80,8 +81,7 @@ async function featureEntries() {
         if (runtime === undefined) {
           for (const candidate of entryNames) {
             try {
-              await readFile(path.join(directory, candidate));
-              entryPath = path.join(directory, candidate);
+              entryPath = await resolveFeatureFile(directory, candidate, "legacy source entry");
               break;
             } catch {
               // Try the next filename, matching build-features.mjs.
@@ -94,24 +94,7 @@ async function featureEntries() {
           runtimeAbi = runtime.abi;
           if (typeof runtime.entry !== "string" || !runtime.entry.trim()) throw new Error("runtime.entry must be a relative file path");
 
-          const resolveFeatureFile = async (relativePath, label) => {
-            if (typeof relativePath !== "string" || !relativePath.trim() || relativePath.includes("\\") || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
-              throw new Error(label + " must be a relative file path");
-            }
-            const resolved = path.resolve(directory, relativePath);
-            if (!resolved.startsWith(path.resolve(directory) + path.sep)) throw new Error(label + " must stay inside the feature directory");
-            await access(resolved);
-            const [realDirectory, realFile, fileInfo] = await Promise.all([
-              realpath(directory),
-              realpath(resolved),
-              stat(resolved),
-            ]);
-            if (!realFile.startsWith(realDirectory + path.sep)) throw new Error(label + " must not resolve through a symlink outside the feature directory");
-            if (!fileInfo.isFile()) throw new Error(label + " must reference a file");
-            return resolved;
-          };
-
-          entryPath = await resolveFeatureFile(runtime.entry, "runtime.entry");
+          entryPath = await resolveFeatureFile(directory, runtime.entry, "runtime.entry");
           if (runtime.styles !== undefined && !Array.isArray(runtime.styles)) throw new Error("runtime.styles must be an array of relative file paths");
           const stylePaths = runtime.styles ?? [];
           for (const [index, stylePath] of stylePaths.entries()) {
@@ -119,7 +102,7 @@ async function featureEntries() {
               throw new Error("runtime.styles[" + index + "] must reference a CSS file");
             }
           }
-          styles = await Promise.all(stylePaths.map((stylePath, index) => resolveFeatureFile(stylePath, "runtime.styles[" + index + "]")));
+          styles = await Promise.all(stylePaths.map((stylePath, index) => resolveFeatureFile(directory, stylePath, "runtime.styles[" + index + "]")));
           if (runtimeAbi === "static-html-v1") html = await readFile(entryPath, "utf8");
         }
       } catch (reason) {
@@ -191,6 +174,28 @@ function featureRegistryPlugin() {
       return code.replace("/* VITASIL_SOURCE_SCAN is replaced by the Vite config before Tailwind runs. */", `@source "${sourceRoot.replaceAll("\\", "/")}";`);
     },
     configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        let requestURL;
+        try {
+          requestURL = new URL(request.url ?? "/", "http://127.0.0.1");
+        } catch {
+          response.statusCode = 400;
+          response.end("Bad Request");
+          return;
+        }
+        if (!requestURL.pathname.startsWith("/@fs/")) {
+          next();
+          return;
+        }
+        try {
+          const filePath = decodeURIComponent(requestURL.pathname.slice("/@fs".length));
+          await resolveAllowedRealPath(filePath, [labRoot, vitasilRoot]);
+          next();
+        } catch {
+          response.statusCode = 403;
+          response.end("Forbidden");
+        }
+      });
       server.watcher.add(featureRoot);
       server.watcher.on("all", (event, filePath) => {
         const normalized = path.resolve(filePath);

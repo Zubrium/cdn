@@ -26,4 +26,10 @@ func TestFreshInitialSchemaHasNoLegacyTablesOrAlterStatements(t *testing.T) {
 			t.Errorf("fresh initial schema contains retired legacy table declaration %q", legacyTable)
 		}
 	}
+	if !regexp.MustCompile(`(?im)^\s*reserved_by_id uuid NOT NULL,`).Match(initial) {
+		t.Error("fresh initial schema must declare the file upload reservation principal")
+	}
+	if !strings.Contains(string(initial), "CREATE INDEX file_upload_sessions_reserved_by ON public.file_upload_sessions USING btree (reserved_by_id, state, expires_at);") {
+		t.Error("fresh initial schema must declare the file upload reservation lookup index")
+	}
 }

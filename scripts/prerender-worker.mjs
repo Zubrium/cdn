@@ -37,6 +37,21 @@ try {
     emitTiming("context_creation", contextStartedAt);
   }
   stage("context");
+  await page.addInitScript(() => {
+    for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel"]) {
+      try {
+        Object.defineProperty(globalThis, name, {
+          value: undefined,
+          configurable: false,
+          enumerable: false,
+          writable: false,
+        });
+      } catch {
+        // A browser that exposes a non-configurable constructor is handled by
+        // the process-level network isolation required for every deployment.
+      }
+    }
+  });
   page.setDefaultTimeout(input.timeoutMs);
   let lastActivity = Date.now();
   const pending = new Set();

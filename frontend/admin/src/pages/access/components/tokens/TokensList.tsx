@@ -53,10 +53,7 @@ export function TokensList({ tokens, isRevoking, onRevoke }: TokensListProps) {
             {tokens.map((token) => (
               <tr key={token.id} className="group">
                 <td>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{token.name}</p>
-                    <code className="block truncate text-2xs text-muted-foreground">{token.id}</code>
-                  </div>
+                  <p className="truncate text-sm font-medium">{token.name}</p>
                 </td>
                 <td><RoleBadge role={token.role} /></td>
                 <td><TokenStatusBadge token={token} /></td>
@@ -78,7 +75,6 @@ export function TokensList({ tokens, isRevoking, onRevoke }: TokensListProps) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{token.name}</p>
-                <code className="block truncate text-2xs text-muted-foreground">{token.id}</code>
               </div>
               <RoleBadge role={token.role} />
             </div>

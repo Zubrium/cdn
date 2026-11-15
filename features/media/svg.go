@@ -86,6 +86,11 @@ func sanitizeSVG(data []byte) ([]byte, error) {
 				if attrName == "href" && !localSVGRef.MatchString(attr.Value) && !dataImageURL.MatchString(attr.Value) {
 					return nil, errors.New("external SVG references are not allowed")
 				}
+				if attrName == "href" && dataImageURL.MatchString(attr.Value) {
+					if err := validateEmbeddedDataImage(attr.Value); err != nil {
+						return nil, err
+					}
+				}
 				for _, reference := range svgURL.FindAllString(attr.Value, -1) {
 					if !localSVGURL.MatchString(reference) {
 						return nil, errors.New("external SVG URLs are not allowed")

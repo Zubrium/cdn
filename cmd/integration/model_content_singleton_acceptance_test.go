@@ -96,8 +96,8 @@ func TestModelContentSingletonAPIAcceptance(t *testing.T) {
 	if !ok || uuid.Validate(seededID) != nil || seeded["entityId"] != ids["singleton"] || len(seeded["values"].(map[string]any)) != 0 {
 		t.Fatalf("singleton seed must have a generated ID and empty values: %v", seeded)
 	}
-	if relations, ok := seeded["relations"].(map[string]any); ok && len(relations) != 0 {
-		t.Fatalf("singleton seed must not carry relations: %v", seeded)
+	if _, exists := seeded["relations"]; exists {
+		t.Fatalf("singleton seed must not expose relations: %v", seeded)
 	}
 	var initialPublications int
 	if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM snapshot_model_content_publications WHERE snapshot_id=$1`, rootID).Scan(&initialPublications); err != nil {

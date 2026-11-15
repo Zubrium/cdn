@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 	"websiteengine/pkg/principal"
 
@@ -51,14 +52,21 @@ func (r *Repository) Create(ctx context.Context, id uuid.UUID, name string, hash
 	return t, err
 }
 
-func (r *Repository) List(ctx context.Context, creator *uuid.UUID, limit int) ([]Token, error) {
+func (r *Repository) List(ctx context.Context, creator *uuid.UUID, beforeCreatedAt *time.Time, beforeID *uuid.UUID, limit int) ([]Token, error) {
+	args := []any{creator}
+	pagination := ""
+	if beforeCreatedAt != nil && beforeID != nil {
+		args = append(args, *beforeCreatedAt, *beforeID)
+		pagination = ` AND (created_at, id) < ($2, $3)`
+	}
+	args = append(args, limit)
 	query := `
 		SELECT id, name, role, created_by, expires_at, revoked_at, last_used_at, created_at
 		  FROM access_tokens
-		 WHERE ($1::uuid IS NULL OR created_by = $1::uuid)
+		 WHERE ($1::uuid IS NULL OR created_by = $1::uuid)` + pagination + `
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT $2`
-	rows, err := r.pool.Query(ctx, query, creator, limit)
+		 LIMIT $` + strconv.Itoa(len(args))
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

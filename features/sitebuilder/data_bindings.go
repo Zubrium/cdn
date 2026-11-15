@@ -1,18 +1,20 @@
 package sitebuilder
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // DataInputBinding connects one feature input port to a snapshot entity.
 // Scalar ports use FieldID. Record and collection ports use Fields to map
 // their declared output pointers to stable model field IDs.
 type DataInputBinding struct {
-	InputKey    string                  `json:"inputKey"`
-	EntityID    string                  `json:"entityId"`
-	FieldID     string                  `json:"fieldId,omitempty"`
-	RelationIDs []string                `json:"relationIds,omitempty"`
-	Fields      []DataInputFieldBinding `json:"fields,omitempty"`
-	Lookup      *DataInputLookupBinding `json:"lookup,omitempty"`
-	DetailSEO   *DetailSEOFieldBindings `json:"detailSEO,omitempty"`
+	InputKey  string                  `json:"inputKey"`
+	EntityID  string                  `json:"entityId"`
+	FieldID   string                  `json:"fieldId,omitempty"`
+	Fields    []DataInputFieldBinding `json:"fields,omitempty"`
+	Lookup    *DataInputLookupBinding `json:"lookup,omitempty"`
+	DetailSEO *DetailSEOFieldBindings `json:"detailSEO,omitempty"`
 }
 
 // DetailSEOFieldBindings selects published fields from a unique detail-record
@@ -27,9 +29,46 @@ type DetailSEOFieldBindings struct {
 }
 
 type DataInputFieldBinding struct {
-	InputPath   string   `json:"inputPath"`
-	FieldID     string   `json:"fieldId"`
-	RelationIDs []string `json:"relationIds,omitempty"`
+	InputPath string `json:"inputPath"`
+	FieldID   string `json:"fieldId"`
+}
+
+func (binding *DataInputBinding) UnmarshalJSON(raw []byte) error {
+	type bindingAlias DataInputBinding
+	alias := bindingAlias{}
+	wire := struct {
+		*bindingAlias
+		RelationIDs json.RawMessage `json:"relationIds"`
+	}{bindingAlias: &alias}
+	if err := decodeStrictModelJSON(raw, &wire); err != nil {
+		return err
+	}
+	if nonEmpty, err := legacyJSONValueNonEmpty(wire.RelationIDs); err != nil {
+		return fmt.Errorf("%w: dataBinding.relationIds: %v", ErrLegacyModelRelations, err)
+	} else if nonEmpty {
+		return fmt.Errorf("%w: dataBinding.relationIds", ErrLegacyModelRelations)
+	}
+	*binding = DataInputBinding(alias)
+	return nil
+}
+
+func (binding *DataInputFieldBinding) UnmarshalJSON(raw []byte) error {
+	type bindingAlias DataInputFieldBinding
+	alias := bindingAlias{}
+	wire := struct {
+		*bindingAlias
+		RelationIDs json.RawMessage `json:"relationIds"`
+	}{bindingAlias: &alias}
+	if err := decodeStrictModelJSON(raw, &wire); err != nil {
+		return err
+	}
+	if nonEmpty, err := legacyJSONValueNonEmpty(wire.RelationIDs); err != nil {
+		return fmt.Errorf("%w: dataInputFieldBinding.relationIds: %v", ErrLegacyModelRelations, err)
+	} else if nonEmpty {
+		return fmt.Errorf("%w: dataInputFieldBinding.relationIds", ErrLegacyModelRelations)
+	}
+	*binding = DataInputFieldBinding(alias)
+	return nil
 }
 
 type DataInputLookupBinding struct {
@@ -83,14 +122,14 @@ func ValidateDataInputBindings(model DataModel, ports []DataInputPort, bindings 
 		if !exists {
 			return fmt.Errorf("dataInput %q references unknown entity %q", port.Key, binding.EntityID)
 		}
-		if err := validateDataInputBinding(port, binding, entity, model, argumentBindings); err != nil {
+		if err := validateDataInputBinding(port, binding, entity, argumentBindings); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateDataInputBinding(port DataInputPort, binding DataInputBinding, entity DataModelEntity, model DataModel, argumentBindings map[string]ArgumentBinding) error {
+func validateDataInputBinding(port DataInputPort, binding DataInputBinding, entity DataModelEntity, argumentBindings map[string]ArgumentBinding) error {
 	if binding.EntityID != entity.ID {
 		return fmt.Errorf("dataInput %q entity binding is inconsistent", port.Key)
 	}
@@ -112,16 +151,9 @@ func validateDataInputBinding(port DataInputPort, binding DataInputBinding, enti
 		if binding.Lookup != nil {
 			return fmt.Errorf("scalar dataInput %q cannot declare a route lookup", port.Key)
 		}
-		fieldEntity, wildcardCount, err := dataInputRelationTarget(model, entity.ID, binding.RelationIDs)
-		if err != nil {
-			return fmt.Errorf("scalar dataInput %q relation path: %w", port.Key, err)
-		}
-		if wildcardCount != 0 {
-			return fmt.Errorf("scalar dataInput %q cannot traverse a multi-target relation", port.Key)
-		}
-		field, exists := dataModelFieldByID(fieldEntity, binding.FieldID)
+		field, exists := dataModelFieldByID(entity, binding.FieldID)
 		if !exists {
-			return fmt.Errorf("scalar dataInput %q references unknown field %q in entity %q", port.Key, binding.FieldID, fieldEntity.ID)
+			return fmt.Errorf("scalar dataInput %q references unknown field %q in entity %q", port.Key, binding.FieldID, entity.ID)
 		}
 		if field.Type != port.Type {
 			return fmt.Errorf("scalar dataInput %q type %q does not match model field type %q", port.Key, port.Type, field.Type)
@@ -134,9 +166,6 @@ func validateDataInputBinding(port DataInputPort, binding DataInputBinding, enti
 
 	if binding.FieldID != "" {
 		return fmt.Errorf("composite dataInput %q must use field mappings, not fieldId", port.Key)
-	}
-	if len(binding.RelationIDs) != 0 {
-		return fmt.Errorf("composite dataInput %q must declare relation paths on its field mappings", port.Key)
 	}
 	if port.Kind == "collection" && binding.Lookup != nil {
 		return fmt.Errorf("collection dataInput %q cannot declare a route lookup", port.Key)
@@ -153,6 +182,11 @@ func validateDataInputBinding(port DataInputPort, binding DataInputBinding, enti
 		if err != nil {
 			return fmt.Errorf("dataInput %q has invalid declared field path %q", port.Key, field.Path)
 		}
+		for _, segment := range segments {
+			if segment == "*" {
+				return fmt.Errorf("dataInput %q field path %q cannot use retired relation wildcards", port.Key, field.Path)
+			}
+		}
 		expectedPaths[pointerKey(segments)] = field
 	}
 	seenPaths := make(map[string]bool, len(binding.Fields))
@@ -161,10 +195,9 @@ func validateDataInputBinding(port DataInputPort, binding DataInputBinding, enti
 		if err != nil {
 			return fmt.Errorf("dataInput %q binding has invalid inputPath %q", port.Key, mapping.InputPath)
 		}
-		wildcardCount := 0
 		for _, segment := range segments {
 			if segment == "*" {
-				wildcardCount++
+				return fmt.Errorf("dataInput %q inputPath %q cannot use retired relation wildcards", port.Key, mapping.InputPath)
 			}
 		}
 		path := pointerKey(segments)
@@ -179,16 +212,9 @@ func validateDataInputBinding(port DataInputPort, binding DataInputBinding, enti
 		if mapping.FieldID == "" {
 			return fmt.Errorf("dataInput %q inputPath %q requires a fieldId", port.Key, mapping.InputPath)
 		}
-		fieldEntity, relationWildcardCount, err := dataInputRelationTarget(model, entity.ID, mapping.RelationIDs)
-		if err != nil {
-			return fmt.Errorf("dataInput %q inputPath %q relation path: %w", port.Key, mapping.InputPath, err)
-		}
-		if wildcardCount != relationWildcardCount {
-			return fmt.Errorf("dataInput %q inputPath %q has %d array wildcards but its relation path requires %d", port.Key, mapping.InputPath, wildcardCount, relationWildcardCount)
-		}
-		modelField, exists := dataModelFieldByID(fieldEntity, mapping.FieldID)
+		modelField, exists := dataModelFieldByID(entity, mapping.FieldID)
 		if !exists {
-			return fmt.Errorf("dataInput %q inputPath %q references unknown field %q in entity %q", port.Key, mapping.InputPath, mapping.FieldID, fieldEntity.ID)
+			return fmt.Errorf("dataInput %q inputPath %q references unknown field %q in entity %q", port.Key, mapping.InputPath, mapping.FieldID, entity.ID)
 		}
 		if modelField.Type != declaredField.Type {
 			return fmt.Errorf("dataInput %q inputPath %q type %q does not match model field type %q", port.Key, mapping.InputPath, declaredField.Type, modelField.Type)
@@ -265,43 +291,6 @@ func validateDataInputEnumOptions(inputKey, inputPath string, modelField DataMod
 		}
 	}
 	return nil
-}
-
-// dataInputRelationTarget follows a directed relation path from a binding's
-// root entity and returns the entity that owns the mapped field. A wildcard is
-// required in the manifest's output path for each multi-target edge.
-func dataInputRelationTarget(model DataModel, sourceEntityID string, relationIDs []string) (DataModelEntity, int, error) {
-	entities := make(map[string]DataModelEntity, len(model.Entities))
-	for _, entity := range model.Entities {
-		entities[entity.ID] = entity
-	}
-	current, ok := entities[sourceEntityID]
-	if !ok {
-		return DataModelEntity{}, 0, fmt.Errorf("unknown source entity %q", sourceEntityID)
-	}
-	relations := make(map[string]DataModelRelation, len(model.Relations))
-	for _, relation := range model.Relations {
-		relations[relation.ID] = relation
-	}
-	wildcards := 0
-	for _, relationID := range relationIDs {
-		relation, ok := relations[relationID]
-		if !ok {
-			return DataModelEntity{}, 0, fmt.Errorf("unknown relation %q", relationID)
-		}
-		if relation.FromEntityID != current.ID {
-			return DataModelEntity{}, 0, fmt.Errorf("relation %q does not start at entity %q", relationID, current.ID)
-		}
-		if relation.Cardinality == "one-to-many" || relation.Cardinality == "many-to-many" {
-			wildcards++
-		}
-		next, ok := entities[relation.ToEntityID]
-		if !ok {
-			return DataModelEntity{}, 0, fmt.Errorf("relation %q points to unknown entity %q", relationID, relation.ToEntityID)
-		}
-		current = next
-	}
-	return current, wildcards, nil
 }
 
 func validateDataInputLookup(inputKey string, entity DataModelEntity, lookup DataInputLookupBinding, argumentBindings map[string]ArgumentBinding) error {

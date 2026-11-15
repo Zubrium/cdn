@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
@@ -36,6 +37,14 @@ func (h *Handler) anonymousKey(r *http.Request) string {
 	return "ip:" + middleware.ClientIP(r, h.trustProxy)
 }
 
+func (h *Handler) adminPrincipalRateKey(r *http.Request) (string, bool) {
+	p, ok := principal.FromContext(r.Context())
+	if !ok || p.TokenID == uuid.Nil {
+		return "", false
+	}
+	return "principal:" + p.TokenID.String(), true
+}
+
 type ownerKey struct{}
 
 func (h *Handler) RegisterServiceRoutes(mux *http.ServeMux) {
@@ -58,6 +67,7 @@ func (h *Handler) register(mux *http.ServeMux, prefix string, auth func(http.Han
 		fn := func(w http.ResponseWriter, r *http.Request) {
 			var owner files.Owner
 			var err error
+			rateKey := ""
 			if auth != nil {
 				p, ok := principal.FromContext(r.Context())
 				if !ok {
@@ -70,7 +80,13 @@ func (h *Handler) register(mux *http.ServeMux, prefix string, auth func(http.Han
 					h.error(w, r, files.ErrForbidden)
 					return
 				}
+				key, ok := h.adminPrincipalRateKey(r)
+				if !ok {
+					h.error(w, r, files.ErrForbidden)
+					return
+				}
 				owner = h.service.AdminOwner()
+				rateKey = key
 			} else {
 				owner, err = h.service.Authenticate(bearer(r), route.permission)
 				if err != nil {
@@ -80,8 +96,9 @@ func (h *Handler) register(mux *http.ServeMux, prefix string, auth func(http.Han
 					h.error(w, r, err)
 					return
 				}
+				rateKey = "owner:" + owner.ID.String()
 			}
-			if !h.rateAllowed(w, r, "owner:"+owner.ID.String()) {
+			if !h.rateAllowed(w, r, rateKey) {
 				return
 			}
 			route.handler(w, r, owner)
@@ -95,7 +112,12 @@ func (h *Handler) register(mux *http.ServeMux, prefix string, auth func(http.Han
 }
 
 func (h *Handler) limits(w http.ResponseWriter, r *http.Request) {
-	if !h.rateAllowed(w, r, "owner:"+h.service.AdminOwner().ID.String()) {
+	key, ok := h.adminPrincipalRateKey(r)
+	if !ok {
+		h.error(w, r, files.ErrForbidden)
+		return
+	}
+	if !h.rateAllowed(w, r, key) {
 		return
 	}
 	config := h.service.Config()
@@ -109,6 +131,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, o files.Owner) 
 	if e := response.DecodeJSON(w, r, &in, h.maxJSON); e != nil {
 		response.WriteDecodeError(w, r, e)
 		return
+	}
+	if p, ok := principal.FromContext(r.Context()); ok {
+		in.ReservedByID = p.TokenID
 	}
 	u, e := h.service.CreateUpload(r.Context(), o, in)
 	if e != nil {
@@ -265,6 +290,14 @@ func (h *Handler) Content(w http.ResponseWriter, r *http.Request) {
 	h.serve(w, r, id, nil, false, "")
 }
 func (h *Handler) AdminContent(w http.ResponseWriter, r *http.Request) {
+	key, ok := h.adminPrincipalRateKey(r)
+	if !ok {
+		h.error(w, r, files.ErrForbidden)
+		return
+	}
+	if !h.rateAllowed(w, r, key) {
+		return
+	}
 	id, ok := id(w, r)
 	if !ok {
 		return
@@ -419,10 +452,40 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id uuid.UUID, ad
 
 // UploadAdminMedia preserves the existing media response shape while using disk-backed streaming.
 func (h *Handler) UploadAdminMedia(w http.ResponseWriter, r *http.Request) {
-	if !h.rateAllowed(w, r, "owner:"+h.service.AdminOwner().ID.String()) {
+	key, ok := h.adminPrincipalRateKey(r)
+	if !ok {
+		h.error(w, r, files.ErrForbidden)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, h.service.Config().MaxBytes+h.maxJSON)
+	if !h.rateAllowed(w, r, key) {
+		return
+	}
+	p, ok := principal.FromContext(r.Context())
+	if !ok {
+		h.error(w, r, files.ErrForbidden)
+		return
+	}
+	config := h.service.Config()
+	reservedSize := config.MaxBytes
+	if r.ContentLength > 0 && r.ContentLength < reservedSize {
+		reservedSize = r.ContentLength
+	}
+	owner := h.service.AdminOwner()
+	reservation, err := h.service.CreateUpload(r.Context(), owner, files.UploadInput{
+		Name: "pending-upload", Size: reservedSize, SHA256: strings.Repeat("0", 64),
+		Visibility: "public", ReservedByID: p.TokenID,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	keepReservation := false
+	defer func() {
+		if !keepReservation {
+			_ = h.service.Abort(context.Background(), owner, reservation.ID)
+		}
+	}()
+	r.Body = http.MaxBytesReader(w, r.Body, config.MaxBytes+h.maxJSON)
 	if e := r.ParseMultipartForm(0); e != nil {
 		h.error(w, r, fmt.Errorf("%w: invalid multipart or upload too large", files.ErrInvalid))
 		return
@@ -440,14 +503,23 @@ func (h *Handler) UploadAdminMedia(w http.ResponseWriter, r *http.Request) {
 	if visibility == "" {
 		visibility = "public"
 	}
-	f, e := h.service.UploadStream(r.Context(), h.service.AdminOwner(), header.Filename, header.Size, visibility, file)
+	f, e := h.service.UploadReservedStream(r.Context(), owner, reservation.ID, header.Filename, header.Size, visibility, file)
 	if e != nil {
 		h.error(w, r, e)
 		return
 	}
+	keepReservation = true
 	response.JSON(w, http.StatusCreated, map[string]any{"id": f.ID, "object_key": f.ObjectKey, "original_filename": f.Name, "content_type": f.ContentType, "size_bytes": f.Size, "status": "ready", "variants": map[string]string{"original": f.ObjectKey}, "ownerId": f.OwnerID, "visibility": f.Visibility, "sha256": f.SHA256, "created_at": f.CreatedAt, "updated_at": f.CreatedAt})
 }
 func (h *Handler) DeleteAdminMedia(w http.ResponseWriter, r *http.Request) {
+	key, ok := h.adminPrincipalRateKey(r)
+	if !ok {
+		h.error(w, r, files.ErrForbidden)
+		return
+	}
+	if !h.rateAllowed(w, r, key) {
+		return
+	}
 	h.delete(w, r, h.service.AdminOwner())
 }
 func bearer(r *http.Request) string {

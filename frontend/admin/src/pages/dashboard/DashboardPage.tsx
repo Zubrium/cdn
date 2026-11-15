@@ -181,7 +181,7 @@ export default function DashboardPage() {
 
           {canManageSite && <SiteStatusSection />}
 
-          <section aria-label="Рабочая очередь и активность" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+          <section aria-label="Рабочая очередь и активность" className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
             <AttentionQueue attention={attention} />
             <ActivityFeed items={activity} />
           </section>

@@ -7,47 +7,79 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/google/uuid"
 )
 
-// UploadStream adapts ordinary admin multipart uploads to the same resumable
-// transaction. Spooling uses disk; no allocation grows with file size.
+// UploadStream adapts ordinary uploads to the resumable transaction. It
+// reserves the requested quota before reading or staging any caller bytes.
 func (s *Service) UploadStream(ctx context.Context, owner Owner, name string, size int64, visibility string, body io.Reader) (File, error) {
 	if size < 1 || size > s.cfg.MaxBytes {
 		return File{}, ErrInvalid
 	}
-	file, e := os.CreateTemp(s.cfg.TempDir, "engine-upload-*")
-	if e != nil {
-		return File{}, e
+	u, err := s.CreateUpload(ctx, owner, UploadInput{
+		Name: name, Size: size, SHA256: strings.Repeat("0", sha256.Size*2), Visibility: visibility,
+	})
+	if err != nil {
+		return File{}, err
+	}
+	return s.UploadReservedStream(ctx, owner, u.ID, name, size, visibility, body)
+}
+
+// UploadReservedStream stages a body only after an upload reservation exists,
+// then shrinks that reservation to the verified file size before sending parts.
+func (s *Service) UploadReservedStream(ctx context.Context, owner Owner, reservationID uuid.UUID, name string, size int64, visibility string, body io.Reader) (File, error) {
+	reserved, err := s.UploadStatus(ctx, owner, reservationID)
+	if err != nil {
+		return File{}, err
+	}
+	if size < 1 || size > s.cfg.MaxBytes || size > reserved.Size {
+		_ = s.Abort(context.Background(), owner, reservationID)
+		return File{}, ErrInvalid
+	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = s.Abort(context.Background(), owner, reservationID)
+		}
+	}()
+	file, err := os.CreateTemp(s.cfg.TempDir, "engine-upload-*")
+	if err != nil {
+		return File{}, err
 	}
 	defer func() { _ = file.Close(); _ = os.Remove(file.Name()) }()
 	hash := sha256.New()
-	n, e := io.Copy(io.MultiWriter(file, hash), io.LimitReader(body, size+1))
-	if e != nil {
-		return File{}, e
+	n, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(body, size+1))
+	if err != nil {
+		return File{}, err
 	}
 	if n != size {
 		return File{}, fmt.Errorf("%w: upload length mismatch", ErrInvalid)
 	}
-	u, e := s.CreateUpload(ctx, owner, UploadInput{Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), Visibility: visibility})
-	if e != nil {
-		return File{}, e
+	if err := file.Sync(); err != nil {
+		return File{}, err
 	}
-	for offset := int64(0); offset < size; offset += u.PartSize {
-		partSize := min(u.PartSize, size-offset)
+	if _, err := s.FinalizeUpload(ctx, owner, reservationID, UploadInput{
+		Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), Visibility: visibility,
+	}); err != nil {
+		return File{}, err
+	}
+	for offset := int64(0); offset < size; offset += reserved.PartSize {
+		partSize := min(reserved.PartSize, size-offset)
 		partHash := sha256.New()
-		if _, e = io.Copy(partHash, io.NewSectionReader(file, offset, partSize)); e != nil {
-			_ = s.Abort(context.Background(), owner, u.ID)
-			return File{}, e
+		if _, err := io.Copy(partHash, io.NewSectionReader(file, offset, partSize)); err != nil {
+			return File{}, err
 		}
-		_, e = s.PutPart(ctx, owner, u.ID, int(offset/u.PartSize)+1, partSize, hex.EncodeToString(partHash.Sum(nil)), io.NewSectionReader(file, offset, partSize))
-		if e != nil {
-			_ = s.Abort(context.Background(), owner, u.ID)
-			return File{}, e
+		_, err := s.PutPart(ctx, owner, reservationID, int(offset/reserved.PartSize)+1, partSize, hex.EncodeToString(partHash.Sum(nil)), io.NewSectionReader(file, offset, partSize))
+		if err != nil {
+			return File{}, err
 		}
 	}
-	f, e := s.Commit(ctx, owner, u.ID)
-	if e != nil {
-		_ = s.Abort(context.Background(), owner, u.ID)
+	result, err := s.Commit(ctx, owner, reservationID)
+	if err != nil {
+		return File{}, err
 	}
-	return f, e
+	failed = false
+	return result, nil
 }

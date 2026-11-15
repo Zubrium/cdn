@@ -335,6 +335,7 @@ export interface SettingsLimits {
   admin_page_size: number;
   public_page_size: number;
   submission_export_max_rows: number;
+  submission_export_max_bytes: number;
 }
 
 export interface SettingsPublicAPI {
@@ -414,7 +415,6 @@ export interface DataInputPort {
 export interface DataInputFieldBinding {
   inputPath: string;
   fieldId: string;
-  relationIds?: string[];
 }
 
 export interface DataInputLookupBinding {
@@ -434,7 +434,6 @@ export interface DataInputBinding {
   inputKey: string;
   entityId: string;
   fieldId?: string;
-  relationIds?: string[];
   fields?: DataInputFieldBinding[];
   lookup?: DataInputLookupBinding;
   detailSEO?: DetailSEOFieldBindings;
@@ -457,18 +456,9 @@ export interface DataModelEntity {
   fields: DataModelField[];
 }
 
-export interface DataModelRelation {
-  id: string;
-  name: string;
-  fromEntityId: string;
-  toEntityId: string;
-  cardinality: "one-to-one" | "one-to-many" | "many-to-many";
-}
-
 export interface DataModel {
   formatVersion: 1;
   entities: DataModelEntity[];
-  relations?: DataModelRelation[];
   positions?: Record<string, { x: number; y: number }>;
 }
 
@@ -649,7 +639,6 @@ export interface ModelContentRecord {
   entityId: string;
   sortOrder: number;
   values: JsonObject;
-  relations?: Record<string, string[]>;
 }
 
 export interface ModelContentRecordInput {
@@ -657,7 +646,6 @@ export interface ModelContentRecordInput {
   entityId: string;
   sortOrder: number;
   values: JsonObject;
-  relations?: Record<string, string[]>;
 }
 
 export interface ModelContentSelection {

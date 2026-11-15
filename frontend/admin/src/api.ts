@@ -73,7 +73,6 @@ function normalizeModelContentWorkspace(workspace: ModelContentWorkspace): Model
     records: arrayOrEmpty(workspace?.records).map((record) => ({
       ...record,
       values: record.values ?? {},
-      relations: record.relations ?? {},
     })),
     selections: arrayOrEmpty(workspace?.selections).map((selection) => ({
       ...selection,
@@ -156,7 +155,6 @@ export interface SitepackImportReport {
   modelHistoryRevisions: number;
   remappedModelEntityIds: number;
   remappedModelFieldIds: number;
-  remappedModelRelationIds: number;
   remappedModelRecordIds: number;
   fileIds: Record<string, string>;
   fileIdsTruncated?: boolean;
@@ -165,7 +163,7 @@ export interface SitepackImportReport {
 }
 
 export interface SitepackReportItem {
-	kind: "build" | "file" | "model_entity" | "model_field" | "model_relation" | "model_record";
+  kind: "build" | "file" | "model_entity" | "model_field" | "model_record";
   path: string;
   action: string;
   sourceId?: string;
@@ -397,8 +395,11 @@ export const api = {
   },
 
   tokens: {
-    list(signal?: AbortSignal): Promise<ListResponse<Token>> {
-      return requestList<Token>(`${ADMIN_ROOT}/tokens`, { signal });
+    list(cursor?: string | null, signal?: AbortSignal): Promise<ListResponse<Token>> {
+      return requestList<Token>(`${ADMIN_ROOT}/tokens`, {
+        signal,
+        query: { cursor },
+      });
     },
     get(id: string): Promise<Token> {
       return request<Token>(`${ADMIN_ROOT}/tokens/${encoded(id)}`);

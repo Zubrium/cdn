@@ -42,7 +42,7 @@ describe("DataInputBindingsEditor", () => {
     ] }]);
 
     expect(markup).toContain("Подключение данных модели");
-    expect(markup).toContain("в редакторе контента");
+    expect(markup).toContain("настраиваются в «Контенте»");
     expect(markup).toContain("Товар → Адрес");
     expect(markup).toContain("Товар → Название");
     expect(markup).not.toContain("Изображение · image");
@@ -68,10 +68,10 @@ describe("DataInputBindingsEditor", () => {
     const missingTarget = render([port], [{ inputKey: "products", entityId: "retired-entity", fields: [] }]);
     expect(missingTarget).toContain('id="data-input-products-entity"');
     expect(missingTarget).toContain('aria-invalid="true"');
-    expect(missingTarget).toContain("Сохранённая сущность больше не существует в этой модели.");
+    expect(missingTarget).toContain("Сохранённая модель больше не существует.");
 
     const missingField = render([port], [{ inputKey: "products", entityId: entityID, fields: [] }]);
-    expect(missingField).toContain("Выберите совместимое поле модели для этого входа.");
+    expect(missingField).toContain("Выберите совместимое поле модели.");
     expect(missingField).toContain('id="data-input-products-mapping-0-error"');
   });
 });

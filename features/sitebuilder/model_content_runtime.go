@@ -42,7 +42,6 @@ func projectModelContentWithIndex(model DataModel, manifest Manifest, placement 
 			fields[entity.ID][field.ID] = field
 		}
 	}
-	recordsByID := readIndex.recordsByID
 	var routeArguments map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(arguments))
 	decoder.UseNumber()
@@ -77,7 +76,7 @@ func projectModelContentWithIndex(model DataModel, manifest Manifest, placement 
 				omitValue = true
 			}
 			if chosen != nil {
-				projected, present, err := projectModelFieldValue(model, *chosen, binding.RelationIDs, binding.FieldID, recordsByID)
+				projected, present, err := projectModelFieldValue(entity, *chosen, binding.FieldID)
 				if err != nil {
 					return nil, nil, nil, fmt.Errorf("placement %q scalar input %q: %w", placement.ID, port.Key, err)
 				}
@@ -120,7 +119,7 @@ func projectModelContentWithIndex(model DataModel, manifest Manifest, placement 
 			if chosen == nil {
 				value = map[string]any{}
 			} else {
-				projected, err := projectModelRecord(port, binding, model, recordsByID, *chosen)
+				projected, err := projectModelRecord(port, binding, entity, *chosen)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -146,7 +145,7 @@ func projectModelContentWithIndex(model DataModel, manifest Manifest, placement 
 			}
 			projected := make([]any, 0, len(chosen))
 			for _, record := range chosen {
-				item, err := projectModelRecord(port, binding, model, recordsByID, record)
+				item, err := projectModelRecord(port, binding, entity, record)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -341,19 +340,10 @@ func (index *modelContentReadIndex) recordByLookup(entityID, fieldKey string, va
 	return nil
 }
 
-func findModelRecord(records []ModelContentRecord, id string) *ModelContentRecord {
-	for i := range records {
-		if records[i].ID == id {
-			return &records[i]
-		}
-	}
-	return nil
-}
-
-func projectModelRecord(port DataInputPort, binding DataInputBinding, model DataModel, recordsByID map[string]*ModelContentRecord, record ModelContentRecord) (map[string]any, error) {
+func projectModelRecord(port DataInputPort, binding DataInputBinding, entity DataModelEntity, record ModelContentRecord) (map[string]any, error) {
 	projected := map[string]any{"id": record.ID}
 	for _, mapping := range binding.Fields {
-		value, present, err := projectModelFieldValue(model, record, mapping.RelationIDs, mapping.FieldID, recordsByID)
+		value, present, err := projectModelFieldValue(entity, record, mapping.FieldID)
 		if err != nil {
 			return nil, fmt.Errorf("data input %q references an invalid model path: %w", port.Key, err)
 		}
@@ -371,66 +361,13 @@ func projectModelRecord(port DataInputPort, binding DataInputBinding, model Data
 	return projected, nil
 }
 
-func projectModelFieldValue(model DataModel, record ModelContentRecord, relationIDs []string, fieldID string, recordsByID map[string]*ModelContentRecord) (any, bool, error) {
-	entities := make(map[string]DataModelEntity, len(model.Entities))
-	for _, entity := range model.Entities {
-		entities[entity.ID] = entity
+func projectModelFieldValue(entity DataModelEntity, record ModelContentRecord, fieldID string) (any, bool, error) {
+	field, exists := dataModelFieldByID(entity, fieldID)
+	if !exists {
+		return nil, false, fmt.Errorf("field %q is missing from entity %q", fieldID, entity.ID)
 	}
-	relations := make(map[string]DataModelRelation, len(model.Relations))
-	for _, relation := range model.Relations {
-		relations[relation.ID] = relation
-	}
-	var walk func(ModelContentRecord, int) (any, bool, error)
-	walk = func(current ModelContentRecord, index int) (any, bool, error) {
-		if index == len(relationIDs) {
-			entity, exists := entities[current.EntityID]
-			if !exists {
-				return nil, false, fmt.Errorf("record %q belongs to an unknown entity", current.ID)
-			}
-			field, exists := dataModelFieldByID(entity, fieldID)
-			if !exists {
-				return nil, false, fmt.Errorf("field %q is missing from entity %q", fieldID, entity.ID)
-			}
-			value, present := current.Values[field.Key]
-			return value, present, nil
-		}
-		relation, exists := relations[relationIDs[index]]
-		if !exists || relation.FromEntityID != current.EntityID {
-			return nil, false, fmt.Errorf("relation %q does not start at entity %q", relationIDs[index], current.EntityID)
-		}
-		targetIDs := current.Relations[relation.ID]
-		multi := relation.Cardinality == "one-to-many" || relation.Cardinality == "many-to-many"
-		if multi {
-			values := make([]any, 0, len(targetIDs))
-			for _, targetID := range targetIDs {
-				target := recordsByID[targetID]
-				if target == nil || target.EntityID != relation.ToEntityID {
-					return nil, false, fmt.Errorf("relation %q references a missing or incompatible target", relation.ID)
-				}
-				value, present, err := walk(*target, index+1)
-				if err != nil {
-					return nil, false, err
-				}
-				if !present {
-					value = map[string]any{}
-				}
-				values = append(values, value)
-			}
-			return values, true, nil
-		}
-		if len(targetIDs) == 0 {
-			return nil, false, nil
-		}
-		if len(targetIDs) != 1 {
-			return nil, false, fmt.Errorf("one-to-one relation %q has more than one target", relation.ID)
-		}
-		target := recordsByID[targetIDs[0]]
-		if target == nil || target.EntityID != relation.ToEntityID {
-			return nil, false, fmt.Errorf("relation %q references a missing or incompatible target", relation.ID)
-		}
-		return walk(*target, index+1)
-	}
-	return walk(record, 0)
+	value, present := record.Values[field.Key]
+	return value, present, nil
 }
 
 func setModelInputPath(target map[string]any, segments []string, value any) error {
@@ -457,7 +394,7 @@ func setModelInputPathValue(current any, segments []string, index int, value any
 			if segments[index+1] == "*" {
 				items, ok := value.([]any)
 				if !ok {
-					return nil, fmt.Errorf("path %q expects an array relation value", strings.Join(segments, "/"))
+					return nil, fmt.Errorf("path %q expects an array value", strings.Join(segments, "/"))
 				}
 				child = make([]any, len(items))
 			} else {
@@ -476,7 +413,7 @@ func setModelInputPathValue(current any, segments []string, index int, value any
 		}
 		items, ok := value.([]any)
 		if !ok {
-			return nil, fmt.Errorf("path %q expects an array relation value", strings.Join(segments, "/"))
+			return nil, fmt.Errorf("path %q expects an array value", strings.Join(segments, "/"))
 		}
 		if len(target) != 0 && len(target) != len(items) {
 			return nil, fmt.Errorf("path %q maps arrays with different lengths", strings.Join(segments, "/"))
@@ -490,7 +427,7 @@ func setModelInputPathValue(current any, segments []string, index int, value any
 				if index+1 < len(segments) && segments[index+1] == "*" {
 					nested, ok := items[itemIndex].([]any)
 					if !ok {
-						return nil, fmt.Errorf("path %q expects a nested array relation value", strings.Join(segments, "/"))
+						return nil, fmt.Errorf("path %q expects a nested array value", strings.Join(segments, "/"))
 					}
 					child = make([]any, len(nested))
 				} else {

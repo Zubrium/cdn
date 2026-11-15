@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -78,6 +79,34 @@ type fixture struct {
 	a, b    files.Owner
 }
 
+type reservationAwareReader struct {
+	pool         *pgxpool.Pool
+	ownerID      uuid.UUID
+	reservedByID uuid.UUID
+	reader       io.Reader
+	checked      bool
+	checkErr     error
+}
+
+func (r *reservationAwareReader) Read(p []byte) (int, error) {
+	if !r.checked {
+		r.checked = true
+		var count int
+		reservedByID := r.reservedByID
+		if reservedByID == uuid.Nil {
+			reservedByID = r.ownerID
+		}
+		r.checkErr = r.pool.QueryRow(context.Background(), `SELECT count(*) FROM file_upload_sessions WHERE owner_id=$1 AND reserved_by_id=$2 AND state='uploading'`, r.ownerID, reservedByID).Scan(&count)
+		if r.checkErr == nil && count == 0 {
+			r.checkErr = errors.New("upload body was read before its quota reservation existed")
+		}
+		if r.checkErr != nil {
+			return 0, r.checkErr
+		}
+	}
+	return r.reader.Read(p)
+}
+
 func setup(t *testing.T) *fixture {
 	t.Helper()
 	raw := os.Getenv("TEST_FILES_DATABASE_URL")
@@ -128,7 +157,7 @@ func setup(t *testing.T) *fixture {
 		t.Fatal(e)
 	}
 	t.Cleanup(pool.Close)
-	_, e = pool.Exec(ctx, `CREATE TABLE media_objects(id uuid PRIMARY KEY,object_key text UNIQUE NOT NULL,original_filename text NOT NULL,content_type text NOT NULL,size_bytes bigint NOT NULL,status text NOT NULL,variants jsonb NOT NULL DEFAULT '{}',uploaded_by uuid,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());CREATE TABLE media_renditions(media_id uuid REFERENCES media_objects(id) ON DELETE CASCADE,profile_hash text,status text,outputs jsonb);`)
+	_, e = pool.Exec(ctx, `CREATE TABLE media_objects(id uuid PRIMARY KEY,object_key text UNIQUE NOT NULL,original_filename text NOT NULL,content_type text NOT NULL,size_bytes bigint NOT NULL,status text NOT NULL,variants jsonb NOT NULL DEFAULT '{}',uploaded_by uuid,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());CREATE TABLE media_renditions(media_id uuid REFERENCES media_objects(id) ON DELETE CASCADE,profile_hash text,status text,outputs jsonb);CREATE TABLE feature_builds(id uuid PRIMARY KEY,digest text NOT NULL);`)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -141,7 +170,7 @@ func setup(t *testing.T) *fixture {
 	}
 	t.Setenv("FILES_TEST_KEY_A", "files-test-key-a-at-least-24-chars")
 	t.Setenv("FILES_TEST_KEY_B", "files-test-key-b-at-least-24-chars")
-	cfg := config.FilesConfig{MaxBytes: 1024, PartBytes: 4, UploadTTL: time.Minute, CleanupInterval: time.Second, ProcessingTimeout: time.Minute, OwnerQuotaBytes: 4096, MaxSessions: 5, ListLimit: 2, RateLimit: 1200, RateMaxClients: 100, RateWindow: time.Minute, LinkMaxTTL: time.Minute, PublicBaseURL: "http://example.test", TempDir: t.TempDir(), SigningKey: bytes.Repeat([]byte("s"), 32), Services: []config.FileServiceConfig{{Name: "service-a", Permissions: []string{"upload", "read", "list", "delete", "link"}, Keys: []config.FileSecretRef{{Env: "FILES_TEST_KEY_A"}}}, {Name: "service-b", Permissions: []string{"read", "list"}, Keys: []config.FileSecretRef{{Env: "FILES_TEST_KEY_B"}}}}}
+	cfg := config.FilesConfig{MaxBytes: 1024, PartBytes: 4, UploadTTL: time.Minute, CleanupInterval: time.Second, ProcessingTimeout: time.Minute, OwnerQuotaBytes: 4096, MaxSessions: 5, MaxSessionsPerPrincipal: 5, MaxReservedBytesPerPrincipal: 4096, ListLimit: 2, RateLimit: 1200, RateMaxClients: 100, RateWindow: time.Minute, LinkMaxTTL: time.Minute, PublicBaseURL: "http://example.test", TempDir: t.TempDir(), SigningKey: bytes.Repeat([]byte("s"), 32), Services: []config.FileServiceConfig{{Name: "service-a", Permissions: []string{"upload", "read", "list", "delete", "link"}, Keys: []config.FileSecretRef{{Env: "FILES_TEST_KEY_A"}}}, {Name: "service-b", Permissions: []string{"read", "list"}, Keys: []config.FileSecretRef{{Env: "FILES_TEST_KEY_B"}}}}}
 	store := &memoryStore{objects: map[string][]byte{}}
 	s, e := files.NewService(pool, store, cfg)
 	if e != nil {
@@ -160,6 +189,38 @@ func setup(t *testing.T) *fixture {
 	}
 	return &fixture{s, pool, store, cfg, a, b}
 }
+
+func TestCleanupPreservesCommittedDerivativeAndBuildObjects(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	mediaID := uuid.New()
+	variantKey := "media/" + mediaID.String() + "/card.webp"
+	renditionKey := "media/" + mediaID.String() + "/rendition.webp"
+	buildDigest := strings.Repeat("a", 64)
+	buildKey := "feature-builds/" + buildDigest + "/assets/app.js"
+	for _, key := range []string{variantKey, renditionKey, buildKey} {
+		f.store.objects[key] = []byte("committed")
+	}
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO media_objects(id,object_key,original_filename,content_type,size_bytes,status,variants,owner_id,visibility)
+		VALUES($1,'media/original','original.png','image/png',1,'ready',$2::jsonb,$3,'public');
+		INSERT INTO media_renditions(media_id,profile_hash,status,outputs)
+		VALUES($1,$4,'ready',$5::jsonb);
+		INSERT INTO feature_builds(id,digest) VALUES($6,$7);
+		INSERT INTO file_object_deletions(object_key) VALUES($8),($9),($10);
+		UPDATE file_object_deletions SET created_at=now()-interval '10 minutes' WHERE object_key IN ($8,$9,$10);
+	`, mediaID, `{"card":"`+variantKey+`"}`, uuid.New(), strings.Repeat("b", 64), `{"rendition":{"objectKey":"`+renditionKey+`"}}`, uuid.New(), buildDigest, variantKey, renditionKey, buildKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{variantKey, renditionKey, buildKey} {
+		if _, ok := f.store.objects[key]; !ok {
+			t.Fatalf("cleanup deleted committed object %q", key)
+		}
+	}
+}
 func upload(t *testing.T, f *fixture, data []byte, visibility string) files.Upload {
 	t.Helper()
 	u, e := f.service.CreateUpload(context.Background(), f.a, files.UploadInput{Name: "example.sh", Size: int64(len(data)), SHA256: checksum(data), Visibility: visibility})
@@ -176,6 +237,36 @@ func upload(t *testing.T, f *fixture, data []byte, visibility string) files.Uplo
 	}
 	return u
 }
+
+func TestUploadReservationsAreIsolatedByPrincipal(t *testing.T) {
+	f := setup(t)
+	cfg := f.cfg
+	cfg.MaxSessions = 1
+	cfg.MaxSessionsPerPrincipal = 1
+	cfg.MaxReservedBytesPerPrincipal = 1
+	service, err := files.NewService(f.pool, f.store, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.InitOwners(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	owner := service.AdminOwner()
+	first := uuid.New()
+	second := uuid.New()
+	input := files.UploadInput{Name: "reservation.bin", Size: 1, SHA256: checksum([]byte("a")), Visibility: "private", ReservedByID: first}
+	if _, err = service.CreateUpload(context.Background(), owner, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.CreateUpload(context.Background(), owner, input); !errors.Is(err, files.ErrQuota) {
+		t.Fatalf("same principal exceeded reservation limit: %v", err)
+	}
+	input.ReservedByID = second
+	if _, err = service.CreateUpload(context.Background(), owner, input); err != nil {
+		t.Fatalf("different principal was blocked by another reservation: %v", err)
+	}
+}
+
 func TestResumableIsolationCommitRetryRestartAndQuota(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
@@ -1287,7 +1378,7 @@ func TestAdminFileDeleteRespectsRole(t *testing.T) {
 	wrap := func(fn http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			role := principal.Role(r.Header.Get("X-Test-Role"))
-			fn(w, r.WithContext(principal.WithPrincipal(r.Context(), principal.Principal{Role: role})))
+			fn(w, r.WithContext(principal.WithPrincipal(r.Context(), principal.Principal{TokenID: uuid.New(), Role: role})))
 		})
 	}
 	handler.RegisterAdminRoutes(mux, wrap)
@@ -1303,6 +1394,57 @@ func TestAdminFileDeleteRespectsRole(t *testing.T) {
 	}
 	if code := request("admin"); code != http.StatusNoContent {
 		t.Fatalf("admin delete failed: %d", code)
+	}
+}
+
+func TestUploadStreamReservesQuotaBeforeReadingBody(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	input := []byte("quota is reserved before accepting upload bytes")
+	body := &reservationAwareReader{
+		pool: f.pool, ownerID: f.a.ID, reader: bytes.NewReader(input),
+	}
+	file, err := f.service.UploadStream(ctx, f.a, "reserved.txt", int64(len(input)), "private", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !body.checked || body.checkErr != nil {
+		t.Fatalf("reservation was not checked before reading: %v", body.checkErr)
+	}
+	if file.SHA256 != checksum(input) || file.Size != int64(len(input)) {
+		t.Fatalf("uploaded file metadata does not match source: %+v", file)
+	}
+}
+
+func TestAdminMultipartUploadReservesQuotaBeforeParsingBody(t *testing.T) {
+	f := setup(t)
+	owner := f.service.AdminOwner()
+	tokenID := uuid.New()
+	var body bytes.Buffer
+	multipartWriter := multipart.NewWriter(&body)
+	part, err := multipartWriter.CreateFormFile("file", "before-quota.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("reserve first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := multipartWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader := &reservationAwareReader{pool: f.pool, ownerID: owner.ID, reservedByID: tokenID, reader: bytes.NewReader(body.Bytes())}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/media", reader)
+	request.ContentLength = int64(body.Len())
+	request.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+	request = request.WithContext(principal.WithPrincipal(request.Context(), principal.Principal{TokenID: tokenID, Role: principal.RoleUser}))
+	handler := hfiles.NewHandler(f.service, slog.New(slog.NewTextHandler(io.Discard, nil)), 1<<20)
+	response := httptest.NewRecorder()
+	handler.UploadAdminMedia(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("admin multipart upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !reader.checked || reader.checkErr != nil {
+		t.Fatalf("multipart body was parsed before principal quota reservation: %v", reader.checkErr)
 	}
 }
 
@@ -1340,22 +1482,24 @@ func TestConcurrentDeletionEnforcesOwnership(t *testing.T) {
 
 func TestLoadFilesRequiresOneServicesArray(t *testing.T) {
 	for name, value := range map[string]string{
-		"FILES_MAX_BYTES":         "1024",
-		"FILES_PART_BYTES":        "256",
-		"FILES_OWNER_QUOTA_BYTES": "2048",
-		"FILES_MAX_SESSIONS":      "10",
-		"FILES_LIST_LIMIT":        "10",
-		"FILES_RATE_LIMIT":        "100",
-		"FILES_RATE_MAX_CLIENTS":  "100",
-		"FILES_UPLOAD_TTL":        "1h",
-		"FILES_CLEANUP_INTERVAL":  "1m",
-		"FILES_LINK_MAX_TTL":      "15m",
-		"FILES_PROCESS_TIMEOUT":   "1m",
-		"FILES_RATE_WINDOW":       "1m",
-		"FILES_PUBLIC_BASE_URL":   "http://files.example.test",
-		"FILES_TEMP_DIR":          t.TempDir(),
-		"FILES_SIGNING_KEY_ENV":   "FILES_TEST_SIGNING_KEY",
-		"FILES_TEST_SIGNING_KEY":  strings.Repeat("s", 32),
+		"FILES_MAX_BYTES":                        "1024",
+		"FILES_PART_BYTES":                       "256",
+		"FILES_OWNER_QUOTA_BYTES":                "2048",
+		"FILES_MAX_SESSIONS":                     "10",
+		"FILES_MAX_SESSIONS_PER_PRINCIPAL":       "2",
+		"FILES_MAX_RESERVED_BYTES_PER_PRINCIPAL": "1024",
+		"FILES_LIST_LIMIT":                       "10",
+		"FILES_RATE_LIMIT":                       "100",
+		"FILES_RATE_MAX_CLIENTS":                 "100",
+		"FILES_UPLOAD_TTL":                       "1h",
+		"FILES_CLEANUP_INTERVAL":                 "1m",
+		"FILES_LINK_MAX_TTL":                     "15m",
+		"FILES_PROCESS_TIMEOUT":                  "1m",
+		"FILES_RATE_WINDOW":                      "1m",
+		"FILES_PUBLIC_BASE_URL":                  "http://files.example.test",
+		"FILES_TEMP_DIR":                         t.TempDir(),
+		"FILES_SIGNING_KEY_ENV":                  "FILES_TEST_SIGNING_KEY",
+		"FILES_TEST_SIGNING_KEY":                 strings.Repeat("s", 32),
 	} {
 		t.Setenv(name, value)
 	}

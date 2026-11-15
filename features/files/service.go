@@ -119,6 +119,10 @@ func (s *Service) CreateUpload(ctx context.Context, owner Owner, input UploadInp
 	if owner.ID == uuid.Nil || input.Size < 1 || input.Size > s.cfg.MaxBytes || !validHash(input.SHA256) || (input.Visibility != "public" && input.Visibility != "private") {
 		return Upload{}, ErrInvalid
 	}
+	reservedByID := input.ReservedByID
+	if reservedByID == uuid.Nil {
+		reservedByID = owner.ID
+	}
 	name := sanitizeName(input.Name)
 	if name == "" || len(name) > 255 {
 		return Upload{}, ErrInvalid
@@ -132,19 +136,26 @@ func (s *Service) CreateUpload(ctx context.Context, owner Owner, input UploadInp
 	if e = tx.QueryRow(ctx, `SELECT enabled FROM file_owners WHERE id=$1 FOR UPDATE`, owner.ID).Scan(&enabled); e != nil || !enabled {
 		return Upload{}, ErrForbidden
 	}
-	var used, held int64
+	var used, held, heldByPrincipal int64
 	var sessions int
+	var principalSessions int
 	if e = tx.QueryRow(ctx, `SELECT COALESCE(sum(size_bytes),0) FROM media_objects WHERE owner_id=$1 AND status<>'deleted'`, owner.ID).Scan(&used); e != nil {
 		return Upload{}, e
 	}
 	if e = tx.QueryRow(ctx, `SELECT COALESCE(sum(size_bytes),0),count(*) FROM file_upload_sessions WHERE owner_id=$1 AND state='uploading' AND expires_at>now()`, owner.ID).Scan(&held, &sessions); e != nil {
 		return Upload{}, e
 	}
-	if input.Size > s.cfg.OwnerQuotaBytes-used-held || sessions >= s.cfg.MaxSessions {
+	if e = tx.QueryRow(ctx, `SELECT COALESCE(sum(size_bytes),0),count(*) FROM file_upload_sessions WHERE reserved_by_id=$1 AND state='uploading' AND expires_at>now()`, reservedByID).Scan(&heldByPrincipal, &principalSessions); e != nil {
+		return Upload{}, e
+	}
+	if input.Size > s.cfg.OwnerQuotaBytes-used-held ||
+		sessions >= s.cfg.MaxSessions ||
+		input.Size > s.cfg.MaxReservedBytesPerPrincipal-heldByPrincipal ||
+		principalSessions >= s.cfg.MaxSessionsPerPrincipal {
 		return Upload{}, ErrQuota
 	}
 	u := Upload{ID: uuid.New(), FileID: uuid.New(), OwnerID: owner.ID, Name: name, Size: input.Size, SHA256: input.SHA256, Visibility: input.Visibility, PartSize: s.cfg.PartBytes, State: "uploading", ExpiresAt: time.Now().UTC().Add(s.cfg.UploadTTL), Parts: []Part{}}
-	_, e = tx.Exec(ctx, `INSERT INTO file_upload_sessions(id,file_id,owner_id,name,size_bytes,sha256,visibility,part_bytes,state,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, u.ID, u.FileID, u.OwnerID, u.Name, u.Size, u.SHA256, u.Visibility, u.PartSize, u.State, u.ExpiresAt)
+	_, e = tx.Exec(ctx, `INSERT INTO file_upload_sessions(id,file_id,owner_id,reserved_by_id,name,size_bytes,sha256,visibility,part_bytes,state,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, u.ID, u.FileID, u.OwnerID, reservedByID, u.Name, u.Size, u.SHA256, u.Visibility, u.PartSize, u.State, u.ExpiresAt)
 	if e != nil {
 		return Upload{}, e
 	}
@@ -153,6 +164,50 @@ func (s *Service) CreateUpload(ctx context.Context, owner Owner, input UploadInp
 	}
 	return u, tx.Commit(ctx)
 }
+
+// FinalizeUpload replaces an internal conservative reservation with the
+// verified size, digest, name, and visibility after the body has been staged.
+// It only shrinks an upload that has no uploaded parts, so quota cannot grow
+// after the request starts consuming temporary storage.
+func (s *Service) FinalizeUpload(ctx context.Context, owner Owner, id uuid.UUID, input UploadInput) (Upload, error) {
+	if input.Size < 1 || input.Size > s.cfg.MaxBytes || !validHash(input.SHA256) || (input.Visibility != "public" && input.Visibility != "private") {
+		return Upload{}, ErrInvalid
+	}
+	name := sanitizeName(input.Name)
+	if name == "" || len(name) > 255 {
+		return Upload{}, ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Upload{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	u, err := uploadStatus(ctx, tx, owner, id, true)
+	if err != nil {
+		return Upload{}, err
+	}
+	if err := canUpload(u); err != nil {
+		return Upload{}, err
+	}
+	if input.Size > u.Size {
+		return Upload{}, ErrQuota
+	}
+	if len(u.Parts) != 0 {
+		return Upload{}, ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `UPDATE file_upload_sessions SET name=$3,size_bytes=$4,sha256=$5,visibility=$6,updated_at=now() WHERE id=$1 AND owner_id=$2 AND state='uploading'`, id, owner.ID, name, input.Size, input.SHA256, input.Visibility); err != nil {
+		return Upload{}, err
+	}
+	u, err = uploadStatus(ctx, tx, owner, id, false)
+	if err != nil {
+		return Upload{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Upload{}, err
+	}
+	return u, nil
+}
+
 func (s *Service) UploadStatus(ctx context.Context, owner Owner, id uuid.UUID) (Upload, error) {
 	return uploadStatus(ctx, s.pool, owner, id, false)
 }
@@ -356,6 +411,9 @@ func (s *Service) Commit(ctx context.Context, owner Owner, id uuid.UUID) (File, 
 		if closeErr != nil {
 			return File{}, closeErr
 		}
+	}
+	if e = validateOriginalRaster(contentType, prefix.data); e != nil {
+		return File{}, fmt.Errorf("%w: raster dimensions are not supported", ErrInvalid)
 	}
 	key := "media/" + u.FileID.String() + "/original"
 	opts := storage.PutOptions{ContentType: contentType, CacheControl: "private, no-store"}
@@ -599,7 +657,10 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	if e = tx.Commit(ctx); e != nil {
 		return e
 	}
-	rows, e = s.pool.Query(ctx, `SELECT object_key FROM file_object_deletions ORDER BY created_at`)
+	// Staged object writes queue their cleanup key before the external write.
+	// A grace window lets a successful database registration publish its
+	// reference before cleanup can inspect the key.
+	rows, e = s.pool.Query(ctx, `SELECT object_key FROM file_object_deletions WHERE created_at < now() - interval '5 minutes' ORDER BY created_at`)
 	if e != nil {
 		return e
 	}
@@ -618,7 +679,21 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	}
 	for _, key := range keys { // A committed ready file always wins over a stale reservation.
 		var used bool
-		if e = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM media_objects WHERE object_key=$1 AND status='ready' UNION ALL SELECT 1 FROM file_upload_sessions WHERE state='uploading' AND 'media/'||file_id::text||'/original'=$1)`, key).Scan(&used); e != nil {
+		if e = s.pool.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM media_objects WHERE object_key=$1 AND status='ready'
+				UNION ALL
+				SELECT 1 FROM file_upload_sessions WHERE state='uploading' AND 'media/'||file_id::text||'/original'=$1
+				UNION ALL
+				SELECT 1 FROM media_objects m, LATERAL jsonb_each_text(m.variants) variant
+				 WHERE m.status='ready' AND variant.value=$1
+				UNION ALL
+				SELECT 1 FROM media_renditions r, LATERAL jsonb_each(r.outputs) output
+				 WHERE r.status='ready' AND output.value->>'objectKey'=$1
+				UNION ALL
+				SELECT 1 FROM feature_builds b
+				 WHERE $1 LIKE 'feature-builds/'||b.digest||'/%'
+			)`, key).Scan(&used); e != nil {
 			return e
 		}
 		if used {

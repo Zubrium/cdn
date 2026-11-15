@@ -100,7 +100,6 @@ const sitepackKindLabels: Record<SitepackImportReport["items"][number]["kind"], 
   file: "Файл",
   model_entity: "Сущность модели",
   model_field: "Поле модели",
-  model_relation: "Связь модели",
   model_record: "Запись модели",
 };
 

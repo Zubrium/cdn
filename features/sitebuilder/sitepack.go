@@ -95,22 +95,21 @@ type sitepackIndex struct {
 	Files         []packFile        `json:"files"`
 }
 type SitepackReport struct {
-	Snapshot                 SnapshotRecord       `json:"snapshot"`
-	NewBuilds                int                  `json:"newBuilds"`
-	ReusedBuilds             int                  `json:"reusedBuilds"`
-	NewFiles                 int                  `json:"newFiles"`
-	ReusedFiles              int                  `json:"reusedFiles"`
-	ModelPublishedRecords    int                  `json:"modelPublishedRecords"`
-	ModelDraftRecords        int                  `json:"modelDraftRecords"`
-	ModelHistoryRevisions    int                  `json:"modelHistoryRevisions"`
-	RemappedModelEntityIDs   int                  `json:"remappedModelEntityIds"`
-	RemappedModelFieldIDs    int                  `json:"remappedModelFieldIds"`
-	RemappedModelRelationIDs int                  `json:"remappedModelRelationIds"`
-	RemappedModelRecordIDs   int                  `json:"remappedModelRecordIds"`
-	FileIDs                  map[string]string    `json:"fileIds"`
-	FileIDsTruncated         bool                 `json:"fileIdsTruncated,omitempty"`
-	Items                    []SitepackReportItem `json:"items"`
-	ItemsTruncated           bool                 `json:"itemsTruncated,omitempty"`
+	Snapshot               SnapshotRecord       `json:"snapshot"`
+	NewBuilds              int                  `json:"newBuilds"`
+	ReusedBuilds           int                  `json:"reusedBuilds"`
+	NewFiles               int                  `json:"newFiles"`
+	ReusedFiles            int                  `json:"reusedFiles"`
+	ModelPublishedRecords  int                  `json:"modelPublishedRecords"`
+	ModelDraftRecords      int                  `json:"modelDraftRecords"`
+	ModelHistoryRevisions  int                  `json:"modelHistoryRevisions"`
+	RemappedModelEntityIDs int                  `json:"remappedModelEntityIds"`
+	RemappedModelFieldIDs  int                  `json:"remappedModelFieldIds"`
+	RemappedModelRecordIDs int                  `json:"remappedModelRecordIds"`
+	FileIDs                map[string]string    `json:"fileIds"`
+	FileIDsTruncated       bool                 `json:"fileIdsTruncated,omitempty"`
+	Items                  []SitepackReportItem `json:"items"`
+	ItemsTruncated         bool                 `json:"itemsTruncated,omitempty"`
 }
 
 // SitepackReportItem reports only structural changes. It deliberately omits
@@ -716,7 +715,7 @@ func (s *SnapshotService) ImportSitepack(ctx context.Context, actor uuid.UUID, b
 		return report, rejectSitepack("snapshot.payload", "invalid_snapshot_payload", "Конфигурация, контент или схема снапшота несовместимы")
 	}
 	if err := validateSitepackModelContent(&index); err != nil {
-		return report, rejectSitepack("modelContent", "invalid_model_content", "Модель, записи, связи или история публикаций некорректны")
+		return report, rejectSitepack("modelContent", "invalid_model_content", "Модель, записи или история публикаций некорректны")
 	}
 	modelIDs, err := remapSitepackModelIdentities(&index)
 	if err != nil {
@@ -726,7 +725,7 @@ func (s *SnapshotService) ImportSitepack(ctx context.Context, actor uuid.UUID, b
 		return report, rejectSitepack("snapshot.config", "invalid_snapshot_config", "Конфигурация сайта не соответствует закреплённым сборкам")
 	}
 	if err := validateSitepackModelContent(&index); err != nil {
-		return report, rejectSitepack("modelContent", "invalid_model_content", "Переназначенные модель, записи или связи не прошли повторную проверку")
+		return report, rejectSitepack("modelContent", "invalid_model_content", "Переназначенные модель и записи не прошли повторную проверку")
 	}
 	if err := seedSitepackSingletonDraft(&index); err != nil {
 		return report, rejectSitepack("modelContent.draftRecords", "invalid_singleton_draft", "Черновик должен содержать одну запись для каждой singleton-сущности")
@@ -737,7 +736,6 @@ func (s *SnapshotService) ImportSitepack(ctx context.Context, actor uuid.UUID, b
 		report.ModelHistoryRevisions = len(index.ModelContent.History)
 		report.RemappedModelEntityIDs = len(modelIDs.entities)
 		report.RemappedModelFieldIDs = len(modelIDs.fields)
-		report.RemappedModelRelationIDs = len(modelIDs.relations)
 		report.RemappedModelRecordIDs = len(modelIDs.records)
 	}
 	references, err := checkPackReferences(&index)
@@ -764,17 +762,27 @@ func (s *SnapshotService) ImportSitepack(ctx context.Context, actor uuid.UUID, b
 	// its pinned manifests, and all editorial/design data have passed preflight.
 	// A later DB race can still reject registration; these build keys are
 	// immutable and safe to reuse on retry.
+	buildKeys := []string{}
 	for i, archive := range archives {
 		blob := index.Builds[i]
 		raw, err := readEntry(entries[blob.Path])
 		if err != nil {
 			return report, err
 		}
-		if err := s.builds.store.Put(ctx, path.Join("feature-builds", archive.Digest, "artifact.zip"), bytes.NewReader(raw), blob.Size, storage.PutOptions{ContentType: "application/zip", CacheControl: "private, no-store"}); err != nil {
+		artifactKey := path.Join("feature-builds", archive.Digest, "artifact.zip")
+		if err := s.builds.queueObjectDeletions(ctx, []string{artifactKey}); err != nil {
+			return report, err
+		}
+		buildKeys = append(buildKeys, artifactKey)
+		if err := s.builds.store.Put(ctx, artifactKey, bytes.NewReader(raw), blob.Size, storage.PutOptions{ContentType: "application/zip", CacheControl: "private, no-store"}); err != nil {
 			return report, err
 		}
 		for _, asset := range archive.Assets {
 			key := path.Join("feature-builds", archive.Digest, asset.Path)
+			if err := s.builds.queueObjectDeletions(ctx, []string{key}); err != nil {
+				return report, err
+			}
+			buildKeys = append(buildKeys, key)
 			if err := s.builds.store.Put(ctx, key, bytes.NewReader(asset.Data), asset.Size, storage.PutOptions{ContentType: asset.ContentType, CacheControl: "public, max-age=31536000, immutable"}); err != nil {
 				return report, err
 			}
@@ -1053,6 +1061,7 @@ func (s *SnapshotService) ImportSitepack(ctx context.Context, actor uuid.UUID, b
 		return report, err
 	}
 	committed = true
+	_ = s.builds.clearObjectDeletions(context.Background(), buildKeys)
 	report.Snapshot = record
 	return report, nil
 }

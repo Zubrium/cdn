@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "@/api";
 import { ErrorState, LoadingPage, useDocumentTitle } from "@/components/common/page";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import type { SiteSnapshot } from "@/types";
 import { ModelContentEditor, modelWorkspaceQueryKey } from "./model-content-editor";
 
 function DataModelSetupPage({ snapshot }: { snapshot?: SiteSnapshot }) {
+  useDocumentTitle("Контент");
   const target = snapshot ? `/site/data-model?snapshot=${encodeURIComponent(snapshot.id)}` : "/site";
   const hasSnapshot = Boolean(snapshot);
   return <div className="page-grid">
@@ -27,8 +28,10 @@ function DataModelSetupPage({ snapshot }: { snapshot?: SiteSnapshot }) {
 }
 
 export default function ContentHomePage() {
-  useDocumentTitle("Редактор контента");
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { entityKey = "", recordId = "" } = useParams();
   const queryClient = useQueryClient();
   const snapshotQuery = useQuery({
     queryKey: queryKeys.content.snapshots,
@@ -64,19 +67,25 @@ export default function ContentHomePage() {
   if (modelQuery.error) return <div className="page-grid"><ErrorState error={modelQuery.error} title="Не удалось загрузить контент снапшота" onRetry={() => void modelQuery.refetch()} /></div>;
   if (!modelQuery.data?.dataModel) return <DataModelSetupPage snapshot={selectedSnapshot ?? undefined} />;
 
+  const view = location.pathname === "/content/placements"
+    ? "placements"
+    : recordId
+      ? "record"
+      : entityKey
+        ? "entity"
+        : "overview";
+
   return <ModelContentEditor
     key={snapshotId}
     snapshots={snapshots}
     workspace={modelQuery.data}
+    view={view}
+    entityKey={entityKey}
+    recordId={recordId}
     onSnapshotChange={(nextId) => {
-      setSearchParams((current) => {
-        const next = new URLSearchParams(current);
-        next.set("snapshot", nextId);
-        next.delete("feature");
-        next.delete("record");
-        next.delete("settings");
-        return next;
-      });
+      const next = new URLSearchParams();
+      next.set("snapshot", nextId);
+      navigate({ pathname: "/content", search: `?${next}` });
       void queryClient.invalidateQueries({ queryKey: modelWorkspaceQueryKey(nextId) });
     }}
   />;

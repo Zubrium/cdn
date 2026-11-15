@@ -166,7 +166,7 @@ func run(log *slog.Logger) error {
 
 	formsRepo := forms.NewRepository(pool)
 	formsService := forms.NewService(formsRepo, featureRepo)
-	if err := formsService.SetLimits(pagination.AdminPageSize, pagination.SubmissionExportMaxRows); err != nil {
+	if err := formsService.SetLimits(pagination.AdminPageSize, pagination.SubmissionExportMaxRows, pagination.SubmissionExportMaxBytes); err != nil {
 		return fmt.Errorf("form limits: %w", err)
 	}
 	formsService.SetSnapshotSchemaProvider(snapshotService)
@@ -182,7 +182,7 @@ func run(log *slog.Logger) error {
 	sitepackHandler := hsitebuilder.NewSitepackHandler(snapshotService, sitebuilder.SitepackOptions{TempDir: sitepackCfg.TempDir, MaxBytes: sitepackCfg.MaxBytes, MaxExpandedBytes: sitepackCfg.MaxExpandedBytes, MaxEntries: sitepackCfg.MaxEntries, MaxIndexBytes: sitepackCfg.MaxIndexBytes, MaxSVGBytes: sitepackCfg.MaxSVGBytes, MaxBrowserBlobBytes: sitepackCfg.MaxBrowserBlobBytes}, log)
 
 	mediaRepo := media.NewRepository(pool)
-	processor, err := media.NewFFmpegProcessorWithSettings(filesCfg.TempDir, filesCfg.ProcessingTimeout)
+	processor, err := media.NewFFmpegProcessorWithSettings(filesCfg.TempDir, filesCfg.ProcessingTimeout, filesCfg.MaxBytes)
 	if err != nil {
 		return fmt.Errorf("media processor: %w", err)
 	}
@@ -220,16 +220,17 @@ func run(log *slog.Logger) error {
 	authHandler := hauth.NewHandler(authService, log, cfg.MaxJSONBytes)
 
 	settingsService := settings.NewService(settings.Config{
-		MaxJSONBytes:            cfg.MaxJSONBytes,
-		MaxUploadBytes:          cfg.MaxUploadBytes,
-		FormRateLimit:           cfg.FormRateLimit,
-		FormRateWindowSeconds:   int(cfg.FormRateWindow / time.Second),
-		PublicCORSOrigins:       corsOrigins,
-		AdminPageSize:           pagination.AdminPageSize,
-		PublicPageSize:          pagination.PublicPageSize,
-		SubmissionExportMaxRows: pagination.SubmissionExportMaxRows,
-		AcceptedContentTypes:    media.AcceptedContentTypes(),
-		ImageVariants:           media.ImageVariantNames(),
+		MaxJSONBytes:             cfg.MaxJSONBytes,
+		MaxUploadBytes:           cfg.MaxUploadBytes,
+		FormRateLimit:            cfg.FormRateLimit,
+		FormRateWindowSeconds:    int(cfg.FormRateWindow / time.Second),
+		PublicCORSOrigins:        corsOrigins,
+		AdminPageSize:            pagination.AdminPageSize,
+		PublicPageSize:           pagination.PublicPageSize,
+		SubmissionExportMaxRows:  pagination.SubmissionExportMaxRows,
+		SubmissionExportMaxBytes: pagination.SubmissionExportMaxBytes,
+		AcceptedContentTypes:     media.AcceptedContentTypes(),
+		ImageVariants:            media.ImageVariantNames(),
 	})
 	settingsHandler := hsettings.NewHandler(settingsService)
 

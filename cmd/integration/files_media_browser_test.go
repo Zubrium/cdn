@@ -86,7 +86,7 @@ func newFileMediaHarness(t *testing.T, env *testEnv) *fileMediaHarness {
 	filesConfig := config.FilesConfig{
 		MaxBytes: 16 << 20, PartBytes: 1 << 20,
 		UploadTTL: 2 * time.Minute, CleanupInterval: time.Minute, ProcessingTimeout: time.Minute,
-		OwnerQuotaBytes: 64 << 20, MaxSessions: 8, ListLimit: 20,
+		OwnerQuotaBytes: 64 << 20, MaxSessions: 8, MaxSessionsPerPrincipal: 8, MaxReservedBytesPerPrincipal: 64 << 20, ListLimit: 20,
 		RateLimit: 1200, RateMaxClients: 100, RateWindow: time.Minute,
 		LinkMaxTTL: 15 * time.Minute, PublicBaseURL: baseURL, TempDir: t.TempDir(),
 		SigningKey: bytes.Repeat([]byte("file-media-qa-signing-key-"), 2),

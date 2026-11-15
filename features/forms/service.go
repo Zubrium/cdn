@@ -40,12 +40,19 @@ func (e *ExportLimitError) Error() string {
 	return fmt.Sprintf("Экспорт превышает настроенный предел (%d строк). Уточните фильтры", e.MaxRows)
 }
 
+type ExportByteLimitError struct{ MaxBytes int64 }
+
+func (e *ExportByteLimitError) Error() string {
+	return fmt.Sprintf("Экспорт превышает настроенный предел объёма данных (%d байт). Уточните фильтры", e.MaxBytes)
+}
+
 type Service struct {
-	repo          *Repository
-	featureRepo   *features.Repository
-	schemas       SnapshotSchemaProvider
-	maxPageSize   int
-	exportMaxRows int
+	repo           *Repository
+	featureRepo    *features.Repository
+	schemas        SnapshotSchemaProvider
+	maxPageSize    int
+	exportMaxRows  int
+	exportMaxBytes int64
 }
 
 type SnapshotSchemaProvider interface {
@@ -202,7 +209,7 @@ func (s *Service) List(ctx context.Context, key string, filter ListFilter) ([]Su
 // Export rejects a result set above its configured ceiling rather than
 // returning a CSV that silently omits matching submissions.
 func (s *Service) Export(ctx context.Context, key string, filter ListFilter) ([]Submission, []FieldDefinition, error) {
-	if s.maxPageSize < 1 || s.exportMaxRows < 1 {
+	if s.maxPageSize < 1 || s.exportMaxRows < 1 || s.exportMaxBytes < 1 {
 		return nil, nil, errors.New("submission pagination and export limits are not configured")
 	}
 	_, form, fields, err := s.formContext(ctx, filter.Environment, key)
@@ -222,9 +229,13 @@ func (s *Service) Export(ctx context.Context, key string, filter ListFilter) ([]
 	items, err := s.repo.List(ctx, s.repo.pool, ListParams{
 		FeatureID: form.FeatureID, Environment: filter.Environment, Status: filter.Status, CreatedFrom: filter.CreatedFrom,
 		CreatedTo: filter.CreatedTo, SearchFields: searchFields, Search: filter.Search,
-		IncludeArchived: filter.IncludeArchived, SortAsc: filter.Sort == "asc", Limit: s.exportMaxRows + 1,
+		IncludeArchived: filter.IncludeArchived, SortAsc: filter.Sort == "asc",
+		Limit: s.exportMaxRows + 1, MaxDataBytes: s.exportMaxBytes,
 	})
 	if err != nil {
+		if errors.Is(err, ErrExportTooLarge) {
+			return nil, nil, &ExportByteLimitError{MaxBytes: s.exportMaxBytes}
+		}
 		return nil, nil, err
 	}
 	if len(items) > s.exportMaxRows {
@@ -439,11 +450,19 @@ func (s *Service) BranchChoices(ctx context.Context) ([]BranchChoice, error) {
 }
 
 // SetLimits binds production behavior to explicit operator configuration.
-func (s *Service) SetLimits(maxPageSize, exportMaxRows int) error {
-	if maxPageSize < 1 || exportMaxRows < 1 || exportMaxRows == int(^uint(0)>>1) {
-		return errors.New("submission page and export limits must be positive")
+func (s *Service) SetLimits(maxPageSize, exportMaxRows int, exportMaxBytes ...int64) error {
+	maxBytes := int64(64 << 20)
+	if len(exportMaxBytes) > 1 {
+		return errors.New("exactly one aggregate export byte limit may be configured")
+	}
+	if len(exportMaxBytes) == 1 {
+		maxBytes = exportMaxBytes[0]
+	}
+	if maxPageSize < 1 || exportMaxRows < 1 || exportMaxRows == int(^uint(0)>>1) || maxBytes < 1 {
+		return errors.New("submission page, row, and aggregate byte export limits must be positive")
 	}
 	s.maxPageSize = maxPageSize
 	s.exportMaxRows = exportMaxRows
+	s.exportMaxBytes = maxBytes
 	return nil
 }

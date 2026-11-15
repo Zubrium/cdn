@@ -66,12 +66,22 @@ func (s *BuildService) Import(ctx context.Context, actor uuid.UUID, body []byte)
 	if err != nil {
 		return BuildRecord{}, false, err
 	}
-	if err := s.store.Put(ctx, path.Join("feature-builds", archive.Digest, "artifact.zip"), bytes.NewReader(body), int64(len(body)), storage.PutOptions{ContentType: "application/zip", CacheControl: "private, no-store"}); err != nil {
+	stagedKeys := make([]string, 0, len(archive.Assets)+1)
+	artifactKey := path.Join("feature-builds", archive.Digest, "artifact.zip")
+	if err := s.queueObjectDeletions(ctx, []string{artifactKey}); err != nil {
+		return BuildRecord{}, false, err
+	}
+	stagedKeys = append(stagedKeys, artifactKey)
+	if err := s.store.Put(ctx, artifactKey, bytes.NewReader(body), int64(len(body)), storage.PutOptions{ContentType: "application/zip", CacheControl: "private, no-store"}); err != nil {
 		return BuildRecord{}, false, fmt.Errorf("store source feature archive: %w", err)
 	}
 	assets := make(map[string]AssetRecord, len(archive.Assets))
 	for _, asset := range archive.Assets {
 		objectKey := path.Join("feature-builds", archive.Digest, asset.Path)
+		if err := s.queueObjectDeletions(ctx, []string{objectKey}); err != nil {
+			return BuildRecord{}, false, err
+		}
+		stagedKeys = append(stagedKeys, objectKey)
 		if err := s.store.Put(ctx, objectKey, bytes.NewReader(asset.Data), asset.Size, storage.PutOptions{
 			ContentType: asset.ContentType, CacheControl: "public, max-age=31536000, immutable",
 		}); err != nil {
@@ -95,7 +105,26 @@ func (s *BuildService) Import(ctx context.Context, actor uuid.UUID, body []byte)
 	if err := tx.Commit(ctx); err != nil {
 		return BuildRecord{}, false, err
 	}
+	_ = s.clearObjectDeletions(context.Background(), stagedKeys)
 	return record, created, nil
+}
+
+func (s *BuildService) queueObjectDeletions(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO file_object_deletions(object_key) VALUES($1) ON CONFLICT DO NOTHING`, key); err != nil {
+			return fmt.Errorf("queue feature-build staging cleanup: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *BuildService) clearObjectDeletions(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if _, err := s.pool.Exec(ctx, `DELETE FROM file_object_deletions WHERE object_key=$1`, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RegisterArchiveTx registers a verified, already-staged archive in the

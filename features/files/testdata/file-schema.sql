@@ -20,6 +20,7 @@ CREATE TABLE file_upload_sessions (
     id uuid PRIMARY KEY,
     file_id uuid NOT NULL UNIQUE,
     owner_id uuid NOT NULL REFERENCES file_owners(id),
+    reserved_by_id uuid NOT NULL,
     name text NOT NULL,
     size_bytes bigint NOT NULL CHECK(size_bytes>0 AND size_bytes<=5368709120),
     sha256 text NOT NULL CHECK(sha256 ~ '^[a-f0-9]{64}$'),

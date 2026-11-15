@@ -3,16 +3,17 @@ package settings
 // Config carries only the non-sensitive runtime values needed to build the
 // payload. The caller decides which values to pass in.
 type Config struct {
-	MaxJSONBytes            int64
-	MaxUploadBytes          int64
-	FormRateLimit           int
-	FormRateWindowSeconds   int
-	PublicCORSOrigins       []string
-	AdminPageSize           int
-	PublicPageSize          int
-	SubmissionExportMaxRows int
-	AcceptedContentTypes    []string
-	ImageVariants           []string
+	MaxJSONBytes             int64
+	MaxUploadBytes           int64
+	FormRateLimit            int
+	FormRateWindowSeconds    int
+	PublicCORSOrigins        []string
+	AdminPageSize            int
+	PublicPageSize           int
+	SubmissionExportMaxRows  int
+	SubmissionExportMaxBytes int64
+	AcceptedContentTypes     []string
+	ImageVariants            []string
 }
 
 // Service builds the sanitized settings payload. It has no storage: the
@@ -48,13 +49,14 @@ func build(cfg Config) Settings {
 	}
 	return Settings{
 		Limits: Limits{
-			MaxJSONBytes:            cfg.MaxJSONBytes,
-			MaxUploadBytes:          cfg.MaxUploadBytes,
-			FormRateLimit:           cfg.FormRateLimit,
-			FormRateWindowSeconds:   cfg.FormRateWindowSeconds,
-			AdminPageSize:           cfg.AdminPageSize,
-			PublicPageSize:          cfg.PublicPageSize,
-			SubmissionExportMaxRows: cfg.SubmissionExportMaxRows,
+			MaxJSONBytes:             cfg.MaxJSONBytes,
+			MaxUploadBytes:           cfg.MaxUploadBytes,
+			FormRateLimit:            cfg.FormRateLimit,
+			FormRateWindowSeconds:    cfg.FormRateWindowSeconds,
+			AdminPageSize:            cfg.AdminPageSize,
+			PublicPageSize:           cfg.PublicPageSize,
+			SubmissionExportMaxRows:  cfg.SubmissionExportMaxRows,
+			SubmissionExportMaxBytes: cfg.SubmissionExportMaxBytes,
 		},
 		PublicAPI: PublicAPI{
 			RuntimePath: "/api/v2/runtime?path={path}",

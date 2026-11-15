@@ -165,13 +165,14 @@ func TestLoadPaginationRequiresPositiveConfiguredBounds(t *testing.T) {
 		t.Setenv("ADMIN_PAGE_SIZE", "200")
 		t.Setenv("PUBLIC_PAGE_SIZE", "50")
 		t.Setenv("SUBMISSION_EXPORT_MAX_ROWS", "10000")
+		t.Setenv("SUBMISSION_EXPORT_MAX_BYTES", "67108864")
 	}
 	setPaginationConfig(t)
 	cfg, err := LoadPagination()
-	if err != nil || cfg.AdminPageSize != 200 || cfg.PublicPageSize != 50 || cfg.SubmissionExportMaxRows != 10000 {
+	if err != nil || cfg.AdminPageSize != 200 || cfg.PublicPageSize != 50 || cfg.SubmissionExportMaxRows != 10000 || cfg.SubmissionExportMaxBytes != 67108864 {
 		t.Fatalf("LoadPagination() = %+v, %v", cfg, err)
 	}
-	for key := range map[string]bool{"ADMIN_PAGE_SIZE": true, "PUBLIC_PAGE_SIZE": true, "SUBMISSION_EXPORT_MAX_ROWS": true} {
+	for key := range map[string]bool{"ADMIN_PAGE_SIZE": true, "PUBLIC_PAGE_SIZE": true, "SUBMISSION_EXPORT_MAX_ROWS": true, "SUBMISSION_EXPORT_MAX_BYTES": true} {
 		t.Run("missing_"+key, func(t *testing.T) {
 			setPaginationConfig(t)
 			t.Setenv(key, "")
@@ -190,7 +191,7 @@ func setFilesConfig(t *testing.T) {
 	t.Helper()
 	values := map[string]string{
 		"FILES_MAX_BYTES": "5368709120", "FILES_PART_BYTES": "8388608", "FILES_OWNER_QUOTA_BYTES": "53687091200",
-		"FILES_MAX_SESSIONS": "10", "FILES_LIST_LIMIT": "100", "FILES_RATE_LIMIT": "1200", "FILES_RATE_MAX_CLIENTS": "10000",
+		"FILES_MAX_SESSIONS": "10", "FILES_MAX_SESSIONS_PER_PRINCIPAL": "2", "FILES_MAX_RESERVED_BYTES_PER_PRINCIPAL": "10737418240", "FILES_LIST_LIMIT": "100", "FILES_RATE_LIMIT": "1200", "FILES_RATE_MAX_CLIENTS": "10000",
 		"FILES_UPLOAD_TTL": "24h", "FILES_CLEANUP_INTERVAL": "5m", "FILES_LINK_MAX_TTL": "15m", "FILES_PROCESS_TIMEOUT": "15m", "FILES_RATE_WINDOW": "1m",
 		"FILES_TEMP_DIR": t.TempDir(), "FILES_PUBLIC_BASE_URL": "http://localhost:8080", "FILES_SIGNING_KEY_ENV": "TEST_FILES_SIGNING_KEY", "FILE_SERVICES": "[]",
 	}

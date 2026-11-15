@@ -33,7 +33,7 @@ export const queryKeys = {
   },
   tokens: {
     all: ["tokens"] as const,
-    list: () => ["tokens", "list"] as const,
+    list: (principalID: string) => ["tokens", "list", principalID] as const,
     detail: (id: string) => ["tokens", "detail", id] as const,
   },
   overview: ["overview"] as const,

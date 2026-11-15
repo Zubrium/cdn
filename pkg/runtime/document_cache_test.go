@@ -147,6 +147,37 @@ func TestDocumentHandlerDoesNotCacheWorkerFailureFallback(t *testing.T) {
 	}
 }
 
+func TestDocumentHandlerSkipsPrerenderForUncacheableQueryRequests(t *testing.T) {
+	dir := t.TempDir()
+	renderer, err := NewPrerenderer("http://127.0.0.1:12345", PrerenderOptions{
+		NodePath: filepath.Join(dir, "missing-node"), WorkerPath: "unused-worker",
+		PlaywrightModule: "unused-module", BrowserPath: "unused-browser",
+		Timeout: time.Second, AttemptTimeout: time.Second, MaxAttempts: 1,
+		QuietInterval: 10 * time.Millisecond, CacheTTL: time.Minute,
+		Concurrency: 1, QueueSize: 1, CacheEntries: 1, MaxHTMLBytes: 4096,
+		HeapMB: 32, ViewportWidth: 320, ViewportHeight: 240, MaxRequests: 4,
+		MaxNetworkBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := []byte("<!DOCTYPE html><html><body>client shell</body></html>")
+	handler := DocumentHandler("", func(context.Context, string, string) (Document, error) {
+		return Document{
+			HTML: shell, Status: http.StatusOK, CacheKey: "query-sensitive",
+			SnapshotID: "snapshot", Cacheable: false,
+		}, nil
+	}, renderer, time.Hour)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/search?q=one", nil))
+	if response.Code != http.StatusOK || response.Body.String() != string(shell) {
+		t.Fatalf("query request did not receive the client shell: status=%d body=%q", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("X-Engine-Prerender"); got != "" {
+		t.Fatalf("uncacheable query request unexpectedly invoked prerender: %q", got)
+	}
+}
+
 func TestDocumentHandlerSkipsExternalBackendPrerenderAndLimitsCSPOrigins(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "worker-called")

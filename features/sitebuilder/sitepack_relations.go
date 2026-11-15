@@ -13,7 +13,6 @@ import (
 type sitepackModelIDRemap struct {
 	entities     map[string]string
 	fields       map[string]string
-	relations    map[string]string
 	records      map[string]string
 	publications map[uuid.UUID]uuid.UUID
 }
@@ -178,7 +177,7 @@ func validateSitepackHistoricalModelState(model DataModel, placements []ModelCon
 
 func remapSitepackModelIdentities(index *sitepackIndex) (sitepackModelIDRemap, error) {
 	result := sitepackModelIDRemap{
-		entities: map[string]string{}, fields: map[string]string{}, relations: map[string]string{},
+		entities: map[string]string{}, fields: map[string]string{},
 		records: map[string]string{}, publications: map[uuid.UUID]uuid.UUID{},
 	}
 	if index == nil || index.Payload.Config.DataModel == nil || index.ModelContent == nil {
@@ -201,24 +200,17 @@ func remapSitepackModelIdentities(index *sitepackIndex) (sitepackModelIDRemap, e
 	}
 	entityKeys := make([]string, 0, len(model.Entities))
 	fieldKeys := []string{}
-	relationKeys := make([]string, 0, len(model.Relations))
 	for _, entity := range model.Entities {
 		entityKeys = append(entityKeys, entity.ID)
 		for _, field := range entity.Fields {
 			fieldKeys = append(fieldKeys, field.ID)
 		}
 	}
-	for _, relation := range model.Relations {
-		relationKeys = append(relationKeys, relation.ID)
-	}
 	var err error
 	if result.entities, err = newUUIDMap(entityKeys); err != nil {
 		return result, err
 	}
 	if result.fields, err = newUUIDMap(fieldKeys); err != nil {
-		return result, err
-	}
-	if result.relations, err = newUUIDMap(relationKeys); err != nil {
 		return result, err
 	}
 	recordEntityIDs := map[string]string{}
@@ -279,21 +271,6 @@ func remapSitepackModelIdentities(index *sitepackIndex) (sitepackModelIDRemap, e
 			}
 		}
 	}
-	for i := range model.Relations {
-		relation := &model.Relations[i]
-		relation.ID, err = remapID(result.relations, relation.ID)
-		if err != nil {
-			return result, err
-		}
-		relation.FromEntityID, err = remapID(result.entities, relation.FromEntityID)
-		if err != nil {
-			return result, err
-		}
-		relation.ToEntityID, err = remapID(result.entities, relation.ToEntityID)
-		if err != nil {
-			return result, err
-		}
-	}
 	positions := make(map[string]DataModelPosition, len(model.Positions))
 	for rawID, position := range model.Positions {
 		mapped, ok := result.entities[rawID]
@@ -320,24 +297,10 @@ func remapSitepackModelIdentities(index *sitepackIndex) (sitepackModelIDRemap, e
 						return result, err
 					}
 				}
-				for ri := range binding.RelationIDs {
-					binding.RelationIDs[ri], err = remapID(result.relations, binding.RelationIDs[ri])
-					if err != nil {
-						return result, err
-					}
-				}
 				for fi := range binding.Fields {
 					binding.Fields[fi].FieldID, err = remapID(result.fields, binding.Fields[fi].FieldID)
 					if err != nil {
 						return result, err
-					}
-				}
-				for fi := range binding.Fields {
-					for ri := range binding.Fields[fi].RelationIDs {
-						binding.Fields[fi].RelationIDs[ri], err = remapID(result.relations, binding.Fields[fi].RelationIDs[ri])
-						if err != nil {
-							return result, err
-						}
 					}
 				}
 				if binding.Lookup != nil {
@@ -360,22 +323,6 @@ func remapSitepackModelIdentities(index *sitepackIndex) (sitepackModelIDRemap, e
 			if err != nil {
 				return err
 			}
-			relations := make(map[string][]string, len(record.Relations))
-			for relationID, oldTargets := range record.Relations {
-				newRelationID, ok := result.relations[relationID]
-				if !ok {
-					return fmt.Errorf("%w: record references relation outside the data model", ErrInvalid)
-				}
-				newTargets := make([]string, len(oldTargets))
-				for i, oldID := range oldTargets {
-					newTargets[i], err = remapID(result.records, oldID)
-					if err != nil {
-						return err
-					}
-				}
-				relations[newRelationID] = newTargets
-			}
-			record.Relations = relations
 		}
 		return nil
 	}
@@ -423,7 +370,6 @@ func addSitepackModelReportItems(report *SitepackReport, remap sitepackModelIDRe
 	for _, item := range []SitepackReportItem{
 		{Kind: "model_entity", Path: "dataModel.entities", Action: "ids_remapped", Count: len(remap.entities), Message: "ID сущностей модели переназначены"},
 		{Kind: "model_field", Path: "dataModel.fields", Action: "ids_remapped", Count: len(remap.fields), Message: "ID полей модели переназначены"},
-		{Kind: "model_relation", Path: "dataModel.relations", Action: "ids_remapped", Count: len(remap.relations), Message: "ID связей модели переназначены"},
 		{Kind: "model_record", Path: "modelContent.records", Action: "ids_remapped", Count: len(remap.records), Message: "ID записей модели переназначены"},
 	} {
 		if item.Count > 0 {

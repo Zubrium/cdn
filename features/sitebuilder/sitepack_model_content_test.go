@@ -11,7 +11,6 @@ import (
 func sitepackModelFixture() (*sitepackIndex, map[string]string) {
 	productID, categoryID := uuid.NewString(), uuid.NewString()
 	titleID, imageID, categoryNameID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	relationID := uuid.NewString()
 	productRecordID, categoryRecordID := uuid.NewString(), uuid.NewString()
 	publicationID := uuid.New()
 	fileID := uuid.NewString()
@@ -26,13 +25,11 @@ func sitepackModelFixture() (*sitepackIndex, map[string]string) {
 				{ID: categoryNameID, Key: "name", Name: "Name", Type: "text"},
 			}},
 		},
-		Relations: []DataModelRelation{{ID: relationID, Name: "Category", FromEntityID: productID, ToEntityID: categoryID, Cardinality: "one-to-one"}},
 		Positions: map[string]DataModelPosition{productID: {X: 20, Y: 30}, categoryID: {X: 420, Y: 30}},
 	}
 	product := func(title string) ModelContentRecord {
 		return ModelContentRecord{ID: productRecordID, EntityID: productID, SortOrder: 0,
-			Values:    map[string]any{"title": title, "image": fileID},
-			Relations: map[string][]string{relationID: {categoryRecordID}},
+			Values: map[string]any{"title": title, "image": fileID},
 		}
 	}
 	category := ModelContentRecord{ID: categoryRecordID, EntityID: categoryID, SortOrder: 0, Values: map[string]any{"name": "Skin"}}
@@ -44,24 +41,16 @@ func sitepackModelFixture() (*sitepackIndex, map[string]string) {
 		PublishedSelections: []ModelContentSelection{{PlacementID: "slider", InputKey: "products", Mode: "ids", RecordIDs: []string{productRecordID}}},
 		History:             []packModelPublication{{ID: publicationID, DraftRevision: 1, ContentRevision: 1, CreatedAt: time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC), Records: []ModelContentRecord{product("Published"), category}, Selections: []ModelContentSelection{{PlacementID: "slider", InputKey: "products", Mode: "ids", RecordIDs: []string{productRecordID}}}}},
 	}
-	payload := SnapshotPayload{Config: SiteConfig{DataModel: model, Pages: []Page{
-		{Placements: []Placement{{ID: "slider", DataBindings: []DataInputBinding{
-			{InputKey: "products", EntityID: productID, Fields: []DataInputFieldBinding{
-				{InputPath: "/title", FieldID: titleID},
-				{InputPath: "/category/name", FieldID: categoryNameID, RelationIDs: []string{relationID}},
-			}},
-			{InputKey: "categoryName", EntityID: productID, RelationIDs: []string{relationID}, FieldID: categoryNameID},
-		}}}},
-	}}}
+	payload := SnapshotPayload{Config: SiteConfig{DataModel: model, Pages: []Page{{Placements: []Placement{{ID: "slider"}}}}}}
 	index := &sitepackIndex{Payload: payload, ModelContent: content}
 	return index, map[string]string{
 		"product": productID, "category": categoryID, "title": titleID, "image": imageID,
-		"categoryName": categoryNameID, "relation": relationID, "productRecord": productRecordID,
+		"categoryName": categoryNameID, "productRecord": productRecordID,
 		"categoryRecord": categoryRecordID, "publication": publicationID.String(),
 	}
 }
 
-func TestRemapSitepackModelIdentitiesRemapsSchemaBindingsRecordsRelationsAndHistory(t *testing.T) {
+func TestRemapSitepackModelIdentitiesRemapsSchemaRecordsAndHistory(t *testing.T) {
 	index, old := sitepackModelFixture()
 	mapping, err := remapSitepackModelIdentities(index)
 	if err != nil {
@@ -70,24 +59,15 @@ func TestRemapSitepackModelIdentitiesRemapsSchemaBindingsRecordsRelationsAndHist
 	model := index.Payload.Config.DataModel
 	if model.Entities[0].ID == old["product"] || model.Entities[1].ID == old["category"] ||
 		model.Entities[0].Fields[0].ID == old["title"] || model.Entities[0].Fields[1].ID == old["image"] ||
-		model.Relations[0].ID == old["relation"] || len(mapping.entities) != 2 || len(mapping.fields) != 3 || len(mapping.relations) != 1 || len(mapping.records) != 2 {
+		len(mapping.entities) != 2 || len(mapping.fields) != 3 || len(mapping.records) != 2 {
 		t.Fatalf("schema identities were not remapped: %#v, %#v", mapping, model)
 	}
 	if err := ValidateDataModel(*model); err != nil {
 		t.Fatalf("remapped model invalid: %v", err)
 	}
 	newProductID, newCategoryID := model.Entities[0].ID, model.Entities[1].ID
-	if model.Relations[0].FromEntityID != newProductID || model.Relations[0].ToEntityID != newCategoryID {
-		t.Fatalf("relation endpoints were not remapped: %#v", model.Relations[0])
-	}
 	if model.Positions[old["product"]] != (DataModelPosition{}) || len(model.Positions) != 2 {
 		t.Fatalf("canvas positions were not moved with entity IDs: %#v", model.Positions)
-	}
-	binding := index.Payload.Config.Pages[0].Placements[0].DataBindings[0]
-	if binding.EntityID != newProductID || binding.Fields[0].FieldID != model.Entities[0].Fields[0].ID ||
-		binding.Fields[1].FieldID != model.Entities[1].Fields[0].ID || binding.Fields[1].RelationIDs[0] != model.Relations[0].ID ||
-		index.Payload.Config.Pages[0].Placements[0].DataBindings[1].RelationIDs[0] != model.Relations[0].ID {
-		t.Fatalf("placement binding was not remapped: %#v", binding)
 	}
 	for label, state := range map[string][]ModelContentRecord{
 		"draft":     index.ModelContent.DraftRecords,
@@ -97,9 +77,6 @@ func TestRemapSitepackModelIdentitiesRemapsSchemaBindingsRecordsRelationsAndHist
 		if len(state) != 2 || state[0].ID != mapping.records[old["productRecord"]] || state[0].EntityID != newProductID ||
 			state[1].ID != mapping.records[old["categoryRecord"]] || state[1].EntityID != newCategoryID {
 			t.Fatalf("%s record identity not remapped: %#v", label, state)
-		}
-		if state[0].Relations[model.Relations[0].ID][0] != mapping.records[old["categoryRecord"]] {
-			t.Fatalf("%s relation key/target not remapped: %#v", label, state[0].Relations)
 		}
 	}
 	if got := index.ModelContent.DraftSelections[0].RecordIDs; len(got) != 1 || got[0] != mapping.records[old["productRecord"]] {
@@ -131,9 +108,9 @@ func TestValidateSitepackModelContentChecksHistoryAndAllStates(t *testing.T) {
 	broken.ModelContent = &content
 	broken.ModelContent.History = append([]packModelPublication(nil), content.History...)
 	broken.ModelContent.History[0].Records = append([]ModelContentRecord(nil), content.History[0].Records...)
-	broken.ModelContent.History[0].Records[0].Relations = map[string][]string{uuid.NewString(): {uuid.NewString()}}
+	broken.ModelContent.History[0].Records[0].Values["unknown"] = "value"
 	if err := validateSitepackModelContent(&broken); err == nil {
-		t.Fatal("invalid historical relation target was accepted")
+		t.Fatal("invalid historical record value was accepted")
 	}
 	broken = *index
 	content = *index.ModelContent
@@ -216,7 +193,7 @@ func TestSitepackSeedsSingletonDraftWithoutPublishingIt(t *testing.T) {
 		t.Fatalf("seeding must create a new draft revision without publishing: %+v", index.ModelContent)
 	}
 	seeded := index.ModelContent.DraftRecords[0]
-	if seeded.ID == "" || seeded.EntityID != entityID || len(seeded.Values) != 0 || len(seeded.Relations) != 0 {
+	if seeded.ID == "" || seeded.EntityID != entityID || len(seeded.Values) != 0 {
 		t.Fatalf("imported singleton draft must be a generated empty record: %+v", seeded)
 	}
 	if _, err := uuid.Parse(seeded.ID); err != nil {
@@ -243,7 +220,6 @@ func TestSitepackPreservesManyHistoryAfterEntityBecomesSingletonButRestoreReject
 	older := index.ModelContent.History[0].Records[0]
 	older.ID = uuid.NewString()
 	older.SortOrder = 1
-	older.Relations = map[string][]string{}
 	index.ModelContent.History[0].Records = append(index.ModelContent.History[0].Records, older)
 	index.ModelContent.Revision = 3
 	index.ModelContent.PublishedRevision = 2

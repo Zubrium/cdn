@@ -1,6 +1,8 @@
 package media
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -43,6 +45,11 @@ func ValidateSVGReader(reader io.Reader) error {
 				if name == "href" && !localSVGRef.MatchString(attr.Value) && !dataImageURL.MatchString(attr.Value) {
 					return fmt.Errorf("unsafe SVG reference")
 				}
+				if name == "href" && dataImageURL.MatchString(attr.Value) {
+					if err := validateEmbeddedDataImage(attr.Value); err != nil {
+						return err
+					}
+				}
 				for _, reference := range svgURL.FindAllString(attr.Value, -1) {
 					if !localSVGURL.MatchString(reference) {
 						return fmt.Errorf("unsafe SVG URL")
@@ -71,6 +78,34 @@ func ValidateSVGReader(reader io.Reader) error {
 	}
 	if !root || depth != 0 {
 		return fmt.Errorf("incomplete SVG")
+	}
+	return nil
+}
+
+func validateEmbeddedDataImage(value string) error {
+	parts := strings.SplitN(value, ",", 2)
+	if len(parts) != 2 || !strings.HasPrefix(strings.ToLower(parts[0]), "data:image/") {
+		return fmt.Errorf("invalid SVG data image")
+	}
+	mediaType := strings.ToLower(strings.TrimSuffix(parts[0][len("data:"):], ";base64"))
+	if mediaType == "image/gif" {
+		return fmt.Errorf("animated SVG raster references are not supported")
+	}
+	encoded := strings.Map(func(character rune) rune {
+		if character == '\r' || character == '\n' {
+			return -1
+		}
+		return character
+	}, parts[1])
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("invalid SVG data image: %w", err)
+	}
+	if mediaType == "image/webp" && isAnimatedWebP(data) {
+		return fmt.Errorf("animated SVG raster references are not supported")
+	}
+	if err := ValidateRasterReader(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("unsupported embedded SVG raster: %w", err)
 	}
 	return nil
 }

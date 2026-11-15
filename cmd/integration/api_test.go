@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -427,23 +428,66 @@ func (e *testEnv) rawRequest(method, path, token string, body io.Reader, content
 func TestTokenPolicyAndModeratorScope(t *testing.T) {
 	env := newTestEnv(t)
 
-	status, mod, _ := env.request(http.MethodPost, "/api/v1/admin/tokens", env.adminToken,
+	status, mod, createdHeaders := env.request(http.MethodPost, "/api/v1/admin/tokens", env.adminToken,
 		map[string]any{"name": "moderator", "role": "moderator"})
 	if status != http.StatusCreated {
 		t.Fatalf("create moderator: %d %v", status, mod)
 	}
+	if !strings.Contains(strings.ToLower(createdHeaders.Get("Cache-Control")), "no-store") {
+		t.Fatalf("one-time token response is cacheable: Cache-Control=%q", createdHeaders.Get("Cache-Control"))
+	}
 	modToken := mod["token"].(string)
 	adminTokenID := ""
 
-	status, list, _ := env.request(http.MethodGet, "/api/v1/admin/tokens", env.adminToken, nil)
+	status, list, listHeaders := env.request(http.MethodGet, "/api/v1/admin/tokens", env.adminToken, nil)
 	if status != http.StatusOK {
 		t.Fatalf("admin token list: %d %v", status, list)
+	}
+	if !strings.Contains(strings.ToLower(listHeaders.Get("Cache-Control")), "no-store") {
+		t.Fatalf("token metadata response is cacheable: Cache-Control=%q", listHeaders.Get("Cache-Control"))
 	}
 	for _, item := range list["items"].([]any) {
 		token := item.(map[string]any)
 		if token["role"] == "admin" {
 			adminTokenID = token["id"].(string)
 		}
+	}
+	if err := env.routerDeps.AuthService.SetListLimit(1); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	for {
+		path := "/api/v1/admin/tokens"
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
+		}
+		status, page, _ := env.request(http.MethodGet, path, env.adminToken, nil)
+		if status != http.StatusOK {
+			t.Fatalf("paginated admin token list: %d %v", status, page)
+		}
+		items, ok := page["items"].([]any)
+		if !ok || len(items) > 1 {
+			t.Fatalf("configured token page limit was not applied: %v", page)
+		}
+		for _, item := range items {
+			id := item.(map[string]any)["id"].(string)
+			if seen[id] {
+				t.Fatalf("token %s was repeated across pages", id)
+			}
+			seen[id] = true
+		}
+		next, _ := page["next_cursor"].(string)
+		if next == "" {
+			break
+		}
+		if next == cursor {
+			t.Fatal("token pagination cursor did not advance")
+		}
+		cursor = next
+	}
+	if !seen[adminTokenID] || len(seen) != 2 {
+		t.Fatalf("token pagination omitted a credential: seen=%v admin=%s", seen, adminTokenID)
 	}
 
 	status, body, _ := env.request(http.MethodPost, "/api/v1/admin/tokens", modToken,

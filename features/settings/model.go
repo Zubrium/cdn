@@ -9,13 +9,14 @@ package settings
 
 // Limits mirrors the request and pagination limits enforced by the server.
 type Limits struct {
-	MaxJSONBytes            int64 `json:"max_json_bytes"`
-	MaxUploadBytes          int64 `json:"max_upload_bytes"`
-	FormRateLimit           int   `json:"form_rate_limit"`
-	FormRateWindowSeconds   int   `json:"form_rate_window_seconds"`
-	AdminPageSize           int   `json:"admin_page_size"`
-	PublicPageSize          int   `json:"public_page_size"`
-	SubmissionExportMaxRows int   `json:"submission_export_max_rows"`
+	MaxJSONBytes             int64 `json:"max_json_bytes"`
+	MaxUploadBytes           int64 `json:"max_upload_bytes"`
+	FormRateLimit            int   `json:"form_rate_limit"`
+	FormRateWindowSeconds    int   `json:"form_rate_window_seconds"`
+	AdminPageSize            int   `json:"admin_page_size"`
+	PublicPageSize           int   `json:"public_page_size"`
+	SubmissionExportMaxRows  int   `json:"submission_export_max_rows"`
+	SubmissionExportMaxBytes int64 `json:"submission_export_max_bytes"`
 }
 
 // PublicAPI describes the publicly reachable API surface.

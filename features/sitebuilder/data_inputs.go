@@ -8,6 +8,13 @@ import (
 	"websiteengine/features/media"
 )
 
+const (
+	maxDataInputPorts         = 128
+	maxDataInputFieldsPerPort = 64
+	maxDataInputFieldsTotal   = 512
+	maxDataInputPathSegments  = 32
+)
+
 // DataInputPort is a feature's typed data boundary. It describes the shape the
 // runtime component consumes; it intentionally contains no editor labels or
 // record-form settings.
@@ -28,7 +35,11 @@ type DataInputField struct {
 }
 
 func validateDataInputPorts(ports []DataInputPort) error {
+	if len(ports) > maxDataInputPorts {
+		return fmt.Errorf("data model inputs accept at most %d ports", maxDataInputPorts)
+	}
 	keys := make(map[string]bool, len(ports))
+	totalFields := 0
 	for _, port := range ports {
 		if !argumentPattern.MatchString(port.Key) || keys[port.Key] {
 			return errors.New("input keys must be valid and unique")
@@ -65,11 +76,21 @@ func validateDataInputPorts(ports []DataInputPort) error {
 		if len(port.Fields) == 0 {
 			return fmt.Errorf("input %q must declare at least one typed field", port.Key)
 		}
+		if len(port.Fields) > maxDataInputFieldsPerPort {
+			return fmt.Errorf("input %q accepts at most %d fields", port.Key, maxDataInputFieldsPerPort)
+		}
+		totalFields += len(port.Fields)
+		if totalFields > maxDataInputFieldsTotal {
+			return fmt.Errorf("data model inputs accept at most %d fields in total", maxDataInputFieldsTotal)
+		}
 		paths := make(map[string][]string, len(port.Fields))
 		for _, field := range port.Fields {
 			segments, err := parseJSONPointer(field.Path)
 			if err != nil || len(segments) == 0 {
 				return fmt.Errorf("input %q contains an invalid field path", port.Key)
+			}
+			if len(segments) > maxDataInputPathSegments {
+				return fmt.Errorf("input %q field path %q accepts at most %d segments", port.Key, field.Path, maxDataInputPathSegments)
 			}
 			for index, segment := range segments {
 				if segment == "*" {

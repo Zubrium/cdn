@@ -1,4 +1,4 @@
-import type { DataModel, DataModelEntity, DataModelField, DataModelFieldType, DataModelRelation, SiteConfig } from "@/types";
+import type { DataModel, DataModelEntity, DataModelField, DataModelFieldType, SiteConfig } from "@/types";
 
 export const fieldTypes: Array<{ value: DataModelFieldType; label: string }> = [
   { value: "text", label: "Короткий текст" },
@@ -14,14 +14,8 @@ export const fieldTypes: Array<{ value: DataModelFieldType; label: string }> = [
   { value: "media", label: "Медиафайл" },
 ];
 
-export const cardinalities: Array<{ value: DataModelRelation["cardinality"]; label: string }> = [
-  { value: "one-to-one", label: "Один к одному" },
-  { value: "one-to-many", label: "Один ко многим" },
-  { value: "many-to-many", label: "Многие ко многим" },
-];
-
 export const entityCardinalities: Array<{ value: NonNullable<DataModelEntity["cardinality"]>; label: string }> = [
-  { value: "many", label: "Много записей" },
+  { value: "many", label: "Коллекция" },
   { value: "singleton", label: "Одна запись" },
 ];
 
@@ -40,7 +34,7 @@ function generatedID(): string {
 }
 
 export function emptyDataModel(): DataModel {
-  return { formatVersion: 1, entities: [], relations: [], positions: {} };
+  return { formatVersion: 1, entities: [], positions: {} };
 }
 
 export function modelFor(config: SiteConfig): DataModel {
@@ -52,7 +46,6 @@ export function validModelName(value: string): boolean {
 }
 
 export const DATA_MODEL_ADD_ENTITY_CONTROL_ID = "data-model-add-entity";
-export const DATA_MODEL_NEW_RELATION_FROM_CONTROL_ID = "data-model-new-relation-from";
 
 export function dataModelEntityNameControlID(entityID: string): string {
   return `data-model-entity-name-${entityID}`;
@@ -66,10 +59,6 @@ export function dataModelAddFieldControlID(entityID: string): string {
   return `data-model-add-field-${entityID}`;
 }
 
-export function dataModelRelationNameControlID(relationID: string): string {
-  return `data-model-relation-name-${relationID}`;
-}
-
 export function dataModelEntityRemovalFocusTarget(model: DataModel, entityID: string): string {
   const index = model.entities.findIndex((entity) => entity.id === entityID);
   const survivor = index < 0 ? undefined : model.entities[index + 1] ?? model.entities[index - 1];
@@ -80,13 +69,6 @@ export function dataModelFieldRemovalFocusTarget(entity: DataModelEntity, fieldI
   const index = entity.fields.findIndex((field) => field.id === fieldID);
   const survivor = index < 0 ? undefined : entity.fields[index + 1] ?? entity.fields[index - 1];
   return survivor ? dataModelFieldNameControlID(survivor.id) : dataModelAddFieldControlID(entity.id);
-}
-
-export function dataModelRelationRemovalFocusTarget(model: DataModel, relationID: string): string {
-  const relations = model.relations ?? [];
-  const index = relations.findIndex((relation) => relation.id === relationID);
-  const survivor = index < 0 ? undefined : relations[index + 1] ?? relations[index - 1];
-  return survivor ? dataModelRelationNameControlID(survivor.id) : DATA_MODEL_NEW_RELATION_FROM_CONTROL_ID;
 }
 
 export function focusDataModelControl(
@@ -126,19 +108,23 @@ export function setModel(config: SiteConfig, model: DataModel): SiteConfig {
   return { ...config, dataModel: model };
 }
 
-export function addDataModelEntity(model: DataModel, idFactory: IDFactory = generatedID): DataModel {
+export function addDataModelEntity(
+  model: DataModel,
+  idFactory: IDFactory = generatedID,
+  name = "Новая модель",
+  cardinality: NonNullable<DataModelEntity["cardinality"]> = "many",
+): DataModel {
   const id = idFactory();
   const entity: DataModelEntity = {
     id,
-    key: generatedKey("entity", id, model.entities),
-    name: "Новая сущность",
-    cardinality: "many",
+    key: generatedKey("model", id, model.entities),
+    name: validModelName(name) ? name.trim() : "Новая модель",
+    cardinality,
     fields: [],
   };
   return {
     ...model,
     entities: [...model.entities, entity],
-    relations: model.relations ?? [],
     positions: { ...(model.positions ?? {}), [id]: defaultPosition(model.entities.length) },
   };
 }
@@ -249,81 +235,6 @@ export function reorderDataModelFields(model: DataModel, entityID: string, order
   return updateDataModelEntity(model, entityID, (current) => ({ ...current, fields }));
 }
 
-export function addDataModelRelation(
-  model: DataModel,
-  relation: Omit<DataModelRelation, "id">,
-  idFactory: IDFactory = generatedID,
-): DataModel {
-  const name = relation.name.trim();
-  const hasSource = model.entities.some((entity) => entity.id === relation.fromEntityId);
-  const hasTarget = model.entities.some((entity) => entity.id === relation.toEntityId);
-  if (!name || !hasSource || !hasTarget || findDataModelRelationConflict(model, { ...relation, name })) return model;
-  return {
-    ...model,
-    relations: [...(model.relations ?? []), { ...relation, id: idFactory(), name }],
-  };
-}
-
-export function findDataModelRelationConflict(
-  model: DataModel,
-  relation: Omit<DataModelRelation, "id">,
-  ignoreRelationID?: string,
-): DataModelRelation | undefined {
-  const name = relation.name.trim().toLocaleLowerCase();
-  if (!name) return undefined;
-  return (model.relations ?? []).find((existing) =>
-    existing.id !== ignoreRelationID &&
-    existing.fromEntityId === relation.fromEntityId &&
-    existing.toEntityId === relation.toEntityId &&
-    existing.name.trim().toLocaleLowerCase() === name,
-  );
-}
-
-export function updateDataModelRelation(
-  model: DataModel,
-  relationID: string,
-  transform: (relation: DataModelRelation) => DataModelRelation,
-): DataModel {
-  return {
-    ...model,
-    relations: (model.relations ?? []).map((relation) => relation.id === relationID ? transform(relation) : relation),
-  };
-}
-
-export function renameDataModelRelation(model: DataModel, relationID: string, name: string): DataModel {
-  return updateDataModelRelation(model, relationID, (relation) => ({ ...relation, name }));
-}
-
-export function dataModelRelationBindingImpacts(config: SiteConfig, relationID: string): DataModelBindingImpact[] {
-  return (config.pages ?? []).flatMap((page) => page.placements.flatMap((placement) =>
-    (placement.dataBindings ?? []).flatMap((binding) => {
-      const paths = [
-        ...(binding.relationIds?.includes(relationID) ? ["значение"] : []),
-        ...(binding.fields ?? []).filter((field) => field.relationIds?.includes(relationID)).map((field) => field.inputPath),
-      ];
-      return paths.length === 0 ? [] : [{
-        pageName: page.name || "Без названия",
-        featureKey: placement.build.featureKey,
-        version: placement.build.version,
-        inputKey: binding.inputKey,
-        paths,
-      }];
-    }),
-  ));
-}
-
-export type DataModelDrag = { id: string; pointerId: number; x: number; y: number; originX: number; originY: number };
-
-export function finalDataModelDragPosition(
-  drag: DataModelDrag | null,
-  preview: { id: string; x: number; y: number } | null,
-  pointerID: number,
-  cancelled = false,
-): { id: string; x: number; y: number } | undefined {
-  if (cancelled || !drag || drag.pointerId !== pointerID || preview?.id !== drag.id) return undefined;
-  return { id: preview.id, x: preview.x, y: preview.y };
-}
-
 export interface DataModelBindingImpact {
   pageName: string;
   featureKey: string;
@@ -335,18 +246,14 @@ export interface DataModelBindingImpact {
 export function dataModelEntityBindingImpacts(config: SiteConfig, entityID: string): DataModelBindingImpact[] {
   const model = config.dataModel ?? emptyDataModel();
   const entityFieldIDs = new Set(model.entities.find((entity) => entity.id === entityID)?.fields.map((field) => field.id) ?? []);
-  const removedRelationIDs = new Set((model.relations ?? [])
-    .filter((relation) => relation.fromEntityId === entityID || relation.toEntityId === entityID)
-    .map((relation) => relation.id));
   return (config.pages ?? []).flatMap((page) => page.placements.flatMap((placement) =>
     (placement.dataBindings ?? []).flatMap((binding) => {
       const paths = new Set<string>();
       const rootEntity = binding.entityId === entityID;
       if (rootEntity && binding.fieldId) paths.add("значение");
       if (binding.fieldId && entityFieldIDs.has(binding.fieldId)) paths.add("значение");
-      if (binding.fieldId && (binding.relationIds ?? []).some((id) => removedRelationIDs.has(id))) paths.add("значение");
       for (const field of binding.fields ?? []) {
-        if (entityFieldIDs.has(field.fieldId) || field.relationIds?.some((id) => removedRelationIDs.has(id))) paths.add(field.inputPath);
+        if (entityFieldIDs.has(field.fieldId)) paths.add(field.inputPath);
       }
       if (rootEntity) {
         for (const [slot, fieldID] of Object.entries(binding.detailSEO ?? {})) {
@@ -371,20 +278,11 @@ export function dataModelEntityBindingImpacts(config: SiteConfig, entityID: stri
 export function dataModelFieldBindingImpacts(config: SiteConfig, entityID: string, fieldID: string): DataModelBindingImpact[] {
   const ownsField = config.dataModel?.entities.some((entity) => entity.id === entityID && entity.fields.some((field) => field.id === fieldID)) ?? false;
   if (!ownsField) return [];
-  const relationTargetEntity = (sourceEntityID: string, relationIDs: string[] = []): string | null => {
-    let currentEntityID = sourceEntityID;
-    for (const relationID of relationIDs) {
-      const relation = config.dataModel?.relations?.find((item) => item.id === relationID);
-      if (!relation || relation.fromEntityId !== currentEntityID) return null;
-      currentEntityID = relation.toEntityId;
-    }
-    return currentEntityID;
-  };
   return (config.pages ?? []).flatMap((page) => page.placements.flatMap((placement) =>
     (placement.dataBindings ?? []).flatMap((binding) => {
       const paths = [
         ...(binding.entityId === entityID && binding.fieldId === fieldID ? ["значение"] : []),
-        ...(binding.fields ?? []).filter((field) => field.fieldId === fieldID && relationTargetEntity(binding.entityId, field.relationIds) === entityID).map((field) => field.inputPath),
+        ...(binding.entityId === entityID ? (binding.fields ?? []).filter((field) => field.fieldId === fieldID).map((field) => field.inputPath) : []),
         ...(binding.entityId === entityID ? Object.entries(binding.detailSEO ?? {}).filter(([, boundFieldID]) => boundFieldID === fieldID).map(([slot]) => `SEO: ${detailSEOFieldLabels[slot] ?? slot}`) : []),
         ...(binding.entityId === entityID && binding.lookup?.fieldId === fieldID ? [`маршрут: ${binding.lookup.argument}`] : []),
       ];
@@ -407,17 +305,12 @@ export function describeBindingImpacts(impacts: DataModelBindingImpact[]): strin
   return `\n\nЗатронуты структурные привязки:\n${affected.join("\n")}\n\nПерепривяжите эти входы в редакторе сайта до сохранения дочернего снапшота.`;
 }
 
-export function removeDataModelRelation(model: DataModel, relationID: string): DataModel {
-  return { ...model, relations: (model.relations ?? []).filter((relation) => relation.id !== relationID) };
-}
-
 export function removeDataModelEntity(model: DataModel, entityID: string): DataModel {
   const positions = { ...(model.positions ?? {}) };
   delete positions[entityID];
   return {
     ...model,
     entities: model.entities.filter((entity) => entity.id !== entityID),
-    relations: (model.relations ?? []).filter((relation) => relation.fromEntityId !== entityID && relation.toEntityId !== entityID),
     positions,
   };
 }

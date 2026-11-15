@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   UNAUTHORIZED_EVENT,
@@ -39,6 +40,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const initial = getStoredToken();
   const [token, setToken] = useState<string | null>(initial);
   const [principal, setPrincipal] = useState<Principal | null>(null);
@@ -49,13 +51,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const clearState = useCallback((message?: string) => {
+    void queryClient.cancelQueries();
+    queryClient.clear();
     setStoredToken(null);
     setToken(null);
     setPrincipal(null);
     setStatus("anonymous");
     setError(null);
     setNotice(message ?? null);
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     const stored = getStoredToken();
@@ -101,6 +105,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (secret: string) => {
     const value = secret.trim();
+    void queryClient.cancelQueries();
+    queryClient.clear();
     setNotice(null);
     setError(null);
     setStoredToken(value);
@@ -122,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("unavailable");
       throw loginError;
     }
-  }, []);
+  }, [queryClient]);
 
   const retry = useCallback(async () => {
     const stored = getStoredToken();

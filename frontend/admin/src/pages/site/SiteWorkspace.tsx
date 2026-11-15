@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, isApiError } from "@/api";
@@ -43,7 +43,9 @@ const siteEditorModes = [
 ] as const;
 const siteEditorModePaths = new Set<string>(siteEditorModes.map(([path]) => path));
 function isSiteEditorPath(pathname: string): boolean {
-  return siteEditorModePaths.has(pathname) || pathname.startsWith("/site/pages/");
+  return siteEditorModePaths.has(pathname)
+    || pathname.startsWith("/site/pages/")
+    || pathname.startsWith("/site/data-model/");
 }
 
 function childSnapshotName(snapshot: SiteSnapshot): string {
@@ -71,6 +73,7 @@ function emptyConfig(): SiteConfig {
 
 export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const principal = useAuth().principal;
   const queryClient = useQueryClient();
@@ -327,7 +330,10 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   if (loading || snapshots.isLoading || (!selected && Boolean(snapshots.data?.items.length))) return <p className="p-8 text-sm text-muted-foreground">Загружаем снапшот…</p>;
   if (error || !config) return <ErrorState error={error} title="Не удалось загрузить снапшот" onRetry={() => void reload()} />;
 
-  const canvas = location.pathname.startsWith("/site/pages") || location.pathname === "/site/router" || location.pathname === "/site/data-model";
+  const canvas = location.pathname.startsWith("/site/pages")
+    || location.pathname === "/site/router"
+    || location.pathname === "/site/data-model"
+    || location.pathname.startsWith("/site/data-model/");
   return (
     <WorkspaceContext.Provider value={{ config, metadata, designSystem, revision: snapshot?.sequence ?? 0, snapshot, dirty: allDirty, saving, conflict, localSaveError, update, updateMetadata, updateDesignSystem, save, reload }}>
       {guard.dialog}
@@ -338,7 +344,14 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             if (allDirty && !(await confirm({ title: "Отбросить изменения?", description: "Несохранённые изменения редактора будут потеряны.", confirmLabel: "Отбросить", destructive: true }))) return;
             if (allDirty && principal) { try { const key = siteDraftKey(principal.id, selected); if (localDraftConflict.current || localStorage.getItem(key) !== lastLocalDraft.current) throw new Error("Local draft changed in another tab"); localStorage.removeItem(key); lastLocalDraft.current = null; } catch { toast.error("Локальная копия изменилась или недоступна. Сохраните правки перед переключением."); return; } }
             guardBypass.current = true;
-            setParams((current) => { const next = new URLSearchParams(current); if (value === "new") next.delete("snapshot"); else next.set("snapshot", value); return next; });
+            if (location.pathname.startsWith("/site/data-model/")) {
+              const next = new URLSearchParams(location.search);
+              if (value === "new") next.delete("snapshot");
+              else next.set("snapshot", value);
+              navigate({ pathname: "/site/data-model", search: next.size ? `?${next}` : "" });
+            } else {
+              setParams((current) => { const next = new URLSearchParams(current); if (value === "new") next.delete("snapshot"); else next.set("snapshot", value); return next; });
+            }
           }}>
             <SelectTrigger className="w-full sm:w-80" aria-label="Рабочий снапшот"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -348,7 +361,9 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
           </Select>
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
             {siteEditorModes.map(([path, label]) => {
-              const active = location.pathname === path || path === "/site/pages" && location.pathname.startsWith("/site/pages/");
+              const active = location.pathname === path
+                || path === "/site/pages" && location.pathname.startsWith("/site/pages/")
+                || path === "/site/data-model" && location.pathname.startsWith("/site/data-model/");
               return <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
             })}
           </nav>

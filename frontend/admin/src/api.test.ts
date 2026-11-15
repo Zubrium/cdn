@@ -54,3 +54,28 @@ describe("branch snapshot API", () => {
     expect(JSON.parse(String(init.body))).not.toHaveProperty("accept");
   });
 });
+
+describe("token pagination API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the continuation cursor and returns the next page", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [], next_cursor: "next-page" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost" },
+      localStorage: { getItem: () => null },
+      dispatchEvent: () => true,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await api.tokens.list("cursor-value");
+
+    const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const url = new URL(input, "http://localhost");
+    expect(url.pathname).toBe("/api/v1/admin/tokens");
+    expect(url.searchParams.get("cursor")).toBe("cursor-value");
+    expect(page.next_cursor).toBe("next-page");
+  });
+});

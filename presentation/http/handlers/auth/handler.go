@@ -49,6 +49,9 @@ type createdTokenResponse struct {
 }
 
 func (h *Handler) CreateToken(w http.ResponseWriter, r *http.Request) {
+	// The bearer secret is returned only once; never allow an intermediary or
+	// browser cache to persist this response.
+	w.Header().Set("Cache-Control", "no-store")
 	p, _ := principal.FromContext(r.Context())
 	var req createTokenRequest
 	if err := response.DecodeJSON(w, r, &req, h.maxJSON); err != nil {
@@ -71,16 +74,27 @@ func (h *Handler) CreateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListTokens(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	p, _ := principal.FromContext(r.Context())
-	items, err := h.service.List(r.Context(), p)
+	cursor := r.URL.Query().Get("cursor")
+	if len(cursor) > 256 {
+		h.writeError(w, r, auth.ErrValidation)
+		return
+	}
+	items, next, err := h.service.List(r.Context(), p, cursor)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
+	var nextCursor any
+	if next != "" {
+		nextCursor = next
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})
 }
 
 func (h *Handler) GetToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	p, _ := principal.FromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {

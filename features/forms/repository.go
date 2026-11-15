@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	ErrNotFound   = errors.New("submission not found")
-	ErrConflict   = errors.New("submission conflict")
-	ErrValidation = errors.New("submission validation")
+	ErrNotFound       = errors.New("submission not found")
+	ErrConflict       = errors.New("submission conflict")
+	ErrValidation     = errors.New("submission validation")
+	ErrExportTooLarge = errors.New("submission export exceeds the aggregate data budget")
 )
 
 type DBTX interface {
@@ -75,6 +76,7 @@ type ListParams struct {
 	BeforeTime      *time.Time
 	BeforeID        *uuid.UUID
 	Limit           int
+	MaxDataBytes    int64
 }
 
 type Repository struct {
@@ -162,11 +164,19 @@ func (r *Repository) List(ctx context.Context, db DBTX, p ListParams) ([]Submiss
 	}
 	defer rows.Close()
 	out := make([]Submission, 0, p.Limit)
+	var totalDataBytes int64
 	for rows.Next() {
 		var s Submission
 		if err := rows.Scan(&s.ID, &s.FeatureID, &s.FeatureKey, &s.SchemaVersionID, &s.Environment, &s.Data,
 			&s.Status, &s.ProcessedBy, &s.CreatedAt, &s.UpdatedAt, &s.ArchivedAt, &s.DeletedAt); err != nil {
 			return nil, err
+		}
+		if p.MaxDataBytes > 0 {
+			rowBytes := int64(len(s.Data))
+			if rowBytes < 0 || totalDataBytes > p.MaxDataBytes-rowBytes {
+				return nil, ErrExportTooLarge
+			}
+			totalDataBytes += rowBytes
 		}
 		out = append(out, s)
 	}

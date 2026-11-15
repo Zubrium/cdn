@@ -67,10 +67,6 @@ func TestModelContentAPIWorkspaceLifecycle(t *testing.T) {
 				map[string]any{"id": modelIDs["categoryName"], "key": "name", "name": "Name", "type": "text"},
 			}},
 		},
-		"relations": []any{map[string]any{
-			"id": modelIDs["categoryProducts"], "name": "Products", "fromEntityId": modelIDs["category"],
-			"toEntityId": modelIDs["product"], "cardinality": "one-to-many",
-		}},
 	}
 	bindings := []any{map[string]any{
 		"inputKey": "products", "entityId": modelIDs["product"],
@@ -137,7 +133,7 @@ func TestModelContentAPIWorkspaceLifecycle(t *testing.T) {
 
 	fileService, err := files.NewService(env.pool, env.store, pkgconfig.FilesConfig{
 		MaxBytes: 20 << 20, PartBytes: 20 << 20, UploadTTL: time.Hour, CleanupInterval: time.Minute,
-		ProcessingTimeout: time.Minute, OwnerQuotaBytes: 40 << 20, MaxSessions: 4, ListLimit: 20,
+		ProcessingTimeout: time.Minute, OwnerQuotaBytes: 40 << 20, MaxSessions: 4, MaxSessionsPerPrincipal: 4, MaxReservedBytesPerPrincipal: 40 << 20, ListLimit: 20,
 		RateLimit: 100, RateMaxClients: 100, RateWindow: time.Minute, LinkMaxTTL: time.Minute,
 		PublicBaseURL: "https://files.example.test", TempDir: t.TempDir(), SigningKey: bytes.Repeat([]byte("f"), 32),
 	})
@@ -229,9 +225,9 @@ func TestModelContentAPIWorkspaceLifecycle(t *testing.T) {
 		{name: "unknown media object", mutate: func(items []any) {
 			items[1].(map[string]any)["values"].(map[string]any)["image"] = uuid.NewString()
 		}, want: "image"},
-		{name: "relation points to missing record", mutate: func(items []any) {
+		{name: "legacy record relations are rejected", mutate: func(items []any) {
 			items[0].(map[string]any)["relations"] = map[string]any{modelIDs["categoryProducts"]: []string{uuid.NewString()}}
-		}, want: "relation"},
+		}, want: "legacy_model_relations_not_supported"},
 	}
 	for _, test := range invalidDrafts {
 		t.Run(test.name, func(t *testing.T) {
@@ -253,17 +249,16 @@ func TestModelContentAPIWorkspaceLifecycle(t *testing.T) {
 		})
 	}
 
-	relatedRecords := cloneModelContentJSONArray(t, records)
-	relatedRecords[0].(map[string]any)["relations"] = map[string]any{modelIDs["categoryProducts"]: []string{idsByEntityAndSlug["pear"], idsByEntityAndSlug["apple"]}}
+	selectedRecords := cloneModelContentJSONArray(t, records)
 	selection := map[string]any{
 		"placementId": "products-placement", "inputKey": "products", "mode": "ids",
 		"recordIds": []string{idsByEntityAndSlug["apple"], idsByEntityAndSlug["pear"]},
 	}
 	status, relatedDraft, _ := env.request(http.MethodPut, base, userToken, map[string]any{
-		"revision": 1, "records": relatedRecords, "selections": []any{selection},
+		"revision": 1, "records": selectedRecords, "selections": []any{selection},
 	})
 	if status != http.StatusOK || relatedDraft["revision"] != float64(2) {
-		t.Fatalf("save valid relation and ordered selection: status=%d body=%v", status, relatedDraft)
+		t.Fatalf("save valid records and ordered selection: status=%d body=%v", status, relatedDraft)
 	}
 
 	staleRecords := cloneModelContentJSONArray(t, relatedDraft["records"].([]any))
@@ -425,7 +420,7 @@ func assertRetiredContentAPIUnavailable(t *testing.T, env *testEnv, snapshotID s
 	} {
 		status, body, _ := env.request(http.MethodGet, endpoint, "", nil)
 		if status != http.StatusNotFound {
-			t.Fatalf("retired per-feature/relations API %s should be absent, got status=%d body=%v", endpoint, status, body)
+			t.Fatalf("retired content API %s should be absent, got status=%d body=%v", endpoint, status, body)
 		}
 	}
 }

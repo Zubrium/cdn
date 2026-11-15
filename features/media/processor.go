@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	_ "golang.org/x/image/webp"
 	"image"
@@ -44,11 +46,21 @@ type StreamingRenditionProcessor interface {
 	ProcessStream(context.Context, Media, FieldProfile, io.Reader) (map[string]ProcessedFile, func(), error)
 }
 type FFmpegProcessor struct {
-	ffmpeg  string
-	ffprobe string
-	tempDir string
-	timeout time.Duration
+	ffmpeg         string
+	ffprobe        string
+	tempDir        string
+	timeout        time.Duration
+	maxOutputBytes int64
 }
+
+const maxCommandDiagnosticBytes = 64 * 1024
+const defaultMaxProcessedOutputBytes = 5 << 30
+const maxVideoDuration = 10 * time.Minute
+const maxVideoDimension = 8192
+const maxVideoPixels int64 = 33_554_432
+const maxVideoFrameRate = 60
+const maxVideoPixelFrames int64 = 40_000_000_000
+const maxVideoPosterBytes int64 = 32 << 20
 
 func (p *FFmpegProcessor) ProcessingTimeout() time.Duration { return p.timeout }
 
@@ -76,14 +88,14 @@ func NewFFmpegProcessor(timeout time.Duration) (*FFmpegProcessor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe executable not found: %w", err)
 	}
-	return &FFmpegProcessor{ffmpeg: ffmpeg, ffprobe: ffprobe, timeout: timeout}, nil
+	return &FFmpegProcessor{ffmpeg: ffmpeg, ffprobe: ffprobe, timeout: timeout, maxOutputBytes: defaultMaxProcessedOutputBytes}, nil
 }
 
 // NewFFmpegProcessorWithSettings is the production constructor: the
 // temporary storage directory and processing timeout are operator configured.
-func NewFFmpegProcessorWithSettings(tempDir string, timeout time.Duration) (*FFmpegProcessor, error) {
-	if tempDir == "" || timeout <= 0 {
-		return nil, fmt.Errorf("media processing directory and positive timeout are required")
+func NewFFmpegProcessorWithSettings(tempDir string, timeout time.Duration, maxOutputBytes int64) (*FFmpegProcessor, error) {
+	if tempDir == "" || timeout <= 0 || maxOutputBytes <= 0 {
+		return nil, fmt.Errorf("media processing directory, positive timeout, and output byte limit are required")
 	}
 	if err := os.MkdirAll(tempDir, 0700); err != nil {
 		return nil, err
@@ -93,6 +105,7 @@ func NewFFmpegProcessorWithSettings(tempDir string, timeout time.Duration) (*FFm
 		return nil, err
 	}
 	p.tempDir = tempDir
+	p.maxOutputBytes = maxOutputBytes
 	return p, nil
 }
 
@@ -179,6 +192,9 @@ func (p *FFmpegProcessor) ProcessStream(ctx context.Context, original Media, pro
 		if err != nil {
 			return fail(err)
 		}
+		if err := p.validateOutputBudget(outputs); err != nil {
+			return fail(err)
+		}
 		return outputs, cleanup, nil
 	}
 	input, err = os.Open(inputPath)
@@ -212,7 +228,25 @@ func (p *FFmpegProcessor) ProcessStream(ctx context.Context, original Media, pro
 		}
 		outputs[rendition.Name] = output
 	}
+	if err := p.validateOutputBudget(outputs); err != nil {
+		return fail(err)
+	}
 	return outputs, cleanup, nil
+}
+
+func (p *FFmpegProcessor) validateOutputBudget(outputs map[string]ProcessedFile) error {
+	limit := p.maxOutputBytes
+	if limit <= 0 {
+		limit = defaultMaxProcessedOutputBytes
+	}
+	var total int64
+	for _, output := range outputs {
+		if output.Size < 0 || total > limit-output.Size {
+			return fmt.Errorf("processed media exceeds the configured %d-byte output budget", limit)
+		}
+		total += output.Size
+	}
+	return nil
 }
 
 // Scan WebP chunks without loading the original or any large payload into RAM.
@@ -303,18 +337,29 @@ func isAnimatedWebP(data []byte) bool {
 
 func (p *FFmpegProcessor) processVideoFiles(ctx context.Context, workDir, inputPath string, profile FieldProfile) (map[string]ProcessedFile, error) {
 	v := profile.Video
+	probe, err := p.probeVideo(ctx, inputPath)
+	if err != nil {
+		return nil, fmt.Errorf("probe source video complexity: %w", err)
+	}
+	if err := validateVideoProbe(probe); err != nil {
+		return nil, err
+	}
 	videoPath := filepath.Join(workDir, "video.mp4")
 	videoFilter := fmt.Sprintf("scale=w='min(iw,%d)':h='min(ih,%d)':force_original_aspect_ratio=decrease:force_divisible_by=2", v.MaxWidth, v.MaxHeight)
-	if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", inputPath, "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "-1", "-vf", videoFilter, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", videoPath); err != nil {
+	videoCap, posterCap := p.videoOutputBudgets()
+	if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-i", inputPath, "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", videoFilter, "-c:v", "libx264", "-threads", "2", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-fs", strconv.FormatInt(videoCap, 10), videoPath); err != nil {
 		return nil, fmt.Errorf("encode H.264 video: %w", err)
+	}
+	videoStat, err := os.Stat(videoPath)
+	if err != nil {
+		return nil, err
+	}
+	if videoStat.Size() >= videoCap {
+		return nil, fmt.Errorf("encoded video reached its %d-byte output cap", videoCap)
 	}
 	width, height, err := p.probeDimensions(ctx, videoPath)
 	if err != nil {
 		return nil, fmt.Errorf("probe encoded video: %w", err)
-	}
-	stat, err := os.Stat(videoPath)
-	if err != nil {
-		return nil, err
 	}
 	posterPath := filepath.Join(workDir, "poster.webp")
 	posterWidth, posterHeight, err := p.probeDimensions(ctx, inputPath)
@@ -325,14 +370,111 @@ func (p *FFmpegProcessor) processVideoFiles(ctx context.Context, workDir, inputP
 	if err != nil {
 		return nil, err
 	}
-	if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", inputPath, "-map_metadata", "-1", "-vf", posterFilter, "-frames:v", "1", "-c:v", "libwebp", "-quality", "82", "-compression_level", "6", posterPath); err != nil {
+	if _, err := runCommand(ctx, p.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-i", inputPath, "-map_metadata", "-1", "-vf", posterFilter, "-frames:v", "1", "-c:v", "libwebp", "-quality", "82", "-compression_level", "6", "-fs", strconv.FormatInt(posterCap, 10), posterPath); err != nil {
 		return nil, fmt.Errorf("encode video poster: %w", err)
+	}
+	posterStat, err := os.Stat(posterPath)
+	if err != nil {
+		return nil, err
+	}
+	if posterStat.Size() >= posterCap {
+		return nil, fmt.Errorf("encoded video poster reached its %d-byte output cap", posterCap)
 	}
 	poster, err := inspectImageFile(posterPath)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]ProcessedFile{"video": {Path: videoPath, Size: stat.Size(), MIMEType: "video/mp4", Width: width, Height: height}, "poster": poster}, nil
+	return map[string]ProcessedFile{"video": {Path: videoPath, Size: videoStat.Size(), MIMEType: "video/mp4", Width: width, Height: height}, "poster": poster}, nil
+}
+
+func (p *FFmpegProcessor) videoOutputBudgets() (video, poster int64) {
+	limit := p.maxOutputBytes
+	if limit <= 0 {
+		limit = defaultMaxProcessedOutputBytes
+	}
+	poster = min(maxVideoPosterBytes, limit/2)
+	if poster < 1 {
+		poster = 1
+	}
+	video = limit - poster
+	if video < 1 {
+		video = 1
+	}
+	return video, poster
+}
+
+func validateVideoDuration(duration time.Duration) error {
+	if duration <= 0 || duration > maxVideoDuration {
+		return fmt.Errorf("video duration must be positive and no longer than %s", maxVideoDuration)
+	}
+	return nil
+}
+
+type videoProbe struct {
+	Width      int
+	Height     int
+	FrameRate  float64
+	FrameCount int64
+	Duration   time.Duration
+}
+
+type ffprobeVideoMetadata struct {
+	Streams []struct {
+		Width       int    `json:"width"`
+		Height      int    `json:"height"`
+		AverageRate string `json:"avg_frame_rate"`
+		RealRate    string `json:"r_frame_rate"`
+		FrameCount  string `json:"nb_frames"`
+	} `json:"streams"`
+	Format struct {
+		Duration string `json:"duration"`
+	} `json:"format"`
+}
+
+func validateVideoProbe(probe videoProbe) error {
+	if err := validateVideoDuration(probe.Duration); err != nil {
+		return err
+	}
+	if probe.Width < 1 || probe.Height < 1 || probe.Width > maxVideoDimension || probe.Height > maxVideoDimension {
+		return fmt.Errorf("source video dimensions must be between 1 and %d pixels", maxVideoDimension)
+	}
+	pixels := int64(probe.Width) * int64(probe.Height)
+	if pixels > maxVideoPixels {
+		return fmt.Errorf("source video exceeds the %d-pixel frame budget", maxVideoPixels)
+	}
+	if math.IsNaN(probe.FrameRate) || math.IsInf(probe.FrameRate, 0) || probe.FrameRate <= 0 || probe.FrameRate > maxVideoFrameRate {
+		return fmt.Errorf("source video frame rate must be positive and no greater than %d fps", maxVideoFrameRate)
+	}
+	frames := int64(math.Ceil(probe.FrameRate * probe.Duration.Seconds()))
+	if probe.FrameCount > frames {
+		frames = probe.FrameCount
+	}
+	if frames < 1 || frames > maxVideoPixelFrames/pixels {
+		return fmt.Errorf("source video exceeds the %d pixel-frame processing budget", maxVideoPixelFrames)
+	}
+	return nil
+}
+
+func parseVideoFrameRate(raw string) (float64, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), "/")
+	if len(parts) > 2 || len(parts) == 0 {
+		return 0, false
+	}
+	numerator, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil || math.IsNaN(numerator) || math.IsInf(numerator, 0) || numerator <= 0 {
+		return 0, false
+	}
+	if len(parts) == 2 {
+		denominator, err := strconv.ParseFloat(parts[1], 64)
+		if err != nil || math.IsNaN(denominator) || math.IsInf(denominator, 0) || denominator <= 0 {
+			return 0, false
+		}
+		numerator /= denominator
+	}
+	if math.IsNaN(numerator) || math.IsInf(numerator, 0) || numerator <= 0 {
+		return 0, false
+	}
+	return numerator, true
 }
 
 func renditionFilter(r Rendition, sourceWidth, sourceHeight int) (string, error) {
@@ -376,11 +518,50 @@ func (p *FFmpegProcessor) probeDimensions(ctx context.Context, path string) (int
 	return width, height, err
 }
 
+func (p *FFmpegProcessor) probeVideo(ctx context.Context, path string) (videoProbe, error) {
+	out, err := runCommand(ctx, p.ffprobe, "-v", "error", "-protocol_whitelist", "file,pipe", "-probesize", "16777216", "-analyzeduration", "5000000", "-select_streams", "v:0", "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate,nb_frames:format=duration", "-show_streams", "-show_format", "-of", "json", path)
+	if err != nil {
+		return videoProbe{}, err
+	}
+	var metadata ffprobeVideoMetadata
+	if err := json.Unmarshal(out, &metadata); err != nil {
+		return videoProbe{}, fmt.Errorf("invalid ffprobe response")
+	}
+	if len(metadata.Streams) != 1 {
+		return videoProbe{}, fmt.Errorf("source video stream is unavailable")
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(metadata.Format.Duration), 64)
+	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64(maxVideoDuration)/float64(time.Second) {
+		return videoProbe{}, fmt.Errorf("unsupported source video duration")
+	}
+	stream := metadata.Streams[0]
+	averageRate, averageOK := parseVideoFrameRate(stream.AverageRate)
+	realRate, realOK := parseVideoFrameRate(stream.RealRate)
+	frameRate := 0.0
+	if averageOK {
+		frameRate = averageRate
+	} else if realOK {
+		frameRate = realRate
+	}
+	var frameCount int64
+	if raw := strings.TrimSpace(stream.FrameCount); raw != "" && raw != "N/A" {
+		frameCount, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || frameCount < 0 {
+			return videoProbe{}, fmt.Errorf("invalid source video frame count")
+		}
+	}
+	return videoProbe{Width: stream.Width, Height: stream.Height, FrameRate: frameRate, FrameCount: frameCount, Duration: time.Duration(seconds * float64(time.Second))}, nil
+}
+
 func runCommand(ctx context.Context, executable string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, executable, args...)
-	var stderr bytes.Buffer
+	var stdout cappedBuffer
+	var stderr cappedBuffer
+	stdout.remaining = 4 * 1024 * 1024
+	stderr.remaining = maxCommandDiagnosticBytes
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	err := cmd.Run()
 	if err != nil {
 		message := strings.TrimSpace(stderr.String())
 		if message != "" {
@@ -388,7 +569,38 @@ func runCommand(ctx context.Context, executable string, args ...string) ([]byte,
 		}
 		return nil, err
 	}
-	return out, nil
+	if stdout.truncated {
+		return nil, errors.New("media command output exceeded the configured diagnostic limit")
+	}
+	return stdout.buffer.Bytes(), nil
+}
+
+type cappedBuffer struct {
+	buffer    bytes.Buffer
+	remaining int
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(data []byte) (int, error) {
+	original := len(data)
+	keep := 0
+	if b.remaining > 0 {
+		keep = min(len(data), b.remaining)
+		_, _ = b.buffer.Write(data[:keep])
+		b.remaining -= keep
+	}
+	if keep < original {
+		b.truncated = true
+	}
+	return original, nil
+}
+
+func (b *cappedBuffer) String() string {
+	value := b.buffer.String()
+	if b.truncated {
+		value += "\n[diagnostic truncated]"
+	}
+	return value
 }
 
 func readImageOutput(path string) (ProcessedOutput, error) {

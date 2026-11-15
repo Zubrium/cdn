@@ -18,7 +18,7 @@ const config: SiteConfig = {
   pages: [
     { id: "home", name: "Home", kind: "page", placements: [
       { id: "main-data", slot: "main", build: { featureKey: "main-data", version: "1.0.0" }, dataBindings: [
-        { inputKey: "item", entityId: "entity-product", fieldId: "field-title", relationIds: ["relation-category"] },
+        { inputKey: "item", entityId: "entity-product", fieldId: "field-title" },
       ] },
       { id: "main-data-copy", slot: "footer", build: { featureKey: "main-data", version: "1.0.0" } },
     ] },
@@ -97,7 +97,7 @@ describe("placement-derived feature composition", () => {
     ]);
     expect(config.pages[0]?.placements).toHaveLength(2);
     expect(config.pages[0]?.placements[0]?.dataBindings).toEqual([
-      { inputKey: "item", entityId: "entity-product", fieldId: "field-title", relationIds: ["relation-category"] },
+      { inputKey: "item", entityId: "entity-product", fieldId: "field-title" },
     ]);
   });
 });

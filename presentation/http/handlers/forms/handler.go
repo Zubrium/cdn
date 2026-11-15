@@ -324,9 +324,12 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	var validationErr *forms.ValidationError
 	var conflictErr *forms.ConflictError
 	var exportLimitErr *forms.ExportLimitError
+	var exportByteLimitErr *forms.ExportByteLimitError
 	switch {
 	case errors.As(err, &exportLimitErr):
 		response.Error(w, r, http.StatusRequestEntityTooLarge, "export_limit_exceeded", exportLimitErr.Error())
+	case errors.As(err, &exportByteLimitErr):
+		response.Error(w, r, http.StatusRequestEntityTooLarge, "export_limit_exceeded", exportByteLimitErr.Error())
 	case errors.As(err, &validationErr):
 		details := make([]response.ErrorDetail, 0, len(validationErr.Details))
 		for _, d := range validationErr.Details {

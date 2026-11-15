@@ -4,7 +4,6 @@ import type { MediaRenditionContext, ModelContentFieldProjection, ModelContentWo
 import type { ModelContentDraft } from "../model-content/types";
 import {
   duplicateUniqueModelValueIssues,
-  modelContentRelationIssues,
   modelEntityFields,
   modelRecordTitle,
   orphanedModelContentSelections,
@@ -72,20 +71,16 @@ export function useModelContentEditorModel(
   const selectedRecord = selectedModelRecord(selectedEntity, recordsForEntity, recordId);
   const validation = useMemo(() => {
     const uniqueValueIssues = model ? duplicateUniqueModelValueIssues(draft.records, model) : [];
-    const relationIssues = model ? modelContentRelationIssues(draft.records, model) : [];
     const recordIssues = draft.records.flatMap((record) => {
       const entity = entities.find((item) => item.id === record.entityId);
       if (!entity) return [{ recordId: record.id, issues: [{ path: "entityId", message: "Сущность записи больше не существует." }] }];
-      const orphaned = model ? orphanedModelRecordData(record, model) : { unknownFieldKeys: [], unknownRelationIds: [] };
+      const orphaned = model ? orphanedModelRecordData(record, model) : { unknownFieldKeys: [] };
       const structuralIssues = [
         ...orphaned.unknownFieldKeys.map((key) => ({ path: `values.${key}`, message: "Поле отсутствует в модели." })),
-        ...orphaned.unknownRelationIds.map((id) => ({ path: `relations.${id}`, message: "Связь отсутствует в модели." })),
       ];
       const uniqueIssues = uniqueValueIssues.filter((issue) => issue.recordId === record.id)
         .map((issue) => ({ path: issue.fieldKey, message: issue.message }));
-      const linkedRecordIssues = relationIssues.filter((issue) => issue.recordId === record.id)
-        .map((issue) => ({ path: `relations.${issue.relationId}`, message: issue.message }));
-      return [{ recordId: record.id, issues: [...validateEntryFields(modelEntityFields(entity), record.values), ...structuralIssues, ...uniqueIssues, ...linkedRecordIssues] }];
+      return [{ recordId: record.id, issues: [...validateEntryFields(modelEntityFields(entity), record.values), ...structuralIssues, ...uniqueIssues] }];
     }).filter((item) => item.issues.length > 0);
     const singletonIntegrityIssues = entities.flatMap((entity) => {
       if (entity.cardinality !== "singleton") return [];

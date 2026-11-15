@@ -1,10 +1,14 @@
 package files
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"websiteengine/pkg/principal"
 )
 
 func TestOwnerRateLimiterIsolationAndCapacity(t *testing.T) {
@@ -43,5 +47,42 @@ func TestRateLimitReturnsRetryAfter(t *testing.T) {
 	other := httptest.NewRecorder()
 	if !h.rateAllowed(other, r, "owner:second") {
 		t.Fatal("independent owner was limited")
+	}
+}
+
+func TestAuthenticatedAdminRateLimitIsolatedByPrincipal(t *testing.T) {
+	limiter := newOwnerLimiter(1, 4, time.Minute)
+	h := &Handler{limiter: limiter}
+	a := principal.Principal{TokenID: uuid.New(), Role: principal.RoleUser}
+	b := principal.Principal{TokenID: uuid.New(), Role: principal.RoleUser}
+	requestFor := func(p principal.Principal) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/api/v2/admin/files/limits", nil).
+			WithContext(principal.WithPrincipal(context.Background(), p))
+	}
+	keyA, ok := h.adminPrincipalRateKey(requestFor(a))
+	if !ok {
+		t.Fatal("authenticated principal must produce a rate-limit key")
+	}
+	keyB, ok := h.adminPrincipalRateKey(requestFor(b))
+	if !ok || keyA == keyB {
+		t.Fatal("distinct authenticated principals must have distinct rate-limit keys")
+	}
+	if ok, _ := limiter.allow(keyA, time.Now()); !ok {
+		t.Fatal("first principal request denied")
+	}
+	if ok, _ := limiter.allow(keyA, time.Now()); ok {
+		t.Fatal("first principal should exhaust only their own allowance")
+	}
+	if ok, _ := limiter.allow(keyB, time.Now()); !ok {
+		t.Fatal("one principal exhausted another principal's allowance")
+	}
+}
+
+func TestAdminPrincipalRateKeyRejectsMissingPrincipalIdentity(t *testing.T) {
+	h := &Handler{limiter: newOwnerLimiter(1, 4, time.Minute)}
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/files/limits", nil).
+		WithContext(principal.WithPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}))
+	if _, ok := h.adminPrincipalRateKey(request); ok {
+		t.Fatal("principal without a token ID must not share the nil-UUID rate-limit bucket")
 	}
 }

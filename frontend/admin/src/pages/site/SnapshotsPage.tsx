@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Search } from "lucide-react";
 import { api } from "@/api";
-import { ErrorState, LoadingPage, PageHeader } from "@/components/common/page";
+import { ErrorState, LoadingPage, PageHeader, useDocumentTitle } from "@/components/common/page";
 import { useConfirm } from "@/components/common/confirm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,9 +21,11 @@ function emptySiteConfig(): SiteConfig {
 }
 
 export default function SnapshotsPage() {
+  useDocumentTitle("Дерево снапшотов");
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const snapshots = useQuery({ queryKey: ["site", "snapshot-choices"], queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal) });
   const branches = useQuery({ queryKey: ["branches"], queryFn: ({ signal }) => api.siteBuilder.branches(signal) });
@@ -76,6 +79,12 @@ export default function SnapshotsPage() {
     const parent = snapshots.data?.items.find((item) => item.id === branch.snapshotId)?.parentSnapshotId;
     if (parent) protectedIds.add(parent);
   }
+  const needle = query.trim().toLocaleLowerCase("ru");
+  const visibleSnapshots = (snapshots.data?.items ?? []).filter((snapshot) => {
+    if (!needle) return true;
+    const branchNames = (branches.data?.items ?? []).filter((branch) => branch.snapshotId === snapshot.id).map((branch) => branch.name).join(" ");
+    return `#${snapshot.sequence} ${snapshot.name} ${snapshot.parentName ?? ""} ${branchNames}`.toLocaleLowerCase("ru").includes(needle);
+  });
 
   return (
     <div className="page-grid">
@@ -90,8 +99,13 @@ export default function SnapshotsPage() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">Создаст независимый корневой снапшот с пустой главной страницей без фич и контента. Текущий выбор и назначения веток не изменятся.</p>
+      <label className="relative block max-w-xl">
+        <span className="sr-only">Поиск снапшотов</span>
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <Input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Номер, название или ветка" className="min-h-11 pl-9" />
+      </label>
       <ul aria-label="Дерево снапшотов" className="divide-y divide-border rounded-xl border border-border bg-card">
-        {snapshots.data?.items.map((snapshot) => {
+        {visibleSnapshots.map((snapshot) => {
           const assigned = branches.data?.items.filter((branch) => branch.snapshotId === snapshot.id).map((branch) => branch.name) ?? [];
           const protectedSnapshot = protectedIds.has(snapshot.id);
           return (
@@ -108,6 +122,7 @@ export default function SnapshotsPage() {
           );
         })}
       </ul>
+      {snapshots.data?.items.length !== 0 && visibleSnapshots.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">Снапшоты не найдены.</p>}
       {snapshots.data?.items.length === 0 && <p className="text-sm text-muted-foreground">Создайте пустой сайт или настройте текущий сайт в редакторе.</p>}
       <SitepackImportAction />
     </div>

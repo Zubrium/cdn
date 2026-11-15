@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Boxes, FileCode2, Fingerprint } from "lucide-react";
+import { Boxes, FileCode2 } from "lucide-react";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ErrorState, PageHeader } from "@/components/common/page";
+import { ErrorState, PageHeader, useDocumentTitle } from "@/components/common/page";
 import type { FeatureBuild } from "@/types";
 import { useSiteWorkspace } from "./SiteWorkspace";
 import { selectFeature, selectedFeatures } from "./feature-selection";
 import { groupFeatureBuilds } from "./feature-builds";
 
 export default function FeatureRegistryPage() {
+  useDocumentTitle("Состав фичей");
   const { config, dirty, saving, update, save } = useSiteWorkspace();
   const selected = useMemo(() => selectedFeatures(config), [config]);
   const [items, setItems] = useState<FeatureBuild[]>([]);
@@ -96,7 +98,7 @@ export default function FeatureRegistryPage() {
                         <span className="mt-0.5 block truncate text-xs text-muted-foreground">{group.key} · в снапшоте v{currentVersion} · версий: {group.versions.length}</span>
                       </span>
                     </span>
-                    <span className="flex items-center gap-2 text-xs text-muted-foreground"><Fingerprint className="size-3.5" />{build.digest.slice(0, 16)}</span>
+                    <Badge variant="outline">v{currentVersion}</Badge>
                   </summary>
                   <div className="mt-3 space-y-4 border-t border-border pt-3">
                     <div className="flex flex-wrap items-end gap-3">

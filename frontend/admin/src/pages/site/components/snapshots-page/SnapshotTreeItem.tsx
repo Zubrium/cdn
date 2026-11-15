@@ -1,4 +1,6 @@
 import { Link } from "react-router-dom";
+import { ChevronDown } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatSnapshotDate, snapshotCreationLines, snapshotCreatorLabel } from "@/domains/snapshots/provenance";
 import type { SiteSnapshot } from "@/types";
@@ -30,23 +32,29 @@ export function SnapshotTreeItem({
     : "Корневой снапшот";
 
   return (
-    <li className="p-4">
-      <article className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-sm font-medium">#{snapshot.sequence} · {snapshot.name}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {parentLabel} · {assignedBranchNames.length ? `Ветки: ${assignedBranchNames.join(", ")}` : "Не назначен ветке"}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Создан {formatSnapshotDate(snapshot.createdAt)} · Инициатор: {snapshotCreatorLabel(snapshot)}
-          </p>
-          {snapshot.creationSummary && (
-            <ul aria-label={`Состав изменений снапшота #${snapshot.sequence}`} className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              {snapshotCreationLines(snapshot.creationSummary).map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
-            </ul>
-          )}
-        </div>
-        <div role="group" aria-label={`Действия для снапшота #${snapshot.sequence}`} className="flex flex-wrap gap-2">
+    <li>
+      <details open={assignedBranchNames.length > 0 ? true : undefined} className="group">
+        <summary className="flex min-h-16 cursor-pointer list-none items-center gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">#{snapshot.sequence} · {snapshot.name}</span>
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">{parentLabel} · {formatSnapshotDate(snapshot.createdAt)}</span>
+          </span>
+          {assignedBranchNames.map((branch) => <Badge key={branch} variant="success">{branch}</Badge>)}
+          {assignedBranchNames.length === 0 && <Badge variant="muted">Без ветки</Badge>}
+        </summary>
+        <div className="border-t border-border/70 px-4 pb-4 pt-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">Инициатор: {snapshotCreatorLabel(snapshot)}</p>
+              {snapshot.creationSummary && (
+                <ul aria-label={`Состав изменений снапшота #${snapshot.sequence}`} className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  {snapshotCreationLines(snapshot.creationSummary).map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
+                </ul>
+              )}
+            </div>
+          </div>
+          <div role="group" aria-label={`Действия для снапшота #${snapshot.sequence}`} className="mt-3 flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="outline" disabled={!canCreate || busy} onClick={() => onCreateChild(snapshot.id)}>
             {busy ? "Создаём…" : "Создать потомка"}
           </Button>
@@ -70,8 +78,9 @@ export function SnapshotTreeItem({
           >
             Удалить
           </Button>
+          </div>
         </div>
-      </article>
+      </details>
     </li>
   );
 }

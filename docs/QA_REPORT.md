@@ -999,3 +999,56 @@ Checks for this fix: Engine `pnpm typecheck`, `pnpm build:runtime`, `pnpm lint`,
 The browser error was real on the previously open page: its older prerendered header emitted the absolute internal URL `http://127.0.0.1:8082/feature-assets/69227cd5e89c496f01f5127b3455bb974ffa8def4daa69128e05b46fd3812a12/assets/cow-BZyfs3AS.svg`. That Engine branch intentionally permits same-origin images, not the internal branch port. The current Vitasil `header` source now takes only the asset URL's pathname, query, and fragment when deriving the default logo; the internal prerender origin is not serialized into the page. No CSP exception was added.
 
 After reloading the task-owned QA site, the browser moved from the old tab snapshot to active snapshot sequence 15 (`c512d8f3-8bd0-4eab-9991-d39cbf42a98b`, `header@2.0.16`). The logo URL became `/feature-assets/803a9f9124cc0958cbed7c328e02006afee758ddb620c7d7672d4b477a84e4b4/assets/cow-BZyfs3AS.svg`; it returned HTTP 200 and decoded to 80×80 pixels. The fresh page reported zero console errors or warnings. The earlier CSP message was from the stale page/snapshot and is no longer present after reload. No API writes or changes to Vitasil database/storage were made in this check.
+
+### Flat model pages and relation retirement — 15 November 2026
+
+The model editor was replaced with a searchable model list at `/site/data-model` and a full-screen page at `/site/data-model/:model`. The route parameter is the stable generated entity key, so the URL remains readable; `snapshot` stays in the query string. The page edits name, cardinality, and ordered fields with drag handles and named movement controls. The React Flow canvas, model-relation dialogs, relation inspectors, record-relation editor, and relation counts were removed from the admin. `@xyflow/react` was removed from the frontend dependency graph.
+
+The Go contract now contains flat `DataModel`, flat `ModelContentRecord`, and direct `DataInputBinding` mappings. Compatibility parsing accepts missing, `null`, or empty legacy relation fields but rejects non-empty `dataModel.relations`, record `relations`, and binding `relationIds` with `legacy_model_relations_not_supported`. Rejection does not write a draft or snapshot. Runtime projection resolves direct fields on one model only. Sitepack remaps entity, field, record, file, selection, and history identities without a relation map.
+
+Verification passed:
+
+```text
+pnpm typecheck
+pnpm lint
+pnpm test        # 33 files / 139 tests
+pnpm build
+go test ./...
+go vet ./...
+git diff --check
+```
+
+Frontend component tests cover the model list/detail deep links, field editing and ordering, direct binding choices, flat record forms, and absence of relation controls. Go tests cover flat schema validation, empty/null legacy relation compatibility, non-empty rejection for models, records, and bindings, direct scalar/record/collection bindings, runtime projection, historical record remapping, and sitepack reporting. The HTTP model-content lifecycle rejects a non-empty record relation and verifies that the workspace revision/data remain unchanged.
+
+Read-only Chromium QA against the current Engine API at `127.0.0.1:8080` and a task-owned Vite listener on `127.0.0.1:5176` opened `/site/data-model` from the shared site workspace. The list exposed 12 model deep links, no relation/canvas text, and no console errors. Selecting a model opened its full-screen field editor with snapshot query retained; browser back returned to the list. At 390×844 the document width and scroll width were both 390 CSS px, so no horizontal overflow was present. The browser checked only navigation and rendering; it did not save a model or create a snapshot.
+
+### Website Engine security fixes from supplied candidate reports — 15 November 2026
+
+The supplied JSON reports were treated as leads and checked against the current Website Engine source. The token lifecycle reports duplicated the same two candidates; the files/media report supplied three more. Source review supported these problems in the pre-fix worktree, and the current changes close the relevant paths:
+
+- Token-list React Query keys now include the authenticated principal ID. Login, logout, and unauthorized-session cleanup cancel and clear the query cache so token metadata from one creator scope does not remain in a later session.
+- Token listing uses a stable `(created_at, id)` keyset cursor in the repository, service, HTTP response, and both admin list screens. The UI loads later pages and labels summaries/search as partial while more pages remain. Token creation, list, and detail responses set `Cache-Control: no-store`.
+- Authenticated admin file/media rate-limit keys now use the request token principal rather than the shared admin file owner. The compatibility multipart route creates a database quota reservation before parsing/spooling the request body, then shrinks it only after the streamed body is verified.
+- Video rendition processing probes source duration, dimensions, frame rate, and frame count before FFmpeg encoding; it rejects sources outside the configured decode-work budget, caps FFmpeg threads, and applies per-output caps whose sum equals the configured processed-output budget.
+
+Verification in an OS-isolated, network-disabled Docker environment passed:
+
+```text
+go test -count=1 ./...                         # all Go packages; no DB credentials exposed
+go vet ./...
+TestTokenPolicyAndModeratorScope              # disposable PostgreSQL in tmpfs
+TestUploadStreamReservesQuotaBeforeReadingBody # disposable PostgreSQL in tmpfs
+TestAdminMultipartUploadReservesQuotaBeforeParsingBody
+pnpm typecheck
+pnpm lint
+Vitest                                         # 34 files, 141 tests
+Admin Vite production build                   # output redirected to task scratch
+Public runtime Vite production build           # output redirected to task scratch
+git diff --check
+```
+
+The three PostgreSQL checks used unique `website_engine_*_qa_*` databases in a task-owned tmpfs-only container; each target database was verified to have zero other sessions before use. The API integration test ran schema migrations and pagination against an empty disposable database. No production, shared Engine, Vitasil, external gateway, or object-storage service was contacted.
+
+The host `node_modules` was macOS-specific and lacked Linux optional packages. To run the Node checks, a task-owned copy of the current frontend lockfile was materialized offline from the already-cached local pnpm store with `pnpm install --offline --frozen-lockfile --ignore-scripts`, then mounted read-only during tests/builds. This did not access a registry or execute package lifecycle scripts, but it deviates from the security-audit skill's stricter “do not install dependencies” rule; the formal security audit therefore remains incomplete. The build outputs and package copy were kept outside the repository.
+
+No real-browser E2E/role matrix was run. A production-readiness or complete security-audit claim is not supported: the formal run-3 has no fresh independent verifier in this session, and the following broader ledger candidates remain unresolved rather than confirmed findings: `feature-lab.vite-fs-allowlist-symlink-escape`, `client:runtime-module-shared-admin-token`, `github-actions:docs-workflow:unscoped-default-token`, `github-actions:engine-image:unrestricted-semver-tag-publish`, `runtime:query-variant-prerender-amplification`, `runtime:webrtc-prerender-egress`, `sitebuilder:data-input-overlap-quadratic`, `sitebuilder:feature-build-staging-orphan`, `sitepack-import/ambiguous-commit-cleanup-secondary-objects`, `sitepack-import/build-objects-not-rollback-tracked`, and `presentation/http/middleware/middleware.go:untrusted-proxy-rate-key`. Production gateway, identity-provider, and storage-provider behavior is outside this local source check.

@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { KeyRound, RefreshCw, Search, UsersRound, X } from "lucide-react";
 import { api } from "@/api";
 import type { Role } from "@/types";
 import { queryKeys } from "@/lib/query-keys";
+import { useAuth } from "@/app/auth";
 import { formatDate, formatDateTime, roleLabels } from "@/lib/format";
 import {
   EmptyState,
@@ -25,15 +26,22 @@ import {
 type RoleFilter = Role | "all";
 
 export default function UsersPage() {
+  const { principal } = useAuth();
   const [search, setSearch] = useState("");
   const [role, setRole] = useState<RoleFilter>("all");
 
-  const tokensQuery = useQuery({
-    queryKey: queryKeys.tokens.list(),
-    queryFn: ({ signal }) => api.tokens.list(signal),
+  const tokensQuery = useInfiniteQuery({
+    queryKey: queryKeys.tokens.list(principal?.id ?? ""),
+    queryFn: ({ pageParam, signal }) => api.tokens.list(pageParam, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
+    enabled: Boolean(principal),
   });
 
-  const all = useMemo(() => tokensQuery.data?.items ?? [], [tokensQuery.data]);
+  const all = useMemo(
+    () => tokensQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [tokensQuery.data],
+  );
 
   const users = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -41,7 +49,7 @@ export default function UsersPage() {
       if (role !== "all" && token.role !== role) return false;
       if (
         query &&
-        !`${token.name} ${roleLabels[token.role]} ${token.id}`
+        !`${token.name} ${roleLabels[token.role]}`
           .toLowerCase()
           .includes(query)
       ) {
@@ -108,7 +116,7 @@ export default function UsersPage() {
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск по имени, роли или ID"
+            placeholder="Поиск по имени или роли"
             aria-label="Поиск пользователей"
             className="pl-9 pr-9"
           />
@@ -180,12 +188,7 @@ export default function UsersPage() {
               {users.map((user) => (
                 <tr key={user.id}>
                   <td>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{user.name}</p>
-                      <code className="block truncate text-2xs text-muted-foreground">
-                        {user.id}
-                      </code>
-                    </div>
+                    <p className="truncate text-sm font-medium">{user.name}</p>
                   </td>
                   <td>
                     <RoleBadge role={user.role} />
@@ -230,9 +233,6 @@ export default function UsersPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{user.name}</p>
-                  <code className="block truncate text-2xs text-muted-foreground">
-                    {user.id}
-                  </code>
                 </div>
                 <RoleBadge role={user.role} />
               </div>
@@ -255,6 +255,26 @@ export default function UsersPage() {
           ))}
         </div>
         </>
+      )}
+
+      {tokensQuery.hasNextPage && (
+        <p className="text-sm text-muted-foreground">
+          Поиск применяется к загруженным записям. Загрузите следующие страницы, чтобы найти остальных пользователей.
+        </p>
+      )}
+
+      {tokensQuery.hasNextPage && (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-11"
+            loading={tokensQuery.isFetchingNextPage}
+            onClick={() => void tokensQuery.fetchNextPage()}
+          >
+            Загрузить ещё пользователей
+          </Button>
+        </div>
       )}
     </div>
   );

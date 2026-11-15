@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -8,6 +9,15 @@ import (
 
 	"websiteengine/features/media"
 )
+
+func validateOriginalRaster(contentType string, head []byte) error {
+	switch contentType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+		return media.ValidateRasterReader(bytes.NewReader(head))
+	default:
+		return nil
+	}
+}
 
 // ClassifyContentType derives the type from bytes, not from a request header.
 // A supplied SVG reader is parsed to EOF using the presentation-only SVG

@@ -1,8 +1,11 @@
 package sitebuilder
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"strings"
@@ -13,12 +16,13 @@ import (
 
 var dataModelKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+var ErrLegacyModelRelations = errors.New("legacy_model_relations_not_supported")
+
 // DataModel is the schema and editor layout attached to an immutable snapshot.
 // Record values live in the snapshot content workspace, not here.
 type DataModel struct {
 	FormatVersion int                          `json:"formatVersion"`
 	Entities      []DataModelEntity            `json:"entities"`
-	Relations     []DataModelRelation          `json:"relations,omitempty"`
 	Positions     map[string]DataModelPosition `json:"positions,omitempty"`
 }
 
@@ -44,14 +48,6 @@ type DataModelField struct {
 	Type    string   `json:"type"`
 	Unique  bool     `json:"unique,omitempty"`
 	Options []string `json:"options,omitempty"`
-}
-
-type DataModelRelation struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	FromEntityID string `json:"fromEntityId"`
-	ToEntityID   string `json:"toEntityId"`
-	Cardinality  string `json:"cardinality"`
 }
 
 type DataModelPosition struct {
@@ -130,26 +126,6 @@ func ValidateDataModel(model DataModel) error {
 		entities[entity.ID] = entity
 	}
 
-	for _, relation := range model.Relations {
-		if err := registerDataModelID(ids, relation.ID, "relation"); err != nil {
-			return err
-		}
-		if !validDataModelName(relation.Name) {
-			return fmt.Errorf("dataModel relation %q must have a name", relation.ID)
-		}
-		if _, ok := entities[relation.FromEntityID]; !ok {
-			return fmt.Errorf("dataModel relation %q has an unknown source entity", relation.Name)
-		}
-		if _, ok := entities[relation.ToEntityID]; !ok {
-			return fmt.Errorf("dataModel relation %q has an unknown target entity", relation.Name)
-		}
-		switch relation.Cardinality {
-		case "one-to-one", "one-to-many", "many-to-many":
-		default:
-			return fmt.Errorf("dataModel relation %q has unsupported cardinality %q", relation.Name, relation.Cardinality)
-		}
-	}
-
 	for entityID, position := range model.Positions {
 		if _, ok := entities[entityID]; !ok {
 			return fmt.Errorf("dataModel canvas references unknown entity %q", entityID)
@@ -159,6 +135,66 @@ func ValidateDataModel(model DataModel) error {
 		}
 	}
 	return nil
+}
+
+// UnmarshalJSON keeps snapshots and API requests from returning or accepting
+// the retired relation model while allowing legacy empty relation fields.
+func (model *DataModel) UnmarshalJSON(raw []byte) error {
+	type dataModelAlias DataModel
+	alias := dataModelAlias{}
+	wire := struct {
+		*dataModelAlias
+		Relations json.RawMessage `json:"relations"`
+	}{dataModelAlias: &alias}
+	if err := decodeStrictModelJSON(raw, &wire); err != nil {
+		return err
+	}
+	if nonEmpty, err := legacyJSONValueNonEmpty(wire.Relations); err != nil {
+		return fmt.Errorf("%w: dataModel.relations: %v", ErrLegacyModelRelations, err)
+	} else if nonEmpty {
+		return fmt.Errorf("%w: dataModel.relations", ErrLegacyModelRelations)
+	}
+	*model = DataModel(alias)
+	return nil
+}
+
+func decodeStrictModelJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func legacyJSONValueNonEmpty(raw json.RawMessage) (bool, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false, nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var values []json.RawMessage
+		if err := json.Unmarshal(trimmed, &values); err != nil {
+			return false, err
+		}
+		return len(values) > 0, nil
+	case '{':
+		var values map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &values); err != nil {
+			return false, err
+		}
+		return len(values) > 0, nil
+	default:
+		return true, nil
+	}
 }
 
 func registerDataModelID(ids map[uuid.UUID]string, value, kind string) error {
@@ -189,7 +225,6 @@ func cloneDataModel(model *DataModel) *DataModel {
 			cloned.Entities[index].Fields[fieldIndex].Options = append([]string(nil), model.Entities[index].Fields[fieldIndex].Options...)
 		}
 	}
-	cloned.Relations = append([]DataModelRelation(nil), model.Relations...)
 	if model.Positions != nil {
 		cloned.Positions = make(map[string]DataModelPosition, len(model.Positions))
 		for id, position := range model.Positions {

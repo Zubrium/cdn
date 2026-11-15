@@ -12,14 +12,31 @@ import (
 )
 
 // ModelContentRecord is one snapshot-scoped CMS record. Values are keyed by
-// stable model field keys; relation values are keyed by relation ID and list
-// target record IDs. Generated record IDs are never model field values.
+// stable model field keys. Generated record IDs are never model field values.
 type ModelContentRecord struct {
-	ID        string              `json:"id"`
-	EntityID  string              `json:"entityId"`
-	SortOrder int                 `json:"sortOrder"`
-	Values    map[string]any      `json:"values"`
-	Relations map[string][]string `json:"relations,omitempty"`
+	ID        string         `json:"id"`
+	EntityID  string         `json:"entityId"`
+	SortOrder int            `json:"sortOrder"`
+	Values    map[string]any `json:"values"`
+}
+
+func (record *ModelContentRecord) UnmarshalJSON(raw []byte) error {
+	type recordAlias ModelContentRecord
+	alias := recordAlias{}
+	wire := struct {
+		*recordAlias
+		Relations json.RawMessage `json:"relations"`
+	}{recordAlias: &alias}
+	if err := decodeStrictModelJSON(raw, &wire); err != nil {
+		return err
+	}
+	if nonEmpty, err := legacyJSONValueNonEmpty(wire.Relations); err != nil {
+		return fmt.Errorf("%w: modelContentRecord.relations: %v", ErrLegacyModelRelations, err)
+	} else if nonEmpty {
+		return fmt.Errorf("%w: modelContentRecord.relations", ErrLegacyModelRelations)
+	}
+	*record = ModelContentRecord(alias)
+	return nil
 }
 
 // ModelContentSelection is an ordered editorial selection for one placement
@@ -42,7 +59,7 @@ type ModelContentPlacement struct {
 }
 
 // ValidateModelContent checks the snapshot model, placement bindings, records,
-// relations, unique values, and editorial selections without accessing
+// unique values, and editorial selections without accessing
 // storage. Absent records and field values are valid; a missing collection
 // selection means all published records, while a missing scalar/record
 // selection is an empty runtime input. Route-looked-up record inputs must not
@@ -64,12 +81,8 @@ func validateModelContent(model DataModel, placements []ModelContentPlacement, r
 	}
 
 	entitiesByID := make(map[string]DataModelEntity, len(model.Entities))
-	relationsByID := make(map[string]DataModelRelation, len(model.Relations))
 	for _, entity := range model.Entities {
 		entitiesByID[entity.ID] = entity
-	}
-	for _, relation := range model.Relations {
-		relationsByID[relation.ID] = relation
 	}
 
 	placementsByID := make(map[string]ModelContentPlacement, len(placements))
@@ -114,9 +127,6 @@ func validateModelContent(model DataModel, placements []ModelContentPlacement, r
 	}
 
 	if err := validateModelContentValues(entitiesByID, records); err != nil {
-		return err
-	}
-	if err := validateModelContentRelations(relationsByID, recordsByID, records); err != nil {
 		return err
 	}
 	if err := validateModelContentSelections(placementsByID, entitiesByID, recordsByID, selections); err != nil {
@@ -287,52 +297,6 @@ func modelContentUniqueValue(fieldType string, value any) (string, error) {
 	return "string:" + text, nil
 }
 
-func validateModelContentRelations(relationsByID map[string]DataModelRelation, recordsByID map[string]*ModelContentRecord, records []ModelContentRecord) error {
-	uniqueOwners := make(map[string]string)
-	for index := range records {
-		record := &records[index]
-		path := fmt.Sprintf("modelContent.records[%d].relations", index)
-		for relationID, targetIDs := range record.Relations {
-			relation, exists := relationsByID[relationID]
-			if !exists {
-				return fmt.Errorf("%s.%s: unknown relation ID", path, relationID)
-			}
-			if record.EntityID != relation.FromEntityID {
-				return fmt.Errorf("%s.%s: relation source entity does not match record entity", path, relationID)
-			}
-			if relation.Cardinality == "one-to-one" && len(targetIDs) > 1 {
-				return fmt.Errorf("%s.%s: one-to-one relation accepts at most one target", path, relationID)
-			}
-			seenTargets := make(map[string]bool, len(targetIDs))
-			for targetIndex, targetID := range targetIDs {
-				targetPath := fmt.Sprintf("%s.%s[%d]", path, relationID, targetIndex)
-				if err := validateModelContentUUID(targetID); err != nil {
-					return fmt.Errorf("%s: %w", targetPath, err)
-				}
-				if seenTargets[targetID] {
-					return fmt.Errorf("%s: duplicate relation target %q", targetPath, targetID)
-				}
-				seenTargets[targetID] = true
-				target, exists := recordsByID[targetID]
-				if !exists {
-					return fmt.Errorf("%s: referenced record does not exist", targetPath)
-				}
-				if target.EntityID != relation.ToEntityID {
-					return fmt.Errorf("%s: target entity does not match relation target", targetPath)
-				}
-				if relation.Cardinality == "one-to-one" || relation.Cardinality == "one-to-many" {
-					ownerKey := relationID + "\x00" + targetID
-					if previousID, exists := uniqueOwners[ownerKey]; exists && previousID != record.ID {
-						return fmt.Errorf("%s: target record %q is already linked from record %q", targetPath, targetID, previousID)
-					}
-					uniqueOwners[ownerKey] = record.ID
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func validateModelContentSelections(placements map[string]ModelContentPlacement, entities map[string]DataModelEntity, recordsByID map[string]*ModelContentRecord, selections []ModelContentSelection) error {
 	type selectionKey struct {
 		placementID string
@@ -467,18 +431,7 @@ func validateModelContentEnumBindings(placement ModelContentPlacement, model Dat
 				continue
 			}
 			declared, exists := declaredFields[pointerKey(segments)]
-			fieldEntity, _, relationErr := dataInputRelationTarget(model, binding.EntityID, mapping.RelationIDs)
-			if relationErr != nil {
-				continue // The binding validator reports malformed relation paths.
-			}
-			targetFields := modelFields
-			if fieldEntity.ID != entity.ID {
-				targetFields = make(map[string]DataModelField, len(fieldEntity.Fields))
-				for _, field := range fieldEntity.Fields {
-					targetFields[field.ID] = field
-				}
-			}
-			modelField, modelExists := targetFields[mapping.FieldID]
+			modelField, modelExists := modelFields[mapping.FieldID]
 			if exists && modelExists && declared.Type == "enum" && modelField.Type == "enum" {
 				if err := validateModelContentEnumOptions(port.Key, declared.Path, modelField, declared.Values); err != nil {
 					return err

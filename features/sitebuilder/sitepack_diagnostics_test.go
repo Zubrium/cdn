@@ -74,17 +74,15 @@ func TestSitepackPreflightFailureCreatesNoSnapshotOrObjects(t *testing.T) {
 
 func TestSitepackReportItemsDescribeModelIdentityRemapsWithoutValues(t *testing.T) {
 	remap := sitepackModelIDRemap{
-		entities:  map[string]string{uuid.NewString(): uuid.NewString()},
-		fields:    map[string]string{uuid.NewString(): uuid.NewString(), uuid.NewString(): uuid.NewString()},
-		relations: map[string]string{uuid.NewString(): uuid.NewString()},
-		records:   map[string]string{uuid.NewString(): uuid.NewString(), uuid.NewString(): uuid.NewString()},
+		entities: map[string]string{uuid.NewString(): uuid.NewString()},
+		fields:   map[string]string{uuid.NewString(): uuid.NewString(), uuid.NewString(): uuid.NewString()},
+		records:  map[string]string{uuid.NewString(): uuid.NewString(), uuid.NewString(): uuid.NewString()},
 	}
 	report := SitepackReport{}
 	addSitepackModelReportItems(&report, remap)
-	if len(report.Items) != 4 || report.Items[0].Kind != "model_entity" || report.Items[0].Count != 1 ||
+	if len(report.Items) != 3 || report.Items[0].Kind != "model_entity" || report.Items[0].Count != 1 ||
 		report.Items[1].Kind != "model_field" || report.Items[1].Count != 2 ||
-		report.Items[2].Kind != "model_relation" || report.Items[2].Count != 1 ||
-		report.Items[3].Kind != "model_record" || report.Items[3].Count != 2 {
+		report.Items[2].Kind != "model_record" || report.Items[2].Count != 2 {
 		t.Fatalf("model identity remaps missing: %#v", report.Items)
 	}
 	encoded, err := json.Marshal(report.Items)

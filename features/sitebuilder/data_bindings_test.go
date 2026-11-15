@@ -1,11 +1,40 @@
 package sitebuilder
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+func TestDataInputBindingsRejectLegacyRelationIDs(t *testing.T) {
+	for _, raw := range []string{
+		`{"inputKey":"product","entityId":"` + uuid.NewString() + `","relationIds":["` + uuid.NewString() + `"]}`,
+		`{"inputKey":"product","entityId":"` + uuid.NewString() + `","fields":[{"inputPath":"/title","fieldId":"` + uuid.NewString() + `","relationIds":["` + uuid.NewString() + `"]}]}`,
+	} {
+		var binding DataInputBinding
+		if err := json.Unmarshal([]byte(raw), &binding); !errors.Is(err, ErrLegacyModelRelations) {
+			t.Fatalf("json.Unmarshal() error = %v, want ErrLegacyModelRelations", err)
+		}
+	}
+}
+
+func TestDataInputBindingsAcceptEmptyLegacyRelationIDsAndOmitThem(t *testing.T) {
+	raw := `{"inputKey":"product","entityId":"` + uuid.NewString() + `","fieldId":"` + uuid.NewString() + `","relationIds":[]}`
+	var binding DataInputBinding
+	if err := json.Unmarshal([]byte(raw), &binding); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	encoded, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"relationIds"`) {
+		t.Fatalf("marshaled binding returned relationIds: %s", encoded)
+	}
+}
 
 type typedBindingFixture struct {
 	model            DataModel
@@ -275,8 +304,8 @@ func TestValidateDataInputBindingsRejectsInvalidBindings(t *testing.T) {
 			},
 		},
 		{
-			name:      "array path needs an explicit relation projection",
-			wantError: "array wildcards",
+			name:      "relation wildcard path is retired",
+			wantError: "retired relation wildcards",
 			mutate: func(f *typedBindingFixture) {
 				f.ports[1].Fields[0].Path = "/gallery/*/title"
 				f.bindings[1].Fields[0].InputPath = "/gallery/*/title"
@@ -335,68 +364,6 @@ func TestValidateDataInputBindingsRejectsInvalidBindings(t *testing.T) {
 			}
 			if test.wantError != "" && !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("ValidateDataInputBindings() error = %v, want message containing %q", err, test.wantError)
-			}
-		})
-	}
-}
-
-func TestValidateDataInputBindingsSupportsDirectedRelationPaths(t *testing.T) {
-	productID, categoryID, brandID, reviewID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	categoryRelationID, brandRelationID, reviewsRelationID, reverseCategoryRelationID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	productTitleID, categoryNameID, brandNameID, reviewTitleID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	model := DataModel{FormatVersion: 1,
-		Entities: []DataModelEntity{
-			{ID: productID, Key: "product", Name: "Product", Fields: []DataModelField{{ID: productTitleID, Key: "title", Name: "Title", Type: "text"}}},
-			{ID: categoryID, Key: "category", Name: "Category", Fields: []DataModelField{{ID: categoryNameID, Key: "name", Name: "Name", Type: "text"}}},
-			{ID: brandID, Key: "brand", Name: "Brand", Fields: []DataModelField{{ID: brandNameID, Key: "name", Name: "Name", Type: "text"}}},
-			{ID: reviewID, Key: "review", Name: "Review", Fields: []DataModelField{{ID: reviewTitleID, Key: "title", Name: "Title", Type: "text"}}},
-		},
-		Relations: []DataModelRelation{
-			{ID: categoryRelationID, Name: "Category", FromEntityID: productID, ToEntityID: categoryID, Cardinality: "one-to-one"},
-			{ID: reverseCategoryRelationID, Name: "Reverse products", FromEntityID: categoryID, ToEntityID: productID, Cardinality: "one-to-one"},
-			{ID: brandRelationID, Name: "Brand", FromEntityID: categoryID, ToEntityID: brandID, Cardinality: "one-to-one"},
-			{ID: reviewsRelationID, Name: "Reviews", FromEntityID: productID, ToEntityID: reviewID, Cardinality: "one-to-many"},
-		},
-	}
-	make := func(path, fieldID string, relationIDs ...string) error {
-		return ValidateDataInputBindings(model,
-			[]DataInputPort{{Key: "product", Kind: "record", Fields: []DataInputField{{Path: path, Type: "text"}}}},
-			[]DataInputBinding{{InputKey: "product", EntityID: productID, Fields: []DataInputFieldBinding{{InputPath: path, FieldID: fieldID, RelationIDs: relationIDs}}}}, nil)
-	}
-	for name, test := range map[string]struct {
-		path, fieldID string
-		relations     []string
-		wantError     string
-	}{
-		"direct field":      {path: "/title", fieldID: productTitleID},
-		"one-to-one":        {path: "/category/name", fieldID: categoryNameID, relations: []string{categoryRelationID}},
-		"nested one-to-one": {path: "/category/brand/name", fieldID: brandNameID, relations: []string{categoryRelationID, brandRelationID}},
-		"one-to-many":       {path: "/reviews/*/title", fieldID: reviewTitleID, relations: []string{reviewsRelationID}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := make(test.path, test.fieldID, test.relations...); err != nil {
-				t.Fatalf("valid relation binding rejected: %v", err)
-			}
-		})
-	}
-	for name, test := range map[string]struct {
-		path, fieldID string
-		relations     []string
-		wantError     string
-	}{
-		"missing wildcard":                {path: "/reviews/title", fieldID: reviewTitleID, relations: []string{reviewsRelationID}, wantError: "array wildcards"},
-		"wildcard without multi relation": {path: "/category/*/name", fieldID: categoryNameID, relations: []string{categoryRelationID}, wantError: "array wildcards"},
-		"reversed edge":                   {path: "/category/title", fieldID: productTitleID, relations: []string{reverseCategoryRelationID}, wantError: "does not start at entity"},
-		"field outside path target":       {path: "/category/title", fieldID: productTitleID, relations: []string{categoryRelationID}, wantError: "references unknown field"},
-		"unknown relation":                {path: "/category/name", fieldID: categoryNameID, relations: []string{uuid.NewString()}, wantError: "unknown relation"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := make(test.path, test.fieldID, test.relations...)
-			if err == nil {
-				t.Fatal("invalid relation binding was accepted")
-			}
-			if !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("invalid relation binding error = %v, want message containing %q", err, test.wantError)
 			}
 		})
 	}

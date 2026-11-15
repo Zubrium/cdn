@@ -360,10 +360,6 @@ func cloneModelContentRecords(records []sitebuilder.ModelContentRecord) []sitebu
 		for key, value := range record.Values {
 			cloned[index].Values[key] = value
 		}
-		cloned[index].Relations = make(map[string][]string, len(record.Relations))
-		for relationID, targets := range record.Relations {
-			cloned[index].Relations[relationID] = append([]string(nil), targets...)
-		}
 	}
 	return cloned
 }

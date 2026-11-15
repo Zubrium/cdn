@@ -32,8 +32,7 @@ export function PlacementSelections({
   confirmCleanup,
 }: PlacementSelectionsProps) {
   if (workspace.placements.length === 0) return null;
-  return <section className="min-w-0 space-y-3 rounded-xl border border-border bg-card p-4">
-    <div><h2 className="font-semibold">Записи размещений</h2><p className="text-sm text-muted-foreground">Выберите публичные записи отдельно для каждого размещения.</p></div>
+  return <div className="min-w-0 space-y-3">
     {workspace.placements.flatMap((placement) => placement.inputs.map((input) => {
       const entity = model.entities.find((item) => item.id === input.entityId);
       const candidates = draft.records.filter((record) => record.entityId === input.entityId).sort((a, b) => a.sortOrder - b.sortOrder);
@@ -159,5 +158,5 @@ export function PlacementSelections({
         )}
       </article>;
     }))}
-  </section>;
+  </div>;
 }

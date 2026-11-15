@@ -3,11 +3,14 @@ package media
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +43,119 @@ func TestRenditionWorkerRequiresExplicitTiming(t *testing.T) {
 	}
 	if err := service.SetRenditionWorkerConfig(20*time.Minute, time.Second); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunCommandBoundsCapturedDiagnostics(t *testing.T) {
+	command, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("shell unavailable")
+	}
+	_, err = runCommand(context.Background(), command, "-c", "yes x | head -c 1000000 >&2; exit 1")
+	if err == nil {
+		t.Fatal("expected failing command error")
+	}
+	if len(err.Error()) > maxCommandDiagnosticBytes+64 {
+		t.Fatalf("diagnostic error retained %d bytes, limit %d", len(err.Error()), maxCommandDiagnosticBytes)
+	}
+	if !strings.Contains(err.Error(), "diagnostic truncated") {
+		t.Fatalf("truncation marker missing from error: %q", err.Error()[:120])
+	}
+}
+
+func TestProcessedOutputBudgetUsesAggregateBytes(t *testing.T) {
+	processor := &FFmpegProcessor{maxOutputBytes: 10}
+	outputs := map[string]ProcessedFile{
+		"first":  {Size: 6},
+		"second": {Size: 5},
+	}
+	if err := processor.validateOutputBudget(outputs); err == nil {
+		t.Fatal("aggregate output budget was not enforced")
+	}
+	outputs["second"] = ProcessedFile{Size: 4}
+	if err := processor.validateOutputBudget(outputs); err != nil {
+		t.Fatalf("outputs exactly within budget rejected: %v", err)
+	}
+}
+
+func TestVideoOutputCapsShareConfiguredBudget(t *testing.T) {
+	processor := &FFmpegProcessor{maxOutputBytes: 5 << 30}
+	video, poster := processor.videoOutputBudgets()
+	if video < 1 || poster < 1 || video+poster != processor.maxOutputBytes {
+		t.Fatalf("video/poster caps = %d/%d, want positive caps summing to %d", video, poster, processor.maxOutputBytes)
+	}
+	if poster > maxVideoPosterBytes {
+		t.Fatalf("poster cap %d exceeds %d", poster, maxVideoPosterBytes)
+	}
+}
+
+func TestVideoDurationBudgetRejectsLongSources(t *testing.T) {
+	if err := validateVideoDuration(maxVideoDuration); err != nil {
+		t.Fatalf("exact duration limit rejected: %v", err)
+	}
+	if err := validateVideoDuration(maxVideoDuration + time.Millisecond); err == nil {
+		t.Fatal("duration above the source limit was accepted")
+	}
+	if err := validateVideoDuration(-time.Second); err == nil {
+		t.Fatal("negative duration was accepted")
+	}
+}
+
+func TestVideoSourceComplexityBudget(t *testing.T) {
+	valid := videoProbe{Width: 1920, Height: 1080, FrameRate: 30, FrameCount: 18_000, Duration: 10 * time.Minute}
+	if err := validateVideoProbe(valid); err != nil {
+		t.Fatalf("supported 1080p source rejected: %v", err)
+	}
+
+	for name, probe := range map[string]videoProbe{
+		"dimensions":   {Width: 9000, Height: 1080, FrameRate: 30, Duration: time.Minute},
+		"pixels":       {Width: 7680, Height: 7680, FrameRate: 30, Duration: time.Second},
+		"frame rate":   {Width: 1920, Height: 1080, FrameRate: 120, Duration: time.Second},
+		"pixel frames": {Width: 3840, Height: 2160, FrameRate: 30, FrameCount: 10_000, Duration: 10 * time.Second},
+		"missing rate": {Width: 1920, Height: 1080, Duration: time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateVideoProbe(probe); err == nil {
+				t.Fatalf("unsupported source complexity was accepted: %+v", probe)
+			}
+		})
+	}
+}
+
+func TestVideoComplexityPreflightRejectsBeforeFFmpeg(t *testing.T) {
+	dir := t.TempDir()
+	ffprobe := filepath.Join(dir, "ffprobe")
+	ffmpeg := filepath.Join(dir, "ffmpeg")
+	ffmpegMarker := filepath.Join(dir, "ffmpeg-ran")
+	probeJSON := `{"streams":[{"width":9000,"height":2160,"avg_frame_rate":"30/1","r_frame_rate":"30/1","nb_frames":"300"}],"format":{"duration":"10"}}`
+	if err := os.WriteFile(ffprobe, []byte("#!/bin/sh\nprintf '%s' '"+probeJSON+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ffmpeg, []byte(fmt.Sprintf("#!/bin/sh\nprintf ran > %q\nexit 99\n", ffmpegMarker)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	processor := &FFmpegProcessor{ffmpeg: ffmpeg, ffprobe: ffprobe, tempDir: dir, timeout: time.Minute}
+	profile := FieldProfile{Accept: "video", Video: &VideoProfile{MaxWidth: 640, MaxHeight: 480, Poster: Rendition{Name: "poster", Width: 100, Height: 100, Fit: "contain"}}}
+	_, _, err := processor.ProcessStream(context.Background(), Media{ContentType: "video/mp4", SizeBytes: 4}, profile, bytes.NewReader([]byte("data")))
+	if err == nil || !strings.Contains(err.Error(), "dimensions") {
+		t.Fatalf("oversized source was not rejected by preflight: %v", err)
+	}
+	if _, err := os.Stat(ffmpegMarker); !os.IsNotExist(err) {
+		t.Fatalf("FFmpeg ran before source complexity was rejected: %v", err)
+	}
+}
+
+func TestParseVideoFrameRate(t *testing.T) {
+	for input, want := range map[string]float64{"30/1": 30, "30000/1001": 29.97002997002997, "24": 24} {
+		got, ok := parseVideoFrameRate(input)
+		if !ok || math.Abs(got-want) > 0.001 {
+			t.Fatalf("parseVideoFrameRate(%q) = %v, %v; want %v", input, got, ok, want)
+		}
+	}
+	for _, input := range []string{"", "N/A", "0/0", "30/0", "-1/1", "NaN"} {
+		if _, ok := parseVideoFrameRate(input); ok {
+			t.Fatalf("invalid rate %q was accepted", input)
+		}
 	}
 }
 
@@ -103,6 +219,34 @@ func TestFFmpegProcessorRejectsOversizedSourceDimensionsBeforeEncoding(t *testin
 	_, err := processor.Process(context.Background(), Media{ContentType: "image/png"}, profile, data)
 	if err == nil || !strings.Contains(err.Error(), "dimensions are not supported") {
 		t.Fatalf("oversized source dimensions error=%v, want a clear pre-encode rejection", err)
+	}
+}
+
+func TestValidateRasterReaderRejectsOversizedHeader(t *testing.T) {
+	data := pngFixture(t, 1, 1)
+	binary.BigEndian.PutUint32(data[16:20], uint32(maxImagePixels))
+	binary.BigEndian.PutUint32(data[20:24], 2)
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	if err := ValidateRasterReader(bytes.NewReader(data)); err == nil {
+		t.Fatal("oversized raster header was accepted")
+	}
+}
+
+func TestValidateSVGReaderRejectsUnsafeEmbeddedRaster(t *testing.T) {
+	data := pngFixture(t, 1, 1)
+	binary.BigEndian.PutUint32(data[16:20], uint32(maxImagePixels))
+	binary.BigEndian.PutUint32(data[20:24], 2)
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	oversized := `<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,` + base64.StdEncoding.EncodeToString(data) + `"/></svg>`
+	if err := ValidateSVGReader(strings.NewReader(oversized)); err == nil {
+		t.Fatal("oversized embedded raster was accepted")
+	}
+	animatedGIF := `<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="/></svg>`
+	if err := ValidateSVGReader(strings.NewReader(animatedGIF)); err == nil {
+		t.Fatal("embedded GIF was accepted")
+	}
+	if err := ValidateSVGReader(strings.NewReader(fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,%s"/></svg>`, base64.StdEncoding.EncodeToString(pngFixture(t, 1, 1))))); err != nil {
+		t.Fatalf("safe embedded PNG rejected: %v", err)
 	}
 }
 

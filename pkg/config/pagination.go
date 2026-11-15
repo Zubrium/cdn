@@ -7,9 +7,10 @@ import (
 )
 
 type PaginationConfig struct {
-	AdminPageSize           int
-	PublicPageSize          int
-	SubmissionExportMaxRows int
+	AdminPageSize            int
+	PublicPageSize           int
+	SubmissionExportMaxRows  int
+	SubmissionExportMaxBytes int64
 }
 
 func LoadPagination() (PaginationConfig, error) {
@@ -32,5 +33,14 @@ func LoadPagination() (PaginationConfig, error) {
 	if cfg.PublicPageSize > cfg.AdminPageSize {
 		return cfg, fmt.Errorf("PUBLIC_PAGE_SIZE must not exceed ADMIN_PAGE_SIZE")
 	}
+	raw, ok := os.LookupEnv("SUBMISSION_EXPORT_MAX_BYTES")
+	if !ok || raw == "" {
+		return cfg, fmt.Errorf("SUBMISSION_EXPORT_MAX_BYTES is required (see .env.example)")
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 1<<20 || value > 1<<30 {
+		return cfg, fmt.Errorf("SUBMISSION_EXPORT_MAX_BYTES must be between 1 MiB and 1 GiB")
+	}
+	cfg.SubmissionExportMaxBytes = value
 	return cfg, nil
 }

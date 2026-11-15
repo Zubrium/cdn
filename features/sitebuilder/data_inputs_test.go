@@ -2,6 +2,8 @@ package sitebuilder
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"websiteengine/features/media"
@@ -99,6 +101,28 @@ func TestValidateDataInputPortsRejectsInvalidDeclarations(t *testing.T) {
 				t.Fatal("validateDataInputPorts() error = nil, want invalid declaration error")
 			}
 		})
+	}
+}
+
+func TestValidateDataInputPortsBoundsFieldCardinalityAndDepth(t *testing.T) {
+	fields := make([]DataInputField, maxDataInputFieldsPerPort+1)
+	for index := range fields {
+		fields[index] = DataInputField{Path: fmt.Sprintf("/field_%03d", index), Type: "text"}
+	}
+	if err := validateDataInputPorts([]DataInputPort{{
+		Key: "items", Kind: "record", Fields: fields,
+	}}); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("oversized field list error = %v", err)
+	}
+
+	deepPath := "/" + strings.Join([]string{
+		"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p",
+		"q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "aa", "bb", "cc", "dd", "ee", "ff", "gg",
+	}, "/")
+	if err := validateDataInputPorts([]DataInputPort{{
+		Key: "items", Kind: "record", Fields: []DataInputField{{Path: deepPath, Type: "text"}},
+	}}); err == nil || !strings.Contains(err.Error(), "segments") {
+		t.Fatalf("deep field path error = %v", err)
 	}
 }
 

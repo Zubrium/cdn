@@ -13,22 +13,24 @@ import (
 
 // FilesConfig contains explicit operational limits; LoadFiles has no defaults.
 type FilesConfig struct {
-	MaxBytes          int64
-	PartBytes         int64
-	UploadTTL         time.Duration
-	CleanupInterval   time.Duration
-	ProcessingTimeout time.Duration
-	OwnerQuotaBytes   int64
-	MaxSessions       int
-	ListLimit         int
-	RateLimit         int
-	RateMaxClients    int
-	RateWindow        time.Duration
-	LinkMaxTTL        time.Duration
-	PublicBaseURL     string
-	TempDir           string
-	SigningKey        []byte
-	Services          []FileServiceConfig
+	MaxBytes                     int64
+	PartBytes                    int64
+	UploadTTL                    time.Duration
+	CleanupInterval              time.Duration
+	ProcessingTimeout            time.Duration
+	OwnerQuotaBytes              int64
+	MaxSessions                  int
+	MaxSessionsPerPrincipal      int
+	MaxReservedBytesPerPrincipal int64
+	ListLimit                    int
+	RateLimit                    int
+	RateMaxClients               int
+	RateWindow                   time.Duration
+	LinkMaxTTL                   time.Duration
+	PublicBaseURL                string
+	TempDir                      string
+	SigningKey                   []byte
+	Services                     []FileServiceConfig
 }
 type FileServiceConfig struct {
 	Name        string          `json:"name"`
@@ -45,7 +47,7 @@ func LoadFiles() (FilesConfig, error) {
 	ints := []struct {
 		name   string
 		target *int64
-	}{{"FILES_MAX_BYTES", &c.MaxBytes}, {"FILES_PART_BYTES", &c.PartBytes}, {"FILES_OWNER_QUOTA_BYTES", &c.OwnerQuotaBytes}}
+	}{{"FILES_MAX_BYTES", &c.MaxBytes}, {"FILES_PART_BYTES", &c.PartBytes}, {"FILES_OWNER_QUOTA_BYTES", &c.OwnerQuotaBytes}, {"FILES_MAX_RESERVED_BYTES_PER_PRINCIPAL", &c.MaxReservedBytesPerPrincipal}}
 	for _, v := range ints {
 		n, e := strconv.ParseInt(os.Getenv(v.name), 10, 64)
 		if e != nil || n <= 0 {
@@ -56,7 +58,7 @@ func LoadFiles() (FilesConfig, error) {
 	for _, v := range []struct {
 		name   string
 		target *int
-	}{{"FILES_MAX_SESSIONS", &c.MaxSessions}, {"FILES_LIST_LIMIT", &c.ListLimit}, {"FILES_RATE_LIMIT", &c.RateLimit}, {"FILES_RATE_MAX_CLIENTS", &c.RateMaxClients}} {
+	}{{"FILES_MAX_SESSIONS", &c.MaxSessions}, {"FILES_MAX_SESSIONS_PER_PRINCIPAL", &c.MaxSessionsPerPrincipal}, {"FILES_LIST_LIMIT", &c.ListLimit}, {"FILES_RATE_LIMIT", &c.RateLimit}, {"FILES_RATE_MAX_CLIENTS", &c.RateMaxClients}} {
 		n, e := strconv.Atoi(os.Getenv(v.name))
 		if e != nil || n <= 0 {
 			return c, fmt.Errorf("%s must be an explicitly configured positive integer", v.name)
@@ -143,6 +145,12 @@ func (c FilesConfig) Validate() error {
 	}
 	if c.MaxSessions < 1 {
 		return fmt.Errorf("FILES_MAX_SESSIONS must be positive")
+	}
+	if c.MaxSessionsPerPrincipal < 1 || c.MaxSessionsPerPrincipal > c.MaxSessions {
+		return fmt.Errorf("FILES_MAX_SESSIONS_PER_PRINCIPAL must be positive and not exceed FILES_MAX_SESSIONS")
+	}
+	if c.MaxReservedBytesPerPrincipal < c.MaxBytes || c.MaxReservedBytesPerPrincipal > c.OwnerQuotaBytes {
+		return fmt.Errorf("FILES_MAX_RESERVED_BYTES_PER_PRINCIPAL must be at least FILES_MAX_BYTES and not exceed FILES_OWNER_QUOTA_BYTES")
 	}
 	if c.ListLimit < 1 || c.ListLimit > 1000 {
 		return fmt.Errorf("FILES_LIST_LIMIT must be between 1 and 1000")
