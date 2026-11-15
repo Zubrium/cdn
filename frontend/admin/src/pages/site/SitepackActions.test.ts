@@ -2,9 +2,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { SitepackImportAction, SitepackImportFailureDetails, SitepackImportItems } from "./SitepackActions";
+import { emptySitepackFileError, SitepackImportAction, SitepackImportFailureDetails, SitepackImportItems } from "./SitepackActions";
 
 describe("sitepack import feedback", () => {
+  it("explains that an empty archive must be exported again", () => {
+    expect(emptySitepackFileError({ size: 0 })).toBe("Файл пустой (0 байт) — похоже, скачивание прервалось. Экспортируйте снапшот заново и дождитесь завершения скачивания.");
+    expect(emptySitepackFileError({ size: 1 })).toBe("");
+    expect(emptySitepackFileError(null)).toBe("");
+  });
+
   it("opens the native archive picker through an associated label", () => {
     const queryClient = new QueryClient();
     const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: queryClient }, createElement(SitepackImportAction)));

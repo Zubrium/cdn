@@ -8,6 +8,12 @@ import { errorMessage } from "@/lib/errors";
 import { downloadBlob } from "@/lib/format";
 import type { ApiErrorDetail, SiteSnapshot } from "@/types";
 
+export function emptySitepackFileError(file: Pick<File, "size"> | null): string {
+  return file?.size === 0
+    ? "Файл пустой (0 байт) — похоже, скачивание прервалось. Экспортируйте снапшот заново и дождитесь завершения скачивания."
+    : "";
+}
+
 /** Import creates an unassigned snapshot; assignments always require a separate action. */
 export function SitepackImportAction() {
   const pickerId = useId();
@@ -21,8 +27,9 @@ export function SitepackImportAction() {
 
   const selectFile = (event: ChangeEvent<HTMLInputElement>) => {
     const next = event.target.files?.[0] ?? null;
-    setFile(next);
-    setError("");
+    const selectionError = emptySitepackFileError(next);
+    setFile(selectionError ? null : next);
+    setError(selectionError);
     setErrorDetails([]);
     setReport(null);
     event.target.value = "";
