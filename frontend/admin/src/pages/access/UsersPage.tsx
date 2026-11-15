@@ -121,14 +121,16 @@ export default function UsersPage() {
             className="pl-9 pr-9"
           />
           {search && (
-            <button
+            <Button
               type="button"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:bg-accent"
+              variant="ghost"
+              size="icon"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm text-muted-foreground hover:bg-accent"
               onClick={() => setSearch("")}
               aria-label="Очистить поиск"
             >
               <X className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           )}
         </div>
         <Select value={role} onValueChange={(value) => setRole(value as RoleFilter)}>

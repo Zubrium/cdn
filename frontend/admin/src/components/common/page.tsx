@@ -74,19 +74,21 @@ export function ContextHelp({
   return (
     <Tooltip open={open} onOpenChange={setOpen}>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           aria-label={label}
           aria-description={accessibleDescription}
           aria-expanded={open}
           onClick={() => setOpen(true)}
           className={cn(
-            "inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground",
             buttonClassName,
           )}
         >
           <Info className="size-4" aria-hidden="true" />
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent
         side={tooltipSide}

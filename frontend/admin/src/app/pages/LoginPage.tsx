@@ -208,14 +208,16 @@ export function LoginPage() {
                       },
                     })}
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                     onClick={() => setShowToken((value) => !value)}
                     aria-label={showToken ? "Скрыть токен" : "Показать токен"}
                   >
                     {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+                  </Button>
                 </div>
                 {errors.token && (
                   <p id="token-error" className="text-xs text-destructive">

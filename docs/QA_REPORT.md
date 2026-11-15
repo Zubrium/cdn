@@ -18,17 +18,17 @@
 ### UI review
 
 - Admin использует общие semantic HSL tokens, light/dark/system themes, reduced-motion стили, базовые focus states и общие Radix-компоненты. Скан не нашёл one-off hex цветов или `transition: all` в admin UI; это не доказывает контраст отрендеренных экранов.
-- Обнаружены три малых touch target: help control 24×24 px в `frontend/admin/src/components/common/page.tsx:77-89`, login token toggle 28×28 px в `frontend/admin/src/app/pages/LoginPage.tsx:211-218`, users search clear 28×28 px в `frontend/admin/src/pages/access/UsersPage.tsx:124-131`. Исправление не внесено: сначала нужен failing regression test и browser verification.
+- Обнаружены три малых touch target: help control 24×24 px, login token toggle 28×28 px, users search clear 28×28 px. Все три переведены на общий `Button` с вариантом `size="icon"` (44×44 px); для `ContextHelp` добавлен regression test `frontend/admin/src/components/common/page.test.tsx`.
 
 ### Что блокирует завершение
 
-- Security skill разрешает запуск target-controlled сборок/тестов/browser только в OS-enforced sandbox с пустым allowlist environment, external-network isolation, read-only source/toolchain, scratch-only writes и ограничениями CPU, memory, process, file, disk и wall time. Полный такой набор в текущей среде недоступен; Go/frontend tests и Browser E2E на текущем source не запускались.
+- Security skill разрешает запуск target-controlled сборок/тестов/browser только в OS-enforced sandbox с пустым allowlist environment, external-network isolation, read-only source/toolchain, scratch-only writes и ограничениями CPU, memory, process, file, disk и wall time. Docker-проверка остановилась до запуска тестов из-за отсутствующего Linux/ARM musl Rollup optional dependency (локальные `node_modules` собраны для macOS). Попытка запустить тест в macOS `sandbox-exec` завершилась сигналом abort (134) даже на `/bin/echo`, поэтому этот механизм не обеспечивает проверяемую изоляцию. Сборки, Go/frontend tests и Browser E2E на текущем source не запускались.
 - Доступный локальный Engine image на `127.0.0.1:8083` — revision `85aba05`, а проверяемый source run — `47f3da7`. Несовпадающий API оставлен без изменений; он не подходит для проверки текущего UI.
 - Не выполнена полная browser role matrix, visual QA по всем маршрутам/темам/ширинам, клавиатурный и ручной screen-reader проход. Также не проверены внешние tag rulesets, gateway/proxy, IDP, CDN и S3 ACL/cache policy.
 - Sitepack reliability hypothesis требует воспроизводимого race acceptance на disposable PostgreSQL/MinIO: stale deletion reservation, same-key import, cleanup между PUT и DB commit. Тест не запускался.
-- Нет подтверждённых security findings, поэтому production fixes не менялись. Подтверждённый UI touch-target issue зафиксирован, но не исправлен без обязательного TDD red/green и browser verification.
+- Нет подтверждённых security findings, поэтому production security fixes не требовались. Исправление UI touch targets и regression test внесены; прогнать red/green и browser verification в этой среде не удалось.
 
-Этот проход — независимый source review, но **не** полный security audit, regression pass или UI redesign. Не запускались `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `go test ./...`, `go vet ./...` и browser tests на текущем source. TODO остаётся открытым до завершения deferred проверки и исправления/верификации UI touch targets.
+Этот проход — независимый source review с локальным UI исправлением, но **не** полный security audit, regression pass или полный UI redesign. Не запускались `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `go test ./...`, `go vet ./...` и browser tests на текущем source. TODO остаётся открытым до устранения ограничений изоляции, проверки исправления и завершения deferred security/browser coverage.
 
 ## Экспорт snapshot 22 и cross-install Sitepack — 11 ноября 2026
 
