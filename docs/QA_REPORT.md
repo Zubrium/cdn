@@ -2,6 +2,29 @@
 
 Дата: 2026-11-02. Проверка охватывает React-админку и затронутые backend-сценарии снапшотов. Это отчёт о выполненных проверках, не подтверждение полной production-readiness или WCAG-сертификации.
 
+## Полный security и UI проход — 15 ноября 2026 — незавершён
+
+Пользовательский охват этого прохода: аудит Website Engine, подтверждение критичных проблем, проверка общей визуальной системы админки и исправление подтверждённых дефектов. Исходное дерево было чистым на `dev` (`076fb69`, совпадало с `origin/dev`). Все нижеуказанные результаты относятся к этому source ref.
+
+### Выполнено
+
+- Прочитаны предыдущие результаты security run-3 и их coverage ledger. Run-3 уже зафиксировал 11 невалидированных fingerprint-кандидатов и 6 незавершённых coverage units; ни один кандидат не получил подтверждённую severity. Между его source ref `9bbb4ad` и текущим `076fb69` менялись Feature Lab filesystem policy, auth/token lifecycle, runtime/prerender, middleware, sitebuilder archive и sitepack, поэтому предыдущие source traces требуют повторной независимой проверки.
+- Выполнен read-only source review текущих React route guards и shell, хранения admin token, `ClientIP`/rate limiter, Feature Lab filesystem resolution, runtime lifecycle и prerender request allowlist. В этих просмотренных фрагментах критичный boundary bypass не доказан; это не означает, что остальные candidates безопасны.
+- Статический осмотр admin stylesheet и компонентов подтвердил использование semantic HSL tokens и общих компонентов; поиск one-off hex цветов и `transition: all` в admin UI совпадений не дал. Получены актуальные Web Interface Guidelines; в просмотренном shell и общих контрактах явных нарушений не установлено. Это не визуальное подтверждение всех экранов.
+- `git diff --check` до этого документа прошёл без замечаний.
+
+### Не выполнено и почему
+
+- **Security execution и полная проверка кандидатов:** не запускались. Инструкция `security-audit` допускает target-controlled тесты/сборки только в OS-enforced sandbox с пустым allowlist environment, без внешней сети, read-only target/toolchain, scratch-only writes и явными низкими CPU, memory, process, file, disk и wall-clock limits. В доступной для этого прохода среде весь этот набор гарантий недоступен. Нет независимых fresh verifier, необходимых для оценки каждого кандидата и финального coverage review. 11 кандидатов и 6 units из run-3 остаются незакрытыми; текущий source ref не позволяет переносить на них прошлое предположение.
+- **Browser E2E и role matrix:** не запускались. Доступный local Engine на `127.0.0.1:8083` сообщает image revision `85aba05`, тогда как проверяемый checkout — `076fb69`; это несовпадающая версия API/UI. Инстанс оставлен без изменений. Для актуального браузерного прохода нужен disposable Engine, построенный из текущего source, с проверенными уникальными БД и storage.
+- **Полный visual/accessibility QA:** не выполнен. Нет свежих скриншотов всех маршрутов, тем и viewport размеров, а также полного keyboard/screen-reader прохода. Статический обзор токенов и общих компонентов этого не заменяет.
+- **Production/gateway/provider acceptance:** не выполнялся; не проверялись proxy topology и forwarded-header policy, identity provider, production CDN/gateway и storage-provider ACL/cache behavior.
+- **Кодовые исправления:** не вносились, потому что в доступных source-only свидетельствах не подтверждена конкретная уязвимость или воспроизводимый дефект, а UI изменения без просмотра текущих экранов и доступного актуального API были бы непроверяемой переделкой.
+
+### Вывод
+
+Это незавершённый source-review и проверка доступности локального окружения, а не полный security audit, regression pass или UI redesign. Подтверждённых критичных находок в просмотренных фрагментах нет; оставшиеся кандидаты нельзя считать ни подтверждёнными, ни отклонёнными. Не запускались `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `go test ./...`, `go vet ./...` или browser tests на текущем source. Для завершения нужны совместимая изолированная среда с указанными sandbox-контролями, независимые security verifiers, disposable backend на `076fb69` и реальные браузерные проверки всех admin workflows.
+
 ## Экспорт snapshot 22 и cross-install Sitepack — 11 ноября 2026
 
 Исправлена валидация исторических выборок записей: текущие draft/published selections по-прежнему строго проверяются относительно текущих placements и typed inputs, а неизменяемая публикационная история проверяется по внутренней структуре, уникальности пар placement/input и ссылкам на записи той публикации. Поэтому удаление placement или смена его binding не блокирует экспорт/импорт истории; восстановление старой публикации всё ещё проверяет её против текущей структуры.
