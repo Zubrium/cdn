@@ -1,6 +1,66 @@
 # QA-отчёт
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Дата: 2026-11-02. Проверка охватывает React-админку и затронутые backend-сценарии снапшотов. Это отчёт о выполненных проверках, не подтверждение полной production-readiness или WCAG-сертификации.
+
+## Переопределение Core v2 — 15 ноября 2026
+
+Новая согласованная цель описана в [SPEC-core-v2.md](SPEC-core-v2.md); порядок изменений — в [PLAN-core-v2-realignment.md](PLAN-core-v2-realignment.md). По последующему решению роли исключены: прямые уровни назначаются администраторам и сервисам; поле `role` и прежняя матрица удаляются из нового API и админки. Это явное исключение совместимости. Документы обновлены без изменения реализации. На момент решения текущий `core/` всё ещё содержит роли, прежние версии и владельцев файлов, публичное чтение, индивидуальные гранты, корзину/отложенное удаление и Core-реестр ссылок; он не соответствует новому контракту.
+
+До изменения требований изолированный прогон прежнего каркаса с PostgreSQL и MinIO показал суммарное покрытие 71,1%, а unit/integration тесты, `go vet` и две Go-сборки этого состояния завершились успешно. После него добавлялись изменения проверки ролей и отдельный тест на видимость чужого файла; этот тест не выполнялся и отражает прежнюю модель. Эти результаты не подтверждают ни обновлённую архитектуру, ни её безопасность или совместимость с legacy. Обновлённый Core нужно реализовать и проверить заново; пункты TODO открыты.
+
+### HTTP File API — промежуточный адаптер, 16 ноября 2026
+
+На первом проходе пакет `presentation/fileapi` использовал прямой in-process Core port и не имел HTTP CRUD наборов. Это описание сохранено как история исходной реализации; тот дизайн позднее заменён.
+
+В первоначальном проходе команды `go test ./presentation/fileapi/... -count=1`, `go test -race ./presentation/fileapi/... -count=1`, `go vet ./presentation/fileapi/...`, package coverage и `git diff --check` прошли; покрытие той версии HTTP-адаптера составляло 77,1% statements. Эти результаты относятся к промежуточному прямому Core port и не подтверждают последующую Loader-архитектуру.
+
+### Решение о Loader Engine и схемах модулей — 16 ноября 2026
+
+По уточнению пользователя File API должен вызывать Loader Engine, а не Core напрямую. Loader владеет возобновляемыми upload-сессиями, idempotency, обработкой частей и SHA-256, локальным кешем сессий, expiry/cleanup и автоматическим выбором streaming/buffered по конфигурации и memory budget. Состояние сессий и отдельные Atlas migrations принадлежат схеме `loader`; PostgreSQL в этой схеме — источник истины для рестарта и нескольких экземпляров. Core владеет только `core`, файлами, группами, наборами, identity/authorization и S3; временные байты Loader передаёт через Core staging API. Для каждого engine обязательны собственная изолированная схема, отдельный Atlas migration set и runtime credentials только на свою схему; межсхемные запросы и foreign keys запрещены.
+
+На тот момент наборы были доступны через HTTP File API и связаны со статичной управляющей группой. Это решение позднее отменено: наборы являются внутренними динамическими метками движков и не образуют отдельную границу доступа.
+
+На тот момент `presentation/fileapi` зависел от Loader Go-контракта и публиковал CRUD наборов с `If-Match`; adapter tests использовали fake Loader. Прежние `go test`/`go vet` результаты подтверждают только ту историческую версию HTTP boundary. Они не подтверждают текущую реализацию и будут заменены проверкой отсутствия generic HTTP routes. Реальная Loader application/state machine, проверка хэшей, session cache и durable repository, schema `loader`/Atlas migrations, Core staging API и composition wiring тогда ещё не были реализованы; сквозная проверка отсутствовала. Требуемые критерии перечислены в [CORE-TEST-COVERAGE.md](CORE-TEST-COVERAGE.md).
+
+### Уточнение контрактов динамических наборов — 16 ноября 2026
+
+По принятому решению группы остаются единственной границей файлового доступа, а динамические наборы используются только движками для поиска и организации. Поэтому `managementGroup` и HTTP CRUD наборов удалены из generic File API и контракта Loader; наборы создают и меняют Website/Content через внутренний Core Go API. Тесты фиксируют, что `/api/v2/files/sets` не проходит аутентификацию и не вызывает Loader. Исполнение новых проверок ожидает общего verification pass.
+
+На момент записи остались работающими созданные для предыдущей проверки контейнеры `zubrium-core-qa-nov15-a-pg`, `zubrium-core-qa-nov15-a-s3` и сеть `zubrium-core-qa-nov15-a` без опубликованных портов. Перед использованием или удалением повторно проверить принадлежность и отсутствие активных сессий; удалить только ресурсы этого изолированного запуска после завершения относящихся к ним проверок. Рабочие базы и storage не затрагивать.
+
+### Частичное продолжение — 16 ноября 2026
+
+На изолированной сети `zubrium-core-qa-nov15-a` с read-only source/toolchain, пустым allowlist environment и ограничениями CPU, памяти, процессов, файлов, scratch и времени выполнены focused проверки: тест запрета анонимного чтения сначала воспроизвёл дефект и затем прошёл; тест прямого группового доступа без роли сначала воспроизвёл отсутствие возможности и затем прошёл вместе с unit-проверками уровней и делегирования. Тест наличия новых таблиц `core_access_groups`, `core_group_access`, `core_file_groups` сначала упал на отдельной БД `zubrium_core_qa_groups_20261116`, затем прошёл после изменения начальной схемы на новой БД `zubrium_core_qa_groups_20261116_b`.
+
+Эти проверки подтверждают только перечисленные фрагменты. Старые роли, владельцы, версия файла, публичная выдача, ссылки и старая модель БД ещё не удалены, новая авторизация не подключена к операциям файлов; общий Core и покрытие по новой спецификации не проверены. Обе указанные disposable БД принадлежат изолированному контейнеру `zubrium-core-qa-nov15-a-pg`; перед удалением проверить отсутствие других сессий и удалить только их точные имена либо весь принадлежащий задаче изолированный контейнер после окончания проверок.
+
+Позднее уточнено: существует одна сущность пользователя без `kind`; сервис использует собственный ключ и прямые назначения. На disposable БД `zubrium_core_qa_groups_20261116_f` проверено отсутствие столбца и создание записи без типа; на `_g` прошли проверки делегирования только при наличии права управления и уровня 2, отказа для отключённой группы и отсутствия частичных изменений. Новый доступ пока не подключён к файловому runtime. На `_h` тест выявил отсутствие явного права управления у bootstrap, исправление проверяется отдельно. Использованы также disposable БД `zubrium_core_qa_groups_20261116_c`, `_d`, `_e`, `_i`.
+
+На `_i` исправление bootstrap прошло. На `_j` тест выявил отключение последнего управляющего без роли; на `_k` после изменения проверки и аутентификации прошли focused сценарии bootstrap, назначения прав, защиты последнего управляющего и его ключа. Позднее 256-МБ tmpfs тестового контейнера PostgreSQL заполнился из-за нескольких disposable БД, и PostgreSQL остановился с `No space left on device`; перезапущен только этот контейнер задачи, его tmpfs и прежние временные БД очищены. Новая временная БД для следующего теста — `zubrium_core_qa_groups_20261116_l`.
+
+На `_l` прошли focused тесты синхронизации конфигурационных групп, сохранения ранее изменённого назначения при удалении и возврате группы, начального назначения для новой группы и ранее перечисленные проверки идентичности. Синхронизация пока не подключена к startup, а многопроцессные сценарии и доступ к файлам не проверены.
+
+После проверок подтверждены отсутствие активных сессий и состав внутренней сети; удалены только тестовые контейнеры `zubrium-core-qa-nov15-a-pg`, `zubrium-core-qa-nov15-a-s3` и сеть `zubrium-core-qa-nov15-a`. Их временные базы и данные хранилища удалены вместе с tmpfs.
+
+### Адаптация тестов и групповых проверок — 16 ноября
+
+Тесты Core больше не закрепляют устаревшее поведение владельцев, ролей, публичности и истории в политике и проверках storage. Red-тесты показали обход по роли/владельцу и отсутствие прямых групповых разрешений; политика и выборка назначений из PostgreSQL изменены. Добавлены проверки отзыва доступа, нескольких групп, запрета изменений при уровне 1, отключения группы и отказа до обращения к хранилищу. На disposable БД `zubrium_core_qa_groups_20261116_p` изолированный `go test ./core/... -count=1` прошёл; тесты с другими внешними PostgreSQL/S3 конфигурациями были пропущены. Ранние тестовые БД в этом запуске: `zubrium_core_qa_groups_20261116_m`, `_n`, `_o`.
+
+Это не полная реализация новой спецификации: путь загрузки ещё не создаёт новые принадлежности, старые таблицы и API версий, владельцев и ролей остаются, конфигурационная синхронизация не подключена при запуске, multi-instance, S3 и порог покрытия не проверены. В частности, положительный результат unit-тестов не означает работоспособности сквозной загрузки и чтения файлов.
+
+Изолированный `go vet ./core/...` завершился успешно. После проверки отсутствия других сессий удалены принадлежащие этому запуску контейнер `zubrium-core-qa-20261116-b-pg` и внутренняя сеть `zubrium-core-qa-20261116-b`; базы `_m`–`_p` находились в tmpfs контейнера.
+
+### Перестройка тестов под целевой Core — 16 ноября
+
+Интеграционные тесты ролей, версий, публичности и реестра ссылок заменены проверками жизненного цикла единой учётной записи; добавлены отрицательные проверки отсутствия устаревших публичных полей/методов и таблиц/колонок, матрица уровней 0/1/2 и проверка отказа чтения при недоступной авторизации. На disposable БД `zubrium_core_qa_identity_20261116_d` и `zubrium_core_qa_groups_20261116_r` прошли сценарии identity и групп. `go test ./core/... -count=1` завершился с ошибкой на `TestTargetSchemaHasNoRetiredFileOrRoleModels` и `TestFileContractHasNoOwnerPublicityOrVersionOperations`: старые таблицы, поля и методы ещё присутствуют. S3/runtime integration без отдельной конфигурации пропущены. Ранние тестовые БД этого запуска: `zubrium_core_qa_identity_20261116_c`, `zubrium_core_qa_groups_20261116_q`.
+
+Переработка тестов не полная: проверки сбоев/гонок и S3, ранее привязанные к устаревшему контракту, ещё требуется создать под новый контракт. [CORE-TEST-COVERAGE.md](CORE-TEST-COVERAGE.md) перечисляет непокрытые критерии. Стабильные сигнатуры ещё не реализованных операций не утверждены; гарантия отсутствия дальнейших изменений тестов невозможна.
+
+После проверки отсутствия активных сессий удалены контейнер `zubrium-core-tests-20261116-c-pg` с временными БД и сеть `zubrium-core-tests-20261116-c`.
+
+`go test ./core/... -count=1` в изолированном контейнере без внешней сети завершился ошибкой: `TestWriteGrantDoesNotExposeAnotherOwnersPrivateFile` в `core/internal/storage` ожидает прежнюю модель владельца и публичности и сообщил `visibility change: <nil>`. Интеграционные тесты, требующие явной конфигурации PostgreSQL/S3, в этом запуске не выполнялись. Ошибка не закрыта; перенос файлового сервиса на новую модель и повторная проверка остаются обязательными.
 
 ## Полный security и UI проход — 15 ноября 2026 — незавершён
 
@@ -1080,3 +1140,62 @@ The three PostgreSQL checks used unique `website_engine_*_qa_*` databases in a t
 The host `node_modules` was macOS-specific and lacked Linux optional packages. To run the Node checks, a task-owned copy of the current frontend lockfile was materialized offline from the already-cached local pnpm store with `pnpm install --offline --frozen-lockfile --ignore-scripts`, then mounted read-only during tests/builds. This did not access a registry or execute package lifecycle scripts, but it deviates from the security-audit skill's stricter “do not install dependencies” rule; the formal security audit therefore remains incomplete. The build outputs and package copy were kept outside the repository.
 
 No real-browser E2E/role matrix was run. A production-readiness or complete security-audit claim is not supported: the formal run-3 has no fresh independent verifier in this session, and the following broader ledger candidates remain unresolved rather than confirmed findings: `feature-lab.vite-fs-allowlist-symlink-escape`, `client:runtime-module-shared-admin-token`, `github-actions:docs-workflow:unscoped-default-token`, `github-actions:engine-image:unrestricted-semver-tag-publish`, `runtime:query-variant-prerender-amplification`, `runtime:webrtc-prerender-egress`, `sitebuilder:data-input-overlap-quadratic`, `sitebuilder:feature-build-staging-orphan`, `sitepack-import/ambiguous-commit-cleanup-secondary-objects`, `sitepack-import/build-objects-not-rollback-tracked`, and `presentation/http/middleware/middleware.go:untrusted-proxy-rate-key`. Production gateway, identity-provider, and storage-provider behavior is outside this local source check.
+
+### Core v2 test-contract rewrite — 16 November 2026
+
+Переписан набор тестов до завершения реализации целевого Core. Источником ожиданий служит [SPEC-core-v2.md](SPEC-core-v2.md), а список сценариев, переменных и ограничений — [CORE-TEST-COVERAGE.md](CORE-TEST-COVERAGE.md). Добавлены контрактные проверки сигнатур Runtime/storage, прямых назначений уровней `0/1/2`, one-type users, конфигурации групп и кеша, чистой начальной схемы, неизменяемых байтов, идемпотентной загрузки, метаданных, нескольких групп, file sets, пагинации без утечки закрытых файлов, credential revoke/deactivate, межэкземплярной проверки доступа, stream диапазона/больших файлов и публичности S3 ACL/policy. Удалены старые проверки владельцев/ролей/версий и дублирующий Runtime identity test, который делил БД с новым приёмочным сценарием.
+
+Проверки этого прохода:
+
+```text
+go test ./core/... -run '^$'                   PASS (все тесты компилируются)
+go test -race ./core/cache -count=1             PASS
+go test ./core/... -count=1                     FAIL на целевых red-тестах
+go test ./core/... -count=1 -cover              FAIL на тех же целевых red-тестах
+go vet ./core/...                               PASS
+go test ./core/internal/objectstore -run '^TestRequirePrivateRejectsPublicACLPolicyAndUnverifiablePolicy$' -count=1 PASS
+git diff --check                                PASS
+```
+
+Полный запуск подтверждает незавершённость production Core, а не сбой компиляции тестов: API доступа всё ещё принимает старые grants; `Runtime` и storage всё ещё содержат owner/public/version поля и методы; начальная миграция создаёт роли/grants/версии и не создаёт file sets; S3 принимает произвольные object keys. Пакетные диагностические покрытия старой реализации при `-cover`: access 32.1%, cache 94.6%, identity 83.3%, objectstore 73.1%, postgres 1.9%, storage 6.3%, platform 9.5%. Это не валидирует целевой Core и не доказывает требование `>=70%` нового ядра.
+
+Все `TEST_CORE_*` переменные для PostgreSQL и S3 отсутствовали, поэтому disposable integration tests пропустились; схему БД, реальные upload/delete и runtime сценарии на двух репликах в этом проходе не запускали. S3 fake использовал только loopback и сам завершил HTTP server. Внешние базы, buckets, рабочие Vitasil ресурсы и временные storage объекты не создавались и не изменялись. TODO Core и его критерий покрытия оставлены открытыми.
+
+### Core v2: Atlas-only DDL, интеграционная приёмка и покрытие — 16 ноября 2026
+
+Core v2 реализован согласно [SPEC-core-v2.md](SPEC-core-v2.md): один тип пользователя, прямые групповые уровни `0/1/2`, отдельное право управления администраторами, неизменяемые байты файлов, динамические наборы поиска, S3 и локальный кеш. В production Go оставлены запросы данных; создание/изменение схемы делегируется закреплённому Atlas CLI `v1.3.0`. Регрессионный `TestCoreGoCodeDoesNotExecuteSchemaDDL` и отдельный поиск по активным Go-пакетам не нашли schema DDL. Чистый Core baseline и создание схемы расположены в отдельных Atlas SQL migration-файлах; история bootstrap находится в `public`, а основная Core history — в `core`.
+
+Отладка выявила и устранила: Atlas проверял весь неограниченный realm и видел bootstrap history в `public` как постороннюю схему; основная migration URL теперь имеет `search_path=core`. Исправлен синтаксис SQL-проверки runtime grants, stale `ErrNoRows` в ветке настроенного bootstrap secret и ошибочная валидация upload metadata по сериализованной длине вместо настроенного лимита. Удалены невозможная проверка `int64 > MaxInt64` и дублирование list-query parsing в File API. Staticcheck findings исправлены.
+
+Проверки текущего исходного состояния:
+
+```text
+go test -race -count=1 ./...       # core/: PASS, все пакеты, PostgreSQL integration и Core acceptance
+make coverage                     # PASS, общий statement coverage Core + scaffold: 72.2%
+go test -count=1 ./...             # presentation/fileapi: PASS
+go test -count=1 ./...             # engines/loader: PASS
+make test                         # PASS на предыдущем свежем наборе; текущий coverage workflow повторно прогнал весь test suite с -tags=full
+make vet                          # PASS
+make build                        # PASS
+make build-full                   # PASS
+staticcheck ./...                 # PASS во всех 10 Go modules
+git diff --check                  # PASS
+active Go schema-DDL scan         # PASS, совпадений нет
+```
+
+Интеграции использовали только task-owned PostgreSQL 16 и S3 protocol mock на loopback; внешний S3 endpoint и рабочие Engine/Vitasil ресурсы не использовались. Кэш-проверки повторно читают актуальные права из PostgreSQL и fail closed при сбое авторизации. `govulncheck` не установлен, а независимый изолированный security audit и проверка реальных cloud/provider настроек не проводились; запись не является заявлением о полном security certification.
+
+QA-ресурсы: контейнер `zubrium-core-qa-20261116-pg`, ID `d50952aeb5d40854792b16178774cfe5c8bb09b8180d2f95fae4340f3ef2`, порт `127.0.0.1:54329`; его единственный task-owned volume `e79e2654a95f5b293ae623fde1d3c4de7fe5ce4df0711891436acd1a2cf79425`. Были созданы следующие 77 disposable БД:
+
+```text
+zubrium_core_qa_api_20261116, zubrium_core_qa_api_r12_20261116, zubrium_core_qa_api_r13_20261116, zubrium_core_qa_api_r14_20261116, zubrium_core_qa_api_r15_20261116, zubrium_core_qa_api_r16_20261116, zubrium_core_qa_api_r17_20261116, zubrium_core_qa_api_r3_20261116
+zubrium_core_qa_bootstrap_20261116, zubrium_core_qa_bootstrap_r12_20261116, zubrium_core_qa_bootstrap_r13_20261116, zubrium_core_qa_bootstrap_r14_20261116, zubrium_core_qa_bootstrap_r15_20261116, zubrium_core_qa_bootstrap_r16_20261116, zubrium_core_qa_bootstrap_r17_20261116, zubrium_core_qa_bootstrap_r3_20261116
+zubrium_core_qa_credential_race_20261116, zubrium_core_qa_credential_race_r12_20261116, zubrium_core_qa_credential_race_r13_20261116, zubrium_core_qa_credential_race_r14_20261116, zubrium_core_qa_credential_race_r15_20261116, zubrium_core_qa_credential_race_r16_20261116, zubrium_core_qa_credential_race_r17_20261116, zubrium_core_qa_credential_race_r3_20261116
+zubrium_core_qa_groups_20261116, zubrium_core_qa_groups_r12_20261116, zubrium_core_qa_groups_r13_20261116, zubrium_core_qa_groups_r14_20261116, zubrium_core_qa_groups_r15_20261116, zubrium_core_qa_groups_r16_20261116, zubrium_core_qa_groups_r17_20261116, zubrium_core_qa_groups_r3_20261116, zubrium_core_qa_groups_r4_20261116, zubrium_core_qa_groups_r5_20261116, zubrium_core_qa_groups_r6_20261116, zubrium_core_qa_groups_r7_20261116
+zubrium_core_qa_manager_race_20261116, zubrium_core_qa_manager_race_r12_20261116, zubrium_core_qa_manager_race_r13_20261116, zubrium_core_qa_manager_race_r14_20261116, zubrium_core_qa_manager_race_r15_20261116, zubrium_core_qa_manager_race_r16_20261116, zubrium_core_qa_manager_race_r17_20261116, zubrium_core_qa_manager_race_r3_20261116
+zubrium_core_qa_platform_20261116, zubrium_core_qa_platform_r10_20261116, zubrium_core_qa_platform_r11_20261116, zubrium_core_qa_platform_r12_20261116, zubrium_core_qa_platform_r13_20261116, zubrium_core_qa_platform_r14_20261116, zubrium_core_qa_platform_r15_20261116, zubrium_core_qa_platform_r16_20261116, zubrium_core_qa_platform_r17_20261116, zubrium_core_qa_platform_r3_20261116, zubrium_core_qa_platform_r4_20261116, zubrium_core_qa_platform_r5_20261116, zubrium_core_qa_platform_r6_20261116, zubrium_core_qa_platform_r7_20261116, zubrium_core_qa_platform_r8_20261116, zubrium_core_qa_platform_r9_20261116
+zubrium_core_qa_runtime_role_20261116, zubrium_core_qa_runtime_role_r12_20261116, zubrium_core_qa_runtime_role_r13_20261116, zubrium_core_qa_runtime_role_r14_20261116, zubrium_core_qa_runtime_role_r15_20261116, zubrium_core_qa_runtime_role_r16_20261116, zubrium_core_qa_runtime_role_r17_20261116, zubrium_core_qa_runtime_role_r3_20261116
+zubrium_core_qa_schema_20261116, zubrium_core_qa_schema_r12_20261116, zubrium_core_qa_schema_r13_20261116, zubrium_core_qa_schema_r14_20261116, zubrium_core_qa_schema_r15_20261116, zubrium_core_qa_schema_r16_20261116, zubrium_core_qa_schema_r17_20261116, zubrium_core_qa_schema_r2_20261116, zubrium_core_qa_schema_r3_20261116
+```
+
+После внесения этих точных идентификаторов в журнал выполнена postflight-проверка нулевых соединений и остановленных тестовых процессов. Все перечисленные БД, контейнер, его отдельный volume и task-owned временные файлы удалены; рабочие контейнеры, пользовательские данные, Engine/Vitasil и их storage не затронуты. Новые Engine-модули и UI остаются открытыми задачами в TODO и не объявляются завершёнными этой Core-приёмкой.

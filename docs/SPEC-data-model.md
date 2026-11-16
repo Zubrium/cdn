@@ -1,5 +1,7 @@
 # Snapshot-scoped flat data model and feature bindings
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Status: current contract, 15 November 2026. Model-to-model relations and record-to-record relations are retired. The current Vitasil snapshots contain flat models and no relation maps, so this change requires no production data migration.
 
 ## Product decisions

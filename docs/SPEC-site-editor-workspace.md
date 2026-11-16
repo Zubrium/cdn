@@ -1,5 +1,7 @@
 # Site editor and model-driven content
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Status: the current ownership model is implemented in the working tree. The authoritative flat-model and record contract is [SPEC-data-model.md](SPEC-data-model.md); route target semantics are defined in [SPEC-route-targets.md](SPEC-route-targets.md); this document defines the editor boundaries and user workflows. Per-feature CMS schemas and model/record relations are retired and are not migration requirements.
 
 Навигация редактора: `Страницы`, `Версии`, `Бэкенд`, `Настройки сайта`, `Дизайн-система`, `Модель данных`. Выбор снапшота, предупреждения и общая кнопка сохранения остаются в шапке workspace во всех режимах. `/site/pages` является списком, а не встроенным мастер-детейлом: одна запись объединяет данные страницы и её основной/дополнительные маршруты, отдельными записями показаны файловые маршруты. Список поддерживает поиск по названию, URL, стабильному ключу и отображаемому имени фичи, группировку по первому сегменту URL и сортировку только для отображения.

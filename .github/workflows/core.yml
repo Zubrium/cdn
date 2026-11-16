@@ -1,0 +1,63 @@
+name: Core and modular build
+on:
+  push:
+    branches: [dev_v2]
+  pull_request:
+    branches: [dev_v2]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: zubrium_core_qa_api_ci
+          POSTGRES_USER: qa
+          POSTGRES_PASSWORD: disposable-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qa -d zubrium_core_qa_api_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_CORE_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_api_ci?sslmode=disable
+      TEST_CORE_BOOTSTRAP_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_bootstrap_ci?sslmode=disable
+      TEST_CORE_MANAGER_RACE_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_manager_race_ci?sslmode=disable
+      TEST_CORE_CREDENTIAL_RACE_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_credential_race_ci?sslmode=disable
+      TEST_CORE_GROUPS_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_groups_ci?sslmode=disable
+      TEST_CORE_SCHEMA_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_schema_ci?sslmode=disable
+      TEST_CORE_PLATFORM_DATABASE_URL: postgres://core_runtime:runtime-ci-only@localhost:5432/zubrium_core_qa_platform_ci?sslmode=disable
+      TEST_CORE_PLATFORM_MIGRATION_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_platform_ci?sslmode=disable
+      TEST_CORE_PLATFORM_ADMIN_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_platform_ci?sslmode=disable
+      TEST_CORE_RUNTIME_ROLE_DATABASE_URL: postgres://core_runtime_escalated:runtime-escalated-ci-only@localhost:5432/zubrium_core_qa_runtime_role_ci?sslmode=disable
+      TEST_CORE_RUNTIME_ROLE_MIGRATION_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_runtime_role_ci?sslmode=disable
+      TEST_ATLAS_BINARY: ${{ runner.temp }}/atlas
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: core/go.mod
+      - name: Install pinned Atlas CLI
+        run: curl -fsSL https://atlasgo.sh | ATLAS_VERSION=v1.3.0 sh -s -- --community --output "${RUNNER_TEMP}/atlas" --no-install
+      - name: Create isolated integration resources
+        run: |
+          for database in zubrium_core_qa_bootstrap_ci zubrium_core_qa_manager_race_ci zubrium_core_qa_credential_race_ci zubrium_core_qa_groups_ci zubrium_core_qa_schema_ci zubrium_core_qa_platform_ci zubrium_core_qa_runtime_role_ci; do
+            PGPASSWORD=disposable-ci-only createdb -h 127.0.0.1 -U qa "$database"
+          done
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c 'CREATE ROLE zubrium_core_runtime NOLOGIN'
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE core_runtime LOGIN PASSWORD 'runtime-ci-only'"
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c 'GRANT zubrium_core_runtime TO core_runtime'
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c 'CREATE ROLE zubrium_core_createdb NOLOGIN CREATEDB'
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE core_runtime_escalated LOGIN PASSWORD 'runtime-escalated-ci-only'"
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c 'GRANT zubrium_core_runtime, zubrium_core_createdb TO core_runtime_escalated'
+          PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE core_test_admin LOGIN SUPERUSER PASSWORD 'core-test-admin-only'"
+      - run: make vet
+      - run: make coverage
+      - run: make build
+      - run: make build-full

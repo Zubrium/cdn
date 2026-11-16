@@ -1,5 +1,7 @@
 # Route targets: pages and public files
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Status: page/file route-target support is implemented in the working tree. Route compilation, reference/remapping, disposable PostgreSQL routing, direct public-file handler (`GET`/`HEAD`, Range, ETag and disposition), browser creation/edit, and the local frontend suite pass. A combined snapshot-to-route acceptance against a real disposable object store remains open.
 
 This contract extends the existing snapshot route tree without adding a second public router. A rendered route has one target: a page or a ready public media object. The page target remains the normal feature-composition path. The file target is a direct public-file delivery endpoint.

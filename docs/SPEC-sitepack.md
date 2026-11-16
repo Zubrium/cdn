@@ -1,5 +1,7 @@
 # Sitepack transfer contract
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Status: current flat-model contract, 15 November 2026. Sitepack version 1, manifest format 1, per-feature CMS payloads, `contentRelations`, relation envelopes, legacy collection-source data, and unconverted per-feature bindings are rejected.
 
 ## Exported state

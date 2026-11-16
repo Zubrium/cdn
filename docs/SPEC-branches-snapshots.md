@@ -1,5 +1,7 @@
 # Статические ветки и независимое содержимое снапшотов
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Целевой контракт, зафиксированный 8 ноября 2026. Модельные API, clean initial schema, текущие Vitasil v2 ZIP и model-content cross-install Sitepack прошли disposable Go/API/browser acceptance; браузерная приёмка каждого feature placement и полная UI/accessibility-матрица остаются открытыми. Требования и оставшиеся критерии ведутся в [TODO](TODO-admin-snapshots-content-files.md), фактические команды — в [QA_REPORT.md](QA_REPORT.md). Исторические описания dev/prod и feature-owned CMS ниже не являются текущим контрактом.
 
 Текущий implementation-first проход добавляет последующие изменения редактора и SEO/runtime. Они ещё не прошли общий QA; предыдущая acceptance выше относится к состоянию до этих follow-up изменений.

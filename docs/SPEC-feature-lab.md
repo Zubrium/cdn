@@ -1,5 +1,7 @@
 # Feature Lab
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Status: manifest format 2 and `dataInputs` fixtures are implemented. The latest recorded browser preview on 2026-11-09 covered ten Vitasil source features after public document rendering moved to Go `html/template`. Later on 2026-11-09, `catalog` and `main-data` source/manifests changed and their ZIPs were rebuilt; the updated pair still needs a Feature Lab browser recheck. Feature Lab remains an independent source/runtime preview launched from the Vitasil frontend package; it is not the public document renderer.
 
 ## Purpose and boundaries

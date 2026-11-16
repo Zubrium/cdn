@@ -1,5 +1,7 @@
 # Публичный Website Engine: Go document renderer и DOM structure
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Статус: Go document renderer, встроенные шаблоны и browser ABI loader уже присутствуют в рабочем дереве. Полная проверка переноса и Lighthouse target ещё не закрыты. Публичная HTML-оболочка и начальный bootstrap принадлежат Go `html/template`; feature ABI и админский React SPA сохраняются.
 
 ## Цель и границы

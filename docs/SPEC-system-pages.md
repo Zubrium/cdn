@@ -1,5 +1,7 @@
 # System pages
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 Status: 7 November 2026 functional and focused browser acceptance passed on disposable PostgreSQL with current Vitasil `not-found@1.0.7`; route-level 403, manual screen reader and broader public accessibility matrix remain open.
 
 ## Purpose and boundaries

@@ -1,5 +1,7 @@
 # Frontend architecture
 
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+
 The admin is the only application frontend. Public documents are Go-rendered; browser ABI scripts are authored under `pkg/runtime/scripts`, public styles under `pkg/runtime/styles`, and all are built as static assets embedded by `pkg/runtime`. Public styles are isolated from admin CSS.
 
 ## Packages
