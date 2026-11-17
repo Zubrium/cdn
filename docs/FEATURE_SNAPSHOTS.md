@@ -1,8 +1,8 @@
 # Фичи, модель данных, снапшоты и ветки
 
-> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](../spec/SPEC-modular-platform.md) и [SPEC-core-v2.md](../spec/SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
 
-Эта страница описывает текущий контракт Website Engine. Подробные требования и состояние проверок ведутся в [TODO](TODO-admin-snapshots-content-files.md), спецификациях [модели данных](SPEC-data-model.md), [веток и снапшотов](SPEC-branches-snapshots.md) и [runtime фичей](SPEC-feature-runtime.md).
+Эта страница описывает текущий контракт Website Engine. Подробные требования и состояние проверок ведутся в [TODO](TODO-admin-snapshots-content-files.md), спецификациях [модели данных](../spec/SPEC-data-model.md), [веток и снапшотов](../spec/SPEC-branches-snapshots.md) и [runtime фичей](../spec/SPEC-feature-runtime.md).
 
 ## Feature ZIP и manifest
 
@@ -15,7 +15,7 @@
 - `form.submissionSchema` строго проверяет публичную отправку формы;
 - runtime metadata и design tokens описывают исполняемую сборку.
 
-CMS-схемы `content.*` и manifest format 1 не принимаются и не конвертируются. Отдельного редактора схем фич нет. Текущий Engine сохраняет совместимость с уже поддерживаемыми runtime ABI; актуальные Vitasil ZIP собраны с `static-module-v1`. Подробнее — [контракт сборок](SPEC-feature-runtime.md) и [руководство автора](FEATURE-RUNTIME-AUTHORING.md).
+CMS-схемы `content.*` и manifest format 1 не принимаются и не конвертируются. Отдельного редактора схем фич нет. Текущий Engine сохраняет совместимость с уже поддерживаемыми runtime ABI; актуальные Vitasil ZIP собраны с `static-module-v1`. Подробнее — [контракт сборок](../spec/SPEC-feature-runtime.md) и [руководство автора](FEATURE-RUNTIME-AUTHORING.md).
 
 Go `html/template` отвечает за формирование публичного документа, не за замену runtime фич. Сохраняются текущие ABI `legacy-react-v1`, `static-module-v1` и `static-html-v1`, их lifecycle и передача context, route/data/media/assets. В DOM не добавляются page/slot wrappers: `#root` не оборачивается, каждый placement сохраняет ровно один neutral `<div>` mount root; `main` roots находятся внутри одного page-level `<main>`, остальные являются прямыми детьми `#root`. Новый ABI и поле manifest для выбора root tag не вводятся. Chromium prerender остаётся ответственным за исполнение существующих фич и продолжает использовать прежние cache semantics.
 

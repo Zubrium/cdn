@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Zubrium/cdn/core/access"
 	"github.com/Zubrium/cdn/core/internal/storage"
@@ -24,32 +26,39 @@ func (r Objects) SearchFiles(ctx context.Context, actor access.Principal, query,
 }
 
 func (r Objects) searchVisible(ctx context.Context, actor access.Principal, query, group, cursor, setID string, limit int) ([]storage.Object, string, error) {
-	if r.Pool == nil || !actor.Active || actor.ID == "" || limit < 1 || limit > 1000 || len(query) > 256 {
-		return nil, "", errors.New("invalid file search")
+	if r.Pool == nil {
+		return nil, "", errors.New("postgres: nil pool")
+	}
+	if !actor.Active || actor.ID == "" || limit < 1 || limit > 1000 || len(query) > 256 || !utf8.ValidString(query) || strings.ContainsRune(query, '\x00') {
+		return nil, "", storage.ErrInvalidSearch
 	}
 	actorID, err := uuid.Parse(actor.ID)
 	if err != nil || actorID == uuid.Nil {
 		return nil, "", ErrUnauthorized
 	}
 	if group != "" && !storage.ValidGroupKey(group) {
-		return nil, "", errors.New("invalid access group")
+		return nil, "", storage.ErrInvalidSearch
 	}
 	var cursorUUID uuid.UUID
 	if cursor != "" {
 		cursorUUID, err = uuid.Parse(cursor)
 		if err != nil || cursorUUID == uuid.Nil {
-			return nil, "", errors.New("invalid pagination cursor")
+			return nil, "", storage.ErrInvalidSearch
 		}
 	}
 	var setUUID uuid.UUID
 	if setID != "" {
 		setUUID, err = uuid.Parse(setID)
 		if err != nil || setUUID == uuid.Nil {
-			return nil, "", errors.New("invalid file set")
+			return nil, "", storage.ErrInvalidSearch
 		}
 	}
-	rows, err := r.Pool.Query(ctx, `SELECT o.id::text,o.object_key::text,o.metadata,o.content_type,o.size_bytes,o.revision,o.state,
-		COALESCE(array_agg(fg.group_key ORDER BY fg.group_key) FILTER (WHERE fg.group_key IS NOT NULL),ARRAY[]::text[])
+	rows, err := r.Pool.Query(ctx, `SELECT o.id::text,o.object_key::text,o.metadata,o.content_type,o.size_bytes,o.sha256,o.revision,o.state,
+		COALESCE(array_agg(fg.group_key ORDER BY fg.group_key) FILTER (WHERE fg.group_key IS NOT NULL AND EXISTS(
+			SELECT 1 FROM core_access_groups visible_group JOIN core_group_access visible_access
+			ON visible_access.group_key=visible_group.group_key
+			WHERE visible_group.group_key=fg.group_key AND visible_group.active
+			AND visible_access.principal_id=$1 AND visible_access.access_level>=1)),ARRAY[]::text[])
 		FROM core_objects o
 		LEFT JOIN core_file_groups fg ON fg.object_id=o.id
 		WHERE o.state='ready'
@@ -57,6 +66,10 @@ func (r Objects) searchVisible(ctx context.Context, actor access.Principal, quer
 		AND ($3::uuid IS NULL OR o.id>$3)
 		AND ($4='' OR strpos(lower(o.metadata::text),lower($4))>0)
 		AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM core_file_set_members sm WHERE sm.object_id=o.id AND sm.file_set_id=$5))
+		AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM core_file_sets s
+			JOIN core_access_groups sg ON sg.group_key=s.management_group AND sg.active
+			JOIN core_group_access sga ON sga.group_key=sg.group_key AND sga.principal_id=$1 AND sga.access_level>=1
+			WHERE s.id=$5))
 		AND EXISTS(SELECT 1 FROM core_file_groups vf JOIN core_access_groups vg ON vg.group_key=vf.group_key AND vg.active
 			JOIN core_group_access vga ON vga.group_key=vf.group_key AND vga.principal_id=$1 AND vga.access_level>=1
 			WHERE vf.object_id=o.id AND ($2='' OR vf.group_key=$2))
@@ -68,8 +81,8 @@ func (r Objects) searchVisible(ctx context.Context, actor access.Principal, quer
 	objects := make([]storage.Object, 0, limit+1)
 	for rows.Next() {
 		var object storage.Object
-		var rawMetadata []byte
-		if err := rows.Scan(&object.ID, &object.Key, &rawMetadata, &object.ContentType, &object.Size, &object.Revision, &object.State, &object.Groups); err != nil {
+		var rawMetadata, checksum []byte
+		if err := rows.Scan(&object.ID, &object.Key, &rawMetadata, &object.ContentType, &object.Size, &checksum, &object.Revision, &object.State, &object.Groups); err != nil {
 			return nil, "", err
 		}
 		if err := json.Unmarshal(rawMetadata, &object.Metadata); err != nil {
@@ -78,6 +91,7 @@ func (r Objects) searchVisible(ctx context.Context, actor access.Principal, quer
 		if object.Metadata == nil {
 			object.Metadata = map[string]string{}
 		}
+		object.SHA256 = hex.EncodeToString(checksum)
 		object.Ready = true
 		objects = append(objects, object)
 	}

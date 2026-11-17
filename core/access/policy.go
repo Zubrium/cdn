@@ -33,6 +33,7 @@ func ValidAction(action Action) bool {
 
 type Principal struct {
 	ID                      string
+	Name                    string
 	Active                  bool
 	CanManageAdministrators bool
 }

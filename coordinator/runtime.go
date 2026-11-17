@@ -1,0 +1,487 @@
+package coordinator
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
+)
+
+var ErrComponentUnavailable = errors.New("component is not compiled into this application")
+
+// ManagedComponent is the uniform start/readiness/stop boundary used by the
+// composition root. Engines communicate through adapters registered here.
+type ManagedComponent interface {
+	Start(context.Context) error
+	Ready(context.Context) error
+	Stop(context.Context) error
+}
+
+type CurrentReadiness interface{ IsReady() bool }
+type FailureSource interface{ Errors() <-chan error }
+type ActivatableComponent interface{ Activate(context.Context) error }
+
+type ComponentFactory func(context.Context) (ManagedComponent, error)
+
+type RuntimeComponent struct {
+	ID       string
+	Requires []string
+	New      ComponentFactory
+}
+
+type RuntimeRegistry struct {
+	mu              sync.RWMutex
+	components      map[string]RuntimeComponent
+	workerTasks     map[string]map[string]TaskHandler
+	publicationTask TaskHandler
+}
+
+func NewRuntimeRegistry() *RuntimeRegistry {
+	return &RuntimeRegistry{components: make(map[string]RuntimeComponent)}
+}
+
+func (r *RuntimeRegistry) Register(component RuntimeComponent) error {
+	if r == nil || component.ID == "" || component.New == nil {
+		return ErrInvalid
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.components == nil {
+		r.components = make(map[string]RuntimeComponent)
+	}
+	if _, exists := r.components[component.ID]; exists {
+		return ErrDuplicate
+	}
+	component.Requires = append([]string(nil), component.Requires...)
+	r.components[component.ID] = component
+	return nil
+}
+
+// RegisterWorkerTasks installs the statically compiled handlers for one worker
+// module. Compose later checks that this provider is selected in the profile.
+func (r *RuntimeRegistry) RegisterWorkerTasks(componentID string, handlers map[string]TaskHandler) error {
+	if r == nil || !strings.HasPrefix(componentID, "worker.") || len(handlers) == 0 {
+		return ErrInvalid
+	}
+	if _, ok := buildRegistry()[componentID]; !ok {
+		return ErrComponentUnavailable
+	}
+	copyHandlers := make(map[string]TaskHandler, len(handlers))
+	for jobType, handler := range handlers {
+		if !taskTypePattern.MatchString(jobType) || handler == nil || jobType == SitePublicationJobType {
+			return ErrInvalid
+		}
+		copyHandlers[jobType] = handler
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.workerTasks == nil {
+		r.workerTasks = make(map[string]map[string]TaskHandler)
+	}
+	if _, exists := r.workerTasks[componentID]; exists {
+		return ErrDuplicate
+	}
+	r.workerTasks[componentID] = copyHandlers
+	return nil
+}
+
+// RegisterPublicationHandler installs the one reserved publication task. It
+// is accepted only when the build plan selects publication automation.
+func (r *RuntimeRegistry) RegisterPublicationHandler(handler TaskHandler) error {
+	if r == nil || handler == nil {
+		return ErrInvalid
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.publicationTask != nil {
+		return ErrDuplicate
+	}
+	r.publicationTask = handler
+	return nil
+}
+
+// CompileTaskCatalog exposes a defensive immutable view of the handlers that
+// match a selected profile. Composition uses the same method before startup so
+// missing handlers fail before Core or any listener has side effects.
+func (r *RuntimeRegistry) CompileTaskCatalog(plan BuildPlan) (*TaskCatalog, error) {
+	if r == nil {
+		return nil, ErrInvalid
+	}
+	r.mu.RLock()
+	workers := make([]WorkerTaskSet, 0, len(r.workerTasks))
+	for componentID, handlers := range r.workerTasks {
+		workers = append(workers, WorkerTaskSet{ComponentID: componentID, Handlers: handlers})
+	}
+	publication := r.publicationTask
+	r.mu.RUnlock()
+	return BuildTaskCatalog(plan, workers, publication)
+}
+
+func (r *RuntimeRegistry) lookup(id string) (RuntimeComponent, bool) {
+	if r == nil {
+		return RuntimeComponent{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	component, ok := r.components[id]
+	return component, ok
+}
+
+type startedComponent struct {
+	id        string
+	component ManagedComponent
+}
+
+// Runtime owns initialized components and always shuts them down in reverse
+// dependency order. It does not expose one engine instance to another.
+type Runtime struct {
+	mu              sync.RWMutex
+	started         []startedComponent
+	ready           bool
+	failed          bool
+	closing         bool
+	closeErr        error
+	closeDone       chan struct{}
+	shutdownTimeout time.Duration
+	monitorCancel   context.CancelFunc
+	monitorWG       sync.WaitGroup
+	failures        chan error
+	catalog         *TaskCatalog
+}
+
+func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shutdownTimeout time.Duration) (*Runtime, error) {
+	if ctx == nil || registry == nil || len(plan.Components) == 0 || shutdownTimeout <= 0 {
+		return nil, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := buildRegistry().Validate(plan.Components); err != nil {
+		return nil, err
+	}
+	selected := make(map[string]bool, len(plan.Components))
+	seen := make(map[string]bool, len(plan.Components))
+	for _, id := range plan.Components {
+		selected[id] = true
+	}
+	for _, id := range plan.Components {
+		definition, ok := registry.lookup(id)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", ErrComponentUnavailable, id)
+		}
+		if definition.ID != id {
+			return nil, ErrInvalid
+		}
+		for _, dependency := range definition.Requires {
+			if !selected[dependency] || !seen[dependency] {
+				return nil, fmt.Errorf("component %q dependency %q is unavailable or ordered later", id, dependency)
+			}
+		}
+		seen[id] = true
+	}
+	catalog, err := registry.CompileTaskCatalog(plan)
+	if err != nil {
+		return nil, err
+	}
+	runtime := &Runtime{closeDone: make(chan struct{}), failures: make(chan error, len(plan.Components)), shutdownTimeout: shutdownTimeout, catalog: catalog}
+	cleanup := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		defer cancel()
+		return runtime.stopStarted(cleanupCtx)
+	}
+	active := make(map[string]bool, len(plan.Components))
+	for _, id := range plan.Components {
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Join(err, cleanup())
+		}
+		definition, ok := registry.lookup(id)
+		if !ok {
+			return nil, errors.Join(fmt.Errorf("%w: %s", ErrComponentUnavailable, id), cleanup())
+		}
+		if definition.ID != id {
+			return nil, errors.Join(ErrInvalid, cleanup())
+		}
+		for _, dependency := range definition.Requires {
+			if !active[dependency] {
+				return nil, errors.Join(fmt.Errorf("component %q dependency %q is unavailable or ordered later", id, dependency), cleanup())
+			}
+		}
+		component, err := invokeFactory(id, definition.New, ctx)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("initialize component %q: %w", id, err), cleanup())
+		}
+		if isNilManagedComponent(component) {
+			return nil, errors.Join(fmt.Errorf("%w: component %q factory returned nil", ErrInvalid, id), cleanup())
+		}
+		runtime.started = append(runtime.started, startedComponent{id: id, component: component})
+		if err := invokeLifecycle(id, "start", func() error { return component.Start(ctx) }); err != nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(fmt.Errorf("start component %q: %w", id, err), cleanupErr)
+		}
+		active[id] = true
+	}
+	for _, item := range runtime.started {
+		if err := ctx.Err(); err != nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(err, cleanupErr)
+		}
+		if err := invokeLifecycle(item.id, "readiness", func() error { return item.component.Ready(ctx) }); err != nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(fmt.Errorf("component %q is not ready: %w", item.id, err), cleanupErr)
+		}
+	}
+	for _, item := range runtime.started {
+		activator, ok := item.component.(ActivatableComponent)
+		if !ok {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(err, cleanupErr)
+		}
+		if err := invokeLifecycle(item.id, "activation", func() error { return activator.Activate(ctx) }); err != nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(fmt.Errorf("activate component %q: %w", item.id, err), cleanupErr)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupErr := cleanup()
+		return nil, errors.Join(err, cleanupErr)
+	}
+	failureSources := make([]struct {
+		id     string
+		errors <-chan error
+	}, 0, len(runtime.started))
+	for _, item := range runtime.started {
+		source, ok := item.component.(FailureSource)
+		if !ok {
+			continue
+		}
+		failures, err := invokeFailureSource(item.id, source)
+		if err != nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(err, cleanupErr)
+		}
+		if failures == nil {
+			cleanupErr := cleanup()
+			return nil, errors.Join(fmt.Errorf("component %q returned a nil failure stream: %w", item.id, ErrInvalid), cleanupErr)
+		}
+		failureSources = append(failureSources, struct {
+			id     string
+			errors <-chan error
+		}{id: item.id, errors: failures})
+	}
+	runtime.mu.Lock()
+	runtime.ready = true
+	runtime.mu.Unlock()
+	monitorCtx, monitorCancel := context.WithCancel(context.Background())
+	runtime.monitorCancel = monitorCancel
+	for _, source := range failureSources {
+		runtime.monitorWG.Add(1)
+		go runtime.monitorFailures(monitorCtx, source.id, source.errors)
+	}
+	return runtime, nil
+}
+
+// TaskCatalog returns the immutable handler set compiled into this runtime.
+// A profile without workers or automation has no task catalog.
+func (r *Runtime) TaskCatalog() *TaskCatalog {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.catalog
+}
+
+func (r *Runtime) Ready() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	if !r.ready || r.closing || r.failed {
+		r.mu.RUnlock()
+		return false
+	}
+	items := append([]startedComponent(nil), r.started...)
+	r.mu.RUnlock()
+	for _, item := range items {
+		probe, ok := item.component.(CurrentReadiness)
+		if !ok {
+			continue
+		}
+		ready, panicked := currentReadiness(item.id, probe)
+		if panicked {
+			r.failComponent(item.id)
+			return false
+		}
+		if !ready {
+			return false
+		}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ready && !r.closing && !r.failed
+}
+
+func (r *Runtime) Failures() <-chan error {
+	if r == nil {
+		ch := make(chan error)
+		close(ch)
+		return ch
+	}
+	return r.failures
+}
+
+func (r *Runtime) monitorFailures(ctx context.Context, id string, source <-chan error) {
+	defer r.monitorWG.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err, ok := <-source:
+			if !ok {
+				r.failComponent(id)
+				return
+			}
+			if err == nil {
+				continue
+			}
+			r.failComponent(id)
+			return
+		}
+	}
+}
+
+func (r *Runtime) Close(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		return ErrInvalid
+	}
+	r.mu.Lock()
+	if r.closing {
+		done := r.closeDone
+		r.mu.Unlock()
+		select {
+		case <-done:
+			r.mu.RLock()
+			defer r.mu.RUnlock()
+			return r.closeErr
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	r.closing = true
+	r.ready = false
+	items := append([]startedComponent(nil), r.started...)
+	r.started = nil
+	r.mu.Unlock()
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, r.shutdownTimeout)
+	defer shutdownCancel()
+	if r.monitorCancel != nil {
+		r.monitorCancel()
+	}
+	var closeErr error
+	for i := len(items) - 1; i >= 0; i-- {
+		if err := invokeLifecycle(items[i].id, "stop", func() error { return items[i].component.Stop(shutdownCtx) }); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("stop component %q: %w", items[i].id, err))
+		}
+	}
+	r.monitorWG.Wait()
+	r.mu.Lock()
+	close(r.failures)
+	r.closeErr = closeErr
+	close(r.closeDone)
+	r.mu.Unlock()
+	return closeErr
+}
+
+func (r *Runtime) stopStarted(ctx context.Context) error {
+	var stopErr error
+	for i := len(r.started) - 1; i >= 0; i-- {
+		item := r.started[i]
+		if err := invokeLifecycle(item.id, "stop", func() error { return item.component.Stop(ctx) }); err != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("stop component %q: %w", item.id, err))
+		}
+	}
+	r.started = nil
+	return stopErr
+}
+
+func (r *Runtime) failComponent(id string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closing || r.failed {
+		return
+	}
+	r.failed = true
+	r.ready = false
+	select {
+	case r.failures <- fmt.Errorf("component %q reported a fatal failure", id):
+	default:
+	}
+}
+
+func invokeFactory(id string, factory ComponentFactory, ctx context.Context) (component ManagedComponent, err error) {
+	defer func() {
+		if recover() != nil {
+			component = nil
+			err = fmt.Errorf("%w in component %q factory", ErrComponentPanic, id)
+		}
+	}()
+	return factory(ctx)
+}
+
+func invokeLifecycle(id, phase string, call func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = fmt.Errorf("%w during component %q %s", ErrComponentPanic, id, phase)
+		}
+	}()
+	return call()
+}
+
+func invokeFailureSource(id string, source FailureSource) (failures <-chan error, err error) {
+	defer func() {
+		if recover() != nil {
+			failures = nil
+			err = fmt.Errorf("%w in component %q failure source", ErrComponentPanic, id)
+		}
+	}()
+	return source.Errors(), nil
+}
+
+func currentReadiness(id string, probe CurrentReadiness) (ready, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			ready = false
+			panicked = true
+		}
+	}()
+	return probe.IsReady(), false
+}
+
+func isNilManagedComponent(component ManagedComponent) bool {
+	return isNilInterface(component)
+}
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}

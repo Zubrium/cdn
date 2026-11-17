@@ -20,6 +20,8 @@ type PrincipalRecord struct {
 	CanManageAdministrators bool
 }
 
+var ErrManagerInvariant = errors.New("administrator management invariant would be violated")
+
 func ListPrincipals(ctx context.Context, pool *pgxpool.Pool, actor access.Principal) ([]PrincipalRecord, error) {
 	if pool == nil {
 		return nil, errors.New("nil database pool")
@@ -88,7 +90,7 @@ func SetPrincipalManagement(ctx context.Context, pool *pgxpool.Pool, actor acces
 				return err
 			}
 			if count == 0 {
-				return errors.New("cannot revoke the last active administrator-management permission")
+				return ErrManagerInvariant
 			}
 		}
 	}
@@ -137,7 +139,7 @@ func DeactivatePrincipal(ctx context.Context, pool *pgxpool.Pool, actor access.P
 				return err
 			}
 			if count == 0 {
-				return errors.New("cannot deactivate the last active administrator-manager")
+				return ErrManagerInvariant
 			}
 		}
 	}

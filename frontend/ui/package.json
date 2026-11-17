@@ -1,0 +1,10 @@
+{
+  "name": "@website-engine/ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./styles/foundation.css": "./styles/foundation.css",
+    "./styles/admin.css": "./styles/admin.css"
+  }
+}

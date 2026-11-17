@@ -33,9 +33,14 @@ type RuntimeConfig struct {
 	MaintenanceTimeout   time.Duration
 	PendingTTL           time.Duration
 	MaintenanceBatchSize int
+	ModuleData           ModuleDataLimits
 }
 
 const MaxS3PutObjectBytes = objectstore.MaxPutObjectBytes
+
+// MinRuntimeDatabaseConnections leaves one connection for LISTEN and two for
+// one Loader commit's staged read and final object upload.
+const MinRuntimeDatabaseConnections int32 = 3
 
 // Session stores only a credential digest and deliberately formats as redacted.
 type Session struct{ hash []byte }
@@ -44,13 +49,19 @@ func (Session) String() string                 { return "[redacted session]" }
 func (Session) Format(state fmt.State, _ rune) { _, _ = state.Write([]byte("[redacted session]")) }
 
 func (r *Runtime) Authenticate(ctx context.Context, secret string) (Session, error) {
+	session, _, err := r.authenticatePrincipal(ctx, secret)
+	return session, err
+}
+
+func (r *Runtime) authenticatePrincipal(ctx context.Context, secret string) (Session, access.Principal, error) {
 	if err := r.valid(); err != nil {
-		return Session{}, err
+		return Session{}, access.Principal{}, err
 	}
-	if _, err := postgres.Authenticate(ctx, r.database, secret); err != nil {
-		return Session{}, err
+	principal, err := postgres.Authenticate(ctx, r.database, secret)
+	if err != nil {
+		return Session{}, access.Principal{}, err
 	}
-	return Session{hash: identity.HashSecret(secret)}, nil
+	return Session{hash: identity.HashSecret(secret)}, principal, nil
 }
 
 func (r *Runtime) actor(ctx context.Context, session Session) (access.Principal, error) {
@@ -73,18 +84,24 @@ type S3Config struct {
 }
 
 type Runtime struct {
-	database       *pgxpool.Pool
-	objects        *objectstore.S3
-	files          storage.Service
-	maxObjectBytes int64
-	byteCache      *cache.Cache
-	Registry       *Registry
-	cancel         context.CancelFunc
-	done           chan struct{}
-	notifyDone     chan struct{}
-	errors         chan error
-	closeOnce      sync.Once
-	closeErr       error
+	database               *pgxpool.Pool
+	objects                *objectstore.S3
+	files                  storage.Service
+	maxObjectBytes         int64
+	byteCache              *cache.Cache
+	Registry               *Registry
+	cancel                 context.CancelFunc
+	done                   chan struct{}
+	notifyDone             chan struct{}
+	errors                 chan error
+	closeOnce              sync.Once
+	closeErr               error
+	moduleDataMu           sync.Mutex
+	moduleData             map[string]struct{}
+	moduleDataLimits       ModuleDataLimits
+	coordinatorStoreIssued bool
+	routeTargetStoreIssued bool
+	routeTargetChanges     chan string
 }
 
 // Start verifies the private storage boundary, initializes a fresh Atlas schema
@@ -139,7 +156,9 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 	workerCtx, cancel := context.WithCancel(context.Background())
 	r := &Runtime{
 		database: pool, objects: objects, files: files, maxObjectBytes: cfg.MaxObjectBytes, byteCache: byteCache,
-		Registry: NewRegistry(), cancel: cancel, done: make(chan struct{}), notifyDone: make(chan struct{}), errors: make(chan error, 8),
+		moduleDataLimits: cfg.ModuleData,
+		Registry:         NewRegistry(), cancel: cancel, done: make(chan struct{}), notifyDone: make(chan struct{}), errors: make(chan error, 8),
+		routeTargetChanges: make(chan string, 128),
 	}
 	go r.maintain(workerCtx, cfg)
 	go r.listenInvalidations(workerCtx)
@@ -149,8 +168,8 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 
 func validateRuntimeConfig(cfg RuntimeConfig) error {
 	if cfg.MigrationDatabaseURL == "" || cfg.AtlasBinary == "" || cfg.MigrationLockTimeout <= 0 || cfg.CacheMaxBytes <= 0 || int64(int(cfg.CacheMaxBytes)) != cfg.CacheMaxBytes || cfg.CacheTTL <= 0 ||
-		cfg.MaxMetadataBytes <= 0 || cfg.MaxObjectBytes <= 0 || cfg.MaxCachedObjectBytes < 0 || cfg.MaxCachedObjectBytes > cfg.MaxObjectBytes || cfg.MaxCachedObjectBytes > cfg.CacheMaxBytes ||
-		cfg.MaxObjectBytes > MaxS3PutObjectBytes || cfg.Database.MaxConnections < 2 || cfg.MaintenanceInterval <= 0 || cfg.MaintenanceTimeout <= 0 || cfg.PendingTTL <= 0 || cfg.MaintenanceBatchSize <= 0 {
+		cfg.MaxMetadataBytes <= 0 || cfg.MaxMetadataBytes > 16<<20 || cfg.MaxObjectBytes <= 0 || cfg.MaxCachedObjectBytes < 0 || cfg.MaxCachedObjectBytes > cfg.MaxObjectBytes || cfg.MaxCachedObjectBytes > cfg.CacheMaxBytes ||
+		cfg.MaxObjectBytes > MaxS3PutObjectBytes || cfg.Database.MaxConnections < MinRuntimeDatabaseConnections || cfg.MaintenanceInterval <= 0 || cfg.MaintenanceTimeout <= 0 || cfg.PendingTTL <= 0 || cfg.MaintenanceBatchSize <= 0 || !ValidModuleDataLimits(cfg.ModuleData) {
 		return errors.New("invalid core storage, Atlas, or maintenance configuration")
 	}
 	if err := ValidateDatabaseURLs(cfg.Database.URL, cfg.MigrationDatabaseURL); err != nil {

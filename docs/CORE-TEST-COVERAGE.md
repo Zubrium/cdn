@@ -1,38 +1,51 @@
 # Приёмочный набор Core v2
 
-Нормативные требования — в [SPEC-core-v2.md](SPEC-core-v2.md). Контрактные проверки находятся в `core/access`, `core/internal/storage`, `core/internal/postgres` и test-local `coreV2RuntimeContract` в `core/platform`. Ниже зафиксирован результат локальной приёмки 16 ноября 2026 года. Он подтверждает проверенные Core-критерии, но не означает готовность всей модульной платформы, проверку реального S3-провайдера или завершение независимого security audit.
+Нормативные требования — в [SPEC-core-v2.md](../spec/SPEC-core-v2.md) и [SPEC-module-data.md](../spec/SPEC-module-data.md). Контрактные проверки Core находятся в `core/access`, `core/internal/storage`, `core/internal/postgres`, `core/platform` и пакетах Loader/File API. Реализация module-data, Loader recovery, файловых наборов и их HTTP контрактов добавлена в текущий рабочий набор изменений. Проверки, записанные ниже, относятся к последнему зафиксированному QA прогону до текущих изменений TTL/idempotency и ротации cleanup cursor; эти новые пути требуют повторной приёмки перед закрытием TODO.
 
 ## Покрываемые сценарии
 
-`presentation/fileapi` проверяет HTTP-границу через fake Loader contract: bearer-аутентификацию, отказ до вызова Loader, streaming upload-session routes, строгий JSON и лимиты, закрытие устаревших полей `public`/`role`, ETag/If-Match, диапазонную выдачу с `no-store` и отсутствие generic HTTP-маршрутов для динамических наборов. Наборы создаются и меняются движками через внутренний Core-контракт; их membership не выдаёт доступ, а поиск фильтрует файлы по актуальным группам. Реальная загрузочная state machine, SHA-256 частей и файла, streaming/buffer policy, долговременная схема Loader, интеграция с Core staging и composition runtime ещё требуют отдельных тестов и реализации. Core staging API и его roundtrip/checksum сценарий добавлены в Core integration acceptance; это пока не является пройденным доказательством.
+Module-data page size ограничивается одновременно настроенным числом записей и byte-budget: `max_page_bytes` учитывает потенциальную JSONB-экспансию payload/index, поля записи и число строк. Валидатор сохраняет произвольные конечные JSON numbers без перевода payload в `float64`, учитывает расширение экспонент и ограничивает namespace 255 байтами. Регрессионные проверки добавлены; актуальный verification pass должен подтвердить оценки размера, целостность страниц и монотонность cursor.
+
+`presentation/fileapi` предоставляет HTTP CRUD наборов через Loader contract. Набор не выдаёт доступ к файлам; добавление файла требует уровня `2` в управляющей группе набора и хотя бы одной активной группе файла, а Core фильтрует файлы по текущим правам. Loader state machine, SHA-256 частей/файла, streaming/buffer policy, JSON persistence в `core.module_data`, scoped Core API и composition runtime реализованы; их acceptance-команды и последние изменения восстановления должны быть подтверждены актуальным QA прогоном.
 
 - **Доступ:** уровни `0/1/2`, чтение через любую активную группу файла, неактивные группы, запрет повышения уровня без права управления администраторами и уровня `2`, отсутствие обхода группового доступа правом управления администраторами, запрет продуктовых действий в Core.
 - **Идентичность и группы:** хеши ключей, bootstrap, новые учётные записи без групповых назначений, прямые назначения и запрет частичного изменения, сохранение назначений при изменениях YAML, закрытие отсутствующей группы и возврат прежней группы, защита последнего управляющего пользователя и ключа, конкурентный bootstrap/deactivate/revoke.
-- **Файлы и наборы:** один пользовательский тип, отсутствие владельцев/visibility/версий, неизменяемые байты и новый ID для нового содержимого, повтор идемпотентного запроса, конфликт ключа, лимиты размера/метаданных, ревизии метаданных, несколько групп, запрет последней группы, чтение диапазона, окончательное удаление; наборы хранятся в Core, создаются/меняются движками через внутренний контракт и не дают прав на файлы. Проверяются ограничение изменений учётной записью-создателем, фильтрация недоступных файлов до cursor/пагинации и отсутствие generic HTTP CRUD наборов.
+- **Файлы и наборы:** один пользовательский тип, отсутствие владельцев/visibility/версий, неизменяемые байты и новый ID для нового содержимого, повтор идемпотентного запроса, конфликт ключа, лимиты размера/метаданных, ревизии метаданных, несколько групп, запрет последней группы, чтение диапазона, окончательное удаление; наборы хранятся в Core, HTTP CRUD идёт через Loader→Core с обязательной управляющей группой, но membership не даёт прав на файлы. Проверяются уровни `1/2`, добавление файла только при уровне `2` в управляющей группе набора и хотя бы одной группе файла, фильтрация закрытых файлов до cursor/пагинации, отсутствие утечек счётчиков/имён и возврат только тех групп файла, где у субъекта есть право чтения.
 - **Кеш и ошибки:** копирование байтов, TTL, ограничение количества и объёма, LRU, конкурентный доступ; актуальная проверка разрешения для каждой выдачи, отзыв права на второй реплике и отказ при недоступной БД.
 - **S3 boundary:** небезопасная конфигурация, запрет не-UUID ключей до сетевого запроса, отказ при неполном public-access-block, публичном ACL/policy и невозможности проверить приватность, изолированный roundtrip и несоответствие длины потока.
 - **Core staging:** привязка ID к инициатору, уровень `2` на каждой целевой группе, проверка лимита и SHA-256, потоковое чтение с актуальной проверкой доступа, отказ после отзыва назначения, безопасное удаление и отсутствие TTL-очистки готовых staging-объектов.
-- **Контракт и схема Core:** сигнатуры публичного `Runtime` и storage-service, отсутствие старых API/полей, чистая начальная Atlas-схема `core` с прямыми группами и наборами; интеграционная проверка обеих Atlas histories, grants runtime-пользователя и запрет межсхемного доступа.
+- **Контракт и схема Core:** сигнатуры публичного `Runtime` и module-data API, отсутствие старых API/полей, чистая начальная Core Atlas migration history; runtime-only DML grants и единственная таблица `core.module_data` для engine JSON.
+
+## Приёмка module-data API
+
+Новая физическая модель реализована в текущей миграции и Go API. Следующие проверки остаются обязательными до закрытия acceptance:
+
+- Один JSONB-документ на ключ `(module_id, namespace, scope_type, scope_id, record_key)`; одинаковые ключи разных engines/scopes изолированы. Capability всегда привязана Core к зарегистрированному module ID, попытки чтения/записи чужого ID закрыты.
+- Payload version/upcaster остаётся у engine; запись payload и `index_data` атомарна. Bootstrap defaults не перезаписывают существующие пользовательские значения.
+- Typed selectors принимают только зарегистрированные поля/операторы и используют индекс; arbitrary SQL/JSONPath и full-table unbounded scan невозможны. Проверить планы запросов на disposable PostgreSQL.
+- `expires_at` не даёт читать истёкшее значение до фонового удаления; TTL worker безопасен при нескольких экземплярах.
+- CAS create/update/delete проверяет revision. Atomic batch CAS применяет все операции одной capability одним Core transaction: при любой конфликтной revision или ошибке не остаётся частичных изменений.
+- Проверить предел версии payload для SQL integer, несовместимые с JSONB NUL/surrogate escapes, суммарный нормализованный размер batch, общий бюджет сериализованных selectors, ограничения размера JSON, пагинацию, индексацию, race между экземплярами, payload upcast, TTL очистку и Loader session recovery после перезапуска.
 
 Прежние проверки ролей, владельцев, публикации файла и его версий удалены. `core/platform/runtime_integration_test.go` удалён как дублирующий тест, который совместно с новым сценарием менял одну БД и делал bootstrap зависимым от порядка тестов. Старый storage unit suite на `Grant` заменён тестом целевого интерфейса; сквозные сценарии доступа закреплены в Core v2 acceptance.
 
-## Приёмка Loader Engine и изоляции схем
+## Приёмка Loader Engine на общем хранилище
 
-Эти критерии ещё не реализованы. Загрузочные сессии, idempotency records, части, expiry и их локальный cache принадлежат Loader и только его схеме `loader`; PostgreSQL является источником истины, поэтому несколько экземпляров и рестарт продолжают сессию без чтения Core tables. Временные bytes проходят только через Core staging API; в Core schema нет таблиц upload-сессий.
+Эти контракты реализованы: загрузочные сессии, idempotency records, части, expiry и cleanup сохраняются JSON-записями namespace `loader` в `core.module_data`; отдельной Loader schema/БД нет. PostgreSQL через Core API является источником истины, а временные bytes проходят только через Core staging API. Проверки ниже остаются критериями приёмки, включая последние исправления recovery и ротации durable cleanup.
 
 - Unit tests Loader: state machine, bind session к инициатору, идемпотентность, per-part и итоговый SHA-256, checksum mismatch, неполные/повторные части, commit/abort/expiry, race на одну часть, cache hit/miss/eviction и invalidation.
 - Streaming/buffered policy: выбранный режим соответствует конфигурационному порогу и memory budget; oversized uploads и исчерпание бюджета остаются streaming, параллельная буферизация не превышает общий лимит.
-- Integration tests: потеря процесса/переподключение/два экземпляра, resume через Loader schema, fail/retry при Core staging/finalize, очистка только точных staging refs, отсутствие видимого файла до commit.
-- File API: fake Loader contract; generic API не публикует маршруты для наборов, прав доступа или администрирования; динамические наборы остаются в engine workflows и Core in-process API.
-- Schema boundary: каждая Atlas migration меняет только свою схему; отдельные checksum и migration history; runtime DB roles не имеют прав на чужие схемы; cross-schema query/FK запрещены и отрицательно проверяются.
+- Integration tests: потеря процесса/переподключение/два экземпляра, resume из `core.module_data`, fail/retry при Core staging/finalize, очистка только точных staging refs, отсутствие видимого файла до commit.
+- File API: fake Loader contract и маршруты CRUD наборов; проверка статичной управляющей группы набора, уровня `2` на группе файла, конфликта повторного имени набора, отказа на NUL в поисковом запросе, фильтрации недоступных файлов и fail-closed поведения.
+- Storage boundary: один Core Atlas migration set и одна DB schema; engines не имеют DB credentials/SQL и не могут получить чужую module capability; никаких engine-specific DBs, schemas или migration histories.
 
 ## Изолированные integration-переменные
 
-Каждая PostgreSQL integration-переменная должна указывать на отдельную, только что созданную пустую disposable БД: Core — с префиксом `zubrium_core_qa_*`, Loader — `zubrium_loader_qa_*`. В каждом окружении тесты проверяют имя, отсутствие посторонних подключений и отсутствие целевой схемы или Atlas history; они никогда не очищают или не удаляют БД. База, уже использованная предыдущим запуском, повторно не подходит.
+Каждая PostgreSQL integration-переменная указывает на отдельную, только что созданную пустую disposable БД с префиксом `zubrium_core_qa_*`; все модули в тесте работают через единую Core-схему. Тесты проверяют имя БД и отсутствие посторонних подключений, никогда не очищают или не удаляют неизвестные БД. База, уже использованная предыдущим запуском, повторно не подходит.
 
 | Переменные | Назначение |
 | --- | --- |
-| `TEST_LOADER_DATABASE_URL` | пустая disposable БД/схема для Loader migrations, session concurrency и restart/resume |
+| `TEST_MODULE_DATA_DATABASE_URL` | пустая disposable БД для namespace isolation, selector/index, TTL, CAS/batch и Loader restart/resume через Core API |
 | `TEST_CORE_DATABASE_URL` | identity/credential lifecycle |
 | `TEST_CORE_GROUPS_DATABASE_URL` | прямые уровни, YAML reconciliation, last-manager guard |
 | `TEST_CORE_SCHEMA_DATABASE_URL` | применение миграции и проверка её реального результата |
@@ -53,10 +66,11 @@
 - `make test` — PASS на свежем наборе изолированных БД. После последнего небольшого рефакторинга дополнительно прошли `go test -count=1 ./...` для `presentation/fileapi` и `engines/loader`.
 - `make vet`, `make build`, `make build-full` — PASS. `staticcheck ./...` — PASS отдельно во всех 10 Go modules. `git diff --check` — PASS.
 - Regression `TestCoreGoCodeDoesNotExecuteSchemaDDL` прошёл в составе integration/coverage run. Производственные `.go`-файлы не содержат schema DDL; схемы создают только версионированные Atlas SQL migration files.
+- `ListAccessGroups` должен отказать субъекту без права управления администраторами, чтобы не раскрывать перечень внутренних групп; управляющий администратор видит настроенные группы и собственные уровни. Этот критерий добавлен в текущую приёмку и требует повторного прогона.
 - БД: PostgreSQL 16 в изолированном task-owned контейнере; Atlas CLI и библиотека миграций — `v1.3.0`. S3 acceptance использует loopback-only protocol mock. Реальный внешний S3, production PostgreSQL, внешний gateway и Vitasil не использовались.
 - Все PostgreSQL integration-переменные указывают на отдельные пустые БД с префиксом `zubrium_core_qa_`; runtime, migration и listener-admin connections в platform acceptance используют разные login. Перечень созданных disposable БД и удаление task-owned QA окружения отражены в [QA_REPORT.md](QA_REPORT.md).
 - `govulncheck` на машине не установлен; специализированная независимая security-приёмка не проводилась. Прошли source-level security checks, permission/fail-closed integration cases и Staticcheck, но это не является формальным полным security audit.
 
 ## Оставшиеся acceptance проверки
 
-Core acceptance прошёл контролируемые S3 upload/delete failures, PostgreSQL finalization failure, повторную очистку, recovery-конкуренцию с активными file/staging uploads и восстановление cache-invalidation listener после потери соединения. Реальный внешний S3/provider и production DB не проверялись. Публичный маршрут относится к Router acceptance: Core публичную выдачу запрещает. Полная интеграция Loader Engine, Router, Admin API/UI и модулей Website/Content/Forms ещё не завершена и остаётся открытой в TODO.
+Core acceptance прошёл контролируемые S3 upload/delete failures, PostgreSQL finalization failure, повторную очистку, recovery-конкуренцию с активными file/staging uploads и восстановление cache-invalidation listener после потери соединения. Реальный внешний S3/provider и production DB не проверялись. Публичный маршрут относится к Router acceptance: Core публичную выдачу запрещает. Loader и File API реализованы; Router, Admin API/UI и перенос Website/Content/Forms остаются открытыми в TODO. Последние изменения Loader после этого QA прогона пока не проверены.

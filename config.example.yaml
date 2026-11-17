@@ -11,13 +11,16 @@ core:
   s3_allow_insecure_http: true
   atlas_binary: atlas
   migration_lock_timeout: 30s
+  # An omitted or null level gives the initial administrator level 2.
   access_groups:
     content: 2
     features: 2
+    coordinator_jobs: 2
   cache_max_bytes: 67108864
   cache_ttl: 10m
   min_connections: 0
-  max_connections: 10
+  # Reserve one for Core, two per Loader commit, and two per Coordinator worker (handler plus lease renewal).
+  max_connections: 20
   connect_timeout: 10s
   max_lifetime: 1h
   max_idle_time: 10m
@@ -29,3 +32,62 @@ core:
   maintenance_timeout: 30s
   pending_ttl: 1h
   maintenance_batch_size: 100
+  module_data:
+    max_payload_bytes: 1048576
+    max_index_bytes: 65536
+    max_batch_bytes: 8388608
+    max_page_bytes: 16777216
+    max_selectors: 16
+    max_selector_values: 64
+    max_page_size: 100
+    max_batch_operations: 64
+
+loader:
+  part_size_bytes: 1048576
+  max_file_bytes: 104857600
+  max_part_bytes: 1048576
+  max_parts: 100
+  max_concurrent_commits: 4
+  session_ttl: 24h
+  commit_timeout: 5m
+  mode: auto
+  buffer_threshold_bytes: 2097152
+  max_buffered_bytes: 16777216
+  session_cache_entries: 10000
+  session_cache_max_bytes: 8388608
+  session_cache_ttl: 1m
+  cleanup_interval: 1m
+  cleanup_batch_size: 100
+
+file_api:
+  max_json_bytes: 1048576
+  max_attribute_bytes: 65536
+  max_groups_per_file: 16
+  default_page_size: 25
+  max_page_size: 100
+
+http:
+  listen_address: 127.0.0.1:8080
+  read_header_timeout: 5s
+  read_timeout: 15m
+  # Zero keeps long file streams open; uploads are bounded by File API limits.
+  write_timeout: 0s
+  idle_timeout: 2m
+  shutdown_timeout: 20s
+  max_header_bytes: 65536
+
+coordinator:
+  system_id: website-engine
+  job_access_group: coordinator_jobs
+  jobs_page_default: 25
+  jobs_page_maximum: 100
+  instance_lease: 30s
+  heartbeat_interval: 5s
+  worker_concurrency: 4
+  job_lease: 30s
+  task_timeout: 30m
+  poll_interval: 1s
+  retry_base: 2s
+  retry_maximum: 2m
+  max_attempts: 6
+  bindings: []

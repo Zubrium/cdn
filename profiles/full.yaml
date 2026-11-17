@@ -1,0 +1,28 @@
+version: 1
+engines:
+  - website
+  - content
+  - forms
+  - loader
+  - router
+workers:
+  - archive
+  - media
+  - prerender
+apis:
+  admin:
+    - website
+    - content
+    - forms
+    - files
+    - router
+    - coordinator
+    - identity
+    - ui
+  public:
+    - router
+    - form-submit
+    - form-upload
+    - content-runtime
+automation:
+  - site-publication

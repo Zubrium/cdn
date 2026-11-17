@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/Zubrium/cdn/core/internal/postgres"
 	"github.com/Zubrium/cdn/core/internal/storage"
@@ -39,23 +40,42 @@ func (r *Runtime) DeleteStagedObject(ctx context.Context, session Session, id st
 
 var ErrFileNotFound = storage.ErrNotFound
 var ErrRevisionConflict = storage.ErrRevisionConflict
+var ErrFileSetConflict = storage.ErrFileSetConflict
 var ErrUploadInProgress = storage.ErrUploadInProgress
 var ErrRequestConflict = storage.ErrRequestConflict
 var ErrRequestDeleted = storage.ErrRequestDeleted
+var ErrChecksumMismatch = storage.ErrChecksumMismatch
+var ErrInvalidSearch = storage.ErrInvalidSearch
 
 type File struct {
 	ID          string
 	Groups      []string
 	Metadata    map[string]string
 	ContentType string
+	SHA256      string
 	Revision    int64
 	Size        int64
+}
+
+type FileSet struct {
+	ID              string
+	Namespace       string
+	Name            string
+	ManagementGroup string
+	Revision        int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type UploadRequestStatus struct {
+	State  string
+	FileID string
 }
 
 func exposeFile(object storage.Object) File {
 	return File{
 		ID: object.ID, Groups: append([]string(nil), object.Groups...), Metadata: cloneMap(object.Metadata),
-		ContentType: object.ContentType, Revision: object.Revision, Size: object.Size,
+		ContentType: object.ContentType, SHA256: object.SHA256, Revision: object.Revision, Size: object.Size,
 	}
 }
 
@@ -65,6 +85,14 @@ func (r *Runtime) CreateFile(ctx context.Context, session Session, requestKey st
 		return "", err
 	}
 	return r.files.Create(ctx, actor, requestKey, groups, metadata, contentType, size, body)
+}
+
+func (r *Runtime) CreateFileVerified(ctx context.Context, session Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, expectedSHA256 string, body io.Reader) (string, error) {
+	actor, err := r.actor(ctx, session)
+	if err != nil {
+		return "", err
+	}
+	return r.files.CreateVerified(ctx, actor, requestKey, groups, metadata, contentType, size, expectedSHA256, body)
 }
 
 func (r *Runtime) ReadFile(ctx context.Context, session Session, id string) (io.ReadCloser, File, error) {
@@ -147,51 +175,51 @@ func (r *Runtime) DeleteFile(ctx context.Context, session Session, id string, ex
 	return r.files.Delete(ctx, actor, id, expected)
 }
 
-func (r *Runtime) CreateFileSet(ctx context.Context, session Session, namespace, name string) (string, error) {
+func (r *Runtime) CreateManagedFileSet(ctx context.Context, session Session, namespace, name, managementGroup string) (FileSet, error) {
 	actor, err := r.actor(ctx, session)
 	if err != nil {
-		return "", err
+		return FileSet{}, err
 	}
-	id, err := postgres.CreateFileSet(ctx, r.database, actor, namespace, name)
+	set, err := postgres.CreateManagedFileSet(ctx, r.database, actor, namespace, name, managementGroup)
 	if err != nil {
-		return "", err
+		return FileSet{}, err
 	}
-	return id.String(), nil
+	return exposeSet(set), nil
 }
 
-func (r *Runtime) AddFileToSet(ctx context.Context, session Session, setValue, fileValue string) error {
+func (r *Runtime) GetManagedFileSet(ctx context.Context, session Session, value string) (FileSet, error) {
 	actor, err := r.actor(ctx, session)
 	if err != nil {
-		return err
+		return FileSet{}, err
 	}
-	setID, err := parseID(setValue)
+	setID, err := parseID(value)
 	if err != nil {
-		return err
+		return FileSet{}, err
 	}
-	fileID, err := parseID(fileValue)
+	set, err := postgres.GetFileSet(ctx, r.database, actor, setID)
 	if err != nil {
-		return err
+		return FileSet{}, err
 	}
-	return postgres.AddFileToSet(ctx, r.database, actor, setID, fileID)
+	return exposeSet(set), nil
 }
 
-func (r *Runtime) RemoveFileFromSet(ctx context.Context, session Session, setValue, fileValue string) error {
+func (r *Runtime) UpdateManagedFileSet(ctx context.Context, session Session, value string, expected int64, name string) (FileSet, error) {
 	actor, err := r.actor(ctx, session)
 	if err != nil {
-		return err
+		return FileSet{}, err
 	}
-	setID, err := parseID(setValue)
+	setID, err := parseID(value)
 	if err != nil {
-		return err
+		return FileSet{}, err
 	}
-	fileID, err := parseID(fileValue)
+	set, err := postgres.UpdateFileSet(ctx, r.database, actor, setID, expected, name)
 	if err != nil {
-		return err
+		return FileSet{}, err
 	}
-	return postgres.RemoveFileFromSet(ctx, r.database, actor, setID, fileID)
+	return exposeSet(set), nil
 }
 
-func (r *Runtime) DeleteFileSet(ctx context.Context, session Session, value string) error {
+func (r *Runtime) DeleteManagedFileSet(ctx context.Context, session Session, value string, expected int64) error {
 	actor, err := r.actor(ctx, session)
 	if err != nil {
 		return err
@@ -200,7 +228,63 @@ func (r *Runtime) DeleteFileSet(ctx context.Context, session Session, value stri
 	if err != nil {
 		return err
 	}
-	return postgres.DeleteFileSet(ctx, r.database, actor, setID)
+	return postgres.DeleteManagedFileSet(ctx, r.database, actor, setID, expected)
+}
+
+func (r *Runtime) AddFileToManagedSet(ctx context.Context, session Session, setValue, fileValue string, expected int64) (FileSet, error) {
+	actor, err := r.actor(ctx, session)
+	if err != nil {
+		return FileSet{}, err
+	}
+	setID, err := parseID(setValue)
+	if err != nil {
+		return FileSet{}, err
+	}
+	fileID, err := parseID(fileValue)
+	if err != nil {
+		return FileSet{}, err
+	}
+	set, err := postgres.AddFileToManagedSet(ctx, r.database, actor, setID, fileID, expected)
+	if err != nil {
+		return FileSet{}, err
+	}
+	return exposeSet(set), nil
+}
+
+func (r *Runtime) RemoveFileFromManagedSet(ctx context.Context, session Session, setValue, fileValue string, expected int64) (FileSet, error) {
+	actor, err := r.actor(ctx, session)
+	if err != nil {
+		return FileSet{}, err
+	}
+	setID, err := parseID(setValue)
+	if err != nil {
+		return FileSet{}, err
+	}
+	fileID, err := parseID(fileValue)
+	if err != nil {
+		return FileSet{}, err
+	}
+	set, err := postgres.RemoveFileFromManagedSet(ctx, r.database, actor, setID, fileID, expected)
+	if err != nil {
+		return FileSet{}, err
+	}
+	return exposeSet(set), nil
+}
+
+func (r *Runtime) ListManagedFileSets(ctx context.Context, session Session, namespace, query, cursor string, limit int) ([]FileSet, string, error) {
+	actor, err := r.actor(ctx, session)
+	if err != nil {
+		return nil, "", err
+	}
+	sets, next, err := postgres.ListManagedFileSets(ctx, r.database, actor, namespace, query, cursor, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	items := make([]FileSet, len(sets))
+	for i := range sets {
+		items[i] = exposeSet(sets[i])
+	}
+	return items, next, nil
 }
 
 func (r *Runtime) ListFileSet(ctx context.Context, session Session, setID, cursor string, limit int) ([]File, string, error) {
@@ -213,6 +297,10 @@ func (r *Runtime) ListFileSet(ctx context.Context, session Session, setID, curso
 		return nil, "", err
 	}
 	return exposeFiles(objects), next, nil
+}
+
+func exposeSet(set postgres.FileSet) FileSet {
+	return FileSet{ID: set.ID, Namespace: set.Namespace, Name: set.Name, ManagementGroup: set.ManagementGroup, Revision: set.Revision, CreatedAt: set.CreatedAt, UpdatedAt: set.UpdatedAt}
 }
 
 func (r *Runtime) SearchFiles(ctx context.Context, session Session, query, group, cursor, setID string, limit int) ([]File, string, error) {

@@ -21,12 +21,20 @@ import (
 
 // UploadNew reserves a new immutable object row, streams its bytes to private
 // object storage, then publishes the object and idempotency result atomically.
-func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, actor access.Principal, requestKey string, groups []string, metadata map[string]string, maxMetadataBytes int64, contentType string, size int64, body io.Reader) (uuid.UUID, error) {
+func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, actor access.Principal, requestKey string, groups []string, metadata map[string]string, maxMetadataBytes int64, contentType string, size int64, expectedSHA256 string, body io.Reader) (uuid.UUID, error) {
 	if pool == nil || store == nil || !actor.Active || body == nil || size < 0 || !storage.ValidUUID(requestKey) || !storage.ValidGroups(groups) || !storage.ValidContentType(contentType) {
 		return uuid.Nil, errors.New("invalid upload")
 	}
 	if !storage.ValidMetadata(metadata, maxMetadataBytes) {
 		return uuid.Nil, errors.New("invalid upload metadata")
+	}
+	var expectedDigest []byte
+	if expectedSHA256 != "" {
+		var checksumErr error
+		expectedDigest, checksumErr = parseSHA256(expectedSHA256)
+		if checksumErr != nil {
+			return uuid.Nil, errors.New("invalid expected upload checksum")
+		}
 	}
 	principalID, err := uuid.Parse(actor.ID)
 	if err != nil || principalID == uuid.Nil {
@@ -40,11 +48,12 @@ func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, acto
 	groupCopy := append([]string(nil), groups...)
 	sort.Strings(groupCopy)
 	descriptor, err := json.Marshal(struct {
-		Groups      []string          `json:"groups"`
-		Metadata    map[string]string `json:"metadata"`
-		ContentType string            `json:"contentType"`
-		Size        int64             `json:"size"`
-	}{groupCopy, metadata, contentType, size})
+		Groups         []string          `json:"groups"`
+		Metadata       map[string]string `json:"metadata"`
+		ContentType    string            `json:"contentType"`
+		Size           int64             `json:"size"`
+		ExpectedSHA256 string            `json:"expectedSha256,omitempty"`
+	}{groupCopy, metadata, contentType, size, expectedSHA256})
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -61,6 +70,17 @@ func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, acto
 	}
 	locks := []string{requestLock}
 	defer func() { releaseAdvisoryLocks(conn, locks) }()
+	accessTx, err := conn.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if err := requireUploadAccess(ctx, accessTx, principalID, groups); err != nil {
+		_ = accessTx.Rollback(context.Background())
+		return uuid.Nil, err
+	}
+	if err := accessTx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
 
 	var existingHash []byte
 	var existingID, existingState string
@@ -136,15 +156,28 @@ func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, acto
 	if err := store.Put(ctx, objectKey.String(), io.TeeReader(body, bodyHash), size, contentType); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = store.Delete(cleanupCtx, objectKey.String())
-		cancel()
-		_, markErr := conn.Exec(ctx, `UPDATE core_objects SET state='failed',updated_at=now() WHERE id=$1 AND state='pending'`, objectID)
+		_, markErr := conn.Exec(cleanupCtx, `UPDATE core_objects SET state='failed',updated_at=now() WHERE id=$1 AND state='pending'`, objectID)
 		if markErr == nil {
-			_, markErr = conn.Exec(ctx, `UPDATE core_upload_requests SET state='failed',updated_at=now() WHERE principal_id=$1 AND request_key=$2 AND object_id=$3`, principalID, requestID, objectID)
+			_, markErr = conn.Exec(cleanupCtx, `UPDATE core_upload_requests SET state='failed',updated_at=now() WHERE principal_id=$1 AND request_key=$2 AND object_id=$3`, principalID, requestID, objectID)
 		}
+		cancel()
 		if markErr != nil {
 			return uuid.Nil, fmt.Errorf("upload failed: %v; mark failed reservation: %w", err, markErr)
 		}
 		return uuid.Nil, fmt.Errorf("upload object: %w", err)
+	}
+	if expectedDigest != nil && !bytes.Equal(bodyHash.Sum(nil), expectedDigest) {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = store.Delete(cleanupCtx, objectKey.String())
+		_, markErr := conn.Exec(cleanupCtx, `UPDATE core.core_objects SET state='failed',updated_at=now() WHERE id=$1 AND state='pending'`, objectID)
+		if markErr == nil {
+			_, markErr = conn.Exec(cleanupCtx, `UPDATE core.core_upload_requests SET state='failed',updated_at=now() WHERE principal_id=$1 AND request_key=$2 AND object_id=$3`, principalID, requestID, objectID)
+		}
+		cancel()
+		if markErr != nil {
+			return uuid.Nil, fmt.Errorf("checksum mismatch; mark failed reservation: %w", markErr)
+		}
+		return uuid.Nil, storage.ErrChecksumMismatch
 	}
 	requestHash := combineUploadHash(descriptorHash, bodyHash)
 	finalTx, err := conn.Begin(ctx)
@@ -166,7 +199,12 @@ func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, acto
 		}
 		return uuid.Nil, fmt.Errorf("upload authorization at commit: %w", err)
 	}
-	tag, err := finalTx.Exec(ctx, `UPDATE core_objects SET state='ready',updated_at=now() WHERE id=$1 AND state='pending'`, objectID)
+	if expectedDigest == nil {
+		// Legacy Core callers still persist the computed digest. Loader uses the
+		// verified path and must present the digest it committed against.
+		expectedDigest = bodyHash.Sum(nil)
+	}
+	tag, err := finalTx.Exec(ctx, `UPDATE core_objects SET state='ready',sha256=$2,updated_at=now() WHERE id=$1 AND state='pending'`, objectID, expectedDigest)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -191,14 +229,11 @@ func UploadNew(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, acto
 }
 
 func requireUploadAccess(ctx context.Context, tx pgx.Tx, principalID uuid.UUID, groups []string) error {
-	var active bool
-	if err := tx.QueryRow(ctx, `SELECT active FROM core_principals WHERE id=$1 FOR SHARE`, principalID).Scan(&active); errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
-		return ErrUnauthorized
-	} else if err != nil {
+	if err := requireActivePrincipal(ctx, tx, principalID); err != nil {
 		return err
 	}
 	for _, group := range groups {
-		if err := requireGroupWrite(ctx, tx, principalID, group); err != nil {
+		if err := requireGroupWriteForActive(ctx, tx, principalID, group); err != nil {
 			return err
 		}
 	}

@@ -6,17 +6,42 @@ use (
 	./engines/content
 	./engines/forms
 	./engines/loader
+	./engines/router
+	./workers/archive
+	./workers/media
+	./workers/prerender
+	./coordinator
 	./presentation/router
-	./presentation/fileapi
-	./presentation/adminapi
-	./presentation/adminui
+	./presentation/admin/sites
+	./presentation/admin/files
+	./presentation/admin/main
+	./presentation/admin/ui
+	./presentation/admin/content
+	./presentation/admin/forms
+	./presentation/admin/router
+	./presentation/admin/coordinator
 	./cmd/zubrium
 )
 
 replace (
+	github.com/Zubrium/cdn/coordinator v0.0.0 => ./coordinator
 	github.com/Zubrium/cdn/core v0.0.0 => ./core
-	github.com/Zubrium/cdn/engines/website v0.0.0 => ./engines/website
+	github.com/Zubrium/cdn/cmd/zubrium v0.0.0 => ./cmd/zubrium
 	github.com/Zubrium/cdn/engines/content v0.0.0 => ./engines/content
 	github.com/Zubrium/cdn/engines/forms v0.0.0 => ./engines/forms
 	github.com/Zubrium/cdn/engines/loader v0.0.0 => ./engines/loader
+	github.com/Zubrium/cdn/engines/website v0.0.0 => ./engines/website
+	github.com/Zubrium/cdn/engines/router v0.0.0 => ./engines/router
+	github.com/Zubrium/cdn/presentation/admin/content v0.0.0 => ./presentation/admin/content
+	github.com/Zubrium/cdn/presentation/admin/coordinator v0.0.0 => ./presentation/admin/coordinator
+	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ./presentation/admin/forms
+	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ./presentation/admin/router
+	github.com/Zubrium/cdn/presentation/adminapi v0.0.0 => ./presentation/admin/main
+	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ./presentation/admin/ui
+	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ./presentation/admin/files
+	github.com/Zubrium/cdn/presentation/router v0.0.0 => ./presentation/router
+	github.com/Zubrium/cdn/presentation/sitesapi v0.0.0 => ./presentation/admin/sites
+	github.com/Zubrium/cdn/workers/archive v0.0.0 => ./workers/archive
+	github.com/Zubrium/cdn/workers/media v0.0.0 => ./workers/media
+	github.com/Zubrium/cdn/workers/prerender v0.0.0 => ./workers/prerender
 )

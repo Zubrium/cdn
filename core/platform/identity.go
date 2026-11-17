@@ -12,6 +12,7 @@ import (
 
 var ErrForbidden = access.ErrForbidden
 var ErrUnauthorized = access.ErrUnauthorized
+var ErrManagerInvariant = postgres.ErrManagerInvariant
 
 type Principal struct {
 	ID                      string
@@ -53,12 +54,38 @@ func (r *Runtime) requireAdmin(ctx context.Context, session Session) (access.Pri
 	return actor, nil
 }
 
+// CurrentPrincipal resolves the authenticated session to its current identity
+// so scoped engines can bind durable state to the actor without retaining a
+// credential or trusting a caller-supplied principal ID.
+func (r *Runtime) CurrentPrincipal(ctx context.Context, session Session) (Principal, error) {
+	actor, err := r.actor(ctx, session)
+	if err != nil {
+		return Principal{}, err
+	}
+	return Principal{ID: actor.ID, Name: actor.Name, Active: actor.Active, CanManageAdministrators: actor.CanManageAdministrators}, nil
+}
+
 func (r *Runtime) CreatePrincipal(ctx context.Context, session Session, name string, expires *time.Time) (string, string, error) {
 	actor, err := r.requireAdmin(ctx, session)
 	if err != nil {
 		return "", "", err
 	}
 	id, secret, err := postgres.CreatePrincipal(ctx, r.database, actor, name, expires)
+	if err != nil {
+		return "", "", err
+	}
+	return id.String(), secret, nil
+}
+
+// CreatePrincipalWithAccess creates an account and its explicit initial group
+// levels atomically. Missing groups remain level 0 and the secret is returned
+// only once by the caller.
+func (r *Runtime) CreatePrincipalWithAccess(ctx context.Context, session Session, name string, expires *time.Time, canManageAdministrators bool, groups map[string]access.Level) (string, string, error) {
+	actor, err := r.actor(ctx, session)
+	if err != nil {
+		return "", "", err
+	}
+	id, secret, err := postgres.CreatePrincipalWithAccess(ctx, r.database, actor, name, expires, canManageAdministrators, groups)
 	if err != nil {
 		return "", "", err
 	}
@@ -178,7 +205,7 @@ func (r *Runtime) GroupAccess(ctx context.Context, session Session, target, grou
 }
 
 func (r *Runtime) ListAccessGroups(ctx context.Context, session Session) ([]Group, error) {
-	actor, err := r.actor(ctx, session)
+	actor, err := r.requireAdmin(ctx, session)
 	if err != nil {
 		return nil, err
 	}

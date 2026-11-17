@@ -27,19 +27,27 @@ var ErrDirtyDatabase = errors.New("refusing a database that is not a clean Core 
 
 const AtlasVersion = "v1.3.0"
 
-var coreSchemaRelations = []string{
+var coreSchemaTables = []string{
 	"core_access_groups",
 	"core_bootstrap",
 	"core_credentials",
 	"core_file_groups",
 	"core_file_set_members",
 	"core_file_sets",
+	"module_data",
+	"coordinator_config",
+	"coordinator_instances",
+	"coordinator_jobs",
+	"coordinator_publications",
+	"coordinator_route_targets",
 	"core_group_access",
 	"core_objects",
 	"core_principals",
 	"core_staged_objects",
 	"core_upload_requests",
 }
+
+var coreSchemaRelations = append(append([]string(nil), coreSchemaTables...), "module_data_revision_seq")
 
 // Migrate validates the embedded versioned directory, refuses to initialize an
 // unmanaged or legacy database, and delegates all DDL and migration tracking
@@ -242,11 +250,11 @@ func ensureEmptyOrAtlasManaged(ctx context.Context, pool *pgxpool.Pool) error {
 		var existingCoreTables int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_catalog.pg_class c
 			JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-			WHERE n.nspname='core' AND c.relkind IN ('r','p') AND c.relname=ANY($1::text[])`, coreSchemaRelations).Scan(&existingCoreTables); err != nil {
+			WHERE n.nspname='core' AND c.relkind IN ('r','p') AND c.relname=ANY($1::text[])`, coreSchemaTables).Scan(&existingCoreTables); err != nil {
 			return fmt.Errorf("count Core schema tables: %w", err)
 		}
 		if (hasAppliedCoreMigrations && !hasBaseline) ||
-			(hasBaseline && existingCoreTables != len(coreSchemaRelations)) ||
+			(hasBaseline && existingCoreTables != len(coreSchemaTables)) ||
 			(!hasBaseline && existingCoreTables != 0) {
 			return ErrDirtyDatabase
 		}

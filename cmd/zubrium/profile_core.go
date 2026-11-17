@@ -2,6 +2,11 @@
 
 package main
 
-import "github.com/Zubrium/cdn/core/platform"
+import (
+	"github.com/Zubrium/cdn/coordinator"
+	"github.com/Zubrium/cdn/core/platform"
+)
 
-func registerProfile(_ *platform.Registry) error { return nil }
+func registerProfile(registry *platform.Registry) error { return RegisterGeneratedEngines(registry) }
+
+func compiledBuildPlan() coordinator.BuildPlan { return GeneratedBuildPlan() }

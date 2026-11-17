@@ -1,117 +1,517 @@
 package appconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Zubrium/cdn/coordinator"
 	"github.com/Zubrium/cdn/core/access"
 	"github.com/Zubrium/cdn/core/platform"
+	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
+	"github.com/Zubrium/cdn/presentation/fileapi"
+	"github.com/google/uuid"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Core struct {
-	DatabaseURLEnv          string                  `yaml:"database_url_env"`
-	MigrationDatabaseURLEnv string                  `yaml:"migration_database_url_env"`
-	S3Endpoint              string                  `yaml:"s3_endpoint"`
-	S3Region                string                  `yaml:"s3_region"`
-	S3Bucket                string                  `yaml:"s3_bucket"`
-	S3AccessKeyEnv          string                  `yaml:"s3_access_key_env"`
-	S3SecretKeyEnv          string                  `yaml:"s3_secret_key_env"`
-	S3PathStyle             bool                    `yaml:"s3_path_style"`
-	S3AllowInsecureHTTP     bool                    `yaml:"s3_allow_insecure_http"`
-	BootstrapSecretEnv      string                  `yaml:"bootstrap_secret_env"`
-	AtlasBinary             string                  `yaml:"atlas_binary"`
-	MigrationLockTimeout    string                  `yaml:"migration_lock_timeout"`
-	AccessGroups            map[string]access.Level `yaml:"access_groups"`
-	MinConnections          int32                   `yaml:"min_connections"`
-	MaxConnections          int32                   `yaml:"max_connections"`
-	ConnectTimeout          string                  `yaml:"connect_timeout"`
-	MaxLifetime             string                  `yaml:"max_lifetime"`
-	MaxIdleTime             string                  `yaml:"max_idle_time"`
-	HealthInterval          string                  `yaml:"health_interval"`
-	CacheMaxBytes           int64                   `yaml:"cache_max_bytes"`
-	CacheTTL                string                  `yaml:"cache_ttl"`
-	MaxMetadataBytes        int64                   `yaml:"max_metadata_bytes"`
-	MaxObjectBytes          int64                   `yaml:"max_object_bytes"`
-	MaxCachedObjectBytes    int64                   `yaml:"max_cached_object_bytes"`
-	MaintenanceInterval     string                  `yaml:"maintenance_interval"`
-	MaintenanceTimeout      string                  `yaml:"maintenance_timeout"`
-	PendingTTL              string                  `yaml:"pending_ttl"`
-	MaintenanceBatchSize    int                     `yaml:"maintenance_batch_size"`
+	DatabaseURLEnv          string                   `yaml:"database_url_env"`
+	MigrationDatabaseURLEnv string                   `yaml:"migration_database_url_env"`
+	S3Endpoint              string                   `yaml:"s3_endpoint"`
+	S3Region                string                   `yaml:"s3_region"`
+	S3Bucket                string                   `yaml:"s3_bucket"`
+	S3AccessKeyEnv          string                   `yaml:"s3_access_key_env"`
+	S3SecretKeyEnv          string                   `yaml:"s3_secret_key_env"`
+	S3PathStyle             bool                     `yaml:"s3_path_style"`
+	S3AllowInsecureHTTP     bool                     `yaml:"s3_allow_insecure_http"`
+	BootstrapSecretEnv      string                   `yaml:"bootstrap_secret_env"`
+	AtlasBinary             string                   `yaml:"atlas_binary"`
+	MigrationLockTimeout    string                   `yaml:"migration_lock_timeout"`
+	AccessGroups            map[string]*access.Level `yaml:"access_groups"`
+	MinConnections          int32                    `yaml:"min_connections"`
+	MaxConnections          int32                    `yaml:"max_connections"`
+	ConnectTimeout          string                   `yaml:"connect_timeout"`
+	MaxLifetime             string                   `yaml:"max_lifetime"`
+	MaxIdleTime             string                   `yaml:"max_idle_time"`
+	HealthInterval          string                   `yaml:"health_interval"`
+	CacheMaxBytes           int64                    `yaml:"cache_max_bytes"`
+	CacheTTL                string                   `yaml:"cache_ttl"`
+	MaxMetadataBytes        int64                    `yaml:"max_metadata_bytes"`
+	MaxObjectBytes          int64                    `yaml:"max_object_bytes"`
+	MaxCachedObjectBytes    int64                    `yaml:"max_cached_object_bytes"`
+	MaintenanceInterval     string                   `yaml:"maintenance_interval"`
+	MaintenanceTimeout      string                   `yaml:"maintenance_timeout"`
+	PendingTTL              string                   `yaml:"pending_ttl"`
+	MaintenanceBatchSize    int                      `yaml:"maintenance_batch_size"`
+	ModuleData              ModuleData               `yaml:"module_data"`
 }
 
-// Resolve reads secrets only from the configured environment variables.
-func (c Config) Resolve(getenv func(string) string) (platform.RuntimeConfig, error) {
+type ModuleData struct {
+	MaxPayloadBytes    int `yaml:"max_payload_bytes"`
+	MaxIndexBytes      int `yaml:"max_index_bytes"`
+	MaxBatchBytes      int `yaml:"max_batch_bytes"`
+	MaxPageBytes       int `yaml:"max_page_bytes"`
+	MaxSelectors       int `yaml:"max_selectors"`
+	MaxSelectorValues  int `yaml:"max_selector_values"`
+	MaxPageSize        int `yaml:"max_page_size"`
+	MaxBatchOperations int `yaml:"max_batch_operations"`
+}
+
+type Loader struct {
+	PartSize             int64  `yaml:"part_size_bytes"`
+	MaxFileBytes         int64  `yaml:"max_file_bytes"`
+	MaxPartBytes         int64  `yaml:"max_part_bytes"`
+	MaxParts             int    `yaml:"max_parts"`
+	MaxConcurrentCommits int    `yaml:"max_concurrent_commits"`
+	SessionTTL           string `yaml:"session_ttl"`
+	CommitTimeout        string `yaml:"commit_timeout"`
+	Mode                 string `yaml:"mode"`
+	BufferThreshold      int64  `yaml:"buffer_threshold_bytes"`
+	MaxBufferedBytes     int64  `yaml:"max_buffered_bytes"`
+	SessionCacheEntries  int    `yaml:"session_cache_entries"`
+	SessionCacheMaxBytes int64  `yaml:"session_cache_max_bytes"`
+	SessionCacheTTL      string `yaml:"session_cache_ttl"`
+	CleanupInterval      string `yaml:"cleanup_interval"`
+	CleanupBatchSize     int    `yaml:"cleanup_batch_size"`
+}
+
+type FileAPI struct {
+	MaxJSONBytes      int64 `yaml:"max_json_bytes"`
+	MaxAttributeBytes int64 `yaml:"max_attribute_bytes"`
+	MaxGroupsPerFile  int   `yaml:"max_groups_per_file"`
+	DefaultPageSize   int   `yaml:"default_page_size"`
+	MaxPageSize       int   `yaml:"max_page_size"`
+}
+
+type HTTP struct {
+	ListenAddress     string `yaml:"listen_address"`
+	ReadHeaderTimeout string `yaml:"read_header_timeout"`
+	ReadTimeout       string `yaml:"read_timeout"`
+	WriteTimeout      string `yaml:"write_timeout"`
+	IdleTimeout       string `yaml:"idle_timeout"`
+	ShutdownTimeout   string `yaml:"shutdown_timeout"`
+	MaxHeaderBytes    int    `yaml:"max_header_bytes"`
+}
+
+type HTTPServerConfig struct {
+	ListenAddress     string
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
+	MaxHeaderBytes    int
+}
+
+type PublicationBinding struct {
+	SiteID      string `yaml:"site_id"`
+	ContentID   string `yaml:"content_id"`
+	RouteID     string `yaml:"route_id"`
+	AutoPublish *bool  `yaml:"auto_publish"`
+}
+
+type CoordinatorConfig struct {
+	SystemID          string               `yaml:"system_id"`
+	JobAccessGroup    string               `yaml:"job_access_group"`
+	JobsPageDefault   int                  `yaml:"jobs_page_default"`
+	JobsPageMaximum   int                  `yaml:"jobs_page_maximum"`
+	InstanceLease     string               `yaml:"instance_lease"`
+	HeartbeatInterval string               `yaml:"heartbeat_interval"`
+	WorkerConcurrency int                  `yaml:"worker_concurrency"`
+	JobLease          string               `yaml:"job_lease"`
+	TaskTimeout       string               `yaml:"task_timeout"`
+	PollInterval      string               `yaml:"poll_interval"`
+	RetryBase         string               `yaml:"retry_base"`
+	RetryMaximum      string               `yaml:"retry_maximum"`
+	MaxAttempts       int                  `yaml:"max_attempts"`
+	Bindings          []PublicationBinding `yaml:"bindings"`
+}
+
+type CoordinatorSettings struct {
+	SystemID          string
+	JobAccessGroup    string
+	JobsPageDefault   int
+	JobsPageMaximum   int
+	InstanceLease     time.Duration
+	HeartbeatInterval time.Duration
+	WorkerConcurrency int
+	JobLease          time.Duration
+	TaskTimeout       time.Duration
+	PollInterval      time.Duration
+	RetryBase         time.Duration
+	RetryMaximum      time.Duration
+	MaxAttempts       int
+	Bindings          []coordinator.PublicationBinding
+}
+
+type Resolved struct {
+	Core                   platform.RuntimeConfig
+	Loader                 loaderapp.Config
+	FileAPI                fileapi.Config
+	HTTP                   HTTPServerConfig
+	Coordinator            CoordinatorSettings
+	CoordinatorFingerprint string
+}
+
+var ErrCoordinatorProfileMismatch = errors.New("Coordinator publication settings do not match the compiled profile")
+
+// ValidateBuildPlan prevents startup configuration from advertising a
+// publication workflow that has no selected engine and worker implementation.
+// Empty binding lists are valid only when publication automation is not selected.
+func (r Resolved) ValidateBuildPlan(plan coordinator.BuildPlan) error {
+	selected := make(map[string]struct{}, len(plan.Components))
+	for _, component := range plan.Components {
+		selected[component] = struct{}{}
+	}
+	_, hasAutomation := selected["automation.site-publication"]
+	if hasAutomation != (len(r.Coordinator.Bindings) > 0) {
+		return ErrCoordinatorProfileMismatch
+	}
+	if !hasAutomation {
+		if _, hasCoordinatorAPI := selected["admin.coordinator"]; hasCoordinatorAPI {
+			if !access.ValidGroupKey(r.Coordinator.JobAccessGroup) {
+				return ErrCoordinatorProfileMismatch
+			}
+			if _, configured := r.Core.AccessGroups[r.Coordinator.JobAccessGroup]; !configured {
+				return ErrCoordinatorProfileMismatch
+			}
+		}
+		return nil
+	}
+	for _, required := range []string{
+		"engine.website", "engine.content", "engine.router", "worker.prerender",
+	} {
+		if _, ok := selected[required]; !ok {
+			return ErrCoordinatorProfileMismatch
+		}
+	}
+	if _, hasCoordinatorAPI := selected["admin.coordinator"]; hasCoordinatorAPI {
+		if !access.ValidGroupKey(r.Coordinator.JobAccessGroup) {
+			return ErrCoordinatorProfileMismatch
+		}
+		if _, configured := r.Core.AccessGroups[r.Coordinator.JobAccessGroup]; !configured {
+			return ErrCoordinatorProfileMismatch
+		}
+	}
+	return nil
+}
+
+// WithBuildPlan binds the compiled component set into the instance fingerprint
+// so replicas built from different profiles cannot join the same Coordinator
+// system. The input order is canonicalized before hashing.
+func (r Resolved) WithBuildPlan(plan coordinator.BuildPlan) (Resolved, error) {
+	if err := r.ValidateBuildPlan(plan); err != nil {
+		return Resolved{}, err
+	}
+	if len(plan.Components) == 0 || len(r.CoordinatorFingerprint) != 64 {
+		return Resolved{}, ErrCoordinatorProfileMismatch
+	}
+	if _, err := hex.DecodeString(r.CoordinatorFingerprint); err != nil {
+		return Resolved{}, ErrCoordinatorProfileMismatch
+	}
+	components := append([]string(nil), plan.Components...)
+	sort.Strings(components)
+	for index, component := range components {
+		if component == "" || (index > 0 && components[index-1] == component) {
+			return Resolved{}, ErrCoordinatorProfileMismatch
+		}
+	}
+	canonical, err := json.Marshal(struct {
+		RuntimeFingerprint string   `json:"runtime_fingerprint"`
+		Components         []string `json:"components"`
+	}{r.CoordinatorFingerprint, components})
+	if err != nil {
+		return Resolved{}, ErrCoordinatorProfileMismatch
+	}
+	digest := sha256.Sum256(canonical)
+	r.CoordinatorFingerprint = hex.EncodeToString(digest[:])
+	return r, nil
+}
+
+// Resolve reads secrets only from the configured environment variables and
+// validates every operational limit required to start the active Core/File API profile.
+func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if getenv == nil {
-		return platform.RuntimeConfig{}, errors.New("missing environment lookup")
+		return Resolved{}, errors.New("missing environment lookup")
 	}
 	durations := []string{c.Core.ConnectTimeout, c.Core.MaxLifetime, c.Core.MaxIdleTime, c.Core.HealthInterval, c.Core.MigrationLockTimeout, c.Core.CacheTTL, c.Core.MaintenanceInterval, c.Core.MaintenanceTimeout, c.Core.PendingTTL}
 	var parsed [9]time.Duration
 	for i, value := range durations {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration <= 0 {
-			return platform.RuntimeConfig{}, errors.New("invalid database duration")
+			return Resolved{}, errors.New("invalid Core duration")
 		}
 		parsed[i] = duration
 	}
-	if c.Core.MinConnections < 0 || c.Core.MaxConnections < 2 || c.Core.MinConnections > c.Core.MaxConnections || c.Core.MaxObjectBytes <= 0 || c.Core.MaxObjectBytes > platform.MaxS3PutObjectBytes || c.Core.MaxMetadataBytes <= 0 || c.Core.MaxCachedObjectBytes < 0 || c.Core.MaxCachedObjectBytes > c.Core.MaxObjectBytes || c.Core.CacheMaxBytes <= 0 || c.Core.MaxCachedObjectBytes > c.Core.CacheMaxBytes || c.Core.MaintenanceBatchSize <= 0 || c.Core.AtlasBinary == "" {
-		return platform.RuntimeConfig{}, errors.New("invalid Core cache, object, or database pool configuration")
+	loaderDurationValues := []string{c.Loader.SessionTTL, c.Loader.CommitTimeout, c.Loader.SessionCacheTTL, c.Loader.CleanupInterval}
+	var loaderDurations [4]time.Duration
+	for i, value := range loaderDurationValues {
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 {
+			return Resolved{}, errors.New("invalid Loader duration")
+		}
+		loaderDurations[i] = duration
 	}
-	for key, level := range c.Core.AccessGroups {
+	if loaderDurations[0] > time.Duration(1<<63-1)-loaderDurations[1] {
+		return Resolved{}, errors.New("Loader session and commit timeouts overflow")
+	}
+	coordinatorDurationValues := []string{c.Coordinator.InstanceLease, c.Coordinator.HeartbeatInterval, c.Coordinator.JobLease,
+		c.Coordinator.TaskTimeout, c.Coordinator.PollInterval, c.Coordinator.RetryBase, c.Coordinator.RetryMaximum}
+	var coordinatorDurations [7]time.Duration
+	for i, value := range coordinatorDurationValues {
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 {
+			return Resolved{}, errors.New("invalid Coordinator duration")
+		}
+		coordinatorDurations[i] = duration
+	}
+	if !coordinatorSystemID.MatchString(c.Coordinator.SystemID) || coordinatorDurations[0] < 3*time.Second || coordinatorDurations[0] > time.Hour ||
+		coordinatorDurations[1] >= coordinatorDurations[0]/3 || coordinatorDurations[2] < 3*time.Second || coordinatorDurations[2] > time.Hour ||
+		coordinatorDurations[3] > 24*time.Hour || coordinatorDurations[4] >= coordinatorDurations[2] ||
+		coordinatorDurations[5] > coordinatorDurations[6] || coordinatorDurations[6] > 24*time.Hour ||
+		c.Coordinator.WorkerConcurrency < 1 || c.Coordinator.WorkerConcurrency > 256 || c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 || c.Coordinator.Bindings == nil ||
+		c.Coordinator.JobsPageDefault < 1 || c.Coordinator.JobsPageMaximum < c.Coordinator.JobsPageDefault || c.Coordinator.JobsPageMaximum > 200 ||
+		(c.Coordinator.JobAccessGroup != "" && !access.ValidGroupKey(c.Coordinator.JobAccessGroup)) {
+		return Resolved{}, errors.New("invalid Coordinator configuration")
+	}
+	bindings := make([]coordinator.PublicationBinding, 0, len(c.Coordinator.Bindings))
+	routeIDs := make(map[uuid.UUID]struct{}, len(c.Coordinator.Bindings))
+	for _, binding := range c.Coordinator.Bindings {
+		siteID, siteErr := uuid.Parse(binding.SiteID)
+		contentID, contentErr := uuid.Parse(binding.ContentID)
+		routeID, routeErr := uuid.Parse(binding.RouteID)
+		if siteErr != nil || contentErr != nil || routeErr != nil || siteID == uuid.Nil || contentID == uuid.Nil || routeID == uuid.Nil || binding.AutoPublish == nil {
+			return Resolved{}, errors.New("invalid Coordinator publication binding")
+		}
+		if _, exists := routeIDs[routeID]; exists {
+			return Resolved{}, errors.New("duplicate Coordinator route binding")
+		}
+		routeIDs[routeID] = struct{}{}
+		bindings = append(bindings, coordinator.PublicationBinding{SiteID: siteID, ContentID: contentID, RouteID: routeID, AutoPublish: *binding.AutoPublish})
+	}
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].RouteID.String() < bindings[j].RouteID.String() })
+	httpDurationValues := []string{c.HTTP.ReadHeaderTimeout, c.HTTP.ReadTimeout, c.HTTP.WriteTimeout, c.HTTP.IdleTimeout, c.HTTP.ShutdownTimeout}
+	var httpDurations [5]time.Duration
+	for i, value := range httpDurationValues {
+		duration, err := time.ParseDuration(value)
+		if err != nil || (i == 2 && duration < 0) || (i != 2 && duration <= 0) {
+			return Resolved{}, errors.New("invalid HTTP server duration")
+		}
+		httpDurations[i] = duration
+	}
+	moduleDataLimits := platform.ModuleDataLimits{
+		MaxPayloadBytes: c.Core.ModuleData.MaxPayloadBytes, MaxIndexBytes: c.Core.ModuleData.MaxIndexBytes,
+		MaxBatchBytes: c.Core.ModuleData.MaxBatchBytes, MaxPageBytes: c.Core.ModuleData.MaxPageBytes,
+		MaxSelectors: c.Core.ModuleData.MaxSelectors, MaxSelectorValues: c.Core.ModuleData.MaxSelectorValues,
+		MaxPageSize: c.Core.ModuleData.MaxPageSize, MaxBatchOperations: c.Core.ModuleData.MaxBatchOperations,
+	}
+	if c.Core.MinConnections < 0 || c.Core.MaxConnections < platform.MinRuntimeDatabaseConnections || c.Core.MinConnections > c.Core.MaxConnections || c.Core.MaxObjectBytes <= 0 || c.Core.MaxObjectBytes > platform.MaxS3PutObjectBytes ||
+		c.Core.MaxMetadataBytes <= 0 || c.Core.MaxMetadataBytes > 16<<20 || c.Core.MaxCachedObjectBytes < 0 || c.Core.MaxCachedObjectBytes > c.Core.MaxObjectBytes ||
+		c.Core.CacheMaxBytes <= 0 || c.Core.MaxCachedObjectBytes > c.Core.CacheMaxBytes || c.Core.MaintenanceBatchSize <= 0 || c.Core.AtlasBinary == "" || !platform.ValidModuleDataLimits(moduleDataLimits) {
+		return Resolved{}, errors.New("invalid Core storage, cache, database pool capacity for Loader and Coordinator, or module-data configuration")
+	}
+	accessGroups := make(map[string]access.Level, len(c.Core.AccessGroups))
+	for key, configuredLevel := range c.Core.AccessGroups {
+		level := access.LevelWrite
+		if configuredLevel != nil {
+			level = *configuredLevel
+		}
 		if !access.ValidGroupKey(key) || level > access.LevelWrite {
-			return platform.RuntimeConfig{}, errors.New("invalid configured access group")
+			return Resolved{}, errors.New("invalid configured access group")
+		}
+		accessGroups[key] = level
+	}
+	if c.Coordinator.JobAccessGroup != "" {
+		if _, exists := accessGroups[c.Coordinator.JobAccessGroup]; !exists {
+			return Resolved{}, errors.New("Coordinator job access group must exist in Core access_groups")
 		}
 	}
+	if c.Loader.MaxFileBytes <= 0 || c.Loader.MaxFileBytes > c.Core.MaxObjectBytes || c.Loader.MaxPartBytes <= 0 || c.Loader.MaxPartBytes > c.Core.MaxObjectBytes ||
+		c.Loader.PartSize <= 0 || c.Loader.PartSize > c.Loader.MaxPartBytes || c.Loader.MaxParts <= 0 || c.Loader.MaxParts > 1000 ||
+		c.Loader.MaxConcurrentCommits <= 0 || c.Loader.MaxConcurrentCommits > 100 ||
+		int64(c.Core.MaxConnections) < 1+2*int64(c.Loader.MaxConcurrentCommits)+2*int64(c.Coordinator.WorkerConcurrency) ||
+		c.Loader.BufferThreshold < 0 || c.Loader.MaxBufferedBytes < 0 || c.Loader.SessionCacheEntries <= 0 || c.Loader.SessionCacheEntries > 100000 ||
+		c.Loader.SessionCacheMaxBytes <= 0 || c.Loader.SessionCacheMaxBytes > 256<<20 || c.Loader.CleanupBatchSize <= 0 ||
+		(c.Loader.Mode != loaderapp.ModeAuto && c.Loader.Mode != loaderapp.ModeStream && c.Loader.Mode != loaderapp.ModeBuffered) ||
+		(c.Loader.Mode == loaderapp.ModeBuffered && c.Loader.MaxBufferedBytes == 0) || moduleDataLimits.MaxBatchOperations < 3 ||
+		moduleDataLimits.MaxIndexBytes < loaderapp.MinimumModuleDataIndexBytes ||
+		moduleDataLimits.MaxBatchBytes < moduleDataLimits.MaxPayloadBytes+loaderapp.ModuleDataBatchOverheadBytes {
+		return Resolved{}, errors.New("invalid Loader limits or incompatible Core module-data settings")
+	}
+	if c.FileAPI.MaxJSONBytes <= 0 || c.FileAPI.MaxJSONBytes > 16<<20 || c.FileAPI.MaxAttributeBytes <= 0 || c.FileAPI.MaxAttributeBytes > 16<<20 || c.FileAPI.MaxAttributeBytes > c.Core.MaxMetadataBytes ||
+		c.FileAPI.MaxGroupsPerFile <= 0 || c.FileAPI.MaxGroupsPerFile > 64 || c.FileAPI.DefaultPageSize <= 0 || c.FileAPI.MaxPageSize < c.FileAPI.DefaultPageSize || c.FileAPI.MaxPageSize > 1000 {
+		return Resolved{}, errors.New("invalid File API request limits")
+	}
+	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
+		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
+	}
+	if !validListenAddress(c.HTTP.ListenAddress) || c.HTTP.MaxHeaderBytes < 1024 || c.HTTP.MaxHeaderBytes > 1<<20 {
+		return Resolved{}, errors.New("invalid HTTP listen address or header limit")
+	}
 	if c.Core.BootstrapSecretEnv != "" && !envName.MatchString(c.Core.BootstrapSecretEnv) {
-		return platform.RuntimeConfig{}, errors.New("invalid bootstrap environment name")
+		return Resolved{}, errors.New("invalid bootstrap environment name")
 	}
 	if !envName.MatchString(c.Core.DatabaseURLEnv) || !envName.MatchString(c.Core.MigrationDatabaseURLEnv) || !envName.MatchString(c.Core.S3AccessKeyEnv) || !envName.MatchString(c.Core.S3SecretKeyEnv) {
-		return platform.RuntimeConfig{}, errors.New("invalid secret environment name")
+		return Resolved{}, errors.New("invalid secret environment name")
 	}
 	dbURL, migrationDBURL := getenv(c.Core.DatabaseURLEnv), getenv(c.Core.MigrationDatabaseURLEnv)
 	accessKey, secretKey := getenv(c.Core.S3AccessKeyEnv), getenv(c.Core.S3SecretKeyEnv)
 	if dbURL == "" || migrationDBURL == "" || accessKey == "" || secretKey == "" {
-		return platform.RuntimeConfig{}, errors.New("required secret environment variable is empty")
+		return Resolved{}, errors.New("required secret environment variable is empty")
 	}
 	if err := platform.ValidateDatabaseURLs(dbURL, migrationDBURL); err != nil {
-		return platform.RuntimeConfig{}, err
+		return Resolved{}, err
 	}
 	if c.Core.AccessGroups == nil {
-		return platform.RuntimeConfig{}, errors.New("Core access_groups must be configured explicitly")
+		return Resolved{}, errors.New("Core access_groups must be configured explicitly")
 	}
 	var bootstrap string
 	if c.Core.BootstrapSecretEnv != "" {
 		bootstrap = getenv(c.Core.BootstrapSecretEnv)
 		if bootstrap == "" {
-			return platform.RuntimeConfig{}, errors.New("configured bootstrap secret is empty")
+			return Resolved{}, errors.New("configured bootstrap secret is empty")
 		}
 	}
-	return platform.RuntimeConfig{
+	coreConfig := platform.RuntimeConfig{
 		Database:             platform.DatabaseConfig{URL: dbURL, MinConnections: c.Core.MinConnections, MaxConnections: c.Core.MaxConnections, ConnectTimeout: parsed[0], MaxLifetime: parsed[1], MaxIdleTime: parsed[2], HealthInterval: parsed[3]},
 		MigrationDatabaseURL: migrationDBURL,
 		S3:                   platform.S3Config{Endpoint: c.Core.S3Endpoint, Region: c.Core.S3Region, Bucket: c.Core.S3Bucket, AccessKey: accessKey, SecretKey: secretKey, PathStyle: c.Core.S3PathStyle, AllowInsecureHTTP: c.Core.S3AllowInsecureHTTP},
-		BootstrapSecret:      bootstrap, AtlasBinary: c.Core.AtlasBinary, MigrationLockTimeout: parsed[4], AccessGroups: c.Core.AccessGroups,
+		BootstrapSecret:      bootstrap, AtlasBinary: c.Core.AtlasBinary, MigrationLockTimeout: parsed[4], AccessGroups: accessGroups,
 		CacheMaxBytes: c.Core.CacheMaxBytes, CacheTTL: parsed[5], MaxMetadataBytes: c.Core.MaxMetadataBytes,
 		MaxObjectBytes: c.Core.MaxObjectBytes, MaxCachedObjectBytes: c.Core.MaxCachedObjectBytes,
+		ModuleData:          moduleDataLimits,
 		MaintenanceInterval: parsed[6], MaintenanceTimeout: parsed[7], PendingTTL: parsed[8], MaintenanceBatchSize: c.Core.MaintenanceBatchSize,
-	}, nil
+	}
+	loaderConfig := loaderapp.Config{PartSize: c.Loader.PartSize, MaxFileBytes: c.Loader.MaxFileBytes, MaxPartBytes: c.Loader.MaxPartBytes, MaxParts: c.Loader.MaxParts,
+		MaxConcurrentCommits: c.Loader.MaxConcurrentCommits,
+		SessionTTL:           loaderDurations[0], CommitTimeout: loaderDurations[1], Mode: c.Loader.Mode, BufferThreshold: c.Loader.BufferThreshold,
+		MaxBufferedBytes: c.Loader.MaxBufferedBytes, SessionCacheEntries: c.Loader.SessionCacheEntries,
+		SessionCacheMaxBytes: c.Loader.SessionCacheMaxBytes, SessionCacheTTL: loaderDurations[2],
+		CleanupInterval: loaderDurations[3], CleanupBatchSize: c.Loader.CleanupBatchSize}
+	fileAPIConfig := fileapi.Config{MaxFileBytes: c.Loader.MaxFileBytes, MaxPartBytes: c.Loader.MaxPartBytes, MaxUploadParts: c.Loader.MaxParts,
+		MaxJSONBytes: c.FileAPI.MaxJSONBytes, MaxAttributeBytes: c.FileAPI.MaxAttributeBytes, MaxGroupsPerFile: c.FileAPI.MaxGroupsPerFile,
+		DefaultPageSize: c.FileAPI.DefaultPageSize, MaxPageSize: c.FileAPI.MaxPageSize}
+	if err := fileAPIConfig.Validate(); err != nil {
+		return Resolved{}, err
+	}
+	coordinatorFingerprint, err := configFingerprint(c, dbURL, migrationDBURL)
+	if err != nil {
+		return Resolved{}, errors.New("cannot fingerprint Coordinator configuration")
+	}
+	return Resolved{Core: coreConfig, Loader: loaderConfig, FileAPI: fileAPIConfig, Coordinator: CoordinatorSettings{
+		SystemID: c.Coordinator.SystemID, JobAccessGroup: c.Coordinator.JobAccessGroup,
+		JobsPageDefault: c.Coordinator.JobsPageDefault, JobsPageMaximum: c.Coordinator.JobsPageMaximum,
+		InstanceLease: coordinatorDurations[0], HeartbeatInterval: coordinatorDurations[1],
+		WorkerConcurrency: c.Coordinator.WorkerConcurrency, JobLease: coordinatorDurations[2], TaskTimeout: coordinatorDurations[3],
+		PollInterval: coordinatorDurations[4], RetryBase: coordinatorDurations[5], RetryMaximum: coordinatorDurations[6],
+		MaxAttempts: c.Coordinator.MaxAttempts, Bindings: bindings,
+	}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
+		ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
+		ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}}, nil
 }
 
 type Config struct {
-	Core Core `yaml:"core"`
+	Core        Core              `yaml:"core"`
+	Loader      Loader            `yaml:"loader"`
+	FileAPI     FileAPI           `yaml:"file_api"`
+	HTTP        HTTP              `yaml:"http"`
+	Coordinator CoordinatorConfig `yaml:"coordinator"`
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var coordinatorSystemID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+
+func configFingerprint(config Config, runtimeURL, migrationURL string) (string, error) {
+	config.Core.DatabaseURLEnv = ""
+	config.Core.MigrationDatabaseURLEnv = ""
+	config.Core.S3AccessKeyEnv = ""
+	config.Core.S3SecretKeyEnv = ""
+	config.Core.BootstrapSecretEnv = ""
+	bindings := make([]PublicationBinding, 0, len(config.Coordinator.Bindings))
+	for _, binding := range config.Coordinator.Bindings {
+		siteID, siteErr := uuid.Parse(binding.SiteID)
+		contentID, contentErr := uuid.Parse(binding.ContentID)
+		routeID, routeErr := uuid.Parse(binding.RouteID)
+		if siteErr != nil || contentErr != nil || routeErr != nil || siteID == uuid.Nil || contentID == uuid.Nil || routeID == uuid.Nil || binding.AutoPublish == nil {
+			return "", errors.New("invalid Coordinator publication binding")
+		}
+		bindings = append(bindings, PublicationBinding{SiteID: siteID.String(), ContentID: contentID.String(),
+			RouteID: routeID.String(), AutoPublish: binding.AutoPublish})
+	}
+	config.Coordinator.Bindings = bindings
+	sort.Slice(config.Coordinator.Bindings, func(i, j int) bool {
+		return config.Coordinator.Bindings[i].RouteID < config.Coordinator.Bindings[j].RouteID
+	})
+	databaseIdentity := func(value string) (string, error) {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Host == "" || parsed.Path == "" {
+			return "", errors.New("invalid database endpoint")
+		}
+		user := ""
+		if parsed.User != nil {
+			user = parsed.User.Username()
+		}
+		query := parsed.Query()
+		for key := range query {
+			switch strings.ToLower(key) {
+			case "password", "passfile", "sslpassword":
+				delete(query, key)
+			}
+		}
+		queryText := query.Encode()
+		if queryText != "" {
+			queryText = "?" + queryText
+		}
+		return parsed.Scheme + "://" + user + "@" + parsed.Host + parsed.EscapedPath() + queryText, nil
+	}
+	runtimeIdentity, err := databaseIdentity(runtimeURL)
+	if err != nil {
+		return "", err
+	}
+	migrationIdentity, err := databaseIdentity(migrationURL)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(struct {
+		Config            Config `json:"config"`
+		RuntimeDatabase   string `json:"runtime_database"`
+		MigrationDatabase string `json:"migration_database"`
+	}{config, runtimeIdentity, migrationIdentity})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
 
 // Load rejects unknown keys and multiple documents. Sensitive values are
 // referenced by environment variable name, never embedded in YAML.
 func Load(input io.Reader) (Config, error) {
-	decoder := yaml.NewDecoder(input)
+	if input == nil {
+		return Config{}, errors.New("missing configuration input")
+	}
+	data, err := io.ReadAll(io.LimitReader(input, 1<<20+1))
+	if err != nil {
+		return Config{}, errors.New("cannot read configuration")
+	}
+	if len(data) > 1<<20 {
+		return Config{}, errors.New("configuration exceeds size limit")
+	}
+	if err := validateConfigYAML(data); err != nil {
+		return Config{}, err
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 	decoder.KnownFields(true)
 	var cfg Config
 	if err := decoder.Decode(&cfg); err != nil {
@@ -134,10 +534,63 @@ func Load(input io.Reader) (Config, error) {
 	return cfg, nil
 }
 
+func validateConfigYAML(data []byte) error {
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	var document yaml.Node
+	if err := decoder.Decode(&document); err != nil {
+		return fmt.Errorf("decode configuration: %w", err)
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("configuration must contain exactly one YAML document")
+	}
+	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return errors.New("configuration root must be a mapping")
+	}
+	return validateConfigNode(document.Content[0])
+}
+
+func validateConfigNode(node *yaml.Node) error {
+	if node.Kind == yaml.AliasNode {
+		return errors.New("YAML aliases are not supported in configuration")
+	}
+	if node.Kind == yaml.MappingNode {
+		seen := make(map[string]struct{}, len(node.Content)/2)
+		for index := 0; index < len(node.Content); index += 2 {
+			key := node.Content[index]
+			if key.Kind != yaml.ScalarNode || key.Tag == "!!merge" {
+				return errors.New("configuration mapping keys must be plain scalars")
+			}
+			if _, exists := seen[key.Value]; exists {
+				return fmt.Errorf("duplicate configuration key %q", key.Value)
+			}
+			seen[key.Value] = struct{}{}
+		}
+	}
+	for _, child := range node.Content {
+		if err := validateConfigNode(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func isLoopback(host string) bool {
 	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func validListenAddress(value string) bool {
+	if value == "" || strings.ContainsAny(value, "\r\n\t ") {
+		return false
+	}
+	_, portText, err := net.SplitHostPort(value)
+	if err != nil || portText == "" {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	return err == nil && port > 0 && port <= 65535
 }

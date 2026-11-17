@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/Zubrium/cdn/core/access"
 	"github.com/Zubrium/cdn/core/identity"
+	"github.com/Zubrium/cdn/core/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -97,6 +99,91 @@ func CreatePrincipal(ctx context.Context, pool *pgxpool.Pool, actor access.Princ
 	return principalID, secret, nil
 }
 
+// CreatePrincipalWithAccess creates one principal, its first credential, and
+// its explicitly selected group levels in one transaction. A failed grant
+// cannot leave behind an account with a partial permission set.
+func CreatePrincipalWithAccess(ctx context.Context, pool *pgxpool.Pool, actor access.Principal, name string, expiresAt *time.Time, canManageAdministrators bool, groups map[string]access.Level) (uuid.UUID, string, error) {
+	if !actor.Active || actor.ID == "" {
+		return uuid.Nil, "", ErrUnauthorized
+	}
+	if pool == nil || !validPrincipalName(name) || !validExpiry(expiresAt) {
+		return uuid.Nil, "", errors.New("invalid principal")
+	}
+	if err := validatePrincipalGroups(groups); err != nil {
+		return uuid.Nil, "", err
+	}
+	actorID, err := uuid.Parse(actor.ID)
+	if err != nil {
+		return uuid.Nil, "", ErrUnauthorized
+	}
+	secret, err := identity.NewSecret()
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	principalID, err := uuid.NewRandom()
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	credentialID, err := uuid.NewRandom()
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := lockManagerChanges(ctx, tx); err != nil {
+		return uuid.Nil, "", err
+	}
+	if err := requireAdministratorManager(ctx, tx, actorID); err != nil {
+		return uuid.Nil, "", err
+	}
+	groupKeys := sortedGroupKeys(groups)
+	for _, group := range groupKeys {
+		if err := requireGroupAdministrator(ctx, tx, actorID, group); err != nil {
+			return uuid.Nil, "", err
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO core_principals(id,name,active,can_manage_administrators) VALUES($1,$2,true,$3)`, principalID, name, canManageAdministrators); err != nil {
+		return uuid.Nil, "", err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO core_credentials(id,principal_id,secret_hash,expires_at) VALUES($1,$2,$3,$4)`, credentialID, principalID, identity.HashSecret(secret), expiresAt); err != nil {
+		return uuid.Nil, "", err
+	}
+	for _, group := range groupKeys {
+		level := groups[group]
+		if _, err := tx.Exec(ctx, `INSERT INTO core_group_access(principal_id,group_key,access_level) VALUES($1,$2,$3)`, principalID, group, int16(level)); err != nil {
+			return uuid.Nil, "", err
+		}
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
+		return uuid.Nil, "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, "", fmt.Errorf("commit principal and group access: %w", err)
+	}
+	return principalID, secret, nil
+}
+
+func validatePrincipalGroups(groups map[string]access.Level) error {
+	for group, level := range groups {
+		if !storage.ValidGroupKey(group) || level > access.LevelWrite {
+			return errors.New("invalid principal group access")
+		}
+	}
+	return nil
+}
+
+func sortedGroupKeys(groups map[string]access.Level) []string {
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func IssueCredential(ctx context.Context, pool *pgxpool.Pool, actor access.Principal, principalID uuid.UUID, expiresAt *time.Time) (uuid.UUID, string, error) {
 	if !actor.Active || actor.ID == "" {
 		return uuid.Nil, "", ErrUnauthorized
@@ -184,7 +271,7 @@ func RevokeCredential(ctx context.Context, pool *pgxpool.Pool, actor access.Prin
 			return err
 		}
 		if remaining == 0 {
-			return errors.New("cannot revoke the last active administrator-manager credential")
+			return ErrManagerInvariant
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE core_credentials SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1`, credentialID); err != nil {

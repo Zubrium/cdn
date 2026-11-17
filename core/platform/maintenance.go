@@ -31,10 +31,12 @@ func (r *Runtime) maintain(ctx context.Context, cfg RuntimeConfig) {
 
 func (r *Runtime) listenInvalidations(ctx context.Context) {
 	defer close(r.notifyDone)
+	defer close(r.routeTargetChanges)
 	backoff := 100 * time.Millisecond
 	for ctx.Err() == nil {
 		conn, err := r.database.Acquire(ctx)
 		if err != nil {
+			r.publishRouteTargetChange("*")
 			if ctx.Err() == nil {
 				r.report(fmt.Errorf("core cache invalidation connection: %w", err))
 			}
@@ -45,8 +47,12 @@ func (r *Runtime) listenInvalidations(ctx context.Context) {
 			continue
 		}
 		_, err = conn.Exec(ctx, `LISTEN core_cache_invalidation`)
+		if err == nil {
+			_, err = conn.Exec(ctx, `LISTEN core_route_target_invalidation`)
+		}
 		if err != nil {
 			conn.Release()
+			r.publishRouteTargetChange("*")
 			if ctx.Err() == nil {
 				r.report(fmt.Errorf("listen for Core cache invalidations: %w", err))
 			}
@@ -57,6 +63,9 @@ func (r *Runtime) listenInvalidations(ctx context.Context) {
 			continue
 		}
 		backoff = 100 * time.Millisecond
+		// A notification can be missed while this process was disconnected.
+		// Consumers must reload their active targets after every subscription.
+		r.publishRouteTargetChange("*")
 		for ctx.Err() == nil {
 			notification, waitErr := conn.Conn().WaitForNotification(ctx)
 			if waitErr != nil {
@@ -64,6 +73,7 @@ func (r *Runtime) listenInvalidations(ctx context.Context) {
 				if r.byteCache != nil {
 					r.byteCache.Clear()
 				}
+				r.publishRouteTargetChange("*")
 				if ctx.Err() != nil {
 					return
 				}
@@ -77,11 +87,36 @@ func (r *Runtime) listenInvalidations(ctx context.Context) {
 					r.files.InvalidateCache(notification.Payload)
 				}
 			}
+			if notification.Channel == "core_route_target_invalidation" {
+				r.publishRouteTargetChange(notification.Payload)
+			}
 		}
 		if !waitContext(ctx, backoff) {
 			return
 		}
 		backoff = min(backoff*2, 5*time.Second)
+	}
+}
+
+func (r *Runtime) publishRouteTargetChange(payload string) {
+	if r == nil || r.routeTargetChanges == nil {
+		return
+	}
+	select {
+	case r.routeTargetChanges <- payload:
+	default:
+		// A lost individual notification must force a complete reload.
+		for {
+			select {
+			case <-r.routeTargetChanges:
+			default:
+				select {
+				case r.routeTargetChanges <- "*":
+				default:
+				}
+				return
+			}
+		}
 	}
 }
 

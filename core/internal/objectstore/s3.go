@@ -30,7 +30,8 @@ type S3 struct {
 	bucket string
 }
 
-const MaxPutObjectBytes int64 = 5 * 1024 * 1024 * 1024
+// MaxPutObjectBytes follows the S3 single-PUT ceiling in decimal bytes.
+const MaxPutObjectBytes int64 = 5_000_000_000
 
 type countReader struct {
 	reader io.Reader

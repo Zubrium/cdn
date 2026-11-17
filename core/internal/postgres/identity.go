@@ -105,10 +105,10 @@ func AuthenticateHash(ctx context.Context, pool *pgxpool.Pool, hash []byte) (acc
 		return access.Principal{}, ErrUnauthorized
 	}
 	var principal access.Principal
-	err := pool.QueryRow(ctx, `SELECT p.id::text,p.active,p.can_manage_administrators
+	err := pool.QueryRow(ctx, `SELECT p.id::text,p.name,p.active,p.can_manage_administrators
 		FROM core_credentials c JOIN core_principals p ON p.id=c.principal_id
 		WHERE c.secret_hash=$1 AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at>now()) AND p.active`, hash).
-		Scan(&principal.ID, &principal.Active, &principal.CanManageAdministrators)
+		Scan(&principal.ID, &principal.Name, &principal.Active, &principal.CanManageAdministrators)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return access.Principal{}, ErrUnauthorized
 	}

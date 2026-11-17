@@ -115,11 +115,11 @@ func PutStagedObject(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter
 
 	actualHash := sha256.New()
 	if err := store.Put(ctx, objectKey.String(), io.TeeReader(body, actualHash), size, "application/octet-stream"); err != nil {
-		markStagedFailure(ctx, conn, store, id, objectKey)
+		markStagedFailure(conn, store, id, objectKey)
 		return fmt.Errorf("store staged object: %w", err)
 	}
 	if !bytes.Equal(actualHash.Sum(nil), expectedHash) {
-		markStagedFailure(ctx, conn, store, id, objectKey)
+		markStagedFailure(conn, store, id, objectKey)
 		return errors.New("staged object checksum mismatch")
 	}
 
@@ -130,7 +130,7 @@ func PutStagedObject(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter
 	defer func() { _ = finalTx.Rollback(context.Background()) }()
 	if err := requireUploadAccess(ctx, finalTx, actorID, orderedGroups); err != nil {
 		_ = finalTx.Rollback(context.Background())
-		markStagedFailure(ctx, conn, store, id, objectKey)
+		markStagedFailure(conn, store, id, objectKey)
 		return fmt.Errorf("staged object authorization at commit: %w", err)
 	}
 	tag, err := finalTx.Exec(ctx, `UPDATE core_staged_objects SET state='ready',updated_at=now()
@@ -230,6 +230,39 @@ func DeleteStagedObject(ctx context.Context, pool *pgxpool.Pool, store ObjectWri
 	if ownerID != actorID {
 		return storage.ErrNotFound
 	}
+	return purgeStagedLocked(ctx, conn, store, id, objectKey)
+}
+
+// PurgeStagedObject is only exposed through the trusted Loader file
+// capability. The UUID is the complete authority: Core never accepts an
+// object key or arbitrary S3 path from the engine.
+func PurgeStagedObject(ctx context.Context, pool *pgxpool.Pool, store ObjectWriter, idValue string) error {
+	if pool == nil || store == nil || !storage.ValidUUID(idValue) {
+		return errors.New("invalid staged object cleanup request")
+	}
+	id, _ := uuid.Parse(idValue)
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	lockKey := stagedLockKey(id)
+	if err := lockAdvisory(ctx, conn, lockKey); err != nil {
+		conn.Release()
+		return err
+	}
+	defer releaseAdvisoryLocks(conn, []string{lockKey})
+	var objectKey uuid.UUID
+	err = conn.QueryRow(ctx, `SELECT object_key FROM core_staged_objects WHERE id=$1`, id).Scan(&objectKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return purgeStagedLocked(ctx, conn, store, id, objectKey)
+}
+
+func purgeStagedLocked(ctx context.Context, conn *pgxpool.Conn, store ObjectWriter, id, objectKey uuid.UUID) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
@@ -318,7 +351,7 @@ func recoverOneStaged(ctx context.Context, pool *pgxpool.Pool, store ObjectWrite
 	return err
 }
 
-func markStagedFailure(ctx context.Context, conn *pgxpool.Conn, store ObjectWriter, id, objectKey uuid.UUID) {
+func markStagedFailure(conn *pgxpool.Conn, store ObjectWriter, id, objectKey uuid.UUID) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = store.Delete(cleanupCtx, objectKey.String())

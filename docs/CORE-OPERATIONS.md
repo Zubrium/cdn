@@ -22,11 +22,19 @@ Role provisioning is PostgreSQL cluster administration, outside the Core-owned s
 
 Schema DDL belongs in Atlas SQL. Go may insert the first administrator and reconcile data against configured groups after the migration succeeds. The migration and runtime DB users are required even when the schema is already current, because startup verifies the migration state and runtime privilege boundary.
 
+`core.access_groups` lists static group keys. The initial administrator receives level `2` for a group when its value is omitted or `null`; explicitly configured levels `0`, `1`, and `2` override that initial assignment. These values apply only the first time a group is registered. Later administrator-managed assignments survive restarts and removing/re-adding a previously known group restores its saved assignments.
+
 The configured `max_cached_object_bytes` must not exceed `cache_max_bytes`. This prevents the read-through path from loading an object into memory that cannot fit within the configured byte budget.
+
+The runtime PostgreSQL pool requires at least three connections. One remains available to `LISTEN` for invalidations; each concurrent Loader commit reserves two more while it streams staged parts into the final object upload. Set `loader.max_concurrent_commits` explicitly; startup requires `core.max_connections >= 1 + 2 * max_concurrent_commits`, preventing nested connection acquisition from deadlocking under parallel commits. The separate migration pool has its own two-connection minimum.
 
 ## S3 requirements
 
-Core stores private objects under generated UUID keys. The bucket must have all four public-access-block settings enabled, no public ACL or policy, and versioning disabled so permanent deletion removes bytes. Startup fails closed if any setting cannot be checked. Core uses one streaming `PutObject`; configure `max_object_bytes` at or below 5 GiB. Public file delivery is a Router concern and never makes the Core bucket public.
+Core stores private objects under generated UUID keys. The bucket must have all four public-access-block settings enabled, no public ACL or policy, and versioning disabled so permanent deletion removes bytes. Startup fails closed if any setting cannot be checked. Core uses one streaming `PutObject`; configure `max_object_bytes` at or below 5,000,000,000 bytes (5 GB), the S3 single-PUT ceiling. Public file delivery is a Router concern and never makes the Core bucket public.
+
+## HTTP transport
+
+The configured application listener serves plain HTTP; it does not terminate TLS. The example binds to loopback. For any non-local deployment, keep this listener on a trusted private network behind a TLS-terminating gateway or reverse proxy, and require TLS on the client-to-gateway connection. Do not expose the listener to untrusted networks or send bearer credentials over plaintext HTTP. The application does not use forwarded headers as an authentication or authorization signal.
 
 ## Disposable verification resources
 

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/Zubrium/cdn/core/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,8 +27,8 @@ func (r Objects) CurrentPrincipal(ctx context.Context, value string) (access.Pri
 		return access.Principal{}, ErrUnauthorized
 	}
 	var principal access.Principal
-	err = r.Pool.QueryRow(ctx, `SELECT id::text,active,can_manage_administrators FROM core_principals WHERE id=$1`, id).
-		Scan(&principal.ID, &principal.Active, &principal.CanManageAdministrators)
+	err = r.Pool.QueryRow(ctx, `SELECT id::text,name,active,can_manage_administrators FROM core_principals WHERE id=$1`, id).
+		Scan(&principal.ID, &principal.Name, &principal.Active, &principal.CanManageAdministrators)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !principal.Active) {
 		return access.Principal{}, ErrUnauthorized
 	}
@@ -40,40 +42,46 @@ func (r Objects) Assignments(ctx context.Context, id string) ([]access.GroupAssi
 // Authorize validates the current direct group access and returns the exact
 // object revision observed by the same PostgreSQL statement. Metadata cache
 // entries are usable only when their revision matches this authorization view.
-func (r Objects) Authorize(ctx context.Context, principalValue, objectValue string, action access.Action) (int64, error) {
+func (r Objects) Authorize(ctx context.Context, principalValue, objectValue string, action access.Action) (int64, []string, error) {
 	if r.Pool == nil {
-		return 0, errors.New("postgres: nil pool")
+		return 0, nil, errors.New("postgres: nil pool")
 	}
 	principalID, principalErr := uuid.Parse(principalValue)
 	objectID, objectErr := uuid.Parse(objectValue)
 	if principalErr != nil || principalID == uuid.Nil || objectErr != nil || objectID == uuid.Nil || !access.ValidAction(action) {
-		return 0, ErrUnauthorized
+		return 0, nil, ErrUnauthorized
 	}
 	minimum := int16(access.LevelWrite)
 	if action == access.Read {
 		minimum = int16(access.LevelRead)
 	}
 	var revision int64
+	var visibleGroups []string
 	var active, allowed bool
 	err := r.Pool.QueryRow(ctx, `SELECT o.revision,p.active,EXISTS(
 		SELECT 1 FROM core_file_groups fg JOIN core_access_groups g ON g.group_key=fg.group_key AND g.active
 		JOIN core_group_access ga ON ga.group_key=fg.group_key AND ga.principal_id=p.id AND ga.access_level >= $3
-		WHERE fg.object_id=o.id)
+		WHERE fg.object_id=o.id),ARRAY(
+		SELECT DISTINCT vfg.group_key FROM core_file_groups vfg
+		JOIN core_access_groups vg ON vg.group_key=vfg.group_key AND vg.active
+		JOIN core_group_access vga ON vga.group_key=vfg.group_key AND vga.principal_id=p.id AND vga.access_level >= $4
+		WHERE vfg.object_id=o.id ORDER BY vfg.group_key)
 		FROM core_objects o CROSS JOIN core_principals p
-		WHERE o.id=$1 AND o.state='ready' AND p.id=$2`, objectID, principalID, minimum).Scan(&revision, &active, &allowed)
+		WHERE o.id=$1 AND o.state='ready' AND p.id=$2`, objectID, principalID, minimum, int16(access.LevelRead)).
+		Scan(&revision, &active, &allowed, &visibleGroups)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, storage.ErrNotFound
+		return 0, nil, storage.ErrNotFound
 	}
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if !active {
-		return 0, ErrUnauthorized
+		return 0, nil, ErrUnauthorized
 	}
 	if !allowed {
-		return 0, ErrForbidden
+		return 0, nil, ErrForbidden
 	}
-	return revision, nil
+	return revision, visibleGroups, nil
 }
 
 func (r Objects) Find(ctx context.Context, value string) (storage.Object, error) {
@@ -85,12 +93,12 @@ func (r Objects) Find(ctx context.Context, value string) (storage.Object, error)
 		return storage.Object{}, storage.ErrNotFound
 	}
 	var object storage.Object
-	var rawMetadata []byte
-	err = r.Pool.QueryRow(ctx, `SELECT o.id::text,o.object_key::text,o.metadata,o.content_type,o.size_bytes,o.revision,o.state,
+	var rawMetadata, checksum []byte
+	err = r.Pool.QueryRow(ctx, `SELECT o.id::text,o.object_key::text,o.metadata,o.content_type,o.size_bytes,o.sha256,o.revision,o.state,
 		COALESCE(array_agg(fg.group_key ORDER BY fg.group_key) FILTER (WHERE fg.group_key IS NOT NULL),ARRAY[]::text[])
 		FROM core_objects o LEFT JOIN core_file_groups fg ON fg.object_id=o.id
 		WHERE o.id=$1 AND o.state='ready' GROUP BY o.id`, id).
-		Scan(&object.ID, &object.Key, &rawMetadata, &object.ContentType, &object.Size, &object.Revision, &object.State, &object.Groups)
+		Scan(&object.ID, &object.Key, &rawMetadata, &object.ContentType, &object.Size, &checksum, &object.Revision, &object.State, &object.Groups)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storage.Object{}, storage.ErrNotFound
 	}
@@ -103,6 +111,7 @@ func (r Objects) Find(ctx context.Context, value string) (storage.Object, error)
 	if object.Metadata == nil {
 		object.Metadata = map[string]string{}
 	}
+	object.SHA256 = hex.EncodeToString(checksum)
 	object.Ready = true
 	return object, nil
 }
@@ -121,7 +130,15 @@ type Creator struct {
 }
 
 func (c Creator) Create(ctx context.Context, actor access.Principal, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, body io.Reader) (string, error) {
-	id, err := UploadNew(ctx, c.Pool, c.Store, actor, requestKey, groups, metadata, c.MaxMetadataBytes, contentType, size, body)
+	id, err := UploadNew(ctx, c.Pool, c.Store, actor, requestKey, groups, metadata, c.MaxMetadataBytes, contentType, size, "", body)
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
+func (c Creator) CreateVerified(ctx context.Context, actor access.Principal, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, expectedSHA256 string, body io.Reader) (string, error) {
+	id, err := UploadNew(ctx, c.Pool, c.Store, actor, requestKey, groups, metadata, c.MaxMetadataBytes, contentType, size, expectedSHA256, body)
 	if err != nil {
 		return "", err
 	}
@@ -129,9 +146,16 @@ func (c Creator) Create(ctx context.Context, actor access.Principal, requestKey 
 }
 
 func (c Creator) Update(ctx context.Context, actor access.Principal, objectID string, expected int64, metadata map[string]string) error {
+	return c.UpdateWithContentType(ctx, actor, objectID, expected, metadata, "")
+}
+
+func (c Creator) UpdateWithContentType(ctx context.Context, actor access.Principal, objectID string, expected int64, metadata map[string]string, contentType string) error {
 	id, actorID, err := c.validActorAndObject(actor, objectID, expected)
 	if err != nil {
 		return err
+	}
+	if contentType != "" && !storage.ValidContentType(contentType) {
+		return errors.New("invalid content type")
 	}
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
@@ -145,8 +169,14 @@ func (c Creator) Update(ctx context.Context, actor access.Principal, objectID st
 	if err := requireObjectWrite(ctx, tx, actorID, id); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE core_objects SET metadata=$3::jsonb,revision=revision+1,updated_at=now()
-		WHERE id=$1 AND revision=$2 AND state='ready'`, id, expected, string(encoded))
+	var tag pgconn.CommandTag
+	if contentType == "" {
+		tag, err = tx.Exec(ctx, `UPDATE core_objects SET metadata=$3::jsonb,revision=revision+1,updated_at=now()
+			WHERE id=$1 AND revision=$2 AND state='ready'`, id, expected, string(encoded))
+	} else {
+		tag, err = tx.Exec(ctx, `UPDATE core_objects SET metadata=$3::jsonb,content_type=$4,revision=revision+1,updated_at=now()
+			WHERE id=$1 AND revision=$2 AND state='ready'`, id, expected, string(encoded), contentType)
+	}
 	if err != nil {
 		return err
 	}
@@ -282,12 +312,7 @@ func requireObjectWrite(ctx context.Context, tx pgx.Tx, actorID, objectID uuid.U
 	if err != nil {
 		return err
 	}
-	var active bool
-	err = tx.QueryRow(ctx, `SELECT active FROM core_principals WHERE id=$1 FOR SHARE`, actorID).Scan(&active)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
-		return ErrUnauthorized
-	}
-	if err != nil {
+	if err := requireActivePrincipal(ctx, tx, actorID); err != nil {
 		return err
 	}
 	var group string
@@ -302,6 +327,13 @@ func requireObjectWrite(ctx context.Context, tx pgx.Tx, actorID, objectID uuid.U
 }
 
 func requireGroupWrite(ctx context.Context, tx pgx.Tx, principalID uuid.UUID, group string) error {
+	if err := requireActivePrincipal(ctx, tx, principalID); err != nil {
+		return err
+	}
+	return requireGroupWriteForActive(ctx, tx, principalID, group)
+}
+
+func requireGroupWriteForActive(ctx context.Context, tx pgx.Tx, principalID uuid.UUID, group string) error {
 	var active bool
 	err := tx.QueryRow(ctx, `SELECT active FROM core_access_groups WHERE group_key=$1 FOR SHARE`, group).Scan(&active)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
@@ -314,6 +346,15 @@ func requireGroupWrite(ctx context.Context, tx pgx.Tx, principalID uuid.UUID, gr
 	err = tx.QueryRow(ctx, `SELECT access_level FROM core_group_access WHERE principal_id=$1 AND group_key=$2 FOR SHARE`, principalID, group).Scan(&level)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && level != int16(access.LevelWrite)) {
 		return ErrForbidden
+	}
+	return err
+}
+
+func requireActivePrincipal(ctx context.Context, tx pgx.Tx, principalID uuid.UUID) error {
+	var active bool
+	err := tx.QueryRow(ctx, `SELECT active FROM core_principals WHERE id=$1 FOR SHARE`, principalID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
+		return ErrUnauthorized
 	}
 	return err
 }

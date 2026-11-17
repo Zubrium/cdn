@@ -1,0 +1,10 @@
+version: 1
+engines:
+  - loader
+workers: []
+apis:
+  admin:
+    - files
+    - coordinator
+  public: []
+automation: []

@@ -1,0 +1,9 @@
+packages:
+  - admin
+  - ui
+
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild

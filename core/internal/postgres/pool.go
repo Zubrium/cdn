@@ -86,22 +86,28 @@ func ValidateRuntimeAccess(ctx context.Context, pool *pgxpool.Pool) error {
 				OR has_table_privilege(current_user,c.oid,'DELETE'))
 			AND NOT (n.nspname='core' AND c.relname IN (
 				'core_principals','core_bootstrap','core_credentials','core_access_groups',
-				'core_group_access','core_objects','core_file_groups','core_upload_requests',
-				'core_staged_objects','core_file_sets','core_file_set_members')))
+				'core_group_access','core_objects','core_file_groups','core_upload_requests','module_data_revision_seq',
+				'core_staged_objects','core_file_sets','core_file_set_members','module_data',
+				'coordinator_config','coordinator_instances','coordinator_jobs',
+				'coordinator_publications','coordinator_route_targets')))
 		AND has_schema_privilege(current_user,'core','USAGE')
 		AND NOT EXISTS (
 			SELECT 1 FROM unnest(ARRAY[
 				'core.core_principals','core.core_bootstrap','core.core_credentials',
 				'core.core_access_groups','core.core_group_access','core.core_objects',
 				'core.core_file_groups','core.core_upload_requests','core.core_staged_objects','core.core_file_sets',
-				'core.core_file_set_members']::text[]) AS t(relation_name)
+				'core.core_file_set_members','core.module_data','core.coordinator_config',
+				'core.coordinator_instances','core.coordinator_jobs','core.coordinator_publications',
+				'core.coordinator_route_targets']::text[]) AS t(relation_name)
 			WHERE NOT (has_table_privilege(current_user,t.relation_name,'SELECT')
 				AND has_table_privilege(current_user,t.relation_name,'INSERT')
 				AND has_table_privilege(current_user,t.relation_name,'UPDATE')
 				AND has_table_privilege(current_user,t.relation_name,'DELETE'))
 			OR has_table_privilege(current_user,t.relation_name,'TRUNCATE')
 			OR has_table_privilege(current_user,t.relation_name,'REFERENCES')
-			OR has_table_privilege(current_user,t.relation_name,'TRIGGER'))`).Scan(&safe)
+			OR has_table_privilege(current_user,t.relation_name,'TRIGGER'))
+		AND has_sequence_privilege(current_user,'core.module_data_revision_seq','USAGE')
+		AND NOT has_sequence_privilege(current_user,'core.module_data_revision_seq','UPDATE')`).Scan(&safe)
 	if err != nil {
 		return fmt.Errorf("verify Core runtime database grants: %w", err)
 	}
