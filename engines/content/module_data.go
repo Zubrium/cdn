@@ -7,15 +7,11 @@ const moduleID = "content"
 func ModuleDataDescriptor() core.ModuleDataDescriptor {
 	return core.ModuleDataDescriptor{
 		ModuleID: moduleID,
+		// The current workspace, publication history, and fork marker share one
+		// namespace and snapshot scope so Core Batch can CAS them atomically.
 		Namespaces: []core.ModuleDataNamespace{
-			{Name: "content/models", ScopeTypes: []string{"snapshot"}, Fields: map[string]core.SelectorField{
-				"model_id": {Type: core.SelectorString}, "model_key": {Type: core.SelectorString},
-			}},
-			{Name: "content/records", ScopeTypes: []string{"snapshot"}, Fields: map[string]core.SelectorField{
-				"model_id": {Type: core.SelectorString}, "record_id": {Type: core.SelectorString},
-			}},
-			{Name: "content/bindings", ScopeTypes: []string{"snapshot"}, Fields: map[string]core.SelectorField{
-				"feature_id": {Type: core.SelectorString}, "placement_id": {Type: core.SelectorString},
+			{Name: "content/workspaces", ScopeTypes: []string{"snapshot"}, Fields: map[string]core.SelectorField{
+				"record_type": {Type: core.SelectorString}, "content_revision": {Type: core.SelectorNumber},
 			}},
 		},
 	}

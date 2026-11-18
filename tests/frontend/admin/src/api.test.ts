@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, getSyntheticDataMode, subscribeSyntheticDataMode } from "../../../../frontend/admin/src/api";
-import type { MediaRenditionContext } from "../../../../frontend/admin/src/types";
+import type { FormFieldDefinition, MediaRenditionContext } from "../../../../frontend/admin/src/types";
 
 function stubAdminBrowser(fetchMock: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("window", {
@@ -161,6 +161,63 @@ describe("Website branch API", () => {
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).not.toHaveProperty("accept");
+  });
+});
+
+describe("Forms schema API contract", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("round-trips explicit field types and sends the optimistic revision", async () => {
+    const fields: Record<string, FormFieldDefinition> = {
+      name: { type: "text", required: true, min_length: 2, max_length: 80 },
+      email: { type: "email", required: true },
+      age: { type: "number", required: false, minimum: 18, maximum: 120 },
+      consent: { type: "boolean", required: true },
+      topic: { type: "select", required: false, options: ["Sales", "Support"] },
+      attachment: { type: "file", required: false, max_files: 2, max_file_bytes: 5242880, allowed_content_types: ["application/pdf"] },
+    };
+    const schema = {
+      id: "44444444-4444-4444-8444-444444444444",
+      key: "contact_request",
+      version: 2,
+      revision: 8,
+      fields,
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(schema), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    stubAdminBrowser(fetchMock);
+
+    const saved = await api.formsEngine.saveSchema({
+      snapshot_id: "22222222-2222-4222-8222-222222222222",
+      schema_id: schema.id,
+      key: schema.key,
+      fields,
+      expected_revision: 7,
+    });
+
+    expect(saved).toEqual(schema);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v2/admin/forms/schemas");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toMatchObject({ expected_revision: 7, schema_id: schema.id, snapshot_id: "22222222-2222-4222-8222-222222222222" });
+  });
+
+  it("rejects an invalid server schema instead of exposing malformed constraints", async () => {
+    const invalid = {
+      id: "44444444-4444-4444-8444-444444444444",
+      key: "contact_request",
+      version: 1,
+      revision: 1,
+      fields: { attachment: { type: "file", required: false, max_files: 1, max_file_bytes: 1024, allowed_content_types: ["IMAGE/SVG+XML"] } },
+    };
+    stubAdminBrowser(vi.fn(async () => new Response(JSON.stringify(invalid), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(api.formsEngine.schema("22222222-2222-4222-8222-222222222222", invalid.id)).rejects.toMatchObject({ code: "invalid_response" });
   });
 });
 
@@ -460,6 +517,53 @@ describe("Website feature catalog API", () => {
   });
 });
 
+describe("Content workspace API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("adds the model field type to Website placement bindings", async () => {
+    const snapshotID = "11111111-1111-4111-8111-111111111111";
+    const fieldID = "22222222-2222-4222-8222-222222222222";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      snapshot_id: snapshotID,
+      data_model: { formatVersion: 1, entities: [{
+        id: "33333333-3333-4333-8333-333333333333", key: "article", name: "Article", cardinality: "many",
+        fields: [{ id: fieldID, key: "image", name: "Image", type: "media" }],
+      }] },
+      revision: 0, published_revision: 0, records: [], selections: [],
+      placements: [{ id: "placement-1", page_id: "page-1", page_name: "Home", feature_key: "hero", feature_name: "Hero", version: "1.0.0",
+        inputs: [{ input_key: "article", kind: "record", entity_id: "33333333-3333-4333-8333-333333333333", fields: [{ input_path: "image", field_id: fieldID }] }],
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    stubAdminBrowser(fetchMock);
+
+    const workspace = await api.contentEngine.workspace(snapshotID);
+
+    expect(workspace.placements[0]?.inputs[0]?.fields[0]?.type).toBe("media");
+  });
+
+  it("preserves history cursors for the next request", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      items: [{
+        id: "history-1", draft_revision: 4, content_revision: 2,
+        created_at: "2026-11-18T10:00:00Z", record_count: 3,
+      }],
+      next_cursor: "opaque-history-cursor",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("window", { location: { origin: "http://localhost" }, dispatchEvent: () => true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await api.contentEngine.history("11111111-1111-4111-8111-111111111111", "before", 25);
+
+    const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const url = new URL(input, "http://localhost");
+    expect(url.pathname).toBe("/api/v2/admin/content/snapshots/11111111-1111-4111-8111-111111111111/history");
+    expect(url.searchParams.get("cursor")).toBe("before");
+    expect(url.searchParams.get("limit")).toBe("25");
+    expect(page.nextCursor).toBe("opaque-history-cursor");
+    expect(page.items[0]?.contentRevision).toBe(2);
+  });
+});
+
 describe("modular Website, Content, Forms and Router clients", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -471,21 +575,48 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("lists Website snapshots through the typed, paginated v2 contract", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "draft" }],
+      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" }],
       next_cursor: "next-page",
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubV2(fetchMock);
 
-    const page = await api.website.snapshots("site-1", "first-page", 20);
+    const page = await api.website.snapshots("33333333-3333-4333-8333-333333333333", "first-page", 20);
 
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
     expect(url.pathname).toBe("/api/v2/admin/sites/snapshots");
-    expect(url.searchParams.get("site_id")).toBe("site-1");
+    expect(url.searchParams.get("site_id")).toBe("33333333-3333-4333-8333-333333333333");
     expect(url.searchParams.get("cursor")).toBe("first-page");
     expect(url.searchParams.get("limit")).toBe("20");
     expect(page.next_cursor).toBe("next-page");
     expect(page.items[0]?.id).toBe("22222222-2222-4222-8222-222222222222");
+  });
+
+  it("preserves lifecycle state in the site editor snapshot choices", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    stubV2(fetchMock);
+
+    const page = await api.siteBuilder.contentSnapshots();
+
+    expect(page.items[0]?.state).toBe("provisioning");
+  });
+
+  it("rejects snapshot lifecycle states outside the Website contract", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      id: "22222222-2222-4222-8222-222222222222",
+      site_id: "33333333-3333-4333-8333-333333333333",
+      name: "Homepage",
+      sequence: 1,
+      revision: 1,
+      feature_pins: {},
+      state: "draft",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    stubV2(fetchMock);
+
+    await expect(api.website.snapshot("22222222-2222-4222-8222-222222222222"))
+      .rejects.toMatchObject({ code: "invalid_response", status: 502 });
   });
 
   it("creates a complete child snapshot idempotently and deletes by revision", async () => {
@@ -493,8 +624,8 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
         id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", parent_id: "11111111-1111-4111-8111-111111111111",
-        name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "draft",
-      }), { status: 201, headers: { "Content-Type": "application/json" } }))
+        name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning",
+      }), { status: 202, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
     stubV2(fetchMock);
 
@@ -528,7 +659,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
   it("loads design values and feature declarations through Sites v2", async () => {
     const snapshotID = "22222222-2222-4222-8222-222222222222";
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      snapshot: { id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "draft" },
+      snapshot: { id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" },
       design_system: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
       feature_tokens: [{ featureKey: "hero", featureName: "Hero", definition: { key: "title-color", label: "Цвет заголовка", group: "Colors", kind: "color", default: { color: { hex: "#000000", opacity: 100 } } } }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -563,18 +694,26 @@ describe("modular Website, Content, Forms and Router clients", () => {
   it("uses Content and Forms snapshot contracts with revision guards", async () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        id: "record-1", model_id: "model-1", values: { title: "Draft" }, revision: 3,
-        published_revision: 2, updated_at: "2026-11-18T10:00:00Z",
+        snapshot_id: "snapshot-1", data_model: null, revision: 3, published_revision: 2,
+        records: [], selections: [], placements: [],
       }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
     stubV2(fetchMock);
 
-    await api.contentEngine.saveRecord({ snapshot_id: "snapshot-1", model_id: "model-1", record_id: "record-1", values: { title: "Draft" }, expected_revision: 2 });
+    await api.contentEngine.saveWorkspaceDraft("snapshot-1", 2, [
+      { clientKey: "draft-row-1", entityId: "model-1", sortOrder: 0, values: { title: "Draft" } },
+    ], [], "content-save:request-0001");
     await api.formsEngine.deleteSubmission("snapshot-1", "submission-1", 7);
 
     const [contentInput, contentInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(contentInput).toBe("/api/v2/admin/content/records");
-    expect(JSON.parse(String(contentInit.body))).toEqual({ snapshot_id: "snapshot-1", model_id: "model-1", record_id: "record-1", values: { title: "Draft" }, expected_revision: 2 });
+    expect(contentInput).toBe("/api/v2/admin/content/snapshots/snapshot-1/workspace");
+    expect(contentInit.method).toBe("PUT");
+    expect(JSON.parse(String(contentInit.body))).toEqual({
+      expected_revision: 2,
+      records: [{ client_key: "draft-row-1", entity_id: "model-1", sort_order: 0, values: { title: "Draft" } }],
+      selections: [],
+    });
+    expect(new Headers(contentInit.headers).get("Idempotency-Key")).toBe("content-save:request-0001");
     expect(new Headers(contentInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
 
     const [formsInput, formsInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
@@ -584,6 +723,51 @@ describe("modular Website, Content, Forms and Router clients", () => {
     expect(formsInit.method).toBe("DELETE");
     expect(new Headers(formsInit.headers).get("If-Match")).toBe('"r7"');
     expect(new Headers(formsInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
+  });
+
+  it("does not send Forms mutations with a zero revision", async () => {
+    const fetchMock = vi.fn();
+    stubV2(fetchMock);
+
+    await expect(api.formsEngine.deleteSubmission("snapshot-1", "submission-1", 0))
+      .rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+    await expect(api.formsEngine.setSubmissionStatus("snapshot-1", "submission-1", "read", 0))
+      .rejects.toMatchObject({ code: "invalid_revision", status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("downloads a complete Forms CSV using the selected list filters", async () => {
+    const fetchMock = vi.fn(async () => new Response("id,form_id,schema_version,state,created_at,values_json\n", {
+      status: 200,
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="forms-snapshot-1-submissions.csv"',
+      },
+    }));
+    stubV2(fetchMock);
+
+    const result = await api.formsEngine.exportSubmissions("snapshot-1", { form_id: "form-1", state: "new" });
+    const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const url = new URL(input, "http://localhost");
+    expect(url.pathname).toBe("/api/v2/admin/forms/submissions/export");
+    expect(url.searchParams.get("snapshot_id")).toBe("snapshot-1");
+    expect(url.searchParams.get("form_id")).toBe("form-1");
+    expect(url.searchParams.get("state")).toBe("new");
+    expect(new Headers(init.headers).get("Accept")).toBe("text/csv");
+    expect(init.credentials).toBe("same-origin");
+    expect(result.filename).toBe("forms-snapshot-1-submissions.csv");
+    expect(result.blob.type).toBe("text/csv;charset=utf-8");
+  });
+
+  it("rejects non-CSV Forms export responses", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    stubV2(fetchMock);
+
+    await expect(api.formsEngine.exportSubmissions("snapshot-1"))
+      .rejects.toMatchObject({ code: "invalid_response", status: 502 });
   });
 
   it("creates and revises Router routes through idempotency and ETag contracts", async () => {

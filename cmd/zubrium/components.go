@@ -157,6 +157,8 @@ type fileAPIComponent struct {
 	loader               *loaderComponent
 	core                 *coreComponent
 	coordinatorAdmin     *coordinatorAdminComponent
+	formsEngine          *formsEngineComponent
+	formsAdminEnabled    bool
 	identityAdmin        *identityAdminComponent
 	developmentFixtures  bool
 	routerAdminEnabled   bool
@@ -237,7 +239,9 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		}
 		formsHandler, handlerErr := formsadmin.NewHandler(fixtureAPIs.forms, formsadmin.Config{
 			MaxJSONBytes: c.config.AdminAPI.MaxJSONBytes, DefaultPageSize: c.config.AdminAPI.DefaultPageSize,
-			MaxPageSize: c.config.AdminAPI.MaxPageSize, AllowedOrigins: append([]string(nil), c.config.AdminAPI.AllowedOrigins...),
+			MaxPageSize: c.config.AdminAPI.MaxPageSize, ExportMaxConcurrent: c.config.FormsAPI.ExportMaxConcurrent,
+			ExportMaxRows:  c.config.FormsAPI.ExportMaxRows,
+			ExportMaxBytes: c.config.FormsAPI.ExportMaxBytes, AllowedOrigins: append([]string(nil), c.config.AdminAPI.AllowedOrigins...),
 		})
 		if handlerErr != nil {
 			return fmt.Errorf("initialize synthetic Forms API: %w", handlerErr)
@@ -245,6 +249,20 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		mux.Handle("/api/v2/admin/sites/", c.requireCoreRuntime(syntheticDataMode(websiteHandler)))
 		mux.Handle("/api/v2/admin/content/", c.requireCoreRuntime(syntheticDataMode(contentHandler)))
 		mux.Handle("/api/v2/admin/forms/", c.requireCoreRuntime(syntheticDataMode(formsHandler)))
+	} else if c.formsAdminEnabled {
+		if c.formsEngine == nil || c.formsEngine.engine == nil {
+			return errors.New("Forms Engine is not initialized")
+		}
+		formsHandler, handlerErr := formsadmin.NewHandler(c.formsEngine.engine, formsadmin.Config{
+			MaxJSONBytes: c.config.AdminAPI.MaxJSONBytes, DefaultPageSize: c.config.AdminAPI.DefaultPageSize,
+			MaxPageSize: c.config.AdminAPI.MaxPageSize, ExportMaxConcurrent: c.config.FormsAPI.ExportMaxConcurrent,
+			ExportMaxRows:  c.config.FormsAPI.ExportMaxRows,
+			ExportMaxBytes: c.config.FormsAPI.ExportMaxBytes, AllowedOrigins: append([]string(nil), c.config.AdminAPI.AllowedOrigins...),
+		})
+		if handlerErr != nil {
+			return fmt.Errorf("initialize Forms API: %w", handlerErr)
+		}
+		mux.Handle("/api/v2/admin/forms/", c.requireCoreRuntime(formsHandler))
 	}
 	if c.routerAdminEnabled {
 		routerAdmin := c.requireCoreRuntime(http.HandlerFunc(c.serveRouterAdmin))
@@ -586,6 +604,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	loader := &loaderComponent{core: core, config: resolved}
 	fileAPI := &fileAPIComponent{loader: loader, core: core, config: resolved}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]
+	_, fileAPI.formsAdminEnabled = selected["admin.forms"]
 	if fileAPI.developmentFixtures && !compiledDevelopmentFixtures() {
 		return nil, nil, nil, nil, errors.New("development fixtures were selected without the dedicated development build")
 	}
@@ -627,7 +646,19 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			}
 		}
 	}
-	if err := registry.Register(platform.RuntimeComponent{ID: "admin.files", Requires: []string{"core", "engine.loader"}, New: func(context.Context) (platform.ManagedComponent, error) { return fileAPI, nil }}); err != nil {
+	var formsEngine *formsEngineComponent
+	if _, enabled := selected["engine.forms"]; enabled && !fileAPI.developmentFixtures {
+		formsEngine = &formsEngineComponent{core: core, config: resolved}
+		fileAPI.formsEngine = formsEngine
+		if err := registry.Register(platform.RuntimeComponent{ID: "engine.forms", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return formsEngine, nil }}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	adminFilesRequires := []string{"core", "engine.loader"}
+	if formsEngine != nil && fileAPI.formsAdminEnabled {
+		adminFilesRequires = append(adminFilesRequires, "engine.forms")
+	}
+	if err := registry.Register(platform.RuntimeComponent{ID: "admin.files", Requires: adminFilesRequires, New: func(context.Context) (platform.ManagedComponent, error) { return fileAPI, nil }}); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	if adminAPI := fileAPI.coordinatorAdmin; adminAPI != nil {
@@ -637,6 +668,12 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	}
 	if adminAPI := fileAPI.identityAdmin; adminAPI != nil {
 		if err := registry.Register(platform.RuntimeComponent{ID: "admin.identity", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminAPI, nil }}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	if formsEngine != nil && fileAPI.formsAdminEnabled && !fileAPI.developmentFixtures {
+		adminForms := &readyComponent{id: "admin.forms"}
+		if err := registry.Register(platform.RuntimeComponent{ID: "admin.forms", Requires: []string{"core", "engine.forms", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminForms, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -657,8 +694,12 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	}
 	var routerEngine *routerEngineComponent
 	if _, enabled := selected["engine.router"]; enabled {
-		routerEngine = &routerEngineComponent{core: core, loader: loader, config: resolved, selected: selected}
-		if err := registry.Register(platform.RuntimeComponent{ID: "engine.router", Requires: []string{"core", "engine.loader"}, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
+		requires := []string{"core", "engine.loader"}
+		if formsEngine != nil {
+			requires = append(requires, "engine.forms")
+		}
+		routerEngine = &routerEngineComponent{core: core, loader: loader, forms: formsEngine, config: resolved, selected: selected}
+		if err := registry.Register(platform.RuntimeComponent{ID: "engine.router", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -685,7 +726,31 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		uploadAPI := &publicUploadComponent{engine: routerEngine}
-		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-upload", Requires: []string{"engine.router", "public.router"}, New: func(context.Context) (platform.ManagedComponent, error) { return uploadAPI, nil }}); err != nil {
+		requires := []string{"engine.router", "public.router"}
+		if formsEngine != nil {
+			requires = append(requires, "engine.forms")
+		}
+		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-upload", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return uploadAPI, nil }}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	if _, enabled := selected["public.form-session"]; enabled {
+		if routerEngine == nil || formsEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-session", Requires: []string{"engine.router", "public.router", "engine.forms"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return &readyComponent{id: "public.form-session"}, nil
+		}}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	if _, enabled := selected["public.form-submit"]; enabled {
+		if routerEngine == nil || formsEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-submit", Requires: []string{"engine.router", "public.router", "engine.forms"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return &readyComponent{id: "public.form-submit"}, nil
+		}}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -700,7 +765,8 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	}
 	available := map[string]struct{}{
 		"core": {}, "engine.loader": {}, "admin.files": {}, "admin.coordinator": {}, "admin.identity": {},
-		"engine.router": {}, "admin.router": {}, "public.router": {}, "public.form-upload": {},
+		"engine.router": {}, "engine.forms": {}, "admin.forms": {}, "admin.router": {}, "public.router": {}, "public.form-upload": {},
+		"public.form-session": {}, "public.form-submit": {},
 	}
 	if _, fixtures := selected["development.fixtures"]; fixtures {
 		for _, component := range []string{"development.fixtures", "engine.website", "engine.content", "engine.forms", "admin.website", "admin.content", "admin.forms"} {

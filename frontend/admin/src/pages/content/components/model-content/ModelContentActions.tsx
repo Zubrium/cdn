@@ -2,11 +2,11 @@ import { Clock3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { SiteSnapshot } from "@/types";
+import type { WebsiteSnapshot } from "@/types";
 import type { ModelContentRevisionConflict, ModelContentSaveState } from "./types";
 
 export interface ModelContentActionsProps {
-  snapshots: SiteSnapshot[];
+  snapshots: WebsiteSnapshot[];
   selectedSnapshotId: string;
   revision: number;
   publishedRevision: number;
@@ -26,7 +26,7 @@ export interface ModelContentActionsProps {
   onRetrySave: () => void;
 }
 
-function displaySnapshot(snapshot: SiteSnapshot): string {
+function displaySnapshot(snapshot: WebsiteSnapshot): string {
   return `#${snapshot.sequence} · ${snapshot.name}`;
 }
 

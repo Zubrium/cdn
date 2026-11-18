@@ -52,6 +52,7 @@ func buildRegistry() Registry {
 		"admin.identity":         {ID: "admin.identity", Requires: []string{"core", "admin.files"}},
 		"admin.ui":               {ID: "admin.ui", Requires: []string{"core"}},
 		"public.router":          {ID: "public.router", Requires: []string{"engine.router"}},
+		"public.form-session":     {ID: "public.form-session", Requires: []string{"engine.forms", "public.router"}},
 		"public.form-submit":     {ID: "public.form-submit", Requires: []string{"engine.forms", "public.router"}},
 		"public.form-upload":     {ID: "public.form-upload", Requires: []string{"engine.loader", "public.router"}},
 		"public.content-runtime": {ID: "public.content-runtime", Requires: []string{"engine.content", "public.router"}},
@@ -164,6 +165,8 @@ var generatedModuleImports = map[string]generatedImport{
 	"admin.ui":             {path: "github.com/Zubrium/cdn/presentation/adminui", blank: true},
 	"public.router":        {path: "github.com/Zubrium/cdn/presentation/router", blank: true},
 	"public.form-upload":   {path: "github.com/Zubrium/cdn/presentation/router/publicupload", blank: true},
+	"public.form-session":  {path: "github.com/Zubrium/cdn/presentation/router/publicforms", blank: true},
+	"public.form-submit":   {path: "github.com/Zubrium/cdn/presentation/router/publicforms", blank: true},
 	"development.fixtures": {path: "github.com/Zubrium/cdn/cmd/zubrium/devfixtures", alias: "devfixtures", reg: "development.fixtures"},
 }
 
@@ -211,12 +214,17 @@ func GenerateBuildProfileGoWithTag(plan BuildPlan, packageName, buildTag string)
 	}
 	source.WriteString("\n")
 	fmt.Fprintf(&source, "package %s\n\nimport (\n", packageName)
+	lastPath := ""
 	for _, item := range imports {
+		if item.path == lastPath {
+			continue
+		}
 		if item.blank {
 			fmt.Fprintf(&source, "_ %s\n", strconv.Quote(item.path))
 		} else {
 			fmt.Fprintf(&source, "%s %s\n", item.alias, strconv.Quote(item.path))
 		}
+		lastPath = item.path
 	}
 	source.WriteString(")\n\nfunc RegisterGeneratedEngines(registry *platform.Registry) error {\nif registry == nil { return platform.ErrInvalid }\n")
 	if len(registrations) == 0 {

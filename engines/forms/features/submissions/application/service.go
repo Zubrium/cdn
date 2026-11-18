@@ -5,10 +5,11 @@ import (
 	"errors"
 	"strings"
 	"unicode/utf8"
+	"time"
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/forms/features/submissions/model"
-	"github.com/Zubrium/cdn/engines/forms/features/submissions/repository"
+	submissionpkg "github.com/Zubrium/cdn/engines/forms/features/submissions/pkg"
 )
 
 type Files interface {
@@ -17,9 +18,18 @@ type Files interface {
 }
 
 type Service struct {
-	repository *repository.Repository
+	repository Repository
 	files      Files
 	maxPage    int
+}
+
+type Repository interface {
+	Get(context.Context, string, string) (model.StoredSubmission, error)
+	Create(context.Context, string, submissionpkg.PayloadV1) (model.StoredSubmission, error)
+	List(context.Context, string, string, string, string, int) ([]model.StoredSubmission, string, error)
+	SetState(context.Context, string, string, string, int64) (model.StoredSubmission, error)
+	BeginDelete(context.Context, string, string, int64) (model.StoredSubmission, error)
+	FinishDelete(context.Context, string, string, int64) error
 }
 
 type Versioned struct {
@@ -27,7 +37,18 @@ type Versioned struct {
 	Revision   int64
 }
 
-func New(repository *repository.Repository, files Files, maxPage int) (*Service, error) {
+type CreateInput struct {
+	ID                     string
+	FormID                 string
+	SchemaVersion          int64
+	Values                 map[string]any
+	Attachments            []string
+	IdempotencyKeyHash     string
+	IdempotencyFingerprint string
+	CreatedAt              time.Time
+}
+
+func New(repository Repository, files Files, maxPage int) (*Service, error) {
 	if repository == nil || files == nil || maxPage < 1 {
 		return nil, core.ErrModuleDataUnavailable
 	}
@@ -39,12 +60,38 @@ func (service *Service) Get(ctx context.Context, snapshotID, id string) (model.S
 		return model.Submission{}, 0, core.ErrModuleDataInvalid
 	}
 	entry, err := service.repository.Get(ctx, snapshotID, id)
-	return entry.Submission, entry.Record.Revision, err
+	return entry.Submission, entry.Revision, err
+}
+
+func (service *Service) CreateAccepted(ctx context.Context, snapshotID string, input CreateInput) (model.Submission, int64, error) {
+	if !validIdentifier(snapshotID) || !validIdentifier(input.ID) || !validIdentifier(input.FormID) || input.SchemaVersion < 1 ||
+		input.Values == nil || input.IdempotencyKeyHash == "" || input.IdempotencyFingerprint == "" || input.CreatedAt.IsZero() {
+		return model.Submission{}, 0, core.ErrModuleDataInvalid
+	}
+	seen := make(map[string]struct{}, len(input.Attachments))
+	for _, id := range input.Attachments {
+		if !validIdentifier(id) {
+			return model.Submission{}, 0, core.ErrModuleDataInvalid
+		}
+		if _, exists := seen[id]; exists {
+			return model.Submission{}, 0, core.ErrModuleDataInvalid
+		}
+		seen[id] = struct{}{}
+	}
+	stored, err := service.repository.Create(ctx, snapshotID, submissionpkg.PayloadV1{
+		ID: input.ID, FormID: input.FormID, SchemaVersion: input.SchemaVersion, State: "new",
+		Values: input.Values, CreatedAt: input.CreatedAt.UTC(), IdempotencyKeyHash: input.IdempotencyKeyHash,
+		IdempotencyFingerprint: input.IdempotencyFingerprint, AttachmentIDs: append([]string(nil), input.Attachments...),
+	})
+	if err != nil {
+		return model.Submission{}, 0, err
+	}
+	return stored.Submission, stored.Revision, nil
 }
 
 func (service *Service) List(ctx context.Context, snapshotID, formID, state, after string, limit int) ([]Versioned, string, error) {
 	if !validIdentifier(snapshotID) || (formID != "" && !validIdentifier(formID)) ||
-		(len(state) > 64 || !utf8.ValidString(state) || strings.ContainsRune(state, '\x00')) || limit < 1 || limit > service.maxPage {
+		(state != "" && !validStatus(state)) || limit < 1 || limit > service.maxPage {
 		return nil, "", core.ErrModuleDataInvalid
 	}
 	entries, next, err := service.repository.List(ctx, snapshotID, formID, state, after, limit)
@@ -53,7 +100,7 @@ func (service *Service) List(ctx context.Context, snapshotID, formID, state, aft
 	}
 	items := make([]Versioned, len(entries))
 	for i := range entries {
-		items[i] = Versioned{Submission: entries[i].Submission, Revision: entries[i].Record.Revision}
+		items[i] = Versioned{Submission: entries[i].Submission, Revision: entries[i].Revision}
 	}
 	return items, next, nil
 }
@@ -63,7 +110,7 @@ func (service *Service) SetState(ctx context.Context, snapshotID, id, state stri
 		return model.Submission{}, 0, core.ErrModuleDataInvalid
 	}
 	entry, err := service.repository.SetState(ctx, snapshotID, id, state, expectedRevision)
-	return entry.Submission, entry.Record.Revision, err
+	return entry.Submission, entry.Revision, err
 }
 
 func (service *Service) Delete(ctx context.Context, session core.Session, snapshotID, id string, expectedRevision int64) error {
@@ -98,7 +145,7 @@ func (service *Service) Delete(ctx context.Context, session core.Session, snapsh
 			return core.ErrRevisionConflict
 		}
 	}
-	return service.repository.FinishDelete(ctx, snapshotID, id, entry.Record.Revision)
+	return service.repository.FinishDelete(ctx, snapshotID, id, entry.Revision)
 }
 
 func validStatus(value string) bool {

@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -138,6 +139,56 @@ func TestSessionLoginSetsScopedHttpOnlySessionAndReadableCSRFCookies(t *testing.
 	}
 	if body["principal"] == nil {
 		t.Fatalf("login response omitted the authenticated principal: %s", response.Body.String())
+	}
+}
+
+func TestSessionLoginRejectsAmbiguousRequestHeadersAndJSON(t *testing.T) {
+	newHandler := func(t *testing.T, sessions *sessionStub) http.Handler {
+		t.Helper()
+		handler, err := NewHandlerWithSessions(&fakeIdentityAdmin{}, sessions, Config{
+			MaxJSONBytes: 1024, SessionCookieSecure: true, AllowedOrigins: []string{testAdminOrigin},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler
+	}
+	tests := []struct {
+		name  string
+		body  []byte
+		setup func(*http.Request)
+	}{
+		{
+			name: "duplicate content type",
+			body: []byte(`{"credential":"credential-secret-value"}`),
+			setup: func(request *http.Request) {
+				request.Header.Add("Content-Type", "application/json")
+				request.Header.Add("Content-Type", "text/plain")
+			},
+		},
+		{
+			name:  "duplicate JSON key",
+			body:  []byte(`{"credential":"first-secret-value","credential":"second-secret-value"}`),
+			setup: func(request *http.Request) { request.Header.Set("Content-Type", "application/json") },
+		},
+		{
+			name:  "invalid UTF-8",
+			body:  append(append([]byte(`{"credential":"`), 0xff), []byte(`"}`)...),
+			setup: func(request *http.Request) { request.Header.Set("Content-Type", "application/json") },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sessions := &sessionStub{login: testSessionLogin()}
+			request := httptest.NewRequest(http.MethodPost, apiPrefix+"/session", bytes.NewReader(test.body))
+			test.setup(request)
+			request.Header.Set("Origin", testAdminOrigin)
+			response := httptest.NewRecorder()
+			newHandler(t, sessions).ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || sessions.loginCalls != 0 {
+				t.Fatalf("ambiguous login request status=%d calls=%d body=%s", response.Code, sessions.loginCalls, response.Body.String())
+			}
+		})
 	}
 }
 

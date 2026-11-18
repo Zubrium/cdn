@@ -8,6 +8,7 @@ import { useConfirm } from "@/components/common/confirm";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { WebsiteBranch, WebsiteSnapshot } from "@/types";
+import { readySnapshots } from "@/domains/snapshots/lifecycle";
 
 function BranchHistory({ branchId }: { branchId: string }) {
   const [open, setOpen] = useState(false);
@@ -44,10 +45,14 @@ export default function BranchesPage() {
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<{ branchId: string; phase: "checking" | "assigning" } | null>(null);
   const branches = useQuery({ queryKey: ["website", "branches"], queryFn: ({ signal }) => api.website.branches(signal) });
-  const snapshots = useQuery({ queryKey: ["website", "snapshots", "all"], queryFn: ({ signal }) => api.website.allSnapshots(signal) });
+  const snapshots = useQuery({
+    queryKey: ["website", "snapshots", "all"],
+    queryFn: ({ signal }) => api.website.allSnapshots(signal),
+    refetchInterval: (query) => query.state.data?.some((item) => item.state === "provisioning") ? 2000 : false,
+  });
 
   const assign = async (branch: WebsiteBranch, id: string) => {
-    const target = snapshots.data?.find((snapshot) => snapshot.id === id && snapshot.site_id === branch.site_id);
+    const target = snapshots.data?.find((snapshot) => snapshot.id === id && snapshot.site_id === branch.site_id && snapshot.state === "ready");
     if (!target) {
       toast.error("Выберите снапшот сайта этой ветки");
       return;
@@ -90,8 +95,9 @@ export default function BranchesPage() {
       <PageHeader title="Ветки" description="Состав, порты, CORS и индексацию задаёт конфигурация запуска. Здесь назначаются снапшоты." />
       {branches.data?.items.map((branch) => {
         const branchSnapshots = snapshots.data?.filter((snapshot) => snapshot.site_id === branch.site_id) ?? [];
+        const readyBranchSnapshots = readySnapshots(branchSnapshots);
         const requested = choices[branch.id] ?? params.get("snapshot") ?? branch.snapshot_id ?? "";
-        const selected = branchSnapshots.some((snapshot) => snapshot.id === requested) ? requested : branch.snapshot_id ?? "";
+        const selected = readyBranchSnapshots.some((snapshot) => snapshot.id === requested) ? requested : "";
         const current: WebsiteSnapshot | undefined = branchSnapshots.find((item) => item.id === branch.snapshot_id);
         return (
           <section key={branch.id} className="space-y-4 rounded-xl border border-border bg-card p-4">
@@ -103,11 +109,12 @@ export default function BranchesPage() {
             <div className="flex flex-wrap gap-2">
               <Select value={selected} onValueChange={(value) => setChoices((currentChoices) => ({ ...currentChoices, [branch.id]: value }))} disabled={busy !== null || !branch.enabled}>
                 <SelectTrigger className="w-full sm:w-80" aria-label={`Снапшот ветки ${branch.name}`}><SelectValue placeholder="Выберите снапшот" /></SelectTrigger>
-                <SelectContent>{branchSnapshots.map((item) => <SelectItem key={item.id} value={item.id}>#{item.sequence} · {item.name}</SelectItem>)}</SelectContent>
+                <SelectContent>{readyBranchSnapshots.map((item) => <SelectItem key={item.id} value={item.id}>#{item.sequence} · {item.name}</SelectItem>)}</SelectContent>
               </Select>
               <Button disabled={!selected || busy !== null || selected === branch.snapshot_id || !branch.enabled} onClick={() => void assign(branch, selected)}>{busy?.branchId === branch.id ? busy.phase === "checking" ? "Проверяем…" : "Назначаем…" : "Назначить"}</Button>
-              {current?.parent_id && <Button variant="outline" disabled={busy !== null || !branch.enabled} onClick={() => void assign(branch, current.parent_id!)}>Вернуться к родителю</Button>}
-              {current && <Button variant="ghost" asChild><Link to={`/content?snapshot=${current.id}`}>Контент</Link></Button>}
+              {current?.parent_id && readyBranchSnapshots.some((item) => item.id === current.parent_id) && <Button variant="outline" disabled={busy !== null || !branch.enabled} onClick={() => void assign(branch, current.parent_id!)}>Вернуться к родителю</Button>}
+              {current?.state === "ready" && <Button variant="ghost" asChild><Link to={`/content?snapshot=${current.id}`}>Контент</Link></Button>}
+              {current && current.state !== "ready" && <p role="status" className="text-sm text-warning">Назначенный снапшот {current.state === "provisioning" ? "ещё готовится" : "не прошёл подготовку"}.</p>}
             </div>
             <BranchHistory branchId={branch.id} />
           </section>

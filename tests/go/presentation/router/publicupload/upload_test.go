@@ -382,11 +382,15 @@ type fakeLoader struct {
 	byIdempotency      map[string]loader.BeginUploadInput
 	parts              []string
 	commits            int
+	abortCalls         int
 	set                loader.FileSet
 	addedSetID         string
 	addedFileID        string
 	addedRevision      int64
 	addCalls           int
+	statErr            error
+	deleteErr          error
+	deleteCalls        int
 	conflictsRemaining int
 	addErr             error
 }
@@ -422,7 +426,21 @@ func (f *fakeLoader) PutUploadPart(_ context.Context, _ string, _ int, size int6
 }
 func (f *fakeLoader) CommitUpload(context.Context, string) (loader.File, error) {
 	f.commits++
-	return loader.File{ID: fileID, Name: "server-generated"}, nil
+	return loader.File{ID: fileID, Name: "server-generated", Revision: 1, ContentType: "application/octet-stream", Size: 3, SHA256: digest("abc")}, nil
+}
+func (f *fakeLoader) AbortUpload(context.Context, string) error {
+	f.abortCalls++
+	return nil
+}
+func (f *fakeLoader) StatFile(_ context.Context, id string) (loader.File, error) {
+	if f.statErr != nil {
+		return loader.File{}, f.statErr
+	}
+	return loader.File{ID: id, Revision: 1}, nil
+}
+func (f *fakeLoader) DeleteFile(_ context.Context, _ string, _ int64) error {
+	f.deleteCalls++
+	return f.deleteErr
 }
 func (f *fakeLoader) GetFileSet(_ context.Context, id string) (loader.FileSet, error) {
 	if id != f.set.ID {

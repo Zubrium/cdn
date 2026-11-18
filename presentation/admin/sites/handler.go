@@ -2,12 +2,11 @@
 package sitesapi
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,18 +17,23 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
 const importPath = "/api/v2/admin/sites/feature-imports"
 const apiPrefix = "/api/v2/admin/sites"
 
 type Config struct {
-	MaxJSONBytes    int64
-	DefaultPageSize int
-	MaxPageSize     int
-	AllowedOrigins  []string
+	MaxJSONBytes         int64
+	DefaultPageSize      int
+	MaxPageSize          int
+	AllowedOrigins       []string
+	SnapshotForkWorkflow interface {
+		Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
+	}
 }
 
 type Handler struct {
@@ -59,7 +63,6 @@ func NewHandler(api website.API, cfg Config) (*Handler, error) {
 	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}/design-system", h.getSnapshotDesignSystem)
 	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots", h.createSnapshot)
 	h.mux.HandleFunc("DELETE "+apiPrefix+"/snapshots/{snapshotID}", h.deleteSnapshot)
-	h.mux.HandleFunc("PUT "+apiPrefix+"/snapshots/{snapshotID}/features/{featureID}", h.pinFeatureVersion)
 	h.mux.HandleFunc("GET "+apiPrefix+"/branches", h.listBranches)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/branches/{branchID}/snapshot", h.assignBranch)
 	h.mux.HandleFunc("GET "+apiPrefix+"/branches/{branchID}/events", h.listBranchEvents)
@@ -81,8 +84,8 @@ func (h *Handler) beginImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	key := r.Header.Get("Idempotency-Key")
-	if !validIdempotencyKey(key) {
+	key, valid := readIdempotencyKey(r)
+	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -212,7 +215,7 @@ func (h *Handler) getSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if value.ID != snapshotID || !validID(value.SiteID) || !validSnapshotName(value.Name) || value.Sequence < 1 || value.Revision < 1 ||
+	if value.ID != snapshotID || !validID(value.SiteID) || !validSnapshotName(value.Name) || value.Sequence < 1 || value.Revision < 1 || !validSnapshotState(value.State) ||
 		value.Payload == nil || !validSnapshotPayload(*value.Payload) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
@@ -237,7 +240,7 @@ func (h *Handler) getSnapshotDesignSystem(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if value.Snapshot.ID != snapshotID || !validID(value.Snapshot.SiteID) || !validSnapshotName(value.Snapshot.Name) ||
-		value.Snapshot.Sequence < 1 || value.Snapshot.Revision < 1 || !validUniqueJSONObject(value.DesignSystem, 4<<20) || !validUniqueJSONArray(value.FeatureTokens, 4<<20) {
+		value.Snapshot.Sequence < 1 || value.Snapshot.Revision < 1 || !validSnapshotState(value.Snapshot.State) || !validUniqueJSONObject(value.DesignSystem, 4<<20) || !validUniqueJSONArray(value.FeatureTokens, 4<<20) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -272,7 +275,7 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	for _, snapshot := range page.Items {
 		if !validID(snapshot.ID) || !validID(snapshot.SiteID) ||
 			(query["site_id"] != "" && snapshot.SiteID != query["site_id"]) ||
-			!validSnapshotName(snapshot.Name) || snapshot.Sequence < 1 || snapshot.Revision < 1 || snapshot.State == "" {
+			!validSnapshotName(snapshot.Name) || snapshot.Sequence < 1 || snapshot.Revision < 1 || !validSnapshotState(snapshot.State) {
 			writeError(w, http.StatusBadGateway, "unavailable")
 			return
 		}
@@ -285,8 +288,8 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	key := r.Header.Get("Idempotency-Key")
-	if len(r.Header.Values("Idempotency-Key")) != 1 || !validIdempotencyKey(key) {
+	key, valid := readIdempotencyKey(r)
+	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -297,9 +300,13 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validUUID(input.SiteID) || (input.ParentID != "" && !validUUID(input.ParentID)) ||
 		(input.ParentID == "" && (input.ExpectedRevision != 0 || input.ExpectedContentRevision != 0)) ||
-		(input.ParentID != "" && (input.ExpectedRevision < 1 || input.ExpectedContentRevision < 1)) ||
+		(input.ParentID != "" && (input.ExpectedRevision < 1 || input.ExpectedContentRevision < 0)) ||
 		!validSnapshotName(input.Name) || !validSnapshotPayload(input.Payload) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if input.ParentID != "" && nilInterface(h.cfg.SnapshotForkWorkflow) {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
 	input.IdempotencyKey = key
@@ -308,14 +315,45 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if !validID(value.ID) || value.SiteID != input.SiteID || value.ParentID != input.ParentID || value.Name != input.Name || value.Sequence < 1 || value.Revision < 1 ||
+	expectedState := "ready"
+	if input.ParentID != "" {
+		expectedState = "provisioning"
+	}
+	if !validUUID(value.ID) || value.SiteID != input.SiteID || value.ParentID != input.ParentID || value.Name != input.Name || value.Sequence < 1 || value.Revision < 1 || value.State != expectedState ||
 		value.Payload == nil || !validSnapshotPayload(*value.Payload) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
+	status := http.StatusCreated
+	if input.ParentID != "" {
+		copyKey := "content-copy:" + digestText(value.ID)
+		payload, marshalErr := json.Marshal(website.SnapshotForkWorkflowPayload{
+			SourceSnapshotID: input.ParentID, TargetSnapshotID: value.ID,
+			ExpectedSourceContentRevision: input.ExpectedContentRevision, TargetSnapshotRevision: value.Revision,
+			ContentCopyIdempotencyKey: copyKey,
+		})
+		if marshalErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		_, err := h.cfg.SnapshotForkWorkflow.Start(r.Context(), platform.WorkflowStartRequest{
+			OperationID: "snapshot.fork.start", ContractVersion: 1,
+			IdempotencyKey: "snapshot-fork:" + digestText(key), Payload: payload,
+		})
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		status = http.StatusAccepted
+	}
 	w.Header().Set("Location", apiPrefix+"/snapshots/"+value.ID)
 	setSnapshotETag(w, value.Revision)
-	writeJSON(w, http.StatusCreated, value)
+	writeJSON(w, status, value)
+}
+
+func digestText(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }
 
 func (h *Handler) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -341,7 +379,7 @@ func (h *Handler) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func validSnapshotName(value string) bool {
-	if !utf8.ValidString(value) || strings.TrimSpace(value) != value || utf8.RuneCountInString(value) < 1 || utf8.RuneCountInString(value) > 160 {
+	if !utf8.ValidString(value) || strings.TrimSpace(value) != value || utf8.RuneCountInString(value) < 1 || utf8.RuneCountInString(value) > 120 {
 		return false
 	}
 	for _, char := range value {
@@ -352,86 +390,20 @@ func validSnapshotName(value string) bool {
 	return true
 }
 
+func validSnapshotState(value string) bool {
+	return value == "provisioning" || value == "ready" || value == "failed"
+}
+
 func validSnapshotPayload(payload website.SnapshotPayload) bool {
 	return validUniqueJSONObject(payload.Config, 8<<20) && validUniqueJSONObject(payload.Metadata, 1<<20) && validUniqueJSONObject(payload.DesignSystem, 4<<20)
 }
 
 func validUniqueJSONObject(raw []byte, maxBytes int) bool {
-	trimmed := strings.TrimSpace(string(raw))
-	if !utf8.Valid(raw) || len(trimmed) == 0 || len(trimmed) > maxBytes || trimmed[0] != '{' {
-		return false
-	}
-	decoder := json.NewDecoder(strings.NewReader(trimmed))
-	if err := consumeSnapshotJSONValue(decoder, 0); err != nil {
-		return false
-	}
-	var extra any
-	return errors.Is(decoder.Decode(&extra), io.EOF)
+	return httpjson.ValidObject(raw, maxBytes)
 }
 
 func validUniqueJSONArray(raw []byte, maxBytes int) bool {
-	trimmed := strings.TrimSpace(string(raw))
-	if !utf8.Valid(raw) || len(trimmed) == 0 || len(trimmed) > maxBytes || trimmed[0] != '[' {
-		return false
-	}
-	decoder := json.NewDecoder(strings.NewReader(trimmed))
-	if err := consumeSnapshotJSONValue(decoder, 0); err != nil {
-		return false
-	}
-	var extra any
-	return errors.Is(decoder.Decode(&extra), io.EOF)
-}
-
-func consumeSnapshotJSONValue(decoder *json.Decoder, depth int) error {
-	if depth > 64 {
-		return errors.New("snapshot JSON nesting exceeds limit")
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("invalid snapshot JSON object key")
-			}
-			if _, duplicate := seen[key]; duplicate {
-				return errors.New("duplicate snapshot JSON object key")
-			}
-			seen[key] = struct{}{}
-			if err := consumeSnapshotJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim('}') {
-			return errors.New("invalid snapshot JSON object")
-		}
-	case '[':
-		for decoder.More() {
-			if err := consumeSnapshotJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim(']') {
-			return errors.New("invalid snapshot JSON array")
-		}
-	default:
-		return errors.New("invalid snapshot JSON value")
-	}
-	return nil
+	return httpjson.ValidArray(raw, maxBytes)
 }
 
 func parseIfMatchRevision(values []string) (int64, int) {
@@ -458,33 +430,6 @@ func parseIfMatchRevision(values []string) (int64, int) {
 
 func setSnapshotETag(w http.ResponseWriter, revision int64) {
 	w.Header().Set("ETag", `"`+strconv.FormatInt(revision, 10)+`"`)
-}
-
-func (h *Handler) pinFeatureVersion(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	var input struct {
-		Version          string `json:"version"`
-		ExpectedRevision int64  `json:"expected_revision"`
-	}
-	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
-		writeDecodeError(w, err)
-		return
-	}
-	snapshotID, featureID := r.PathValue("snapshotID"), r.PathValue("featureID")
-	if !validID(snapshotID) || !validID(featureID) || !validVersion(input.Version) || input.ExpectedRevision < 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	value, err := h.website.PinFeatureVersion(ctx, website.PinFeatureVersionRequest{SnapshotID: snapshotID, FeatureID: featureID,
-		Version: input.Version, ExpectedRevision: input.ExpectedRevision})
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
 }
 
 func (h *Handler) listBranches(w http.ResponseWriter, r *http.Request) {
@@ -658,8 +603,8 @@ func (h *Handler) buildSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	key := r.Header.Get("Idempotency-Key")
-	if !validIdempotencyKey(key) {
+	key, valid := readIdempotencyKey(r)
+	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -710,8 +655,8 @@ func (h *Handler) createMediaDerivative(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	key := r.Header.Get("Idempotency-Key")
-	if !validIdempotencyKey(key) {
+	key, valid := readIdempotencyKey(r)
+	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -802,37 +747,27 @@ func validIdempotencyKey(value string) bool {
 	return true
 }
 
+func readIdempotencyKey(r *http.Request) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	values := r.Header.Values("Idempotency-Key")
+	if len(values) != 1 || !validIdempotencyKey(values[0]) {
+		return "", false
+	}
+	return values[0], true
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) error {
-	contentTypes := r.Header.Values("Content-Type")
-	if len(contentTypes) != 1 {
+	err := httpjson.DecodeRequest(w, r, maxBytes, target)
+	switch {
+	case errors.Is(err, httpjson.ErrTooLarge):
+		return website.ErrTooLarge
+	case errors.Is(err, httpjson.ErrInvalid):
 		return website.ErrInvalid
+	default:
+		return err
 	}
-	mediaType, _, mediaErr := mime.ParseMediaType(contentTypes[0])
-	if mediaErr != nil || mediaType != "application/json" {
-		return website.ErrInvalid
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	raw, readErr := io.ReadAll(r.Body)
-	if readErr != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(readErr, &tooLarge) {
-			return website.ErrTooLarge
-		}
-		return website.ErrInvalid
-	}
-	if !validUniqueJSONObject(raw, int(maxBytes)) {
-		return website.ErrInvalid
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return website.ErrInvalid
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return website.ErrInvalid
-	}
-	return nil
 }
 
 func writeEngineError(w http.ResponseWriter, err error) {

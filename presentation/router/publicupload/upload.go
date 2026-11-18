@@ -13,14 +13,19 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 
 	core "github.com/Zubrium/cdn/core/presentation"
+	forms "github.com/Zubrium/cdn/engines/forms/presentation"
 	loader "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/presentation/httpjson"
+	"github.com/Zubrium/cdn/presentation/router/publicforms"
 	"github.com/google/uuid"
 )
 
@@ -31,6 +36,9 @@ type Loader interface {
 	BeginUpload(context.Context, loader.BeginUploadInput) (loader.UploadSession, error)
 	PutUploadPart(context.Context, string, int, int64, string, io.Reader) (loader.UploadSession, error)
 	CommitUpload(context.Context, string) (loader.File, error)
+	AbortUpload(context.Context, string) error
+	StatFile(context.Context, string) (loader.File, error)
+	DeleteFile(context.Context, string, int64) error
 	GetFileSet(context.Context, string) (loader.FileSet, error)
 	AddFileToSet(context.Context, string, string, int64) (loader.FileSet, error)
 }
@@ -45,6 +53,7 @@ type Config struct {
 	MaxConcurrentUploads int
 	MaxStagedBytes       int64
 	AllowedContentTypes  []string
+	Forms                publicforms.VisitorAPI
 }
 
 // GroupAuthorization checks current Core grants for Router's configured
@@ -65,20 +74,27 @@ type Operation struct {
 	maxParts             int
 	maxConcurrentUploads int
 	allowedContentTypes  []string
+	forms                publicforms.VisitorAPI
 	slots                chan struct{}
 }
 
 type routeConfig struct {
-	Enabled             bool     `json:"enabled"`
-	AccessGroup         string   `json:"access_group"`
-	FileSetID           string   `json:"file_set_id,omitempty"`
-	MaxBytes            int64    `json:"max_bytes"`
-	AllowedContentTypes []string `json:"allowed_content_types"`
+	Enabled             bool                       `json:"enabled"`
+	AccessGroup         string                     `json:"access_group"`
+	FileSetID           string                     `json:"file_set_id,omitempty"`
+	MaxBytes            int64                      `json:"max_bytes"`
+	AllowedContentTypes []string                   `json:"allowed_content_types"`
+	Form                *publicforms.BindingConfig `json:"form,omitempty"`
 }
 
 type result struct {
 	FileID    string `json:"file_id"`
 	FileSetID string `json:"file_set_id,omitempty"`
+}
+
+type formResult struct {
+	AttachmentID string `json:"attachment_id"`
+	FieldID      string `json:"field_id"`
 }
 
 func New(api Loader, cfg Config) (*Operation, error) {
@@ -107,7 +123,7 @@ func New(api Loader, cfg Config) (*Operation, error) {
 		loader: api, credential: cfg.Credential, authorization: cfg.GroupAuthorization, stagingDirectory: filepath.Clean(cfg.StagingDirectory),
 		maxFileBytes: cfg.MaxFileBytes, partSize: cfg.PartSize, maxParts: cfg.MaxParts,
 		maxConcurrentUploads: cfg.MaxConcurrentUploads,
-		allowedContentTypes:  allowed, slots: make(chan struct{}, cfg.MaxConcurrentUploads),
+		allowedContentTypes:  allowed, forms: cfg.Forms, slots: make(chan struct{}, cfg.MaxConcurrentUploads),
 	}, nil
 }
 
@@ -207,8 +223,22 @@ func (operation *Operation) ValidateRouteConfigWithContext(ctx context.Context, 
 	if err != nil || operation.validateRouteConfig(config) != nil {
 		return engine.ErrInvalidTarget
 	}
-	_, err = operation.authorizeRoute(ctx, config)
-	return err
+	if _, err = operation.authorizeRoute(ctx, config); err != nil {
+		return err
+	}
+	if config.Form != nil {
+		if operation.forms == nil || config.FileSetID == "" {
+			return engine.ErrInvalidTarget
+		}
+		allowed, _ := normalizeAllowedContentTypes(config.AllowedContentTypes)
+		if err := operation.forms.ValidatePublicUploadRoute(ctx, forms.PublicUploadRouteBinding{
+			PublicFormBinding: config.Form.Binding(), AccessGroup: config.AccessGroup,
+			MaxBytes: config.MaxBytes, AllowedContentTypes: allowed,
+		}); err != nil {
+			return publicforms.MapFormsError(err)
+		}
+	}
+	return nil
 }
 
 func (operation *Operation) authorizeRoute(ctx context.Context, config routeConfig) (context.Context, error) {
@@ -243,17 +273,11 @@ func (operation *Operation) authorizeRoute(ctx context.Context, config routeConf
 }
 
 func decodeRouteConfig(raw json.RawMessage) (routeConfig, error) {
-	if len(raw) == 0 || len(raw) > 64<<10 || !validUniqueJSON(raw) {
+	if len(raw) == 0 || len(raw) > 64<<10 {
 		return routeConfig{}, engine.ErrInvalidTarget
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
 	var config routeConfig
-	if err := decoder.Decode(&config); err != nil {
-		return routeConfig{}, engine.ErrInvalidTarget
-	}
-	var extra any
-	if !errors.Is(decoder.Decode(&extra), io.EOF) {
+	if err := httpjson.DecodeBytes(raw, &config); err != nil {
 		return routeConfig{}, engine.ErrInvalidTarget
 	}
 	if config.FileSetID != "" {
@@ -263,71 +287,12 @@ func decodeRouteConfig(raw json.RawMessage) (routeConfig, error) {
 		}
 		config.FileSetID = id.String()
 	}
+	if config.Form != nil {
+		if config.Form.Validate() != nil || config.FileSetID == "" {
+			return routeConfig{}, engine.ErrInvalidTarget
+		}
+	}
 	return config, nil
-}
-
-func validUniqueJSON(raw []byte) bool {
-	if !json.Valid(raw) {
-		return false
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if err := consumeJSONValue(decoder, 0); err != nil {
-		return false
-	}
-	var extra any
-	return errors.Is(decoder.Decode(&extra), io.EOF)
-}
-
-func consumeJSONValue(decoder *json.Decoder, depth int) error {
-	if depth > 32 {
-		return engine.ErrInvalidTarget
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return engine.ErrInvalidTarget
-			}
-			if _, exists := seen[key]; exists {
-				return engine.ErrInvalidTarget
-			}
-			seen[key] = struct{}{}
-			if err := consumeJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim('}') {
-			return engine.ErrInvalidTarget
-		}
-	case '[':
-		for decoder.More() {
-			if err := consumeJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim(']') {
-			return engine.ErrInvalidTarget
-		}
-	default:
-		return engine.ErrInvalidTarget
-	}
-	return nil
 }
 
 func (operation *Operation) validateRouteConfig(config routeConfig) error {
@@ -339,6 +304,9 @@ func (operation *Operation) validateRouteConfig(config routeConfig) error {
 		if err != nil || id == uuid.Nil {
 			return engine.ErrInvalidTarget
 		}
+	}
+	if config.Form != nil && (config.Form.Validate() != nil || config.FileSetID == "" || operation.forms == nil) {
+		return engine.ErrInvalidTarget
 	}
 	allowed, err := normalizeAllowedContentTypes(config.AllowedContentTypes)
 	if err != nil {
@@ -395,6 +363,25 @@ func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, re
 	if request.Body == nil {
 		return engine.DeliveryResponse{}, engine.ErrInvalid
 	}
+	fieldID := ""
+	var formBinding *publicforms.BindingConfig
+	var formToken string
+	var reservation forms.VisitorUploadReservation
+	if config.Form == nil {
+		if request.Query != "" {
+			return engine.DeliveryResponse{}, engine.ErrInvalid
+		}
+	} else {
+		fieldID, err = parseFieldQuery(request.Query)
+		if err != nil {
+			return engine.DeliveryResponse{}, err
+		}
+		formBinding = config.Form
+		formToken = request.FormSessionTokens[formBinding.FormID]
+		if formToken == "" {
+			return publicforms.ErrorResponse(forms.ErrNotFound, formBinding.FormID, false)
+		}
+	}
 	loaderCtx, err := operation.authorizeRoute(ctx, config)
 	if err != nil {
 		if errors.Is(err, engine.ErrForbidden) || errors.Is(err, engine.ErrUnauthorized) {
@@ -408,8 +395,29 @@ func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, re
 	case <-ctx.Done():
 		return engine.DeliveryResponse{}, ctx.Err()
 	}
-	staged, size, checksum, err := operation.stage(ctx, request.Body, config.MaxBytes)
+	if formBinding != nil {
+		reservation, err = operation.forms.BeginVisitorUpload(ctx, forms.BeginVisitorUploadRequest{
+			PublicFormBinding: formBinding.Binding(), Token: formToken, FieldID: fieldID,
+			IdempotencyKey: scopedFormIdempotencyKey(request, config, fieldID), ContentType: strings.ToLower(mediaType),
+			DeclaredSize: request.ContentLength, RouteMaxBytes: config.MaxBytes,
+			RouteContentTypes: append([]string(nil), config.AllowedContentTypes...), AccessGroup: config.AccessGroup,
+		})
+		if err != nil {
+			return publicforms.ErrorResponse(err, formBinding.FormID, errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound))
+		}
+		if !validUUID(reservation.ID) || reservation.FieldID != fieldID || reservation.MaxBytes <= 0 || reservation.MaxBytes > config.MaxBytes {
+			return engine.DeliveryResponse{}, engine.ErrUnavailable
+		}
+	}
+	maxBytes := config.MaxBytes
+	if formBinding != nil {
+		maxBytes = reservation.MaxBytes
+	}
+	staged, size, checksum, err := operation.stage(ctx, request.Body, maxBytes)
 	if err != nil {
+		if formBinding != nil {
+			_ = operation.abortFormReservation(ctx, *formBinding, formToken, reservation.ID)
+		}
 		return engine.DeliveryResponse{}, err
 	}
 	defer func() {
@@ -417,12 +425,18 @@ func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, re
 		_ = os.Remove(staged.Name())
 	}()
 	if request.ContentLength >= 0 && size != request.ContentLength {
+		if formBinding != nil {
+			_ = operation.abortFormReservation(ctx, *formBinding, formToken, reservation.ID)
+		}
 		return engine.DeliveryResponse{}, engine.ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
 		return engine.DeliveryResponse{}, err
 	}
 
+	if formBinding != nil {
+		return operation.executeFormUpload(ctx, loaderCtx, staged, size, checksum, strings.ToLower(mediaType), config, *formBinding, formToken, fieldID, reservation)
+	}
 	key := scopedIdempotencyKey(request, config)
 	name := "public-upload-" + key[:32]
 	session, err := operation.loader.BeginUpload(loaderCtx, loader.BeginUploadInput{
@@ -457,6 +471,131 @@ func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, re
 		StatusCode: 201, ContentType: "application/json; charset=utf-8", ContentLength: int64(len(body)),
 		CacheControl: "no-store", Body: io.NopCloser(bytes.NewReader(body)),
 	}, nil
+}
+
+func parseFieldQuery(raw string) (string, error) {
+	if raw == "" || len(raw) > 256 {
+		return "", engine.ErrInvalid
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil || len(values) != 1 || len(values["field"]) != 1 {
+		return "", engine.ErrInvalid
+	}
+	field := values.Get("field")
+	if len(field) == 0 || len(field) > 64 || field[0] < 'a' || field[0] > 'z' {
+		return "", engine.ErrInvalid
+	}
+	for index := 1; index < len(field); index++ {
+		char := field[index]
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return "", engine.ErrInvalid
+		}
+	}
+	return field, nil
+}
+
+func (operation *Operation) abortFormReservation(ctx context.Context, binding publicforms.BindingConfig, token, reservationID string) error {
+	if operation.forms == nil {
+		return engine.ErrUnavailable
+	}
+	return operation.forms.AbortVisitorUpload(ctx, forms.AbortVisitorUploadRequest{
+		PublicFormBinding: binding.Binding(), Token: token, ReservationID: reservationID,
+	})
+}
+
+func (operation *Operation) executeFormUpload(ctx, loaderCtx context.Context, staged *os.File, size int64, checksum, mediaType string,
+	config routeConfig, binding publicforms.BindingConfig, token, fieldID string,
+	reservation forms.VisitorUploadReservation) (engine.DeliveryResponse, error) {
+	if reservation.Completed {
+		if !validUUID(reservation.FileID) || !validUUID(reservation.AttachmentID) || reservation.Size != size || reservation.SHA256 != checksum ||
+			reservation.ContentType != mediaType || reservation.AccessGroup != config.AccessGroup {
+			return publicforms.ErrorResponse(forms.ErrConflict, binding.FormID, false)
+		}
+		if err := operation.addToFileSet(loaderCtx, config.FileSetID, reservation.FileID); err != nil {
+			return engine.DeliveryResponse{}, err
+		}
+		return formUploadResponse(http.StatusOK, forms.VisitorAttachment{ID: reservation.AttachmentID, FieldID: fieldID})
+	}
+	key := "form-upload-" + reservation.ID
+	name := "form-upload-" + reservation.ID[:8]
+	session, err := operation.loader.BeginUpload(loaderCtx, loader.BeginUploadInput{
+		IdempotencyKey: key, Name: name, ContentType: mediaType, Size: size, SHA256: checksum,
+		Groups: []string{config.AccessGroup}, Attributes: map[string]string{"source": "router-form-upload", "form_id": binding.FormID, "field_id": fieldID},
+	})
+	if err != nil || !validUUID(session.ID) || session.PartSize != operation.partSize {
+		return engine.DeliveryResponse{}, mapLoaderError(err)
+	}
+	if session.State == "uploading" {
+		if err := operation.uploadParts(loaderCtx, staged, session, size); err != nil {
+			return engine.DeliveryResponse{}, err
+		}
+	} else if session.State != "committing" && session.State != "committed" {
+		return engine.DeliveryResponse{}, engine.ErrUnavailable
+	}
+	file, err := operation.loader.CommitUpload(loaderCtx, session.ID)
+	if err != nil || !validUUID(file.ID) {
+		return engine.DeliveryResponse{}, mapLoaderError(err)
+	}
+	attachment, err := operation.forms.CompleteVisitorUpload(ctx, forms.CompleteVisitorUploadRequest{
+		PublicFormBinding: binding.Binding(), Token: token, ReservationID: reservation.ID,
+		FileID: file.ID, SHA256: file.SHA256, ContentType: file.ContentType, Size: file.Size, AccessGroup: config.AccessGroup,
+	})
+	if err != nil {
+		if errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound) {
+			// A committed Loader file is not a usable attachment until Forms has
+			// recorded it. Expiry and missing reservation are definitive; a CAS
+			// conflict is ambiguous because another concurrent request may have
+			// completed the same reservation, so preserve the file for retry.
+			if cleanupErr := operation.deleteCommittedFile(loaderCtx, file.ID); cleanupErr != nil {
+				return engine.DeliveryResponse{}, engine.ErrUnavailable
+			}
+			_ = operation.abortFormReservation(ctx, binding, token, reservation.ID)
+		}
+		return publicforms.ErrorResponse(err, binding.FormID, errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound))
+	}
+	if attachment.ID == "" || attachment.FieldID != fieldID {
+		return engine.DeliveryResponse{}, engine.ErrUnavailable
+	}
+	if err := operation.addToFileSet(loaderCtx, config.FileSetID, file.ID); err != nil {
+		return engine.DeliveryResponse{}, err
+	}
+	return formUploadResponse(http.StatusCreated, attachment)
+}
+
+func (operation *Operation) deleteCommittedFile(ctx context.Context, fileID string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		file, err := operation.loader.StatFile(ctx, fileID)
+		if errors.Is(err, loader.ErrNotFound) {
+			return nil
+		}
+		if err != nil || file.ID != fileID || file.Revision < 1 {
+			return engine.ErrUnavailable
+		}
+		err = operation.loader.DeleteFile(ctx, fileID, file.Revision)
+		if err == nil || errors.Is(err, loader.ErrNotFound) {
+			return nil
+		}
+		if !errors.Is(err, loader.ErrConflict) {
+			return engine.ErrUnavailable
+		}
+	}
+	return engine.ErrUnavailable
+}
+
+func formUploadResponse(status int, attachment forms.VisitorAttachment) (engine.DeliveryResponse, error) {
+	body, err := json.Marshal(formResult{AttachmentID: attachment.ID, FieldID: attachment.FieldID})
+	if err != nil {
+		return engine.DeliveryResponse{}, engine.ErrUnavailable
+	}
+	return engine.DeliveryResponse{StatusCode: status, ContentType: "application/json; charset=utf-8", ContentLength: int64(len(body)),
+		CacheControl: "no-store", Body: io.NopCloser(bytes.NewReader(body))}, nil
+}
+
+func scopedFormIdempotencyKey(request engine.PublicOperationRequest, config routeConfig, fieldID string) string {
+	value := strings.Join([]string{scopedIdempotencyKey(request, config), config.Form.FormID, config.Form.SnapshotID,
+		fmt.Sprint(config.Form.SchemaVersion), fieldID}, "\x00")
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func (operation *Operation) stage(ctx context.Context, body io.Reader, maxBytes int64) (*os.File, int64, string, error) {

@@ -92,7 +92,7 @@ paths:
     get:
       operationId: listSnapshots
       parameters:
-        - { name: site_id, in: query, schema: { type: string, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$' } }
+        - { name: site_id, in: query, schema: { type: string, format: uuid } }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Limit' }
       responses:
@@ -117,22 +117,35 @@ paths:
               additionalProperties: false
               required: [site_id, name, expected_revision, expected_content_revision, payload]
               properties:
-                site_id: { type: string, minLength: 1, maxLength: 128 }
-                parent_id: { type: string, minLength: 1, maxLength: 128 }
-                name: { type: string, minLength: 1, maxLength: 160 }
+                site_id: { type: string, format: uuid }
+                parent_id: { type: string, format: uuid }
+                name: { type: string, minLength: 1, maxLength: 120 }
                 expected_revision: { type: integer, minimum: 0, description: Parent snapshot revision, or zero for a root snapshot. }
-                expected_content_revision: { type: integer, minimum: 0, description: Parent content revision, or zero for a root snapshot. }
+                expected_content_revision: { type: integer, minimum: 0, description: Current parent Content workspace revision; zero for an untouched workspace or root snapshot. }
                 payload: { $ref: '#/components/schemas/SnapshotPayload' }
+              allOf:
+                - if: { required: [parent_id] }
+                  then:
+                    properties:
+                      expected_revision: { type: integer, minimum: 1 }
+                      expected_content_revision: { type: integer, minimum: 0, description: Current Content workspace revision; an unmodified workspace has revision 0. }
+                - if: { not: { required: [parent_id] } }
+                  then:
+                    properties:
+                      expected_revision: { const: 0 }
+                      expected_content_revision: { const: 0 }
       responses:
-        '201': { description: Snapshot created from a complete immutable payload., headers: { Location: { schema: { type: string } }, ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
+        '201': { description: Root snapshot created and ready; no parent Content is copied., headers: { Location: { schema: { type: string } }, ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
+        '202': { description: Child snapshot created in provisioning state and its durable Content-copy workflow accepted. Poll the snapshot until it becomes ready; retry the same request with the same idempotency key if enqueueing is interrupted., headers: { Location: { schema: { type: string } }, ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /api/v2/admin/sites/snapshots/{snapshotID}:
     get:
       operationId: getSnapshot
-      parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string } }]
+      parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: Snapshot metadata and complete Website-owned payload., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
         '401': { $ref: '#/components/responses/Error' }
@@ -142,7 +155,7 @@ paths:
       operationId: deleteSnapshot
       x-csrf-required-for-cookie-auth: true
       parameters:
-        - { name: snapshotID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+        - { name: snapshotID, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: If-Match, in: header, required: true, schema: { type: string, pattern: '^"[1-9][0-9]*"$' } }
       responses:
         '204': { description: Snapshot deleted or children reparented after ownership checks. }
@@ -155,7 +168,7 @@ paths:
   /api/v2/admin/sites/snapshots/{snapshotID}/design-system:
     get:
       operationId: getSnapshotDesignSystem
-      parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }]
+      parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: Snapshot-scoped structured design-system values and declarations for the pinned feature versions., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/SnapshotDesignSystem' } } } }
         '401': { $ref: '#/components/responses/Error' }
@@ -206,21 +219,6 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/snapshots/{snapshotID}/features/{featureID}:
-    put:
-      operationId: pinFeatureVersion
-      x-csrf-required-for-cookie-auth: true
-      parameters:
-        - { name: snapshotID, in: path, required: true, schema: { type: string } }
-        - { name: featureID, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: true
-        content: { application/json: { schema: { type: object, additionalProperties: false, required: [version, expected_revision], properties: { version: { type: string }, expected_revision: { type: integer, minimum: 0 } } } } }
-      responses:
-        '200': { description: Feature pin updated., content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
-        '401': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
   /api/v2/admin/sites/builds:
     post:
       operationId: buildSnapshot
@@ -316,19 +314,19 @@ components:
       type: object
       required: [id, site_id, name, sequence, revision, feature_pins, state]
       properties:
-        id: { type: string }
-        site_id: { type: string }
-        parent_id: { type: string }
+        id: { type: string, format: uuid }
+        site_id: { type: string, format: uuid }
+        parent_id: { type: string, format: uuid }
         parent_name: { type: string }
         parent_sequence: { type: integer, minimum: 1 }
-        name: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
         sequence: { type: integer, minimum: 1 }
         revision: { type: integer, minimum: 1 }
         content_revision: { type: integer, minimum: 0 }
         digest: { type: string }
         created_at: { type: string, format: date-time }
         feature_pins: { type: object, additionalProperties: { type: string } }
-        state: { type: string }
+        state: { type: string, enum: [provisioning, ready, failed] }
         payload: { $ref: '#/components/schemas/SnapshotPayload' }
     SnapshotPayload:
       type: object

@@ -3,6 +3,7 @@ package router
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +13,12 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 	"github.com/google/uuid"
 )
 
@@ -31,6 +34,7 @@ type Config struct {
 	MaxPageSize      int
 	AllowedOrigins   []string
 	PublicOperations engine.PublicOperationCatalog
+	FormSessionCookieSecure bool
 }
 
 type Handler struct {
@@ -307,7 +311,7 @@ func validTargetMatch(match, targetKind string) bool {
 	if match != "exact" && match != "prefix" {
 		return false
 	}
-	return targetKind != engine.TargetCoreFile || match == "exact"
+	return (targetKind != engine.TargetCoreFile && targetKind != engine.TargetRegisteredOperation) || match == "exact"
 }
 
 func (h *Handler) validateTarget(ctx context.Context, target engine.RouteTarget) error {
@@ -362,6 +366,11 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	formTokens, cookieErr := h.formSessionTokens(r)
+	if cookieErr != nil {
+		writeError(w, http.StatusBadRequest, "invalid_form_session_cookie")
+		return
+	}
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (r.ContentLength > 0 || len(r.TransferEncoding) > 0) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
@@ -373,6 +382,7 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get("Idempotency-Key"), Body: r.Body,
 		IfNoneMatch: r.Header.Get("If-None-Match"), IfModifiedSince: r.Header.Get("If-Modified-Since"),
 		Range: r.Header.Get("Range"), IfRange: r.Header.Get("If-Range"),
+		FormSessionTokens: formTokens,
 	}
 	response, err := h.api.Deliver(r.Context(), request)
 	if err != nil {
@@ -385,6 +395,9 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 	if !validDeliveryResponse(response) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
+	}
+	if change := response.FormSessionCookie; change != nil {
+		h.setFormSessionCookie(w, *change)
 	}
 	cacheControl := response.CacheControl
 	if cacheControl == "" {
@@ -432,6 +445,56 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, response.Body)
 }
 
+func (h *Handler) formSessionTokens(r *http.Request) (map[string]string, error) {
+	if len(r.Header.Values("Cookie")) > 1 {
+		return nil, errors.New("multiple Cookie headers")
+	}
+	prefix := "zubrium_form_"
+	if h.cfg.FormSessionCookieSecure {
+		prefix = "__Host-zubrium-form-"
+	}
+	tokens := make(map[string]string)
+	for _, cookie := range r.Cookies() {
+		if !strings.HasPrefix(cookie.Name, prefix) {
+			continue
+		}
+		formID := strings.TrimPrefix(cookie.Name, prefix)
+		if !validID(formID) || !validFormSessionToken(cookie.Value) || len(tokens) >= 32 {
+			return nil, errors.New("invalid form session cookie")
+		}
+		if _, duplicate := tokens[formID]; duplicate {
+			return nil, errors.New("duplicate form session cookie")
+		}
+		tokens[formID] = cookie.Value
+	}
+	return tokens, nil
+}
+
+func validFormSessionToken(value string) bool {
+	if len(value) != 43 {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	return err == nil && len(decoded) == 32
+}
+
+func (h *Handler) setFormSessionCookie(w http.ResponseWriter, change engine.FormSessionCookieChange) {
+	name := "zubrium_form_" + change.FormID
+	if h.cfg.FormSessionCookieSecure {
+		name = "__Host-zubrium-form-" + change.FormID
+	}
+	cookie := &http.Cookie{Name: name, Path: "/", HttpOnly: true, Secure: h.cfg.FormSessionCookieSecure, SameSite: http.SameSiteStrictMode}
+	if change.Clear {
+		cookie.MaxAge = -1
+		cookie.Expires = time.Unix(1, 0).UTC()
+	} else {
+		cookie.Value = change.Token
+		cookie.Expires = change.ExpiresAt.UTC()
+		cookie.MaxAge = max(1, int(time.Until(change.ExpiresAt).Seconds()))
+	}
+	http.SetCookie(w, cookie)
+}
+
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (context.Context, bool) {
 	credential, err := adminhttpauth.Resolve(r)
 	if err != nil {
@@ -468,36 +531,36 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (context.
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) error {
-	if len(r.Header.Values("Content-Type")) != 1 {
+	err := httpjson.DecodeRequest(w, r, maxBytes, target)
+	switch {
+	case errors.Is(err, httpjson.ErrTooLarge):
+		return engine.ErrTooLarge
+	case errors.Is(err, httpjson.ErrInvalid):
 		return engine.ErrInvalid
+	default:
+		return err
 	}
-	mediaType, _, mediaErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if mediaErr != nil || mediaType != "application/json" {
-		return engine.ErrInvalid
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return engine.ErrTooLarge
-		}
-		return engine.ErrInvalid
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return engine.ErrInvalid
-	}
-	return nil
 }
 
 func expectedRevision(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	value := strings.TrimSpace(r.Header.Get("If-Match"))
-	value = strings.Trim(value, "\"")
-	revision, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || revision <= 0 {
+	values := r.Header.Values("If-Match")
+	if len(values) == 0 {
 		writeError(w, http.StatusPreconditionRequired, "revision_required")
+		return 0, false
+	}
+	if len(values) != 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return 0, false
+	}
+	value := values[0]
+	if len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return 0, false
+	}
+	raw := value[1 : len(value)-1]
+	revision, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || revision <= 0 || strconv.FormatInt(revision, 10) != raw {
+		writeError(w, http.StatusBadRequest, "invalid_request")
 		return 0, false
 	}
 	return revision, true
@@ -524,6 +587,18 @@ func validIdempotencyKey(value string) bool {
 func validDeliveryResponse(response engine.DeliveryResponse) bool {
 	if response.StatusCode < 200 || response.StatusCode > 599 || response.StatusCode == http.StatusSwitchingProtocols || response.ContentLength < -1 {
 		return false
+	}
+	if change := response.FormSessionCookie; change != nil {
+		if !validID(change.FormID) {
+			return false
+		}
+		if change.Clear {
+			if change.Token != "" {
+				return false
+			}
+		} else if !validFormSessionToken(change.Token) || change.ExpiresAt.IsZero() || !change.ExpiresAt.After(time.Now()) || change.ExpiresAt.After(time.Now().Add(24*time.Hour)) {
+			return false
+		}
 	}
 	if response.CacheControl == "" {
 		response.CacheControl = "no-store"

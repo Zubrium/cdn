@@ -25,6 +25,7 @@ export function SnapshotTreeItem({
   onCreateChild,
   onDelete,
 }: SnapshotTreeItemProps) {
+  const ready = snapshot.state === "ready";
   const parentLabel = snapshot.parentSnapshotId
     ? snapshot.parentSequence && snapshot.parentName
       ? `Родитель: #${snapshot.parentSequence} · ${snapshot.parentName}`
@@ -42,11 +43,14 @@ export function SnapshotTreeItem({
           </span>
           {assignedBranchNames.map((branch) => <Badge key={branch} variant="success">{branch}</Badge>)}
           {assignedBranchNames.length === 0 && <Badge variant="muted">Без ветки</Badge>}
+          {snapshot.state === "provisioning" && <Badge variant="warning">Готовится</Badge>}
+          {snapshot.state === "failed" && <Badge variant="destructive">Ошибка подготовки</Badge>}
         </summary>
         <div className="border-t border-border/70 px-4 pb-4 pt-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs text-muted-foreground">Инициатор: {snapshotCreatorLabel(snapshot)}</p>
+              {!ready && <p role="status" className="mt-1 text-xs text-warning">{snapshot.state === "provisioning" ? "Копируется содержимое родительского снапшота. Редактирование и публикация будут доступны после завершения." : "Подготовка не завершилась. Снапшот нельзя редактировать или публиковать."}</p>}
               {snapshot.creationSummary && (
                 <ul aria-label={`Состав изменений снапшота #${snapshot.sequence}`} className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                   {snapshotCreationLines(snapshot.creationSummary).map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
@@ -55,9 +59,10 @@ export function SnapshotTreeItem({
             </div>
           </div>
           <div role="group" aria-label={`Действия для снапшота #${snapshot.sequence}`} className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" disabled={!canCreate || busy} onClick={() => onCreateChild(snapshot.id)}>
+          <Button type="button" size="sm" variant="outline" disabled={!ready || !canCreate || busy} onClick={() => onCreateChild(snapshot.id)}>
             {busy ? "Создаём…" : "Создать потомка"}
           </Button>
+          {ready && <>
           <Button type="button" size="sm" variant="outline" asChild>
             <Link to={`/site/pages?snapshot=${snapshot.id}`}>Страницы</Link>
           </Button>
@@ -68,11 +73,12 @@ export function SnapshotTreeItem({
             <Link to={`/content?snapshot=${snapshot.id}`}>Контент</Link>
           </Button>
           <SitepackExportAction snapshot={snapshot} />
+          </>}
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            disabled={busy || protectedSnapshot}
+            disabled={busy || protectedSnapshot || snapshot.state === "provisioning"}
             title={protectedSnapshot ? "Используется веткой или нужен для отката" : undefined}
             onClick={() => onDelete(snapshot.id)}
           >

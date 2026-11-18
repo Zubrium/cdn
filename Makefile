@@ -1,7 +1,7 @@
 empty :=
 space := $(empty) $(empty)
 comma := ,
-MODULES := core engines/website engines/content engines/forms engines/loader engines/router workers/archive workers/media workers/prerender presentation/router presentation/admin/sites presentation/admin/files presentation/admin/main presentation/admin/ui presentation/admin/content presentation/admin/forms presentation/admin/router presentation/admin/coordinator cmd/zubrium
+MODULES := core engines/website engines/content engines/forms engines/loader engines/router workers/archive workers/media workers/prerender presentation/router presentation/httpjson presentation/admin/sites presentation/admin/files presentation/admin/main presentation/admin/ui presentation/admin/content presentation/admin/forms presentation/admin/router presentation/admin/coordinator cmd/zubrium
 PACKAGES := $(addsuffix /...,$(addprefix ./,$(MODULES)))
 COVER_PACKAGES := $(subst $(space),$(comma),$(strip $(PACKAGES)))
 

@@ -361,6 +361,25 @@ func TestResolveRejectsSharedRuntimeAndMigrationDatabaseUser(t *testing.T) {
 	}
 }
 
+func TestFormsBuildRequiresExplicitCSVExportBounds(t *testing.T) {
+	plan := platform.BuildPlan{Components: []string{"engine.forms", "admin.forms", "development.fixtures"}}
+	valid := Resolved{FormsAPI: FormsAPISettings{ExportMaxConcurrent: 2, ExportMaxRows: 100, ExportMaxBytes: 1 << 20}}
+	if err := valid.ValidateBuildPlan(plan); err != nil {
+		t.Fatalf("valid Forms export limits rejected: %v", err)
+	}
+	for _, forms := range []FormsAPISettings{
+		{},
+		{ExportMaxConcurrent: 2, ExportMaxRows: 10001, ExportMaxBytes: 1 << 20},
+		{ExportMaxConcurrent: 2, ExportMaxRows: 100, ExportMaxBytes: 1023},
+		{ExportMaxConcurrent: 2, ExportMaxRows: 100, ExportMaxBytes: 65 << 20},
+		{ExportMaxConcurrent: 17, ExportMaxRows: 100, ExportMaxBytes: 1 << 20},
+	} {
+		if err := (Resolved{FormsAPI: forms}).ValidateBuildPlan(plan); err == nil {
+			t.Fatalf("invalid Forms export limits were accepted: %+v", forms)
+		}
+	}
+}
+
 func validRuntimeConfig() Config {
 	groupWrite := platform.AccessLevelWrite
 	secureCookie := false

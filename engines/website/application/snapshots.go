@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	core "github.com/Zubrium/cdn/core/presentation"
@@ -66,6 +67,9 @@ func (s *Service) ListSnapshots(ctx context.Context, siteID, cursor string, limi
 		if err != nil {
 			return websiteapi.SnapshotPage{}, mapCoreError(err)
 		}
+		if len(keys) != len(records) {
+			return websiteapi.SnapshotPage{}, websiteapi.ErrUnavailable
+		}
 		for i, record := range records {
 			snapshot, err := decodeSnapshotRecord(site, keys[i], record)
 			if err != nil {
@@ -101,13 +105,68 @@ func (s *Service) GetSnapshot(ctx context.Context, snapshotID string) (websiteap
 	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
 		return websiteapi.Snapshot{}, err
 	}
+	snapshot, _, _, err := s.findSnapshot(ctx, snapshotID)
+	return snapshot, err
+}
+
+// MarkSnapshotReady finalizes one provisioned child using a revision CAS.
+// Replaying the command after it reached ready returns the same immutable value.
+func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expectedRevision int64) (websiteapi.Snapshot, error) {
+	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	if expectedRevision < 1 {
+		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
+	}
+	snapshot, key, record, err := s.findSnapshot(ctx, snapshotID)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	if snapshot.State == "ready" {
+		return snapshot, nil
+	}
+	if snapshot.State != "provisioning" || snapshot.ParentID == "" {
+		return websiteapi.Snapshot{}, websiteapi.ErrConflict
+	}
+	if record.Revision != expectedRevision {
+		return websiteapi.Snapshot{}, websiteapi.ErrConflict
+	}
+
+	snapshot.State = "ready"
+	snapshot.Revision = record.Revision + 1
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	var index map[string]json.RawMessage
+	if err := json.Unmarshal(record.IndexData, &index); err != nil || index == nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	index["state"] = json.RawMessage(`"ready"`)
+	index["revision"] = json.RawMessage(strconv.FormatInt(snapshot.Revision, 10))
+	indexPayload, err := json.Marshal(index)
+	if err != nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{
+		Key: key, ExpectedRevision: record.Revision,
+		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: record.PayloadVersion, IndexData: indexPayload},
+	}}); err != nil {
+		return websiteapi.Snapshot{}, mapCoreError(err)
+	}
+	return snapshot, nil
+}
+
+func (s *Service) findSnapshot(ctx context.Context, snapshotID string) (websiteapi.Snapshot, core.ModuleDataKey, core.ModuleDataRecord, error) {
 	if !snapshotIDPattern.MatchString(snapshotID) {
-		return websiteapi.Snapshot{}, websiteapi.ErrNotFound
+		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
 	}
 	var found *websiteapi.Snapshot
+	var foundKey core.ModuleDataKey
+	var foundRecord core.ModuleDataRecord
 	for _, siteID := range s.config.Sites {
 		if err := ctx.Err(); err != nil {
-			return websiteapi.Snapshot{}, err
+			return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, err
 		}
 		key := snapshotKey(siteID, snapshotID)
 		record, err := s.store.Get(ctx, key)
@@ -115,21 +174,23 @@ func (s *Service) GetSnapshot(ctx context.Context, snapshotID string) (websiteap
 			if errors.Is(err, core.ErrModuleDataNotFound) {
 				continue
 			}
-			return websiteapi.Snapshot{}, mapCoreError(err)
+			return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, mapCoreError(err)
 		}
 		snapshot, err := decodeSnapshotRecord(siteID, key, record)
 		if err != nil {
-			return websiteapi.Snapshot{}, err
+			return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, err
 		}
 		if found != nil {
-			return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+			return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
 		}
 		found = &snapshot
+		foundKey = key
+		foundRecord = record
 	}
 	if found == nil {
-		return websiteapi.Snapshot{}, websiteapi.ErrNotFound
+		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
 	}
-	return *found, nil
+	return *found, foundKey, foundRecord, nil
 }
 
 func (s *Service) GetSnapshotDesignSystem(ctx context.Context, snapshotID string) (websiteapi.SnapshotDesignSystem, error) {
@@ -169,6 +230,9 @@ func snapshotKey(siteID, snapshotID string) core.ModuleDataKey {
 func decodeSnapshotRecord(siteID string, key core.ModuleDataKey, record core.ModuleDataRecord) (websiteapi.Snapshot, error) {
 	var index struct {
 		RecordType string `json:"record_type"`
+		State      string `json:"state"`
+		Revision   int64  `json:"revision"`
+		ParentID   string `json:"parent_id"`
 	}
 	if json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "snapshot" || key.Namespace != snapshotsNamespace || key.ScopeType != "site" || key.ScopeID != siteID || record.PayloadVersion != 1 || record.Revision < 1 || !strings.HasPrefix(key.RecordKey, "snapshot/") {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
@@ -177,9 +241,9 @@ func decodeSnapshotRecord(siteID string, key core.ModuleDataKey, record core.Mod
 	if err := json.Unmarshal(record.Payload, &snapshot); err != nil {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
-	if key.RecordKey != "snapshot/"+snapshot.ID || snapshot.SiteID != siteID || !snapshotIDPattern.MatchString(snapshot.ID) ||
-		strings.TrimSpace(snapshot.Name) != snapshot.Name || len([]rune(snapshot.Name)) < 1 || len([]rune(snapshot.Name)) > 120 || strings.ContainsAny(snapshot.Name, "\r\n\t") ||
-		snapshot.Sequence < 1 || len(snapshot.State) < 1 || len(snapshot.State) > 32 || strings.ContainsAny(snapshot.State, "\r\n\t") || snapshot.Payload == nil || !validJSONObject(snapshot.Payload.Config) ||
+	if key.RecordKey != "snapshot/"+snapshot.ID || snapshot.SiteID != siteID || !snapshotIDPattern.MatchString(snapshot.ID) || index.State != snapshot.State || !validSnapshotState(snapshot.State) || index.Revision != record.Revision || index.ParentID != snapshot.ParentID ||
+		!validSnapshotName(snapshot.Name) ||
+		snapshot.Sequence < 1 || snapshot.Payload == nil || !validJSONObject(snapshot.Payload.Config) ||
 		!validJSONObject(snapshot.Payload.Metadata) || !validJSONObject(snapshot.Payload.DesignSystem) {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
@@ -188,6 +252,10 @@ func decodeSnapshotRecord(siteID string, key core.ModuleDataKey, record core.Mod
 	}
 	if snapshot.FeaturePins == nil {
 		snapshot.FeaturePins = map[string]string{}
+	}
+	derivedPins, err := featurePinsFromConfig(snapshot.Payload.Config)
+	if err != nil || !sameFeaturePins(snapshot.FeaturePins, derivedPins) {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
 	for featureID, version := range snapshot.FeaturePins {
 		if !identifierPattern.MatchString(featureID) || !featureVersionPattern.MatchString(version) {
@@ -201,9 +269,8 @@ func decodeSnapshotRecord(siteID string, key core.ModuleDataKey, record core.Mod
 	return snapshot, nil
 }
 
-func validJSONObject(raw json.RawMessage) bool {
-	trimmed := strings.TrimSpace(string(raw))
-	return len(trimmed) >= 2 && trimmed[0] == '{' && json.Valid(raw)
+func validSnapshotState(value string) bool {
+	return value == "provisioning" || value == "ready" || value == "failed"
 }
 
 func sortedStringIndex(values []string, target string) int {
@@ -229,7 +296,7 @@ func decodeSnapshotCursor(value string, sites []string) (snapshotPageCursor, err
 		return snapshotPageCursor{}, err
 	}
 	var cursor snapshotPageCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != snapshotPageCursorVersion || cursor.SiteIndex < 0 || cursor.SiteIndex >= len(sites) || cursor.SiteID != sites[cursor.SiteIndex] || len(cursor.After) > 256 || (cursor.After != "" && strings.ContainsRune(cursor.After, '\x00')) {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != snapshotPageCursorVersion || cursor.SiteIndex < 0 || cursor.SiteIndex >= len(sites) || cursor.SiteID != sites[cursor.SiteIndex] || len(cursor.After) > 256 || (cursor.After != "" && (!strings.HasPrefix(cursor.After, "snapshot/") || !snapshotIDPattern.MatchString(strings.TrimPrefix(cursor.After, "snapshot/")))) {
 		return snapshotPageCursor{}, fmt.Errorf("invalid cursor")
 	}
 	return cursor, nil

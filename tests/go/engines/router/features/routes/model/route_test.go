@@ -98,6 +98,10 @@ func TestNewRouteRequiresExactCoreFilePathAndExplicitOperationConfig(t *testing.
 	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "main", "EXAMPLE.COM", "/download.pdf", MatchPrefix, coreFile, now); err == nil {
 		t.Fatal("core-file route accepted prefix matching")
 	}
+	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125303", "main", "example.com", "/forms", MatchPrefix,
+		Target{Kind: TargetRegisteredOperation, OperationID: "public.form-session", OperationConfig: json.RawMessage(`{"enabled":true}`)}, now); err == nil {
+		t.Fatal("registered operation accepted prefix matching")
+	}
 	if err := (Target{Kind: TargetCoreFile, FileID: coreFile.FileID, FallbackEnabled: true}).Validate(); err == nil {
 		t.Fatal("core-file target accepted artifact fallback configuration")
 	}

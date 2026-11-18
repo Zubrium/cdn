@@ -80,7 +80,7 @@ describe("Router route settings", () => {
     expect(rendered).toContain("Публичные маршруты");
     expect(rendered).toContain("files.example.test/uploads/consent");
     expect(rendered).toContain("files.example.test/assets/app.js");
-    expect(rendered).toContain("Загрузка через Loader · POST");
+    expect(rendered).toContain("Загрузка файла формы через Loader · POST");
     expect(rendered).toContain("Группа uploads");
     expect(rendered).toContain("набор 01938f7a-68af-7c10-a51d-78b6ca125399");
     expect(rendered).not.toContain("Новый маршрут");

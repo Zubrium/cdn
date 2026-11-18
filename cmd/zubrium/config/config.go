@@ -118,6 +118,16 @@ type RouterAPI struct {
 	UploadMaxConcurrent       int      `yaml:"upload_max_concurrent"`
 	UploadMaxStagedBytes      int64    `yaml:"upload_max_staged_bytes"`
 	UploadAllowedContentTypes []string `yaml:"upload_allowed_content_types"`
+	FormSessionCookieSecure   *bool    `yaml:"form_session_cookie_secure"`
+}
+
+type FormsAPI struct {
+	FileServiceCredentialEnv   string `yaml:"file_service_credential_env"`
+	VisitorSessionTTL          string `yaml:"visitor_session_ttl"`
+	VisitorSessionCleanupEvery string `yaml:"visitor_session_cleanup_interval"`
+	ExportMaxConcurrent        int    `yaml:"export_max_concurrent"`
+	ExportMaxRows              int    `yaml:"export_max_rows"`
+	ExportMaxBytes             int64  `yaml:"export_max_bytes"`
 }
 
 type HTTP struct {
@@ -185,17 +195,28 @@ type AdminAPISettings struct {
 }
 
 type RouterAPISettings struct {
-	MaxJSONBytes              int64
-	DefaultPageSize           int
-	MaxPageSize               int
-	BranchID                  string
-	ServiceCredential         string
-	PublicListenAddress       string
-	UploadStagingDirectory    string
-	UploadMaxFileBytes        int64
-	UploadMaxConcurrent       int
-	UploadMaxStagedBytes      int64
-	UploadAllowedContentTypes []string
+	MaxJSONBytes               int64
+	DefaultPageSize            int
+	MaxPageSize                int
+	BranchID                   string
+	ServiceCredential          string
+	PublicListenAddress        string
+	UploadStagingDirectory     string
+	UploadMaxFileBytes         int64
+	UploadMaxConcurrent        int
+	UploadMaxStagedBytes       int64
+	UploadAllowedContentTypes  []string
+	FormSessionCookieSecure    bool
+	FormSessionCookieSecureSet bool
+}
+
+type FormsAPISettings struct {
+	FileServiceCredential      string
+	VisitorSessionTTL          time.Duration
+	VisitorSessionCleanupEvery time.Duration
+	ExportMaxConcurrent        int
+	ExportMaxRows              int
+	ExportMaxBytes             int64
 }
 
 type Resolved struct {
@@ -204,6 +225,7 @@ type Resolved struct {
 	FileAPI                fileapi.Config
 	AdminAPI               AdminAPISettings
 	RouterAPI              RouterAPISettings
+	FormsAPI               FormsAPISettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
@@ -246,6 +268,49 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 		if _, hasRouterEngine := selected["engine.router"]; !hasRouterEngine {
 			return errors.New("public Router requires engine.router")
 		}
+	}
+	if _, hasFormsAdminAPI := selected["admin.forms"]; hasFormsAdminAPI {
+		settings := r.FormsAPI
+		if settings.ExportMaxConcurrent < 1 || settings.ExportMaxConcurrent > 16 || settings.ExportMaxRows < 1 || settings.ExportMaxRows > 10000 ||
+			settings.ExportMaxBytes < 1024 || settings.ExportMaxBytes > 64<<20 {
+			return errors.New("Forms Admin API requires explicit CSV export concurrency, row and byte limits")
+		}
+	}
+	if _, hasFormsEngine := selected["engine.forms"]; hasFormsEngine {
+		settings := r.FormsAPI
+		if _, fixtures := selected["development.fixtures"]; !fixtures {
+			if settings.FileServiceCredential == "" || settings.VisitorSessionTTL < time.Minute || settings.VisitorSessionTTL > 24*time.Hour ||
+				settings.VisitorSessionCleanupEvery <= 0 || settings.VisitorSessionCleanupEvery > 24*time.Hour {
+				return errors.New("Forms Engine requires an explicit file service credential, visitor session TTL, and cleanup interval")
+			}
+			if _, configured := r.Core.AccessGroups["forms"]; !configured {
+				return errors.New("Forms Engine requires Core access group forms")
+			}
+		}
+	}
+	if _, hasPublicFormSession := selected["public.form-session"]; hasPublicFormSession {
+		if _, hasForms := selected["engine.forms"]; !hasForms {
+			return errors.New("public.form-session requires engine.forms")
+		}
+		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
+			return errors.New("public.form-session requires public.router")
+		}
+		if !r.RouterAPI.FormSessionCookieSecureSet {
+			return errors.New("public.form-session requires an explicit cookie security setting")
+		}
+	}
+	if _, hasPublicFormSubmit := selected["public.form-submit"]; hasPublicFormSubmit {
+		if _, hasForms := selected["engine.forms"]; !hasForms {
+			return errors.New("public.form-submit requires engine.forms")
+		}
+		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
+			return errors.New("public.form-submit requires public.router")
+		}
+	}
+	_, hasPublicFormSession := selected["public.form-session"]
+	_, hasPublicFormSubmit := selected["public.form-submit"]
+	if hasPublicFormSession != hasPublicFormSubmit {
+		return errors.New("public.form-session and public.form-submit must be selected together")
 	}
 	if _, hasPublicUpload := selected["public.form-upload"]; hasPublicUpload {
 		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
@@ -348,6 +413,18 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		(c.Coordinator.JobAccessGroup != "" && !platform.ValidAccessGroupKey(c.Coordinator.JobAccessGroup)) {
 		return Resolved{}, errors.New("invalid Coordinator configuration")
 	}
+	var formsSessionTTL, formsCleanupInterval time.Duration
+	if c.FormsAPI.VisitorSessionTTL != "" || c.FormsAPI.VisitorSessionCleanupEvery != "" {
+		var err error
+		formsSessionTTL, err = time.ParseDuration(c.FormsAPI.VisitorSessionTTL)
+		if err != nil || formsSessionTTL < time.Minute || formsSessionTTL > 24*time.Hour {
+			return Resolved{}, errors.New("invalid Forms visitor session TTL")
+		}
+		formsCleanupInterval, err = time.ParseDuration(c.FormsAPI.VisitorSessionCleanupEvery)
+		if err != nil || formsCleanupInterval <= 0 || formsCleanupInterval > 24*time.Hour {
+			return Resolved{}, errors.New("invalid Forms visitor session cleanup interval")
+		}
+	}
 	httpDurationValues := []string{c.HTTP.ReadHeaderTimeout, c.HTTP.ReadTimeout, c.HTTP.WriteTimeout, c.HTTP.IdleTimeout, c.HTTP.ShutdownTimeout}
 	var httpDurations [5]time.Duration
 	for i, value := range httpDurationValues {
@@ -412,6 +489,9 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if c.RouterAPI.ServiceCredentialEnv != "" && (!envName.MatchString(c.RouterAPI.ServiceCredentialEnv) || len(c.RouterAPI.ServiceCredentialEnv) > 128) {
 		return Resolved{}, errors.New("invalid Router service credential environment name")
 	}
+	if c.FormsAPI.FileServiceCredentialEnv != "" && (!envName.MatchString(c.FormsAPI.FileServiceCredentialEnv) || len(c.FormsAPI.FileServiceCredentialEnv) > 128) {
+		return Resolved{}, errors.New("invalid Forms file service credential environment name")
+	}
 	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
 		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
 	}
@@ -437,6 +517,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		routerServiceCredential = getenv(c.RouterAPI.ServiceCredentialEnv)
 		if routerServiceCredential == "" || strings.ContainsRune(routerServiceCredential, '\x00') {
 			return Resolved{}, errors.New("configured Router service credential is empty or invalid")
+		}
+	}
+	var formsFileServiceCredential string
+	if c.FormsAPI.FileServiceCredentialEnv != "" {
+		formsFileServiceCredential = getenv(c.FormsAPI.FileServiceCredentialEnv)
+		if formsFileServiceCredential == "" || strings.ContainsRune(formsFileServiceCredential, '\x00') {
+			return Resolved{}, errors.New("configured Forms file service credential is empty or invalid")
 		}
 	}
 	if c.Core.AccessGroups == nil {
@@ -484,7 +571,12 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			BranchID: c.RouterAPI.BranchID, ServiceCredential: routerServiceCredential, PublicListenAddress: c.RouterAPI.PublicListenAddress,
 			UploadStagingDirectory: c.RouterAPI.UploadStagingDirectory, UploadMaxFileBytes: c.RouterAPI.UploadMaxFileBytes,
 			UploadMaxConcurrent: c.RouterAPI.UploadMaxConcurrent, UploadMaxStagedBytes: c.RouterAPI.UploadMaxStagedBytes,
-			UploadAllowedContentTypes: append([]string(nil), c.RouterAPI.UploadAllowedContentTypes...)},
+			UploadAllowedContentTypes:  append([]string(nil), c.RouterAPI.UploadAllowedContentTypes...),
+			FormSessionCookieSecure:    c.RouterAPI.FormSessionCookieSecure != nil && *c.RouterAPI.FormSessionCookieSecure,
+			FormSessionCookieSecureSet: c.RouterAPI.FormSessionCookieSecure != nil},
+		FormsAPI: FormsAPISettings{FileServiceCredential: formsFileServiceCredential, VisitorSessionTTL: formsSessionTTL,
+			VisitorSessionCleanupEvery: formsCleanupInterval, ExportMaxConcurrent: c.FormsAPI.ExportMaxConcurrent,
+			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},
 		Coordinator: CoordinatorSettings{
 			JobAccessGroup:  c.Coordinator.JobAccessGroup,
 			JobsPageDefault: c.Coordinator.JobsPageDefault, JobsPageMaximum: c.Coordinator.JobsPageMaximum,
@@ -504,6 +596,7 @@ type Config struct {
 	FileAPI     FileAPI           `yaml:"file_api"`
 	AdminAPI    AdminAPI          `yaml:"admin_api"`
 	RouterAPI   RouterAPI         `yaml:"router_api"`
+	FormsAPI    FormsAPI          `yaml:"forms_api"`
 	HTTP        HTTP              `yaml:"http"`
 	Coordinator CoordinatorConfig `yaml:"coordinator"`
 }

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { validateEntryFields } from "@/domains/content-editor/EntryForm";
-import type { MediaRenditionContext, ModelContentFieldProjection, ModelContentWorkspace } from "@/types";
+import type { MediaRenditionContext, ModelContentPlacementField, ModelContentWorkspace } from "@/types";
 import type { ModelContentDraft } from "../model-content/types";
 import {
   duplicateUniqueModelValueIssues,
@@ -11,7 +11,7 @@ import {
   selectedModelRecord,
 } from "../../model-content-workspace";
 
-type DeclaredMediaPreparation = NonNullable<ModelContentFieldProjection["preparations"]>[number];
+type DeclaredMediaPreparation = NonNullable<ModelContentPlacementField["preparations"]>[number];
 
 /** Keep manifest-only picker metadata out of the rendition API context. */
 export function mediaRenditionContext(

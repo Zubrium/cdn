@@ -1,14 +1,15 @@
-package presentation
+package presentation_test
 
 import (
 	"testing"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/content"
+	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 )
 
 func TestContentDescriptorDeclaresItsOperationsAndData(t *testing.T) {
-	operations := (Descriptor{}).Operations()
+	operations := (contentapi.Descriptor{}).Operations()
 	if len(operations) == 0 {
 		t.Fatal("Content descriptor must expose its typed operation inventory")
 	}

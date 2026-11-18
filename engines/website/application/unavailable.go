@@ -45,30 +45,16 @@ func (s *Service) GetFeatureVersion(ctx context.Context, _, _ string) (websiteap
 	return websiteapi.FeatureVersion{}, websiteapi.ErrUnavailable
 }
 
-func (s *Service) CreateSnapshot(ctx context.Context, _ websiteapi.CreateSnapshotRequest) (websiteapi.Snapshot, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return websiteapi.Snapshot{}, err
-	}
-	return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
-}
-
-func (s *Service) DeleteSnapshot(ctx context.Context, _ websiteapi.DeleteSnapshotRequest) error {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return err
-	}
-	return websiteapi.ErrUnavailable
-}
-
-func (s *Service) PinFeatureVersion(ctx context.Context, _ websiteapi.PinFeatureVersionRequest) (websiteapi.Snapshot, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return websiteapi.Snapshot{}, err
-	}
-	return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
-}
-
-func (s *Service) BuildSnapshot(ctx context.Context, _ websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error) {
+func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
 		return websiteapi.BuildJob{}, err
+	}
+	snapshot, err := s.GetSnapshot(ctx, request.SnapshotID)
+	if err != nil {
+		return websiteapi.BuildJob{}, err
+	}
+	if snapshot.State != "ready" {
+		return websiteapi.BuildJob{}, websiteapi.ErrConflict
 	}
 	return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 }

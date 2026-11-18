@@ -24,7 +24,6 @@ const (
 
 	syntheticSiteID     = "7d4e83e2-bb0e-40d8-a8be-2d197e95a001"
 	syntheticSnapshotID = "7d4e83e2-bb0e-40d8-a8be-2d197e95a002"
-	syntheticModelID    = "7d4e83e2-bb0e-40d8-a8be-2d197e95a003"
 	syntheticRecordID   = "7d4e83e2-bb0e-40d8-a8be-2d197e95a004"
 	syntheticSchemaID   = "7d4e83e2-bb0e-40d8-a8be-2d197e95a005"
 	syntheticFormID     = "7d4e83e2-bb0e-40d8-a8be-2d197e95a006"
@@ -200,16 +199,16 @@ func (a *Website) GetSnapshotDesignSystem(ctx context.Context, id string) (websi
 	if err != nil {
 		return website.SnapshotDesignSystem{}, err
 	}
-	return website.SnapshotDesignSystem{Snapshot: snapshot, DesignSystem: json.RawMessage(`{"tokens":{}}`), FeatureTokens: json.RawMessage(`{}`)}, nil
+	return website.SnapshotDesignSystem{Snapshot: snapshot, DesignSystem: json.RawMessage(`{"tokens":{}}`), FeatureTokens: json.RawMessage(`[]`)}, nil
 }
 func (a *Website) CreateSnapshot(ctx context.Context, _ website.CreateSnapshotRequest) (website.Snapshot, error) {
 	return website.Snapshot{}, a.writeUnavailable(ctx)
 }
+func (a *Website) MarkSnapshotReady(ctx context.Context, _ string, _ int64) (website.Snapshot, error) {
+	return website.Snapshot{}, a.writeUnavailable(ctx)
+}
 func (a *Website) DeleteSnapshot(ctx context.Context, _ website.DeleteSnapshotRequest) error {
 	return a.writeUnavailable(ctx)
-}
-func (a *Website) PinFeatureVersion(ctx context.Context, _ website.PinFeatureVersionRequest) (website.Snapshot, error) {
-	return website.Snapshot{}, a.writeUnavailable(ctx)
 }
 func (a *Website) ListBranches(ctx context.Context) (website.BranchPage, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
@@ -245,53 +244,45 @@ func (a *Website) GetMediaJob(ctx context.Context, _ string) (website.MediaJob, 
 	return website.MediaJob{}, website.ErrNotFound
 }
 
-func (a *Content) ListModels(ctx context.Context, _ string, _ string, _ int) (content.ModelPage, error) {
+func (a *Content) GetWorkspace(ctx context.Context, snapshotID string) (content.Workspace, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return content.ModelPage{}, err
+		return content.Workspace{}, err
 	}
-	return content.ModelPage{Items: []content.Model{demoModel()}}, nil
+	if snapshotID != syntheticSnapshotID {
+		return content.Workspace{}, content.ErrNotFound
+	}
+	return demoWorkspace(), nil
 }
-func (a *Content) GetModel(ctx context.Context, snapshotID, modelID string) (content.Model, error) {
+func (a *Content) SaveWorkspaceDraft(ctx context.Context, _ content.SaveWorkspaceDraftRequest) (content.Workspace, error) {
+	return content.Workspace{}, a.writeUnavailable(ctx)
+}
+func (a *Content) PublishWorkspace(ctx context.Context, _ content.PublishWorkspaceRequest) (content.Workspace, error) {
+	return content.Workspace{}, a.writeUnavailable(ctx)
+}
+func (a *Content) ListHistory(ctx context.Context, snapshotID, _ string, _ int) (content.HistoryPage, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return content.Model{}, err
+		return content.HistoryPage{}, err
 	}
-	if snapshotID != syntheticSnapshotID || modelID != syntheticModelID {
-		return content.Model{}, content.ErrNotFound
+	if snapshotID != syntheticSnapshotID {
+		return content.HistoryPage{}, content.ErrNotFound
 	}
-	return demoModel(), nil
+	return content.HistoryPage{Items: []content.HistoryItem{}}, nil
 }
-func (a *Content) SaveModel(ctx context.Context, _ content.SaveModelRequest) (content.Model, error) {
-	return content.Model{}, a.writeUnavailable(ctx)
+func (a *Content) RestoreHistory(ctx context.Context, _ content.RestoreHistoryRequest) (content.Workspace, error) {
+	return content.Workspace{}, a.writeUnavailable(ctx)
 }
-func (a *Content) ListRecords(ctx context.Context, request content.ListRecordsRequest) (content.RecordPage, error) {
+func (a *Content) ReadPublishedContent(ctx context.Context, snapshotID string) (content.PublishedContent, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return content.RecordPage{}, err
+		return content.PublishedContent{}, err
 	}
-	if request.SnapshotID != syntheticSnapshotID || request.ModelID != syntheticModelID {
-		return content.RecordPage{Items: []content.Record{}}, nil
+	if snapshotID != syntheticSnapshotID {
+		return content.PublishedContent{}, content.ErrNotFound
 	}
-	return content.RecordPage{Items: []content.Record{demoRecord()}}, nil
+	workspace := demoWorkspace()
+	return content.PublishedContent{SnapshotID: snapshotID, ContentRevision: workspace.PublishedRevision, Records: workspace.Records, Selections: workspace.Selections}, nil
 }
-func (a *Content) SaveRecordDraft(ctx context.Context, _ content.SaveRecordRequest) (content.Record, error) {
-	return content.Record{}, a.writeUnavailable(ctx)
-}
-func (a *Content) PublishRecord(ctx context.Context, _ content.PublishRecordRequest) (content.Record, error) {
-	return content.Record{}, a.writeUnavailable(ctx)
-}
-func (a *Content) RestoreRecord(ctx context.Context, _ content.RestoreRecordRequest) (content.Record, error) {
-	return content.Record{}, a.writeUnavailable(ctx)
-}
-func (a *Content) GetBindings(ctx context.Context, snapshotID, featureID string) (content.Bindings, error) {
-	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return content.Bindings{}, err
-	}
-	if snapshotID != syntheticSnapshotID || featureID != syntheticFeatureID {
-		return content.Bindings{}, content.ErrNotFound
-	}
-	return content.Bindings{SnapshotID: snapshotID, FeatureID: featureID, Values: map[string]any{}, Revision: 1}, nil
-}
-func (a *Content) SaveBindings(ctx context.Context, _ content.SaveBindingsRequest) (content.Bindings, error) {
-	return content.Bindings{}, a.writeUnavailable(ctx)
+func (a *Content) CopySnapshotContent(ctx context.Context, _ content.CopySnapshotContentRequest) (content.CopySnapshotContentResult, error) {
+	return content.CopySnapshotContentResult{}, a.writeUnavailable(ctx)
 }
 
 func (a *Forms) ListSchemas(ctx context.Context, _ string, _ string, _ int) (forms.SchemaPage, error) {
@@ -336,6 +327,33 @@ func (a *Forms) SetSubmissionStatus(ctx context.Context, _ forms.SetSubmissionSt
 func (a *Forms) DeleteSubmission(ctx context.Context, _ forms.DeleteSubmissionRequest) error {
 	return a.writeUnavailable(ctx)
 }
+func (*Forms) ValidatePublicForm(context.Context, forms.PublicFormBinding) error {
+	return forms.ErrUnavailable
+}
+func (*Forms) ValidatePublicUploadRoute(context.Context, forms.PublicUploadRouteBinding) error {
+	return forms.ErrUnavailable
+}
+func (*Forms) CreateVisitorSession(context.Context, forms.CreateVisitorSessionRequest) (forms.VisitorSessionCredential, error) {
+	return forms.VisitorSessionCredential{}, forms.ErrUnavailable
+}
+func (*Forms) GetVisitorSession(context.Context, forms.GetVisitorSessionRequest) (forms.VisitorSession, error) {
+	return forms.VisitorSession{}, forms.ErrUnavailable
+}
+func (*Forms) BeginVisitorUpload(context.Context, forms.BeginVisitorUploadRequest) (forms.VisitorUploadReservation, error) {
+	return forms.VisitorUploadReservation{}, forms.ErrUnavailable
+}
+func (*Forms) CompleteVisitorUpload(context.Context, forms.CompleteVisitorUploadRequest) (forms.VisitorAttachment, error) {
+	return forms.VisitorAttachment{}, forms.ErrUnavailable
+}
+func (*Forms) AbortVisitorUpload(context.Context, forms.AbortVisitorUploadRequest) error {
+	return forms.ErrUnavailable
+}
+func (*Forms) SubmitVisitorResponse(context.Context, forms.SubmitVisitorResponseRequest) (forms.VisitorSubmissionReceipt, error) {
+	return forms.VisitorSubmissionReceipt{}, forms.ErrUnavailable
+}
+func (*Forms) CancelVisitorSession(context.Context, forms.CancelVisitorSessionRequest) error {
+	return forms.ErrUnavailable
+}
 
 func (a *Website) writeUnavailable(ctx context.Context) error {
 	if err := a.require(ctx, core.AccessLevelWrite); err != nil {
@@ -376,17 +394,15 @@ var demoTime = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 
 func demoSnapshot() website.Snapshot {
 	return website.Snapshot{ID: syntheticSnapshotID, SiteID: syntheticSiteID, Name: "Synthetic demo", Sequence: 1, Revision: 1,
-		ContentRevision: 1, CreatedAt: demoTime, FeaturePins: map[string]string{syntheticFeatureID: syntheticVersion}, State: "draft",
-		Payload: &website.SnapshotPayload{Config: json.RawMessage(`{"pages":[],"routes":[]}`), Metadata: json.RawMessage(`{"synthetic":true}`), DesignSystem: json.RawMessage(`{"tokens":{}}`)}}
+		ContentRevision: 1, CreatedAt: demoTime, FeaturePins: map[string]string{syntheticFeatureID: syntheticVersion}, State: "ready",
+		Payload: &website.SnapshotPayload{Config: json.RawMessage(`{"formatVersion":2,"dataModel":{"formatVersion":1,"entities":[{"id":"7d4e83e2-bb0e-40d8-a8be-2d197e95a008","key":"announcement","name":"Announcement","cardinality":"many","fields":[{"id":"7d4e83e2-bb0e-40d8-a8be-2d197e95a009","key":"title","name":"Title","type":"text"}]}]},"pages":[],"routeTree":{"id":"demo","type":"site","children":[]}}`), Metadata: json.RawMessage(`{"synthetic":true}`), DesignSystem: json.RawMessage(`{"tokens":{}}`)}}
 }
 
-func demoModel() content.Model {
-	return content.Model{ID: syntheticModelID, Key: "announcement", Name: "Announcement", Cardinality: "many", Revision: 1,
-		Fields: []content.ModelField{{ID: "7d4e83e2-bb0e-40d8-a8be-2d197e95a009", Key: "title", Name: "Title", Type: "text", Required: true}}}
-}
-
-func demoRecord() content.Record {
-	return content.Record{ID: syntheticRecordID, ModelID: syntheticModelID, Values: map[string]any{"title": "Synthetic content record"}, Revision: 1, PublishedRevision: 1, UpdatedAt: demoTime}
+func demoWorkspace() content.Workspace {
+	model := json.RawMessage(`{"formatVersion":1,"entities":[{"id":"7d4e83e2-bb0e-40d8-a8be-2d197e95a008","key":"announcement","name":"Announcement","cardinality":"many","fields":[{"id":"7d4e83e2-bb0e-40d8-a8be-2d197e95a009","key":"title","name":"Title","type":"text"}]}]}`)
+	return content.Workspace{SnapshotID: syntheticSnapshotID, DataModel: model, Revision: 1, PublishedRevision: 1,
+		Records:    []content.Record{{ID: syntheticRecordID, EntityID: "7d4e83e2-bb0e-40d8-a8be-2d197e95a008", SortOrder: 0, Values: map[string]any{"title": "Synthetic content record"}}},
+		Selections: []content.Selection{}, Placements: []content.Placement{}}
 }
 
 func demoSchema() forms.Schema {

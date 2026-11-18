@@ -107,6 +107,10 @@ router_api:
   upload_max_concurrent: 1
   upload_max_staged_bytes: 524288
   upload_allowed_content_types: [image/png]
+forms_api:
+  export_max_concurrent: 2
+  export_max_rows: 10000
+  export_max_bytes: 33554432
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s

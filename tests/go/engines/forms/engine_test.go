@@ -40,29 +40,29 @@ func TestSaveSchemaUsesGeneratedIDsAndIdempotentUniqueKey(t *testing.T) {
 	if err != nil || retried.ID != created.ID || retried.Revision != created.Revision {
 		t.Fatalf("identical create retry was not idempotent: got %#v, err %v", retried, err)
 	}
-	if len(data.records) != 1 {
-		t.Fatalf("schema should be the only persisted record, got %d", len(data.records))
+	if len(data.records) != 2 {
+		t.Fatalf("schema and unique-key index should be persisted atomically, got %d records", len(data.records))
 	}
 }
 
 func TestSaveSchemaRejectsDuplicateKeyAndUsesCASOnUpdate(t *testing.T) {
-	engine, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	engine, data, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	ctx := authenticatedContext(t, engine)
 	created, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": "string"},
+		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "text", "required": false}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": "text"},
+		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}},
 	}); !errors.Is(err, formapi.ErrConflict) {
 		t.Fatalf("duplicate key with different schema = %v, want conflict", err)
 	}
 
 	updated, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
 		SnapshotID: "snapshot-a", SchemaID: created.ID, Key: "contact-v2",
-		Fields: map[string]any{"email": map[string]any{"type": "email"}}, ExpectedRevision: created.Revision,
+		Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}}, ExpectedRevision: created.Revision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,15 +70,18 @@ func TestSaveSchemaRejectsDuplicateKeyAndUsesCASOnUpdate(t *testing.T) {
 	if updated.ID != created.ID || updated.Key != "contact-v2" || updated.Version != 2 || updated.Revision != 2 {
 		t.Fatalf("updated schema did not preserve identity and increment version/revision: %#v", updated)
 	}
+	if len(data.records) != 2 {
+		t.Fatalf("renaming should atomically retain one schema and one key index, got %d records", len(data.records))
+	}
 	if _, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
 		SnapshotID: "snapshot-a", SchemaID: created.ID, Key: "contact-v2",
-		Fields: map[string]any{"email": "stale"}, ExpectedRevision: created.Revision,
+		Fields: map[string]any{"email": map[string]any{"type": "text", "required": false}}, ExpectedRevision: created.Revision,
 	}); !errors.Is(err, formapi.ErrConflict) {
 		t.Fatalf("stale schema write = %v, want conflict", err)
 	}
 
 	oldKey, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": "new"},
+		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "text", "required": false, "max_length": 128}},
 	})
 	if err != nil || oldKey.ID == created.ID {
 		t.Fatalf("renaming should atomically release the old key: new=%#v err=%v", oldKey, err)
@@ -113,7 +116,7 @@ func TestListSchemasUsesOpaqueCursorAndRejectsInvalidCursor(t *testing.T) {
 	engine, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	ctx := authenticatedContext(t, engine)
 	for _, key := range []string{"alpha", "beta"} {
-		if _, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{SnapshotID: "snapshot-a", Key: key, Fields: map[string]any{}}); err != nil {
+		if _, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{SnapshotID: "snapshot-a", Key: key, Fields: map[string]any{"message": map[string]any{"type": "text", "required": false}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -127,6 +130,28 @@ func TestListSchemasUsesOpaqueCursorAndRejectsInvalidCursor(t *testing.T) {
 	}
 	if _, err := engine.ListSchemas(ctx, "snapshot-a", "!not-a-cursor", 1); !errors.Is(err, formapi.ErrInvalid) {
 		t.Fatalf("invalid cursor = %v, want invalid request", err)
+	}
+}
+
+func TestGetSchemaAndSubmissionReturnPersistedRevisions(t *testing.T) {
+	engine, data, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	ctx := authenticatedContext(t, engine)
+	saved, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
+		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSchema, err := engine.GetSchema(ctx, "snapshot-a", saved.ID)
+	if err != nil || loadedSchema.Revision != saved.Revision {
+		t.Fatalf("GetSchema = %#v, %v", loadedSchema, err)
+	}
+	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
+		ID: "entry-a", FormID: saved.ID, SchemaVersion: 1, State: "new", Values: map[string]any{"email": "ada@example.test"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	})
+	loadedSubmission, err := engine.GetSubmission(ctx, "snapshot-a", "entry-a")
+	if err != nil || loadedSubmission.Revision != 1 || loadedSubmission.Values["email"] != "ada@example.test" {
+		t.Fatalf("GetSubmission = %#v, %v", loadedSubmission, err)
 	}
 }
 
@@ -145,13 +170,13 @@ func TestAuthenticatedContextCannotBeReusedAcrossEngines(t *testing.T) {
 func TestListSubmissionsAppliesFormAndStateSelectors(t *testing.T) {
 	engine, data, _, _ := newEngine(t, core.AccessLevelRead, nil)
 	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
-		ID: "entry-a", FormID: "form-a", State: "new", Values: map[string]any{"name": "Ada"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		ID: "entry-a", FormID: "form-a", SchemaVersion: 1, State: "new", Values: map[string]any{"name": "Ada"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	})
 	seedSubmission(t, data, "snapshot-a", "entry-b", submissionpkg.PayloadV1{
-		ID: "entry-b", FormID: "form-a", State: "archived", Values: map[string]any{"name": "Grace"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
+		ID: "entry-b", FormID: "form-a", SchemaVersion: 1, State: "archived", Values: map[string]any{"name": "Grace"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC),
 	})
 	seedSubmission(t, data, "snapshot-a", "entry-c", submissionpkg.PayloadV1{
-		ID: "entry-c", FormID: "form-b", State: "new", Values: map[string]any{"name": "Lin"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 7, 0, time.UTC),
+		ID: "entry-c", FormID: "form-b", SchemaVersion: 1, State: "new", Values: map[string]any{"name": "Lin"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 7, 0, time.UTC),
 	})
 
 	page, err := engine.ListSubmissions(authenticatedContext(t, engine), formapi.ListSubmissionsRequest{
@@ -168,7 +193,7 @@ func TestListSubmissionsAppliesFormAndStateSelectors(t *testing.T) {
 func TestSubmissionStatusUpdateUsesCAS(t *testing.T) {
 	engine, data, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
-		ID: "entry-a", FormID: "form-a", State: "new", Values: map[string]any{"name": "Ada"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		ID: "entry-a", FormID: "form-a", SchemaVersion: 1, State: "new", Values: map[string]any{"name": "Ada"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	})
 
 	updated, err := engine.SetSubmissionStatus(authenticatedContext(t, engine), formapi.SetSubmissionStatusRequest{
@@ -188,7 +213,7 @@ func TestDeleteSubmissionStaleRevisionCannotDeleteAttachments(t *testing.T) {
 	files := &fakeFiles{files: map[string]core.File{"file-a": {ID: "file-a", Revision: 1}}, failOnce: map[string]error{}}
 	engine, data, _, _ := newEngine(t, core.AccessLevelWrite, files)
 	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
-		ID: "entry-a", FormID: "form-a", State: "new", Values: map[string]any{}, AttachmentIDs: []string{"file-a"},
+		ID: "entry-a", FormID: "form-a", SchemaVersion: 1, State: "new", Values: map[string]any{}, AttachmentIDs: []string{"file-a"},
 	})
 	err := engine.DeleteSubmission(authenticatedContext(t, engine), formapi.DeleteSubmissionRequest{
 		SnapshotID: "snapshot-a", SubmissionID: "entry-a", ExpectedRevision: 42,
@@ -211,7 +236,7 @@ func TestDeleteSubmissionResumesAfterPartialAttachmentCleanup(t *testing.T) {
 	}, failOnce: map[string]error{"file-b": errors.New("storage unavailable")}}
 	engine, data, _, _ := newEngine(t, core.AccessLevelWrite, files)
 	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
-		ID: "entry-a", FormID: "form-a", State: "new", Values: map[string]any{"name": "Ada"},
+		ID: "entry-a", FormID: "form-a", SchemaVersion: 1, State: "new", Values: map[string]any{"name": "Ada"},
 		AttachmentIDs: []string{"file-a", "file-b"}, CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	})
 
@@ -254,11 +279,12 @@ func newEngine(t *testing.T, level core.AccessLevel, files *fakeFiles) (*forms.E
 		files = &fakeFiles{files: map[string]core.File{}, failOnce: map[string]error{}}
 	}
 	engine, err := forms.New(forms.Dependencies{
-		Identity:      fakeIdentity{},
-		Sessions:      fakeSessions{},
-		Authorization: authorization,
-		Files:         files,
-		Data:          data,
+		Identity:          fakeIdentity{},
+		Sessions:          fakeSessions{},
+		Authorization:     authorization,
+		Files:             files,
+		Data:              data,
+		VisitorSessionTTL: 30 * time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +298,7 @@ func seedSubmission(t *testing.T, data *fakeDataStore, snapshotID, id string, pa
 	if err != nil {
 		t.Fatal(err)
 	}
-	index, err := json.Marshal(map[string]any{"form_id": payload.FormID, "state": payload.State, "created_at": payload.CreatedAt.Format(time.RFC3339Nano)})
+	index, err := json.Marshal(map[string]any{"form_id": payload.FormID, "schema_version": payload.SchemaVersion, "state": payload.State, "created_at": payload.CreatedAt.Format(time.RFC3339Nano)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +398,7 @@ func (data *fakeDataStore) Get(_ context.Context, key core.ModuleDataKey) (core.
 	data.mu.Lock()
 	defer data.mu.Unlock()
 	record, ok := data.records[key]
-	if !ok {
+	if !ok || record.ExpiresAt != nil && !record.ExpiresAt.After(time.Now()) {
 		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
 	}
 	return cloneRecord(record), nil
@@ -433,8 +459,13 @@ func (data *fakeDataStore) Batch(_ context.Context, mutations []core.ModuleDataM
 			revision = current.Revision + 1
 			created = current.CreatedAt
 		}
-		data.records[mutation.Key] = core.ModuleDataRecord{Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion,
+		record := core.ModuleDataRecord{Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion,
 			IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: revision, CreatedAt: created, UpdatedAt: now}
+		if mutation.Value.TTL > 0 {
+			expiresAt := now.Add(mutation.Value.TTL)
+			record.ExpiresAt = &expiresAt
+		}
+		data.records[mutation.Key] = record
 	}
 	return nil
 }
@@ -444,7 +475,7 @@ func (data *fakeDataStore) List(_ context.Context, namespace, scopeType, scopeID
 	defer data.mu.Unlock()
 	keys := make([]core.ModuleDataKey, 0)
 	for key, record := range data.records {
-		if key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matchesSelectors(record.IndexData, selectors) {
+		if record.ExpiresAt != nil && !record.ExpiresAt.After(time.Now()) || key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matchesSelectors(record.IndexData, selectors) {
 			continue
 		}
 		keys = append(keys, key)
@@ -460,6 +491,35 @@ func (data *fakeDataStore) List(_ context.Context, namespace, scopeType, scopeID
 	rows := make([]core.ModuleDataRecord, len(keys))
 	for i, key := range keys {
 		rows[i] = cloneRecord(data.records[key])
+	}
+	next := ""
+	if more {
+		next = keys[len(keys)-1].RecordKey
+	}
+	return keys, rows, next, nil
+}
+
+func (data *fakeDataStore) ListExpired(_ context.Context, namespace, scopeType, scopeID, after string, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
+	data.mu.Lock()
+	defer data.mu.Unlock()
+	keys := make([]core.ModuleDataKey, 0)
+	for key, record := range data.records {
+		if record.ExpiresAt == nil || record.ExpiresAt.After(time.Now()) || key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].RecordKey < keys[j].RecordKey })
+	if limit < 1 || limit > data.MaxPageSize() {
+		return nil, nil, "", core.ErrModuleDataLimitExceeded
+	}
+	more := len(keys) > limit
+	if more {
+		keys = keys[:limit]
+	}
+	rows := make([]core.ModuleDataRecord, len(keys))
+	for index, key := range keys {
+		rows[index] = cloneRecord(data.records[key])
 	}
 	next := ""
 	if more {

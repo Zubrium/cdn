@@ -5,9 +5,6 @@ import type {
   AccessGroup,
   CoordinatorJob,
   CoordinatorJobPermissions,
-  ContentBindings,
-  ContentModel,
-  ContentRecord,
   CreatedPrincipal,
   Credential,
   GroupLevel,
@@ -15,6 +12,7 @@ import type {
   FeatureBuild,
   FeatureManifest,
   FormSchema,
+  FormFieldDefinition,
   FormSubmission,
   ListResponse,
   Media,
@@ -35,9 +33,14 @@ import type {
   SiteMetadata,
   SiteSnapshot,
   ModelContentHistoryResponse,
+  ModelContentRecord,
   ModelContentRecordInput,
   ModelContentSelection,
   ModelContentWorkspace,
+  ModelContentHistoryItem,
+  ModelContentPlacement,
+  DataModelFieldType,
+  DataModel,
   WebsiteFeatureImport,
   WebsiteFeatureVersion,
   WebsiteFeatureVersionPage,
@@ -52,6 +55,7 @@ import type {
 } from "./types";
 
 import type { SnapshotDesignWorkspace, SnapshotFeatureToken, StructuredDesignSystem } from "@/domains/design-system/types";
+import { hasControlCharacters, isActiveFormContentType } from "@/domains/forms/schema-draft";
 
 export const UNAUTHORIZED_EVENT = "we:unauthorized";
 const syntheticDataModeListeners = new Set<() => void>();
@@ -100,10 +104,6 @@ function containsCodePoint(value: string, predicate: (codePoint: number) => bool
     if (codePoint !== undefined && predicate(codePoint)) return true;
   }
   return false;
-}
-
-function hasControlCharacters(value: string): boolean {
-  return containsCodePoint(value, (codePoint) => codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f));
 }
 
 function hasAsciiControlOrSpace(value: string): boolean {
@@ -196,9 +196,7 @@ function validateRouterPublicOperation(value: unknown): RouterPublicOperation {
     new Set(value.allowed_content_types.map((type) => typeof type === "string" ? type.toLowerCase() : "")).size !== value.allowed_content_types.length) {
     throw invalidRouterOperation();
   }
-  if (value.id === "public.form-upload" && value.allowed_content_types.some((type) => typeof type === "string" &&
-    ["application/ecmascript", "application/javascript", "application/x-httpd-php", "application/xhtml+xml", "application/xml",
-      "image/svg+xml", "text/css", "text/html", "text/javascript", "text/xml"].includes(type.toLowerCase()))) {
+  if (value.id === "public.form-upload" && value.allowed_content_types.some((type) => typeof type === "string" && isActiveFormContentType(type))) {
     throw invalidRouterOperation();
   }
   return value as unknown as RouterPublicOperation;
@@ -206,6 +204,67 @@ function validateRouterPublicOperation(value: unknown): RouterPublicOperation {
 
 function invalidFileSet(): ApiError {
   return new ApiError(502, "invalid_response", "Сервер вернул некорректный набор файлов");
+}
+
+function invalidFormSchema(): ApiError {
+  return new ApiError(502, "invalid_response", "Сервер вернул некорректную схему формы");
+}
+
+function validFormFieldDefinition(value: unknown): value is FormFieldDefinition {
+  if (!isRecord(value) || typeof value.required !== "boolean" || typeof value.type !== "string") return false;
+  if (value.type === "text" || value.type === "email") {
+    return hasOnlyKeys(value, ["type", "required", "min_length", "max_length", "pattern"]) &&
+      (value.min_length === undefined || (Number.isSafeInteger(value.min_length) && Number(value.min_length) >= 0 && Number(value.min_length) <= 1 << 20)) &&
+      (value.max_length === undefined || (Number.isSafeInteger(value.max_length) && Number(value.max_length) >= 1 && Number(value.max_length) <= 1 << 20)) &&
+      !(value.min_length !== undefined && value.max_length !== undefined && Number(value.min_length) > Number(value.max_length)) &&
+      (value.pattern === undefined || (typeof value.pattern === "string" && value.pattern.length <= 256));
+  }
+  if (value.type === "number") {
+    return hasOnlyKeys(value, ["type", "required", "minimum", "maximum"]) &&
+      (value.minimum === undefined || (typeof value.minimum === "number" && Number.isFinite(value.minimum))) &&
+      (value.maximum === undefined || (typeof value.maximum === "number" && Number.isFinite(value.maximum))) &&
+      !(value.minimum !== undefined && value.maximum !== undefined && Number(value.minimum) > Number(value.maximum));
+  }
+  if (value.type === "boolean") return hasOnlyKeys(value, ["type", "required"]);
+  if (value.type === "select") {
+    return hasOnlyKeys(value, ["type", "required", "options"]) && Array.isArray(value.options) &&
+      value.options.length >= 1 && value.options.length <= 128 && value.options.every((option) =>
+        typeof option === "string" && option.length > 0 && option.length <= 256 && option.trim() === option && !hasControlCharacters(option)) &&
+      new Set(value.options).size === value.options.length;
+  }
+  if (value.type === "file") {
+    if (!hasOnlyKeys(value, ["type", "required", "max_files", "max_file_bytes", "allowed_content_types"]) ||
+      !Number.isSafeInteger(value.max_files) || Number(value.max_files) < 1 || Number(value.max_files) > 20 ||
+      !Number.isSafeInteger(value.max_file_bytes) || Number(value.max_file_bytes) < 1 ||
+      !Array.isArray(value.allowed_content_types) || value.allowed_content_types.length < 1 || value.allowed_content_types.length > 32) return false;
+    const types = value.allowed_content_types;
+    return types.every((type) => typeof type === "string" && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(type) &&
+      !isActiveFormContentType(type)) &&
+      new Set(types.map((type) => typeof type === "string" ? type.toLowerCase() : "")).size === types.length;
+  }
+  return false;
+}
+
+function parseFormSchema(value: unknown): FormSchema {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["id", "key", "version", "fields", "revision"]) ||
+    typeof value.id !== "string" || !uuidValuePattern.test(value.id) || value.id !== value.id.toLowerCase() ||
+    typeof value.key !== "string" || value.key.length < 1 || value.key.length > 128 || value.key.trim() !== value.key || hasControlCharacters(value.key) ||
+    !Number.isSafeInteger(value.version) || Number(value.version) < 1 || !Number.isSafeInteger(value.revision) || Number(value.revision) < 1 ||
+    !isRecord(value.fields) || Object.keys(value.fields).length < 1 || Object.keys(value.fields).length > 128) {
+    throw invalidFormSchema();
+  }
+  for (const [name, field] of Object.entries(value.fields)) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(name) || !validFormFieldDefinition(field)) throw invalidFormSchema();
+  }
+  return value as unknown as FormSchema;
+}
+
+function parseFormSchemaPage(value: unknown): ListResponse<FormSchema> {
+  if (!isRecord(value) || !Array.isArray(value.items) ||
+    (value.next_cursor !== undefined && value.next_cursor !== null && typeof value.next_cursor !== "string")) {
+    throw invalidFormSchema();
+  }
+  return { items: value.items.map(parseFormSchema), next_cursor: typeof value.next_cursor === "string" ? value.next_cursor : null };
 }
 
 function validateFileSet(value: unknown): FileSet {
@@ -222,8 +281,17 @@ function validateFileSet(value: unknown): FileSet {
   return value as unknown as FileSet;
 }
 
+function validPublicFormBindingConfig(config: unknown): config is Record<string, unknown> {
+  if (!isRecord(config) || !hasOnlyKeys(config, ["enabled", "snapshot_id", "form_id", "schema_version"])) return false;
+  return config.enabled === true && typeof config.snapshot_id === "string" && uuidValuePattern.test(config.snapshot_id) &&
+    config.snapshot_id === config.snapshot_id.toLowerCase() &&
+    typeof config.form_id === "string" && uuidValuePattern.test(config.form_id) &&
+    config.form_id === config.form_id.toLowerCase() &&
+    Number.isSafeInteger(config.schema_version) && Number(config.schema_version) >= 1;
+}
+
 function validPublicUploadRouteConfig(config: Record<string, unknown>): boolean {
-  const allowedKeys = new Set(["enabled", "access_group", "file_set_id", "max_bytes", "allowed_content_types"]);
+  const allowedKeys = new Set(["enabled", "access_group", "file_set_id", "max_bytes", "allowed_content_types", "form"]);
   if (Object.keys(config).some((key) => !allowedKeys.has(key)) || config.enabled !== true ||
     typeof config.access_group !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(config.access_group) ||
     (config.file_set_id !== undefined && (typeof config.file_set_id !== "string" || !uuidValuePattern.test(config.file_set_id))) ||
@@ -235,13 +303,12 @@ function validPublicUploadRouteConfig(config: Record<string, unknown>): boolean 
   for (const value of config.allowed_content_types) {
     if (typeof value !== "string" || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(value)) return false;
     const normalized = value.toLowerCase();
-    if (["application/ecmascript", "application/javascript", "application/x-httpd-php", "application/xhtml+xml",
-      "application/xml", "image/svg+xml", "text/css", "text/html", "text/javascript", "text/xml"].includes(normalized) || seen.has(normalized)) {
+    if (isActiveFormContentType(normalized) || seen.has(normalized)) {
       return false;
     }
     seen.add(normalized);
   }
-  return true;
+  return config.form === undefined || validPublicFormBindingConfig(config.form);
 }
 
 function validateRouterRoute(value: unknown): RouterRoute {
@@ -275,6 +342,10 @@ function validateRouterRoute(value: unknown): RouterRoute {
     if (value.target.operation_id === "public.form-upload" && !validPublicUploadRouteConfig(value.target.operation_config)) {
       throw invalidRouterRoute();
     }
+    if ((value.target.operation_id === "public.form-session" || value.target.operation_id === "public.form-submit") &&
+      !validPublicFormBindingConfig(value.target.operation_config)) {
+      throw invalidRouterRoute();
+    }
   } else {
     throw invalidRouterRoute();
   }
@@ -301,6 +372,7 @@ function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
     parentSnapshotId: valid.parent_id,
     parentSequence: valid.parent_sequence,
     parentName: valid.parent_name,
+    state: valid.state,
     sequence: valid.sequence,
     name: valid.name,
     digest: valid.digest ?? "",
@@ -315,7 +387,8 @@ function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
 function validateWebsiteSnapshot(value: unknown): WebsiteSnapshot {
   if (!isRecord(value) || typeof value.id !== "string" || !value.id || typeof value.site_id !== "string" || !value.site_id ||
     typeof value.name !== "string" || !value.name || typeof value.sequence !== "number" || !Number.isSafeInteger(value.sequence) || value.sequence < 1 ||
-    typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.state !== "string" || !value.state ||
+    typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
+    (value.state !== "provisioning" && value.state !== "ready" && value.state !== "failed") ||
     !isRecord(value.feature_pins) || !Object.values(value.feature_pins).every((version) => typeof version === "string") ||
     (value.parent_id !== undefined && typeof value.parent_id !== "string") ||
     (value.parent_name !== undefined && typeof value.parent_name !== "string") ||
@@ -433,27 +506,103 @@ function parseFeatureImport(value: unknown): WebsiteFeatureImport {
   return value as unknown as WebsiteFeatureImport;
 }
 
-// The API omits empty `recordIds` for `all` selections. Normalize optional
-// collections at the boundary so editor components can use stable arrays.
-function normalizeModelContentWorkspace(workspace: ModelContentWorkspace): ModelContentWorkspace {
+function parseContentWorkspace(value: unknown, snapshotID: string): ModelContentWorkspace {
+  if (!isRecord(value) || value.snapshot_id !== snapshotID || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0 ||
+    !Number.isSafeInteger(value.published_revision) || Number(value.published_revision) < 0 ||
+    !Array.isArray(value.records) || !Array.isArray(value.selections) || !Array.isArray(value.placements)) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную рабочую область контента");
+  }
+  let dataModel: DataModel | null = null;
+  if (value.data_model !== null) {
+    if (!isRecord(value.data_model) || value.data_model.formatVersion !== 1 || !Array.isArray(value.data_model.entities)) {
+      throw new ApiError(502, "invalid_response", "Сервер вернул некорректную модель данных");
+    }
+    dataModel = value.data_model as unknown as DataModel;
+  }
+  const modelFieldTypes = new Map<string, DataModelFieldType>();
+  for (const entity of dataModel?.entities ?? []) {
+    for (const field of entity.fields) modelFieldTypes.set(field.id, field.type);
+  }
+  const records = value.records.map((record): ModelContentRecord => {
+    if (!isRecord(record) || typeof record.id !== "string" || typeof record.entity_id !== "string" ||
+      !Number.isSafeInteger(record.sort_order) || Number(record.sort_order) < 0 || !isRecord(record.values)) {
+      throw new ApiError(502, "invalid_response", "Сервер вернул некорректную запись контента");
+    }
+    return { id: record.id, entityId: record.entity_id, sortOrder: Number(record.sort_order), values: record.values as ModelContentRecord["values"] };
+  });
+  const selections = value.selections.map((selection): ModelContentSelection => {
+    if (!isRecord(selection) || typeof selection.placement_id !== "string" || typeof selection.input_key !== "string" ||
+      (selection.mode !== "all" && selection.mode !== "ids") ||
+      (selection.record_ids !== undefined && (!Array.isArray(selection.record_ids) || selection.record_ids.some((id) => typeof id !== "string")))) {
+      throw new ApiError(502, "invalid_response", "Сервер вернул некорректный выбор записей");
+    }
+    return { placementId: selection.placement_id, inputKey: selection.input_key, mode: selection.mode, recordIds: arrayOrEmpty(selection.record_ids as string[] | undefined) };
+  });
+  const placements = value.placements.map((placement): ModelContentPlacement => {
+    if (!isRecord(placement) || typeof placement.id !== "string" || typeof placement.page_id !== "string" ||
+      typeof placement.page_name !== "string" || typeof placement.feature_key !== "string" ||
+      typeof placement.feature_name !== "string" || typeof placement.version !== "string" || !Array.isArray(placement.inputs)) {
+      throw new ApiError(502, "invalid_response", "Сервер вернул некорректное описание размещения");
+    }
+    const inputs = placement.inputs.map((input) => {
+      if (!isRecord(input) || typeof input.input_key !== "string" ||
+        (input.kind !== "scalar" && input.kind !== "record" && input.kind !== "collection") ||
+        typeof input.entity_id !== "string" || !Array.isArray(input.fields)) {
+        throw new ApiError(502, "invalid_response", "Сервер вернул некорректный вход размещения");
+      }
+      const fields = input.fields.map((field) => {
+        if (!isRecord(field) || typeof field.input_path !== "string" || typeof field.field_id !== "string") {
+          throw new ApiError(502, "invalid_response", "Сервер вернул некорректное сопоставление поля");
+        }
+        const type = modelFieldTypes.get(field.field_id);
+        if (!type) throw new ApiError(502, "invalid_response", "Сервер связал вход фичи с отсутствующим полем модели");
+        return { inputPath: field.input_path, fieldId: field.field_id, type };
+      });
+      let lookup: ModelContentPlacement["inputs"][number]["lookup"];
+      if (input.lookup !== undefined) {
+        if (!isRecord(input.lookup) || typeof input.lookup.argument !== "string" || typeof input.lookup.field_id !== "string") {
+          throw new ApiError(502, "invalid_response", "Сервер вернул некорректный поиск записи");
+        }
+        lookup = { argument: input.lookup.argument, fieldId: input.lookup.field_id };
+      }
+      return { inputKey: input.input_key, kind: input.kind as ModelContentPlacement["inputs"][number]["kind"], entityId: input.entity_id, fields, ...(lookup ? { lookup } : {}) };
+    });
+    return { id: placement.id, pageId: placement.page_id, pageName: placement.page_name, featureKey: placement.feature_key,
+      featureName: placement.feature_name, version: placement.version, inputs };
+  });
+  const clientRecordIDs = isRecord(value.client_record_ids) && Object.entries(value.client_record_ids).every(([key, id]) => key.length > 0 && typeof id === "string")
+    ? value.client_record_ids as Record<string, string>
+    : undefined;
+  if (value.client_record_ids !== undefined && clientRecordIDs === undefined) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректные идентификаторы записей");
+  }
   return {
-    ...workspace,
-    records: arrayOrEmpty(workspace?.records).map((record) => ({
-      ...record,
-      values: record.values ?? {},
-    })),
-    selections: arrayOrEmpty(workspace?.selections).map((selection) => ({
-      ...selection,
-      recordIds: arrayOrEmpty(selection?.recordIds),
-    })),
-    placements: arrayOrEmpty(workspace?.placements).map((placement) => ({
-      ...placement,
-      inputs: arrayOrEmpty(placement?.inputs).map((input) => ({
-        ...input,
-        fields: arrayOrEmpty(input?.fields),
-      })),
-    })),
+    snapshot: { id: snapshotID },
+    dataModel,
+    revision: Number(value.revision),
+    publishedRevision: Number(value.published_revision),
+    records,
+    selections,
+    placements,
+    ...(clientRecordIDs ? { clientRecordIDs } : {}),
   };
+}
+
+function parseContentHistory(value: unknown): ModelContentHistoryResponse {
+  if (!isRecord(value) || !Array.isArray(value.items) ||
+    (value.next_cursor !== undefined && (typeof value.next_cursor !== "string" || value.next_cursor.length > 1024))) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную историю контента");
+  }
+  const items = value.items.map((item): ModelContentHistoryItem => {
+    if (!isRecord(item) || typeof item.id !== "string" || !Number.isSafeInteger(item.draft_revision) ||
+      !Number.isSafeInteger(item.content_revision) || typeof item.created_at !== "string" ||
+      !Number.isSafeInteger(item.record_count) || Number(item.record_count) < 0) {
+      throw new ApiError(502, "invalid_response", "Сервер вернул некорректную запись истории контента");
+    }
+    return { id: item.id, draftRevision: Number(item.draft_revision), contentRevision: Number(item.content_revision),
+      createdAt: item.created_at, recordCount: Number(item.record_count) };
+  });
+  return { items, ...(typeof value.next_cursor === "string" && value.next_cursor ? { nextCursor: value.next_cursor } : {}) };
 }
 
 async function requestList<T>(
@@ -796,11 +945,6 @@ export const api = {
       if (!Number.isSafeInteger(revision) || revision < 1) throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия снапшота");
       return request<void>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
     },
-    pinFeatureVersion(snapshotID: string, featureID: string, version: string, expectedRevision: number): Promise<WebsiteSnapshot> {
-      return request<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(snapshotID)}/features/${encoded(featureID)}`, {
-        method: "PUT", body: { version, expected_revision: expectedRevision },
-      });
-    },
     buildSnapshot(snapshotID: string, idempotencyKey: string): Promise<WebsiteBuild> {
       return request<WebsiteBuild>(`${ADMIN_V2_ROOT}/sites/builds`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { snapshot_id: snapshotID },
@@ -847,55 +991,92 @@ export const api = {
   },
 
   contentEngine: {
-    models(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return requestList<ContentModel>(`${ADMIN_V2_ROOT}/content/models`, { signal, query: { snapshot_id: snapshotID, cursor, limit } });
+    workspace(snapshotID: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, { signal })
+        .then((value) => parseContentWorkspace(value, snapshotID));
     },
-    model(snapshotID: string, modelID: string, signal?: AbortSignal): Promise<ContentModel> {
-      return request<ContentModel>(`${ADMIN_V2_ROOT}/content/models/${encoded(modelID)}`, { signal, query: { snapshot_id: snapshotID } });
+    saveWorkspaceDraft(
+      snapshotID: string,
+      expectedRevision: number,
+      records: ModelContentRecordInput[],
+      selections: ModelContentSelection[],
+      idempotencyKey: string,
+    ): Promise<ModelContentWorkspace> {
+      const body = {
+        expected_revision: expectedRevision,
+        records: records.map((record) => ({
+          ...(record.id ? { id: record.id } : {}),
+          ...(record.clientKey ? { client_key: record.clientKey } : {}),
+          entity_id: record.entityId,
+          sort_order: record.sortOrder,
+          values: record.values,
+        })),
+        selections: selections.map((selection) => ({
+          placement_id: selection.placementId,
+          input_key: selection.inputKey,
+          mode: selection.mode,
+          ...(selection.mode === "ids" ? { record_ids: selection.recordIds } : {}),
+        })),
+      };
+      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, {
+        method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body,
+      }).then((value) => parseContentWorkspace(value, snapshotID));
     },
-    saveModel(input: { snapshot_id: string; model_id?: string; key: string; name: string; cardinality: "many" | "singleton"; fields: Array<Omit<ContentModel["fields"][number], "id"> & { id?: string }>; expected_revision: number }): Promise<ContentModel> {
-      return request<ContentModel>(`${ADMIN_V2_ROOT}/content/models`, { method: "PUT", body: input });
+    publishWorkspace(snapshotID: string, expectedRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace/publish`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision },
+      }).then((value) => parseContentWorkspace(value, snapshotID));
     },
-    records(snapshotID: string, modelID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return requestList<ContentRecord>(`${ADMIN_V2_ROOT}/content/records`, { signal, query: { snapshot_id: snapshotID, model_id: modelID, cursor, limit } });
+    history(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<ModelContentHistoryResponse> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/history`, { signal, query: { cursor, limit } })
+        .then(parseContentHistory);
     },
-    saveRecord(input: { snapshot_id: string; model_id: string; record_id?: string; values: Record<string, unknown>; expected_revision: number }): Promise<ContentRecord> {
-      return request<ContentRecord>(`${ADMIN_V2_ROOT}/content/records`, { method: "PUT", body: input });
-    },
-    publishRecord(snapshotID: string, recordID: string, expectedRevision: number): Promise<ContentRecord> {
-      return request<ContentRecord>(`${ADMIN_V2_ROOT}/content/records/${encoded(recordID)}/publish`, { method: "POST", body: { snapshot_id: snapshotID, expected_revision: expectedRevision } });
-    },
-    restoreRecord(snapshotID: string, recordID: string, historyID: string, expectedRevision: number): Promise<ContentRecord> {
-      return request<ContentRecord>(`${ADMIN_V2_ROOT}/content/records/${encoded(recordID)}/restore`, { method: "POST", body: { snapshot_id: snapshotID, history_id: historyID, expected_revision: expectedRevision } });
-    },
-    bindings(snapshotID: string, featureID: string, signal?: AbortSignal): Promise<ContentBindings> {
-      return request<ContentBindings>(`${ADMIN_V2_ROOT}/content/bindings/${encoded(featureID)}`, { signal, query: { snapshot_id: snapshotID } });
-    },
-    saveBindings(input: { snapshot_id: string; feature_id: string; values: Record<string, unknown>; expected_revision: number }): Promise<ContentBindings> {
-      return request<ContentBindings>(`${ADMIN_V2_ROOT}/content/bindings`, { method: "PUT", body: input });
+    restoreHistory(snapshotID: string, historyID: string, expectedRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/history/${encoded(historyID)}/restore`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision },
+      }).then((value) => parseContentWorkspace(value, snapshotID));
     },
   },
 
   formsEngine: {
     schemas(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return requestList<FormSchema>(`${ADMIN_V2_ROOT}/forms/schemas`, { signal, query: { snapshot_id: snapshotID, cursor, limit } });
+      return request<unknown>(`${ADMIN_V2_ROOT}/forms/schemas`, { signal, query: { snapshot_id: snapshotID, cursor, limit } })
+        .then(parseFormSchemaPage);
     },
     schema(snapshotID: string, schemaID: string, signal?: AbortSignal): Promise<FormSchema> {
-      return request<FormSchema>(`${ADMIN_V2_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal, query: { snapshot_id: snapshotID } });
+      return request<unknown>(`${ADMIN_V2_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal, query: { snapshot_id: snapshotID } })
+        .then(parseFormSchema);
     },
-    saveSchema(input: { snapshot_id: string; schema_id?: string; key: string; fields: Record<string, unknown>; expected_revision: number }): Promise<FormSchema> {
-      return request<FormSchema>(`${ADMIN_V2_ROOT}/forms/schemas`, { method: "PUT", body: input });
+    saveSchema(input: { snapshot_id: string; schema_id?: string; key: string; fields: Record<string, FormFieldDefinition>; expected_revision: number }): Promise<FormSchema> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/forms/schemas`, { method: "PUT", body: input }).then(parseFormSchema);
     },
     submissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, cursor?: string, limit?: number, signal?: AbortSignal) {
       return requestList<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions`, { signal, query: { snapshot_id: snapshotID, ...filters, cursor, limit } });
     },
+    async exportSubmissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+      const response = await rawRequest(`${ADMIN_V2_ROOT}/forms/submissions/export`, {
+        signal, headers: { Accept: "text/csv" }, query: { snapshot_id: snapshotID, ...filters },
+      });
+      if (!response.ok) throw await parseErrorResponse(response);
+      if (response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() !== "text/csv") {
+        throw new ApiError(502, "invalid_response", "Сервер вернул некорректный CSV-экспорт");
+      }
+      const filename = filenameFromDisposition(response.headers.get("Content-Disposition"), `forms-${snapshotID}-submissions.csv`);
+      return { blob: await response.blob(), filename };
+    },
     submission(snapshotID: string, id: string, signal?: AbortSignal): Promise<FormSubmission> {
       return request<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}`, { signal, query: { snapshot_id: snapshotID } });
     },
-    setSubmissionStatus(snapshotID: string, id: string, status: string, expectedRevision: number): Promise<FormSubmission> {
+    async setSubmissionStatus(snapshotID: string, id: string, status: string, expectedRevision: number): Promise<FormSubmission> {
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+        throw new ApiError(400, "invalid_revision", "Для изменения статуса требуется актуальная ревизия заявки");
+      }
       return request<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}/status`, { method: "PATCH", body: { snapshot_id: snapshotID, status, expected_revision: expectedRevision } });
     },
-    deleteSubmission(snapshotID: string, id: string, revision: number): Promise<void> {
+    async deleteSubmission(snapshotID: string, id: string, revision: number): Promise<void> {
+      if (!Number.isSafeInteger(revision) || revision < 1) {
+        throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия заявки");
+      }
       return request(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}`, {
         method: "DELETE", query: { snapshot_id: snapshotID }, headers: { "If-Match": `"r${revision}"` },
       });
@@ -1191,40 +1372,10 @@ export const api = {
     deleteSnapshot(id: string, revision: number): Promise<void> {
       return api.website.deleteSnapshot(id, revision);
     },
-
     async contentSnapshots(signal?: AbortSignal): Promise<{ items: SiteSnapshot[] }> {
       return { items: (await api.website.allSnapshots(signal)).map(siteSnapshotFromWebsite) };
     },
-    async modelContentWorkspace(snapshotId: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
-      const workspace = await request<ModelContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/model`, { signal });
-      return normalizeModelContentWorkspace(workspace);
-    },
-    saveModelContentWorkspace(
-      snapshotId: string,
-      revision: number,
-      records: ModelContentRecordInput[],
-      selections: ModelContentSelection[],
-    ): Promise<ModelContentWorkspace> {
-      return request<ModelContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/model`, {
-        method: "PUT",
-        body: { revision, records, selections },
-      }).then(normalizeModelContentWorkspace);
-    },
-    publishModelContent(snapshotId: string, revision: number): Promise<ModelContentWorkspace> {
-      return request<ModelContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/model/publish`, {
-        method: "POST",
-        body: { revision },
-      }).then(normalizeModelContentWorkspace);
-    },
-    modelContentHistory(snapshotId: string, signal?: AbortSignal): Promise<ModelContentHistoryResponse> {
-      return request<ModelContentHistoryResponse>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/model/history`, { signal });
-    },
-    restoreModelContent(snapshotId: string, publicationId: string, revision: number): Promise<ModelContentWorkspace> {
-      return request<ModelContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/model/history/${encoded(publicationId)}/restore`, {
-        method: "POST",
-        body: { revision },
-      }).then(normalizeModelContentWorkspace);
-    },
+
     designSnapshot(snapshotId: string, signal?: AbortSignal): Promise<SnapshotDesignWorkspace> {
       return request<{ snapshot: WebsiteSnapshot; design_system: JsonObject; feature_tokens: unknown }>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(snapshotId)}/design-system`, { signal }).then((value) => {
         const snapshot = validateWebsiteSnapshot(value.snapshot);

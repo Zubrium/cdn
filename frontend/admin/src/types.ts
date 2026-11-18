@@ -74,6 +74,8 @@ export interface WebsiteFeatureVersionPage {
   next_cursor?: string | null;
 }
 
+export type WebsiteSnapshotState = "provisioning" | "ready" | "failed";
+
 export interface WebsiteSnapshot {
   id: string;
   site_id: string;
@@ -90,7 +92,7 @@ export interface WebsiteSnapshot {
   creation_summary?: SnapshotCreationSummary;
   revision: number;
   feature_pins: Record<string, string>;
-  state: string;
+  state: WebsiteSnapshotState;
   payload?: WebsiteSnapshotPayload;
 }
 
@@ -154,50 +156,25 @@ export interface WebsiteMediaJob {
   updated_at: string;
 }
 
-export interface ContentModelField {
-  id: string;
-  key: string;
-  name: string;
-  type: string;
-  required: boolean;
-}
-
-export interface ContentModel {
-  id: string;
-  key: string;
-  name: string;
-  cardinality: "many" | "singleton";
-  fields: ContentModelField[];
-  revision: number;
-}
-
-export interface ContentRecord {
-  id: string;
-  model_id: string;
-  values: Record<string, unknown>;
-  revision: number;
-  published_revision: number;
-  updated_at: string;
-}
-
-export interface ContentBindings {
-  snapshot_id: string;
-  feature_id: string;
-  values: Record<string, unknown>;
-  revision: number;
-}
+export type FormFieldDefinition =
+  | { type: "text" | "email"; required: boolean; min_length?: number; max_length?: number; pattern?: string }
+  | { type: "number"; required: boolean; minimum?: number; maximum?: number }
+  | { type: "boolean"; required: boolean }
+  | { type: "select"; required: boolean; options: string[] }
+  | { type: "file"; required: boolean; max_files: number; max_file_bytes: number; allowed_content_types: string[] };
 
 export interface FormSchema {
   id: string;
   key: string;
   version: number;
-  fields: Record<string, unknown>;
+  fields: Record<string, FormFieldDefinition>;
   revision: number;
 }
 
 export interface FormSubmission {
   id: string;
   form_id: string;
+  schema_version: number;
   state: string;
   values: Record<string, unknown>;
   created_at: string;
@@ -572,6 +549,7 @@ export interface SiteConfig {
 }
 
 export interface SiteSnapshot {
+  state: WebsiteSnapshotState;
   contentRevision?: number;
   id: string;
   siteId?: string;
@@ -618,11 +596,18 @@ export interface ModelContentFieldProjection {
   preparations?: Array<Omit<MediaRenditionContext, "snapshotId"> & { accept: string }>;
 }
 
+export interface ModelContentPlacementField {
+  inputPath: string;
+  fieldId: string;
+  type: DataModelFieldType;
+  preparations?: ModelContentFieldProjection["preparations"];
+}
+
 export interface ModelContentPlacementInput {
   inputKey: string;
   kind: ModelContentInputKind;
   entityId: string;
-  fields: ModelContentFieldProjection[];
+  fields: ModelContentPlacementField[];
   lookup?: ModelContentInputLookup;
 }
 
@@ -645,6 +630,7 @@ export interface ModelContentRecord {
 
 export interface ModelContentRecordInput {
   id?: string;
+  clientKey?: string;
   entityId: string;
   sortOrder: number;
   values: JsonObject;
@@ -658,13 +644,14 @@ export interface ModelContentSelection {
 }
 
 export interface ModelContentWorkspace {
-  snapshot: SiteSnapshot;
+  snapshot: Pick<WebsiteSnapshot, "id">;
   dataModel: DataModel | null;
   revision: number;
   publishedRevision: number;
   records: ModelContentRecord[];
   selections: ModelContentSelection[];
   placements: ModelContentPlacement[];
+  clientRecordIDs?: Record<string, string>;
 }
 
 export interface ModelContentHistoryItem {
@@ -677,6 +664,7 @@ export interface ModelContentHistoryItem {
 
 export interface ModelContentHistoryResponse {
   items: ModelContentHistoryItem[];
+  nextCursor?: string;
 }
 
 export interface SiteMetadataOverride {

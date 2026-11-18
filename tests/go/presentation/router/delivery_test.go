@@ -15,6 +15,7 @@ import (
 	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
 const (
@@ -206,7 +207,7 @@ func TestArtifactManifestRejectsDuplicateKeysAndBadDigest(t *testing.T) {
 		`{"format":"static-site-artifact/v1","files":{"/a":{"file_id":"x","file_id":"y"}}}`,
 		`{"format":"static-site-artifact/v1"} {}`,
 	} {
-		if validUniqueJSON([]byte(raw)) {
+		if httpjson.ValidJSON([]byte(raw)) {
 			t.Errorf("invalid or duplicate-key JSON accepted: %s", raw)
 		}
 	}

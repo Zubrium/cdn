@@ -16,12 +16,14 @@ import (
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	adminrouter "github.com/Zubrium/cdn/presentation/admin/router"
 	routerhttp "github.com/Zubrium/cdn/presentation/router"
+	"github.com/Zubrium/cdn/presentation/router/publicforms"
 	"github.com/Zubrium/cdn/presentation/router/publicupload"
 )
 
 type routerEngineComponent struct {
 	core     *coreComponent
 	loader   *loaderComponent
+	forms    *formsEngineComponent
 	config   appconfig.Resolved
 	selected map[string]struct{}
 	api      *routerenginepresentation.APIAdapter
@@ -33,7 +35,28 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		return errors.New("Router dependencies are not initialized")
 	}
 	settings := component.config.RouterAPI
-	operations := make([]routerenginepresentation.PublicOperation, 0, 1)
+	operations := make([]routerenginepresentation.PublicOperation, 0, 3)
+	var formsAPI publicforms.VisitorAPI
+	if component.forms != nil {
+		if component.forms.engine == nil {
+			return errors.New("Forms Engine is not initialized")
+		}
+		formsAPI = component.forms.engine
+	}
+	if _, enabled := component.selected["public.form-session"]; enabled {
+		session, err := publicforms.NewSessionOperation(formsAPI)
+		if err != nil {
+			return fmt.Errorf("configure public Forms session operation: %w", err)
+		}
+		operations = append(operations, session)
+	}
+	if _, enabled := component.selected["public.form-submit"]; enabled {
+		submit, err := publicforms.NewSubmitOperation(formsAPI, settings.MaxJSONBytes)
+		if err != nil {
+			return fmt.Errorf("configure public Forms submit operation: %w", err)
+		}
+		operations = append(operations, submit)
+	}
 	if _, enabled := component.selected["public.form-upload"]; enabled {
 		upload, err := publicupload.New(component.loader.service, publicupload.Config{
 			Credential: settings.ServiceCredential, StagingDirectory: settings.UploadStagingDirectory,
@@ -41,6 +64,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 			MaxParts: component.config.Loader.MaxParts, MaxConcurrentUploads: settings.UploadMaxConcurrent,
 			MaxStagedBytes: settings.UploadMaxStagedBytes, AllowedContentTypes: append([]string(nil), settings.UploadAllowedContentTypes...),
 			GroupAuthorization: component.core.runtime.GroupAuthorization(),
+			Forms: formsAPI,
 		})
 		if err != nil {
 			return fmt.Errorf("configure Router public upload: %w", err)
@@ -140,7 +164,7 @@ func (component *routerAdminComponent) Start(context.Context) error {
 	handler, err := adminrouter.NewHandler(component.engine.api, routerhttp.Config{
 		BranchID: settings.BranchID, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
 		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), component.config.AdminAPI.AllowedOrigins...),
-		PublicOperations: component.engine.registry,
+		PublicOperations: component.engine.registry, FormSessionCookieSecure: settings.FormSessionCookieSecure,
 	})
 	if err != nil {
 		return err
@@ -179,7 +203,7 @@ func (component *publicRouterComponent) Start(context.Context) error {
 	combined, err := routerhttp.NewHandler(component.engine.api, routerhttp.Config{
 		BranchID: settings.BranchID, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
 		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), component.config.AdminAPI.AllowedOrigins...),
-		PublicOperations: component.engine.registry,
+		PublicOperations: component.engine.registry, FormSessionCookieSecure: settings.FormSessionCookieSecure,
 	})
 	if err != nil {
 		return err

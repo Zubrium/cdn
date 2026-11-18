@@ -18,6 +18,7 @@ import (
 	_ "github.com/Zubrium/cdn/presentation/adminui"
 	_ "github.com/Zubrium/cdn/presentation/fileapi"
 	_ "github.com/Zubrium/cdn/presentation/router"
+	_ "github.com/Zubrium/cdn/presentation/router/publicforms"
 	_ "github.com/Zubrium/cdn/presentation/router/publicupload"
 	_ "github.com/Zubrium/cdn/presentation/sitesapi"
 	_ "github.com/Zubrium/cdn/workers/archive"
@@ -65,6 +66,7 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"admin.website",
 		"public.router",
 		"public.content-runtime",
+		"public.form-session",
 		"public.form-submit",
 		"public.form-upload",
 		"worker.archive",

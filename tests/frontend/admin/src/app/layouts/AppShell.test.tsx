@@ -35,6 +35,14 @@ describe("admin navigation permissions", () => {
     expect(rendered).not.toContain("Дерево снапшотов");
   });
 
+  it("shows Forms schema and submission navigation to a reader", () => {
+    const rendered = renderShell({ group_access: { forms: 1 }, can_manage_administrators: false });
+
+    expect(rendered).toContain("Схемы");
+    expect(rendered).toContain("Заявки");
+    expect(rendered).not.toContain("Доступы");
+  });
+
   it("clearly marks synthetic engine fixtures and their non-persistent writes", () => {
     mocks.syntheticDataMode = true;
     const rendered = renderShell({ group_access: { features: 1 }, can_manage_administrators: false });

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
   useConfirm: vi.fn(),
-  api: { website: { snapshots: vi.fn() }, formsEngine: { schemas: vi.fn(), submissions: vi.fn(), submission: vi.fn() } },
+  api: { website: { snapshots: vi.fn() }, formsEngine: { schemas: vi.fn(), submissions: vi.fn(), submission: vi.fn(), exportSubmissions: vi.fn() } },
 }));
 
 vi.mock("@/api", () => ({ api: mocks.api }));
@@ -54,6 +54,7 @@ describe("Forms Engine submissions", () => {
     expect(rendered).toContain("Заявки");
     expect(rendered).toContain("person@example.test");
     expect(rendered).toContain("contact");
+    expect(rendered).toContain("Экспорт CSV");
     expect(rendered).not.toContain("Удалить заявку");
   });
 

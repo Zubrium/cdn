@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
 )
@@ -38,6 +39,8 @@ type fakeWebsite struct {
 	catalogLimit          int
 	buildCalls            int
 	buildInput            website.BuildSnapshotRequest
+	mediaCalls            int
+	mediaInput            website.CreateDerivativeRequest
 	branchCalls           int
 	branchInput           website.AssignBranchRequest
 	wrongAssignedSnapshot bool
@@ -49,23 +52,35 @@ type fakeWebsite struct {
 	eventPage             *website.BranchEventPage
 }
 
+type fakeSnapshotForkWorkflow struct {
+	request platform.WorkflowStartRequest
+	calls   int
+	err     error
+}
+
+func (f *fakeSnapshotForkWorkflow) Start(_ context.Context, request platform.WorkflowStartRequest) (platform.WorkflowReceipt, error) {
+	f.calls++
+	f.request = request
+	return platform.WorkflowReceipt{State: "queued", Created: true}, f.err
+}
+
 func (f *fakeWebsite) ListSnapshots(_ context.Context, siteID, cursor string, limit int) (website.SnapshotPage, error) {
 	f.snapshotSiteID, f.snapshotCursor, f.snapshotLimit = siteID, cursor, limit
 	if siteID == "" {
 		siteID = "33333333-3333-4333-8333-333333333333"
 	}
-	return website.SnapshotPage{Items: []website.Snapshot{{ID: "snapshot-1", SiteID: siteID, Name: "Homepage", Sequence: 1, Revision: 3, FeaturePins: map[string]string{}, State: "draft"}}, NextCursor: "next"}, nil
+	return website.SnapshotPage{Items: []website.Snapshot{{ID: "snapshot-1", SiteID: siteID, Name: "Homepage", Sequence: 1, Revision: 3, FeaturePins: map[string]string{}, State: "ready"}}, NextCursor: "next"}, nil
 }
 
 func (f *fakeWebsite) GetSnapshot(_ context.Context, snapshotID string) (website.Snapshot, error) {
 	f.getSnapshotID, f.getSnapshotCalls = snapshotID, f.getSnapshotCalls+1
-	return website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "draft",
+	return website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "ready",
 		Payload: &website.SnapshotPayload{Config: json.RawMessage(`{"format_version":3}`), Metadata: json.RawMessage(`{"format_version":1}`), DesignSystem: json.RawMessage(`{"formatVersion":2}`)}}, nil
 }
 
 func (f *fakeWebsite) GetSnapshotDesignSystem(_ context.Context, snapshotID string) (website.SnapshotDesignSystem, error) {
 	return website.SnapshotDesignSystem{
-		Snapshot:      website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "draft"},
+		Snapshot:      website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "ready"},
 		DesignSystem:  json.RawMessage(`{"formatVersion":2,"groups":[],"baseTokens":[],"featureValues":{},"breakpoints":[],"fonts":[]}`),
 		FeatureTokens: json.RawMessage(`[]`),
 	}, nil
@@ -74,7 +89,11 @@ func (f *fakeWebsite) GetSnapshotDesignSystem(_ context.Context, snapshotID stri
 func (f *fakeWebsite) CreateSnapshot(_ context.Context, input website.CreateSnapshotRequest) (website.Snapshot, error) {
 	f.createSnapshotInput, f.createSnapshotCalls = input, f.createSnapshotCalls+1
 	payload := input.Payload
-	return website.Snapshot{ID: "22222222-2222-4222-8222-222222222222", SiteID: input.SiteID, ParentID: input.ParentID, Name: input.Name, Sequence: 2, Revision: 1, Payload: &payload, FeaturePins: map[string]string{}, State: "draft"}, nil
+	state := "ready"
+	if input.ParentID != "" {
+		state = "provisioning"
+	}
+	return website.Snapshot{ID: "22222222-2222-4222-8222-222222222222", SiteID: input.SiteID, ParentID: input.ParentID, Name: input.Name, Sequence: 2, Revision: 1, Payload: &payload, FeaturePins: map[string]string{}, State: state}, nil
 }
 
 func (f *fakeWebsite) DeleteSnapshot(_ context.Context, input website.DeleteSnapshotRequest) error {
@@ -115,6 +134,11 @@ func (f *fakeWebsite) ListFeatureCatalog(_ context.Context, cursor string, limit
 func (f *fakeWebsite) BuildSnapshot(_ context.Context, input website.BuildSnapshotRequest) (website.BuildJob, error) {
 	f.buildCalls, f.buildInput = f.buildCalls+1, input
 	return website.BuildJob{ID: "job-1", SnapshotID: input.SnapshotID, State: "queued"}, nil
+}
+
+func (f *fakeWebsite) CreateMediaDerivative(_ context.Context, input website.CreateDerivativeRequest) (website.MediaJob, error) {
+	f.mediaCalls, f.mediaInput = f.mediaCalls+1, input
+	return website.MediaJob{ID: "media-job-1", SourceFileID: input.SourceFileID, Profile: input.Profile, State: "queued"}, nil
 }
 
 func (f *fakeWebsite) ListBranches(context.Context) (website.BranchPage, error) {
@@ -290,6 +314,71 @@ func TestBuildSnapshotRequiresIdempotencyAndUsesClientSnapshotOnly(t *testing.T)
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || api.buildCalls != 1 || api.buildInput.SnapshotID != "snapshot-1" || api.buildInput.IdempotencyKey != "build-snapshot-request-0001" {
 		t.Fatalf("status=%d calls=%d input=%+v body=%s", response.Code, api.buildCalls, api.buildInput, response.Body.String())
+	}
+}
+
+func TestWriteRoutesRejectDuplicateIdempotencyHeaders(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		body  string
+		calls func(*fakeWebsite) int
+	}{
+		{
+			name:  "feature import",
+			path:  "/api/v2/admin/sites/feature-imports",
+			body:  `{"source_file_id":"11111111-1111-4111-8111-111111111111"}`,
+			calls: func(api *fakeWebsite) int { return api.beginCalls },
+		},
+		{
+			name:  "snapshot build",
+			path:  "/api/v2/admin/sites/builds",
+			body:  `{"snapshot_id":"snapshot-1"}`,
+			calls: func(api *fakeWebsite) int { return api.buildCalls },
+		},
+		{
+			name:  "media derivative",
+			path:  "/api/v2/admin/sites/media/derivatives",
+			body:  `{"source_file_id":"11111111-1111-4111-8111-111111111111","feature_id":"feature-a","profile":"thumbnail"}`,
+			calls: func(api *fakeWebsite) int { return api.mediaCalls },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api := &fakeWebsite{}
+			handler, err := NewHandler(api, testConfig(4096))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer user-secret")
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Add("Idempotency-Key", "duplicate-write-request-0001")
+			request.Header.Add("Idempotency-Key", "duplicate-write-request-0002")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || test.calls(api) != 0 {
+				t.Fatalf("duplicate idempotency key status=%d calls=%d body=%s", response.Code, test.calls(api), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSitesAPIRejectsDuplicateContentType(t *testing.T) {
+	api := &fakeWebsite{}
+	handler, err := NewHandler(api, testConfig(4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
+	request.Header.Set("Authorization", "Bearer user-secret")
+	request.Header.Add("Content-Type", "application/json")
+	request.Header.Add("Content-Type", "text/plain")
+	request.Header.Set("Idempotency-Key", "feature-import-request-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || api.beginCalls != 0 {
+		t.Fatalf("duplicate Content-Type status=%d calls=%d body=%s", response.Code, api.beginCalls, response.Body.String())
 	}
 }
 
@@ -643,12 +732,15 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 
 func TestCreateChildSnapshotRequiresBothParentRevisions(t *testing.T) {
 	api := &fakeWebsite{}
-	handler, err := NewHandler(api, testConfig(4096))
+	workflow := &fakeSnapshotForkWorkflow{}
+	config := testConfig(4096)
+	config.SnapshotForkWorkflow = workflow
+	handler, err := NewHandler(api, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := `"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","payload":{"config":{"format_version":3},"metadata":{"format_version":1},"design_system":{"formatVersion":2}}`
-	for _, revisions := range []string{`"expected_revision":0,"expected_content_revision":8`, `"expected_revision":4,"expected_content_revision":0`} {
+	for _, revisions := range []string{`"expected_revision":0,"expected_content_revision":8`, `"expected_revision":4,"expected_content_revision":-1`} {
 		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader("{"+base+","+revisions+"}"))
 		request.Header.Set("Authorization", "Bearer user-secret")
 		request.Header.Set("Content-Type", "application/json")
@@ -659,14 +751,42 @@ func TestCreateChildSnapshotRequiresBothParentRevisions(t *testing.T) {
 			t.Fatalf("invalid revisions response=%d calls=%d body=%s", response.Code, api.createSnapshotCalls, response.Body.String())
 		}
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader("{"+base+`,"expected_revision":4,"expected_content_revision":8}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader("{"+base+`,"expected_revision":4,"expected_content_revision":0}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-child-snapshot-0001")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated || api.createSnapshotCalls != 1 || api.createSnapshotInput.ExpectedRevision != 4 || api.createSnapshotInput.ExpectedContentRevision != 8 {
+	var taskPayload map[string]any
+	if err := json.Unmarshal(workflow.request.Payload, &taskPayload); err != nil {
+		t.Fatal(err)
+	}
+	copyKey, hasCopyKey := taskPayload["content_copy_idempotency_key"].(string)
+	if response.Code != http.StatusAccepted || api.createSnapshotCalls != 1 || api.createSnapshotInput.ExpectedRevision != 4 || api.createSnapshotInput.ExpectedContentRevision != 0 ||
+		workflow.calls != 1 || workflow.request.OperationID != "snapshot.fork.start" || workflow.request.ContractVersion != 1 ||
+		workflow.request.IdempotencyKey == "" || taskPayload["source_snapshot_id"] != "11111111-1111-4111-8111-111111111111" ||
+		taskPayload["target_snapshot_id"] != "22222222-2222-4222-8222-222222222222" ||
+		taskPayload["expected_source_content_revision"] != float64(0) || taskPayload["target_snapshot_revision"] != float64(1) ||
+		!hasCopyKey || !strings.HasPrefix(copyKey, "content-copy:") {
 		t.Fatalf("valid child response=%d calls=%d input=%+v body=%s", response.Code, api.createSnapshotCalls, api.createSnapshotInput, response.Body.String())
+	}
+}
+
+func TestCreateChildSnapshotFailsClosedWithoutWorkflowBeforePersisting(t *testing.T) {
+	api := &fakeWebsite{}
+	handler, err := NewHandler(api, testConfig(4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","expected_revision":4,"expected_content_revision":8,"payload":{"config":{},"metadata":{},"design_system":{}}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer user-secret")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "create-child-snapshot-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || api.createSnapshotCalls != 0 {
+		t.Fatalf("status=%d created=%d body=%s; expected fail-closed before persistence", response.Code, api.createSnapshotCalls, response.Body.String())
 	}
 }
 

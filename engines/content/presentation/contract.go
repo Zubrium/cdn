@@ -1,9 +1,11 @@
-// Package presentation exposes Content's aggregate typed facade to the Admin
-// API. The engine owns validation, drafts, publication, and revisions.
+// Package presentation exposes Content's typed facade to Presentation and to
+// other in-process capabilities. Content reads Website structure through an
+// injected resolver and never accesses Website storage directly.
 package presentation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -25,106 +27,152 @@ type Contract interface {
 	API
 }
 
+// API is the engine boundary. Website schema is read-only; all writes concern
+// snapshot-scoped Content data. Admin transport is supplied by Presentation.
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
-	ListModels(context.Context, string, string, int) (ModelPage, error)
-	GetModel(context.Context, string, string) (Model, error)
-	SaveModel(context.Context, SaveModelRequest) (Model, error)
-	ListRecords(context.Context, ListRecordsRequest) (RecordPage, error)
-	SaveRecordDraft(context.Context, SaveRecordRequest) (Record, error)
-	PublishRecord(context.Context, PublishRecordRequest) (Record, error)
-	RestoreRecord(context.Context, RestoreRecordRequest) (Record, error)
-	GetBindings(context.Context, string, string) (Bindings, error)
-	SaveBindings(context.Context, SaveBindingsRequest) (Bindings, error)
+	GetWorkspace(context.Context, string) (Workspace, error)
+	SaveWorkspaceDraft(context.Context, SaveWorkspaceDraftRequest) (Workspace, error)
+	PublishWorkspace(context.Context, PublishWorkspaceRequest) (Workspace, error)
+	ListHistory(context.Context, string, string, int) (HistoryPage, error)
+	RestoreHistory(context.Context, RestoreHistoryRequest) (Workspace, error)
+	ReadPublishedContent(context.Context, string) (PublishedContent, error)
+	CopySnapshotContent(context.Context, CopySnapshotContentRequest) (CopySnapshotContentResult, error)
 }
 
-type Model struct {
-	ID          string       `json:"id"`
-	Key         string       `json:"key"`
-	Name        string       `json:"name"`
-	Cardinality string       `json:"cardinality"`
-	Fields      []ModelField `json:"fields"`
-	Revision    int64        `json:"revision"`
+// SchemaResolver is provided by the composition root. Its implementation may
+// call Website's in-process typed facade, but must not use HTTP or storage.
+type SchemaResolver interface {
+	ResolveContentSchema(context.Context, string) (SnapshotSchema, error)
 }
 
-type ModelField struct {
-	ID       string `json:"id"`
-	Key      string `json:"key"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Required bool   `json:"required"`
+type SnapshotSchema struct {
+	State      string          `json:"state"`
+	DataModel  json.RawMessage `json:"data_model"`
+	Placements []Placement     `json:"placements"`
 }
 
-type ModelPage struct {
-	Items      []Model `json:"items"`
-	NextCursor string  `json:"next_cursor,omitempty"`
+type Placement struct {
+	ID          string           `json:"id"`
+	PageID      string           `json:"page_id"`
+	PageName    string           `json:"page_name"`
+	FeatureKey  string           `json:"feature_key"`
+	FeatureName string           `json:"feature_name"`
+	Version     string           `json:"version"`
+	Inputs      []PlacementInput `json:"inputs"`
 }
 
-type SaveModelRequest struct {
-	SnapshotID       string       `json:"snapshot_id"`
-	ModelID          string       `json:"model_id,omitempty"`
-	Key              string       `json:"key"`
-	Name             string       `json:"name"`
-	Cardinality      string       `json:"cardinality"`
-	Fields           []ModelField `json:"fields"`
-	ExpectedRevision int64        `json:"expected_revision"`
+type PlacementInput struct {
+	InputKey string                `json:"input_key"`
+	Kind     string                `json:"kind"`
+	EntityID string                `json:"entity_id"`
+	Fields   []PlacementField      `json:"fields"`
+	Lookup   *PlacementInputLookup `json:"lookup,omitempty"`
+}
+
+type PlacementField struct {
+	InputPath string `json:"input_path"`
+	FieldID   string `json:"field_id"`
+}
+
+type PlacementInputLookup struct {
+	Argument string `json:"argument"`
+	FieldID  string `json:"field_id"`
+}
+
+// Workspace combines Website's read-only schema with Content-owned mutable
+// draft/publication state. SnapshotID identifies the selected Website scope.
+type Workspace struct {
+	SnapshotID        string            `json:"snapshot_id"`
+	DataModel         json.RawMessage   `json:"data_model"`
+	Revision          int64             `json:"revision"`
+	PublishedRevision int64             `json:"published_revision"`
+	Records           []Record          `json:"records"`
+	Selections        []Selection       `json:"selections"`
+	Placements        []Placement       `json:"placements"`
+	ClientRecordIDs   map[string]string `json:"client_record_ids,omitempty"`
 }
 
 type Record struct {
-	ID                string         `json:"id"`
-	ModelID           string         `json:"model_id"`
-	Values            map[string]any `json:"values"`
-	Revision          int64          `json:"revision"`
-	PublishedRevision int64          `json:"published_revision"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	ID        string         `json:"id"`
+	EntityID  string         `json:"entity_id"`
+	SortOrder int            `json:"sort_order"`
+	Values    map[string]any `json:"values"`
 }
 
-type ListRecordsRequest struct {
-	SnapshotID string `json:"snapshot_id"`
-	ModelID    string `json:"model_id"`
-	Cursor     string `json:"cursor,omitempty"`
-	Limit      int    `json:"limit"`
+type RecordInput struct {
+	// ID is an ID previously issued by Content. ClientKey correlates a new
+	// request-local row with selections; it is never persisted as the record ID.
+	ID        string         `json:"id,omitempty"`
+	ClientKey string         `json:"client_key,omitempty"`
+	EntityID  string         `json:"entity_id"`
+	SortOrder int            `json:"sort_order"`
+	Values    map[string]any `json:"values"`
 }
 
-type RecordPage struct {
-	Items      []Record `json:"items"`
-	NextCursor string   `json:"next_cursor,omitempty"`
+type Selection struct {
+	PlacementID string   `json:"placement_id"`
+	InputKey    string   `json:"input_key"`
+	Mode        string   `json:"mode"`
+	RecordIDs   []string `json:"record_ids,omitempty"`
 }
 
-type SaveRecordRequest struct {
-	SnapshotID       string         `json:"snapshot_id"`
-	ModelID          string         `json:"model_id"`
-	RecordID         string         `json:"record_id,omitempty"`
-	Values           map[string]any `json:"values"`
-	ExpectedRevision int64          `json:"expected_revision"`
+type SaveWorkspaceDraftRequest struct {
+	SnapshotID       string        `json:"-"`
+	IdempotencyKey   string        `json:"-"`
+	ExpectedRevision int64         `json:"expected_revision"`
+	Records          []RecordInput `json:"records"`
+	Selections       []Selection   `json:"selections"`
 }
 
-type PublishRecordRequest struct {
-	SnapshotID       string `json:"snapshot_id"`
-	RecordID         string `json:"record_id"`
+type PublishWorkspaceRequest struct {
+	SnapshotID       string `json:"-"`
+	IdempotencyKey   string `json:"-"`
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
-type RestoreRecordRequest struct {
-	SnapshotID       string `json:"snapshot_id"`
-	RecordID         string `json:"record_id"`
-	HistoryID        string `json:"history_id"`
+type HistoryItem struct {
+	ID              string    `json:"id"`
+	DraftRevision   int64     `json:"draft_revision"`
+	ContentRevision int64     `json:"content_revision"`
+	CreatedAt       time.Time `json:"created_at"`
+	RecordCount     int       `json:"record_count"`
+}
+
+type HistoryPage struct {
+	Items      []HistoryItem `json:"items"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+}
+
+type RestoreHistoryRequest struct {
+	SnapshotID       string `json:"-"`
+	HistoryID        string `json:"-"`
+	IdempotencyKey   string `json:"-"`
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
-type Bindings struct {
-	SnapshotID string         `json:"snapshot_id"`
-	FeatureID  string         `json:"feature_id"`
-	Values     map[string]any `json:"values"`
-	Revision   int64          `json:"revision"`
+type PublishedContent struct {
+	SnapshotID      string      `json:"snapshot_id"`
+	ContentRevision int64       `json:"content_revision"`
+	Records         []Record    `json:"records"`
+	Selections      []Selection `json:"selections"`
 }
 
-type SaveBindingsRequest struct {
-	SnapshotID       string         `json:"snapshot_id"`
-	FeatureID        string         `json:"feature_id"`
-	Values           map[string]any `json:"values"`
-	ExpectedRevision int64          `json:"expected_revision"`
+// CopySnapshotContentRequest is a durable workflow task input. The copy is
+// idempotent for the target snapshot and rejects a changed parent revision.
+type CopySnapshotContentRequest struct {
+	SourceSnapshotID       string `json:"source_snapshot_id"`
+	TargetSnapshotID       string `json:"target_snapshot_id"`
+	ExpectedSourceRevision int64  `json:"expected_source_revision"`
+	IdempotencyKey         string `json:"idempotency_key"`
+}
+
+type CopySnapshotContentResult struct {
+	TargetSnapshotID string `json:"target_snapshot_id"`
+	SourceRevision   int64  `json:"source_revision"`
+	CopiedRecords    int    `json:"copied_records"`
+	CopiedHistory    int    `json:"copied_history"`
 }
 
 type Descriptor struct{}
@@ -135,15 +183,12 @@ func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
 
 func (Descriptor) Operations() []platform.Operation {
 	return []platform.Operation{
-		{Name: "model.list", Action: platform.AccessActionRead, ResourceType: "content-model"},
-		{Name: "model.read", Action: platform.AccessActionRead, ResourceType: "content-model"},
-		{Name: "model.write", Action: platform.AccessActionWrite, ResourceType: "content-model"},
-		{Name: "record.list", Action: platform.AccessActionRead, ResourceType: "content-record"},
-		{Name: "record.write", Action: platform.AccessActionWrite, ResourceType: "content-record"},
-		{Name: "record.publish", Action: platform.AccessActionWrite, ResourceType: "content-record"},
-		{Name: "record.restore", Action: platform.AccessActionWrite, ResourceType: "content-record"},
-		{Name: "binding.read", Action: platform.AccessActionRead, ResourceType: "content-binding"},
-		{Name: "binding.write", Action: platform.AccessActionWrite, ResourceType: "content-binding"},
+		{Name: "workspace.read", Action: platform.AccessActionRead, ResourceType: "content-workspace"},
+		{Name: "workspace.write", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
+		{Name: "workspace.publish", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
+		{Name: "workspace.history", Action: platform.AccessActionRead, ResourceType: "content-history"},
+		{Name: "workspace.restore", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
+		{Name: "snapshot.copy-content", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
 	}
 }
 

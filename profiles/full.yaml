@@ -21,6 +21,7 @@ apis:
     - ui
   public:
     - router
+    - form-session
     - form-submit
     - form-upload
     - content-runtime

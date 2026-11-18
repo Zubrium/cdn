@@ -7,8 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
-	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +15,7 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 	"github.com/google/uuid"
 )
 
@@ -588,30 +587,11 @@ func isStateChanging(method string) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, target any) error {
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		return errors.New("invalid content type")
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return err
-		}
-		return errors.New("invalid JSON")
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("invalid JSON")
-	}
-	return nil
+	return httpjson.DecodeRequest(w, r, limit, target)
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if errors.Is(err, httpjson.ErrTooLarge) {
 		writeCodeError(w, http.StatusRequestEntityTooLarge, "too_large")
 		return
 	}

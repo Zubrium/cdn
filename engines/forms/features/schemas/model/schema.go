@@ -7,3 +7,9 @@ type Schema struct {
 	Version int64          `json:"version"`
 	Fields  map[string]any `json:"fields"`
 }
+
+type StoredSchema struct {
+	Schema    Schema
+	Revision  int64
+	RecordKey string
+}

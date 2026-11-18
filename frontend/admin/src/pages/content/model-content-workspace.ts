@@ -4,6 +4,7 @@ import type {
   DataModel,
   JsonValue,
   ModelContentRecord,
+  ModelContentRecordInput,
   ModelContentSelection,
   ModelContentWorkspace,
 } from "@/types";
@@ -353,9 +354,10 @@ export function modelDraftHasRevisionConflict(
     && (!modelRecordsEqual(local.records, server.records) || !modelSelectionsEqual(local.selections, server.selections));
 }
 
-export function apiModelRecordInput(record: ModelContentRecord): Omit<ModelContentRecord, "id"> | ModelContentRecord {
+export function apiModelRecordInput(record: ModelContentRecord): Omit<ModelContentRecord, "id"> | ModelContentRecordInput {
   if (record.id.startsWith("local:")) {
     return {
+      clientKey: record.id,
       entityId: record.entityId,
       sortOrder: record.sortOrder,
       values: record.values,
@@ -368,8 +370,11 @@ export function canonicalRecordID(
   selectedID: string,
   submitted: ModelContentRecord[],
   saved: ModelContentRecord[],
+  clientRecordIDs?: Record<string, string>,
 ): string {
   if (!selectedID.startsWith("local:")) return selectedID;
+  const mapped = clientRecordIDs?.[selectedID];
+  if (mapped) return mapped;
   const selected = submitted.find((record) => record.id === selectedID);
   if (!selected) return "";
   return saved.find((record) => record.entityId === selected.entityId && record.sortOrder === selected.sortOrder)?.id ?? "";
@@ -379,11 +384,12 @@ export function remapLocalRecordIDs(
   draft: { records: ModelContentRecord[]; selections: ModelContentSelection[] },
   submitted: ModelContentRecord[],
   saved: ModelContentRecord[],
+  clientRecordIDs?: Record<string, string>,
 ): { records: ModelContentRecord[]; selections: ModelContentSelection[] } {
   const idMap = new Map<string, string>();
   for (const record of submitted) {
     if (!record.id.startsWith("local:")) continue;
-    const canonical = canonicalRecordID(record.id, submitted, saved);
+    const canonical = canonicalRecordID(record.id, submitted, saved, clientRecordIDs);
     if (canonical) idMap.set(record.id, canonical);
   }
   if (idMap.size === 0) return draft;

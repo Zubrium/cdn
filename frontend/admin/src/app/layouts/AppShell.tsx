@@ -16,6 +16,7 @@ import {
   Home,
   Image,
   Inbox,
+  ClipboardList,
   Layers,
   LayoutDashboard,
   LogOut,
@@ -94,7 +95,8 @@ const contentNav: NavItem[] = [
   { to: "/content", label: "Редактор", icon: Layers, match: (p) => p === "/content" },
 ];
 
-const submissionsNav: NavItem[] = [
+const formsNav: NavItem[] = [
+  { to: "/forms", label: "Схемы", icon: ClipboardList, match: (p) => p.startsWith("/forms") },
   { to: "/submissions", label: "Заявки", icon: Inbox, match: (p) => p.startsWith("/submissions") },
 ];
 
@@ -274,7 +276,7 @@ function SidebarContent({
       >
         <NavGroup label="Обзор" collapsed={collapsed} items={homeNav} onNavigate={onNavigate} />
         {contentReader && <NavGroup label="Контент" collapsed={collapsed} items={contentNav} onNavigate={onNavigate} className="mt-3" />}
-        {submissionReader && <NavGroup label="Формы" collapsed={collapsed} items={submissionsNav} onNavigate={onNavigate} className="mt-3" />}
+        {submissionReader && <NavGroup label="Формы" collapsed={collapsed} items={formsNav} onNavigate={onNavigate} className="mt-3" />}
         {fileReader && <NavGroup label="Файлы" collapsed={collapsed} items={filesNav} onNavigate={onNavigate} className="mt-3" />}
         {coordinatorReader && <NavGroup label="Задания" collapsed={collapsed} items={coordinatorNav} onNavigate={onNavigate} className="mt-3" />}
         {hasGroupAccess(principal, "router_routes", 1) && <NavGroup label="Маршрутизация" collapsed={collapsed} items={routerNav} onNavigate={onNavigate} className="mt-3" />}

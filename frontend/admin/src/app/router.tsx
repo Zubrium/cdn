@@ -16,6 +16,7 @@ import { canManageAdministrators, hasAnyGroupAccess, hasGroupAccess } from "@/li
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const ContentHomePage = lazy(() => import("@/pages/content/ContentHomePage"));
 const SubmissionsPage = lazy(() => import("@/pages/submissions/SubmissionsPage"));
+const FormsPage = lazy(() => import("@/pages/forms/FormsPage"));
 const MediaPage = lazy(() => import("@/pages/media/MediaPage"));
 const AccessLayout = lazy(() => import("@/pages/access/AccessLayout"));
 const UsersPage = lazy(() => import("@/pages/access/UsersPage"));
@@ -156,6 +157,7 @@ export const router = createBrowserRouter(
             { path: "features/:featureId/*", element: <Navigate to="/content" replace /> },
             { path: "submissions", element: <RequireGroup group="forms"><SubmissionsPage /></RequireGroup> },
             { path: "submissions/:submissionId", element: <RequireGroup group="forms"><SubmissionsPage /></RequireGroup> },
+            { path: "forms", element: <RequireGroup group="forms"><FormsPage /></RequireGroup> },
             { path: "media", element: <RequireAnyGroup><MediaPage /></RequireAnyGroup> },
             { path: "coordinator/jobs", element: <RequireGroup group="coordinator_jobs"><CoordinatorJobsPage /></RequireGroup> },
             { path: "router/routes", element: <RequireGroup group="router_routes"><RouterRoutesPage /></RequireGroup> },

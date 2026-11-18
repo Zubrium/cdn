@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, Trash2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api";
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { hasGroupAccess } from "@/lib/permissions";
 import { errorMessage } from "@/lib/errors";
+import { downloadBlob } from "@/lib/format";
 import type { FormSubmission } from "@/types";
 
 const pageSize = 100;
@@ -89,6 +90,14 @@ export default function SubmissionsPage() {
   });
   const submissionItems = useMemo(() => submissions.data?.pages.flatMap((page) => page.items) ?? [], [submissions.data]);
   const selectedForm = schemaItems.find((item) => item.id === formID);
+  const exportMutation = useMutation({
+    mutationFn: () => api.formsEngine.exportSubmissions(snapshotID, { form_id: formID || undefined, state: state || undefined }),
+    onSuccess: ({ blob, filename }) => {
+      downloadBlob(blob, filename);
+      toast.success("Экспорт CSV готов");
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
   const detail = useQuery({
     queryKey: ["formsEngine", "submission", snapshotID, submissionId],
     queryFn: ({ signal }) => api.formsEngine.submission(snapshotID, submissionId, signal),
@@ -152,6 +161,7 @@ export default function SubmissionsPage() {
 
   return <div className="page-grid">
     <PageHeader title="Заявки" description="Ответы на опубликованные формы. Содержание заявки неизменяемо." actions={<>
+      <Button type="button" variant="outline" className="min-h-11" disabled={!snapshotID || !formID} loading={exportMutation.isPending} onClick={() => exportMutation.mutate()}><Download />Экспорт CSV</Button>
       <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => { const next = new URLSearchParams(params); next.set("form", event.currentTarget.value); setParams(next); }}><option value="" disabled>Выберите форму</option>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>
       <label className="space-y-1.5 text-sm"><span className="sr-only">Статус</span><select aria-label="Статус" className="h-11 min-w-36 rounded-md border border-input bg-background px-3" value={state} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("state", event.currentTarget.value); else next.delete("state"); setParams(next); }}><option value="">Все статусы</option>{[...new Set([...statusValues, ...submissionItems.map((item) => item.state)])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
       <label className="space-y-1.5 text-sm"><span className="sr-only">Снапшот</span><select aria-label="Снапшот" className="h-11 min-w-56 rounded-md border border-input bg-background px-3" value={snapshotID} onChange={(event) => navigate(`/submissions?snapshot=${encodeURIComponent(event.currentTarget.value)}`)}>{snapshotItems.map((item) => <option key={item.id} value={item.id}>{snapshotLabel(item.id, item.site_id)}</option>)}</select></label>

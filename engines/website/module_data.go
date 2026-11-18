@@ -18,7 +18,7 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 			}},
 			{Name: "website/snapshots", ScopeTypes: []string{"site"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "revision": {Type: core.SelectorNumber},
-				"branch_id": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString}, "action": {Type: core.SelectorString},
+				"parent_id": {Type: core.SelectorString}, "branch_id": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString}, "action": {Type: core.SelectorString},
 			}},
 			{Name: "website/builds", ScopeTypes: []string{"job"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString},

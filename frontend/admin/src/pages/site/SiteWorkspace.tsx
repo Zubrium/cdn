@@ -13,6 +13,7 @@ import { hasCompetingSiteDraftChange, parseSiteDraft, siteDraftKey } from "./wor
 import type { StructuredDesignSystem } from "@/domains/design-system/types";
 import { featureVersionChanges, normalizeFeatureComposition } from "./feature-selection";
 import { siteContextQuery } from "./site-query";
+import { readySnapshots } from "@/domains/snapshots/lifecycle";
 
 type Workspace = {
   config: SiteConfig;
@@ -33,7 +34,7 @@ type Workspace = {
 
 const WorkspaceContext = createContext<Workspace | null>(null);
 const emptyDesignSystem: StructuredDesignSystem = {formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: []};
-const SNAPSHOT_NAME_LIMIT = 160;
+const SNAPSHOT_NAME_LIMIT = 120;
 const siteEditorModes = [
   ["/site/pages", "Страницы"],
   ["/site/features", "Версии"],
@@ -84,10 +85,16 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const [rootSiteSelection, setRootSiteSelection] = useState(requestedSiteID);
   useDocumentTitle("Снапшоты");
 
-  const snapshots = useQuery({ queryKey: ["site", "snapshot-choices"], queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal) });
+  const snapshots = useQuery({
+    queryKey: ["site", "snapshot-choices"],
+    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal),
+    refetchInterval: (query) => query.state.data?.items.some((item) => item.state === "provisioning") ? 2000 : false,
+  });
   const branches = useQuery({ queryKey: ["website", "branches"], queryFn: ({ signal }) => api.website.branches(signal) });
+  const readySnapshotItems = readySnapshots(snapshots.data?.items ?? []);
+  const selectedSnapshotState = snapshots.data?.items.find((item) => item.id === selected)?.state;
   const configuredSiteIDs = [...new Set((branches.data?.items ?? []).map((branch) => branch.site_id))].sort();
-  const waitingForSelection = !selected && (snapshots.isLoading || branches.isLoading || snapshots.isError || branches.isError || Boolean(snapshots.data?.items.length));
+  const waitingForSelection = !selected && (snapshots.isLoading || branches.isLoading || snapshots.isError || branches.isError || readySnapshotItems.length > 0);
   const [config, setConfig] = useState<SiteConfig | null>(null);
   const [savedConfig, setSavedConfig] = useState<SiteConfig | null>(null);
   const [metadata, setMetadata] = useState<SiteMetadata>({formatVersion: 1, siteName: "Website", pages: {}});
@@ -111,6 +118,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const localDraftConflict = useRef(false);
   const requestNumber = useRef(0);
   const createdSelection = useRef("");
+  const createAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const guardBypass = useRef(false);
   const userId = principal?.id ?? "";
 
@@ -175,10 +183,10 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   }, [selected, principal]);
 
   useEffect(() => {
-    if (!selected && snapshots.data?.items.length) {
-      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", snapshots.data.items[0]!.id); return next; }, { replace: true });
+    if (!selected && readySnapshotItems.length > 0) {
+      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", readySnapshotItems[0]!.id); return next; }, { replace: true });
     }
-  }, [selected, setParams, snapshots.data]);
+  }, [selected, setParams, readySnapshotItems]);
 
   useEffect(() => {
     if (waitingForSelection) return;
@@ -191,6 +199,15 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     void reload();
     return () => { requestNumber.current += 1; };
   }, [reload, selected, waitingForSelection]);
+
+  useEffect(() => {
+    if (!selected || !snapshot || snapshot.id !== selected || !selectedSnapshotState || selectedSnapshotState === snapshot.state) return;
+    if (selectedSnapshotState === "ready") {
+      void reload();
+      return;
+    }
+    setSnapshot({ ...snapshot, state: selectedSnapshotState });
+  }, [reload, selected, selectedSnapshotState, snapshot]);
 
   const dirty = useMemo(() => config !== null && savedConfig !== null && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
   const allDirty = dirty || JSON.stringify(metadata) !== JSON.stringify(savedMetadata) || JSON.stringify(designSystem) !== JSON.stringify(savedDesignSystem);
@@ -253,10 +270,15 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     try {
 	  let parentSnapshotRequest: { parentSnapshotId: string; expectedParentRevision: number; expectedParentContentRevision: number } | undefined;
 	  if (snapshot) {
-	    if (snapshot.revision === undefined || snapshot.contentRevision === undefined) {
+	    const contentWorkspace = await api.contentEngine.workspace(snapshot.id);
+	    if (snapshot.revision === undefined || !Number.isSafeInteger(contentWorkspace.revision) || contentWorkspace.revision < 0) {
 	      throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
 	    }
-	    parentSnapshotRequest = { parentSnapshotId: snapshot.id, expectedParentRevision: snapshot.revision, expectedParentContentRevision: snapshot.contentRevision };
+	    parentSnapshotRequest = {
+	      parentSnapshotId: snapshot.id,
+	      expectedParentRevision: snapshot.revision,
+	      expectedParentContentRevision: contentWorkspace.revision,
+	    };
 	    if (changedDuringSave()) {
 	      toast.info("Настройки изменились во время проверки. Сохраните их ещё раз.");
 	      return false;
@@ -281,14 +303,20 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
 	      }
 	    }
 	  }
-      const created = await api.siteBuilder.createSnapshotFrom({
+      const input = {
         siteID: snapshot?.siteId ?? rootSiteID,
         name: name?.trim() || (snapshot ? childSnapshotName(snapshot) : "Новый сайт"),
         ...(parentSnapshotRequest ?? {}),
         config: submitted,
         metadata: submittedMetadata,
         designSystem: submittedDesignSystem,
-      });
+      };
+      const fingerprint = JSON.stringify(input);
+      if (!createAttempt.current || createAttempt.current.fingerprint !== fingerprint) {
+        createAttempt.current = { fingerprint, key: `snapshot-${crypto.randomUUID()}` };
+      }
+      const created = await api.siteBuilder.createSnapshotFrom({ ...input, idempotencyKey: createAttempt.current.key });
+      createAttempt.current = null;
       if (principal) {
         try {
           const oldKey = siteDraftKey(principal.id, selected);
@@ -318,7 +346,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
       setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", created.id); next.delete("site_id"); return next; }, { replace: true });
       void queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
       void queryClient.invalidateQueries({ queryKey: ["content"] });
-      toast.success(`Создан снапшот #${created.sequence}`);
+      toast.success(created.state === "ready" ? `Создан снапшот #${created.sequence}` : `Снапшот #${created.sequence} создан и готовится`);
       if (created.warnings?.length) toast.warning(`Проверьте перенос данных: найдено проблем ${created.warnings.length}`);
       if (changedDuringSave()) {
         toast.info("Новые изменения ещё не сохранены");
@@ -336,8 +364,15 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   }, [saving, snapshot, rootSiteID, setParams, queryClient, confirm, principal, selected, persistLocal]);
 
   if (snapshots.error || branches.error) return <ErrorState error={snapshots.error ?? branches.error} title="Не удалось загрузить конфигурацию сайта" onRetry={() => { void snapshots.refetch(); void branches.refetch(); }} />;
-  if (loading || snapshots.isLoading || (!selected && Boolean(snapshots.data?.items.length))) return <p className="p-8 text-sm text-muted-foreground">Загружаем снапшот…</p>;
+  if (loading || snapshots.isLoading || (!selected && readySnapshotItems.length > 0)) return <p className="p-8 text-sm text-muted-foreground">Загружаем снапшот…</p>;
   if (error || !config) return <ErrorState error={error} title="Не удалось загрузить снапшот" onRetry={() => void reload()} />;
+  if (snapshot && snapshot.state !== "ready") {
+    return <div className="page-grid p-6">
+      <h1 className="text-lg font-semibold">{snapshot.state === "provisioning" ? "Снапшот готовится" : "Не удалось подготовить снапшот"}</h1>
+      <p role="status" className="text-sm text-muted-foreground">{snapshot.state === "provisioning" ? "Копируются записи, публикации и выборы контента. Редактирование станет доступно после завершения." : "Этот снапшот нельзя редактировать или назначать ветке. Проверьте его состояние в дереве снапшотов."}</p>
+      <Button type="button" variant="outline" className="w-fit" onClick={() => void snapshots.refetch()}>Обновить состояние</Button>
+    </div>;
+  }
 
   const canvas = location.pathname.startsWith("/site/pages")
     || location.pathname === "/site/router"
@@ -385,8 +420,8 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
           }}>
             <SelectTrigger className="w-full sm:w-80" aria-label="Рабочий снапшот"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {!snapshots.data?.items.length && <SelectItem value="new">Первый снапшот</SelectItem>}
-              {snapshots.data?.items.map((item) => <SelectItem key={item.id} value={item.id}>#{item.sequence} · {item.name}</SelectItem>)}
+              {readySnapshotItems.length === 0 && <SelectItem value="new">Первый снапшот</SelectItem>}
+              {readySnapshotItems.map((item) => <SelectItem key={item.id} value={item.id}>#{item.sequence} · {item.name}</SelectItem>)}
             </SelectContent>
           </Select>
           {!selected && <Select value={rootSiteID || "none"} disabled={saving || configuredSiteIDs.length === 0} onValueChange={(siteID) => {

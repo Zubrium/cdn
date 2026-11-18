@@ -49,8 +49,8 @@ type SnapshotAPI interface {
 	GetSnapshot(context.Context, string) (Snapshot, error)
 	GetSnapshotDesignSystem(context.Context, string) (SnapshotDesignSystem, error)
 	CreateSnapshot(context.Context, CreateSnapshotRequest) (Snapshot, error)
+	MarkSnapshotReady(context.Context, string, int64) (Snapshot, error)
 	DeleteSnapshot(context.Context, DeleteSnapshotRequest) error
-	PinFeatureVersion(context.Context, PinFeatureVersionRequest) (Snapshot, error)
 }
 
 // BranchAPI exposes statically configured branch topology and its mutable
@@ -193,16 +193,20 @@ type CreateSnapshotRequest struct {
 	Payload                 SnapshotPayload `json:"payload"`
 }
 
+// SnapshotForkWorkflowPayload is the versioned input to Website's durable
+// child-snapshot workflow. Content owns the source revision; Website owns the
+// target lifecycle revision.
+type SnapshotForkWorkflowPayload struct {
+	SourceSnapshotID              string `json:"source_snapshot_id"`
+	TargetSnapshotID              string `json:"target_snapshot_id"`
+	ExpectedSourceContentRevision int64  `json:"expected_source_content_revision"`
+	TargetSnapshotRevision        int64  `json:"target_snapshot_revision"`
+	ContentCopyIdempotencyKey     string `json:"content_copy_idempotency_key"`
+}
+
 type DeleteSnapshotRequest struct {
 	SnapshotID       string `json:"-"`
 	ExpectedRevision int64  `json:"-"`
-}
-
-type PinFeatureVersionRequest struct {
-	SnapshotID       string `json:"snapshot_id"`
-	FeatureID        string `json:"feature_id"`
-	Version          string `json:"version"`
-	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type BuildSnapshotRequest struct {

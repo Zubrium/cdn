@@ -7,20 +7,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"unicode/utf8"
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/forms/features/schemas/model"
-	schemarepo "github.com/Zubrium/cdn/engines/forms/features/schemas/repository"
 )
 
 type Repository interface {
-	GetByKey(context.Context, string, string) (model.Schema, core.ModuleDataRecord, error)
-	GetByID(context.Context, string, string) (model.Schema, core.ModuleDataRecord, string, error)
+	GetByKey(context.Context, string, string) (model.StoredSchema, error)
+	GetByID(context.Context, string, string) (model.StoredSchema, error)
 	Create(context.Context, string, model.Schema) (int64, error)
 	Update(context.Context, string, string, model.Schema, int64) (int64, error)
-	List(context.Context, string, string, int) ([]schemarepo.Entry, string, error)
+	List(context.Context, string, string, int) ([]model.StoredSchema, string, error)
 }
 
 type Versioned struct {
@@ -44,8 +44,8 @@ func (service *Service) Get(ctx context.Context, snapshotID, schemaID string) (m
 	if !validIdentifier(snapshotID) || !validIdentifier(schemaID) {
 		return model.Schema{}, 0, core.ErrModuleDataInvalid
 	}
-	schema, record, _, err := service.repository.GetByID(ctx, snapshotID, schemaID)
-	return schema, record.Revision, err
+	schema, err := service.repository.GetByID(ctx, snapshotID, schemaID)
+	return schema.Schema, schema.Revision, err
 }
 
 func (service *Service) Save(ctx context.Context, snapshotID, schemaID, key string, fields map[string]any, expectedRevision int64) (model.Schema, int64, error) {
@@ -53,11 +53,14 @@ func (service *Service) Save(ctx context.Context, snapshotID, schemaID, key stri
 		(schemaID == "" && expectedRevision != 0) || (schemaID != "" && (expectedRevision == 0 || !validIdentifier(schemaID))) {
 		return model.Schema{}, 0, core.ErrModuleDataInvalid
 	}
+	if _, err := model.ParseFieldDefinitions(fields); err != nil {
+		return model.Schema{}, 0, core.ErrModuleDataInvalid
+	}
 
 	if schemaID == "" {
-		if existing, record, err := service.repository.GetByKey(ctx, snapshotID, key); err == nil {
-			if equalJSON(existing.Fields, fields) {
-				return existing, record.Revision, nil
+		if existing, err := service.repository.GetByKey(ctx, snapshotID, key); err == nil {
+			if equalJSON(existing.Schema.Fields, fields) {
+				return existing.Schema, existing.Revision, nil
 			}
 			return model.Schema{}, 0, core.ErrModuleDataConflict
 		} else if !errors.Is(err, core.ErrModuleDataNotFound) {
@@ -70,31 +73,34 @@ func (service *Service) Save(ctx context.Context, snapshotID, schemaID, key stri
 		schema := model.Schema{ID: id, Key: key, Version: 1, Fields: fields}
 		revision, err := service.repository.Create(ctx, snapshotID, schema)
 		if errors.Is(err, core.ErrModuleDataConflict) {
-			if existing, record, readErr := service.repository.GetByKey(ctx, snapshotID, key); readErr == nil && equalJSON(existing.Fields, fields) {
-				return existing, record.Revision, nil
+			if existing, readErr := service.repository.GetByKey(ctx, snapshotID, key); readErr == nil && equalJSON(existing.Schema.Fields, fields) {
+				return existing.Schema, existing.Revision, nil
 			}
 		}
 		return schema, revision, err
 	}
 
-	current, record, oldRecordKey, err := service.repository.GetByID(ctx, snapshotID, schemaID)
+	current, err := service.repository.GetByID(ctx, snapshotID, schemaID)
 	if err != nil {
 		return model.Schema{}, 0, err
 	}
-	if record.Revision != expectedRevision {
+	if current.Revision != expectedRevision {
 		return model.Schema{}, 0, core.ErrModuleDataConflict
 	}
-	if key != current.Key {
-		if _, _, err := service.repository.GetByKey(ctx, snapshotID, key); err == nil {
+	if current.Schema.Version == math.MaxInt64 {
+		return model.Schema{}, 0, core.ErrModuleDataConflict
+	}
+	if key != current.Schema.Key {
+		if _, err := service.repository.GetByKey(ctx, snapshotID, key); err == nil {
 			return model.Schema{}, 0, core.ErrModuleDataConflict
 		} else if !errors.Is(err, core.ErrModuleDataNotFound) {
 			return model.Schema{}, 0, err
 		}
-	} else if equalJSON(current.Fields, fields) {
-		return current, record.Revision, nil
+	} else if equalJSON(current.Schema.Fields, fields) {
+		return current.Schema, current.Revision, nil
 	}
-	next := model.Schema{ID: current.ID, Key: key, Version: current.Version + 1, Fields: fields}
-	revision, err := service.repository.Update(ctx, snapshotID, oldRecordKey, next, expectedRevision)
+	next := model.Schema{ID: current.Schema.ID, Key: key, Version: current.Schema.Version + 1, Fields: fields}
+	revision, err := service.repository.Update(ctx, snapshotID, current.RecordKey, next, expectedRevision)
 	if err != nil {
 		return model.Schema{}, 0, err
 	}
@@ -117,7 +123,7 @@ func (service *Service) List(ctx context.Context, snapshotID, after string, limi
 	}
 	items := make([]Versioned, len(entries))
 	for i, entry := range entries {
-		items[i] = Versioned{Schema: entry.Schema, Revision: entry.Record.Revision}
+		items[i] = Versioned{Schema: entry.Schema, Revision: entry.Revision}
 	}
 	return items, next, nil
 }

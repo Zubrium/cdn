@@ -584,6 +584,73 @@ func TestUploadRejectsInvalidMetadataBeforeCoreReservation(t *testing.T) {
 	}
 }
 
+func TestUploadAndPartRejectDuplicateSecurityHeaders(t *testing.T) {
+	core := newFakeLoader()
+	handler := testHandler(t, core)
+	body := `{"name":"asset.txt","contentType":"text/plain","size":1,"sha256":"` + strings.Repeat("0", 64) + `","groups":["assets"]}`
+	duplicateKey := httptest.NewRequest(http.MethodPost, apiPrefix+"/uploads", strings.NewReader(body))
+	duplicateKey.Header.Set("Authorization", "Bearer test-core-key")
+	duplicateKey.Header.Set("Content-Type", "application/json")
+	duplicateKey.Header.Add("Idempotency-Key", "create-upload-123456")
+	duplicateKey.Header.Add("Idempotency-Key", "create-upload-123457")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, duplicateKey)
+	if response.Code != http.StatusBadRequest || core.beginCalls != 0 {
+		t.Fatalf("duplicate Idempotency-Key status=%d calls=%d body=%s", response.Code, core.beginCalls, response.Body.String())
+	}
+
+	duplicateType := httptest.NewRequest(http.MethodPost, apiPrefix+"/uploads", strings.NewReader(body))
+	duplicateType.Header.Set("Authorization", "Bearer test-core-key")
+	duplicateType.Header.Add("Content-Type", "application/json")
+	duplicateType.Header.Add("Content-Type", "text/plain")
+	duplicateType.Header.Set("Idempotency-Key", "create-upload-123456")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, duplicateType)
+	if response.Code != http.StatusBadRequest || core.beginCalls != 0 {
+		t.Fatalf("duplicate Content-Type status=%d calls=%d body=%s", response.Code, core.beginCalls, response.Body.String())
+	}
+
+	part := httptest.NewRequest(http.MethodPut, apiPrefix+"/uploads/"+testUploadID+"/parts/1", strings.NewReader("x"))
+	part.Header.Set("Authorization", "Bearer test-core-key")
+	part.Header.Set("Content-Type", "application/octet-stream")
+	part.Header.Add("X-Content-SHA256", strings.Repeat("0", 64))
+	part.Header.Add("X-Content-SHA256", strings.Repeat("1", 64))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, part)
+	if response.Code != http.StatusBadRequest || core.partCalls != 0 {
+		t.Fatalf("duplicate part checksum status=%d calls=%d body=%s", response.Code, core.partCalls, response.Body.String())
+	}
+}
+
+func TestFileAPIRejectsAmbiguousJSONAndInvalidUTF8(t *testing.T) {
+	core := newFakeLoader()
+	handler := testHandler(t, core)
+	validSum := strings.Repeat("0", 64)
+	duplicate := `{"name":"asset.txt","contentType":"text/plain","size":1,"size":2,"sha256":"` + validSum + `","groups":["assets"]}`
+	request := httptest.NewRequest(http.MethodPost, apiPrefix+"/uploads", strings.NewReader(duplicate))
+	request.Header.Set("Authorization", "Bearer test-core-key")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "create-upload-123456")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || core.beginCalls != 0 {
+		t.Fatalf("duplicate JSON key status=%d calls=%d body=%s", response.Code, core.beginCalls, response.Body.String())
+	}
+
+	invalidUTF8 := []byte(`{"name":"`)
+	invalidUTF8 = append(invalidUTF8, 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`.txt","contentType":"text/plain","size":1,"sha256":"`+validSum+`","groups":["assets"]}`)...)
+	request = httptest.NewRequest(http.MethodPost, apiPrefix+"/uploads", bytes.NewReader(invalidUTF8))
+	request.Header.Set("Authorization", "Bearer test-core-key")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "create-upload-123456")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || core.beginCalls != 0 {
+		t.Fatalf("invalid UTF-8 status=%d calls=%d body=%s", response.Code, core.beginCalls, response.Body.String())
+	}
+}
+
 func TestMetadataMutationsRequireCurrentETag(t *testing.T) {
 	core := newFakeLoader()
 	handler := testHandler(t, core)
@@ -619,6 +686,16 @@ func TestMetadataMutationsRequireCurrentETag(t *testing.T) {
 	if wrongFileResponse.Code != http.StatusPreconditionFailed || core.updateCalls != 2 {
 		t.Fatalf("ETag from another file was accepted: status=%d calls=%d", wrongFileResponse.Code, core.updateCalls)
 	}
+	duplicate := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"name":"ambiguous.txt"}`))
+	duplicate.Header.Set("Authorization", "Bearer test-core-key")
+	duplicate.Header.Set("Content-Type", "application/json")
+	duplicate.Header.Add("If-Match", `"`+testFileID+`-r1"`)
+	duplicate.Header.Add("If-Match", `"`+testFileID+`-r2"`)
+	duplicateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateResponse, duplicate)
+	if duplicateResponse.Code != http.StatusBadRequest || core.updateCalls != 2 {
+		t.Fatalf("duplicate If-Match status=%d calls=%d body=%s", duplicateResponse.Code, core.updateCalls, duplicateResponse.Body.String())
+	}
 }
 
 func TestDownloadSupportsRangesAndPrivateHeaders(t *testing.T) {
@@ -634,6 +711,15 @@ func TestDownloadSupportsRangesAndPrivateHeaders(t *testing.T) {
 	}
 	if response.Header().Get("Content-Range") != "bytes 2-4/6" || response.Header().Get("Cache-Control") != "private, no-store" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("unsafe or incomplete download headers: %v", response.Header())
+	}
+	duplicateRange := httptest.NewRequest(http.MethodGet, apiPrefix+"/objects/"+testFileID+"/content", nil)
+	duplicateRange.Header.Set("Authorization", "Bearer test-core-key")
+	duplicateRange.Header.Add("Range", "bytes=0-1")
+	duplicateRange.Header.Add("Range", "bytes=2-3")
+	duplicateRangeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRangeResponse, duplicateRange)
+	if duplicateRangeResponse.Code != http.StatusBadRequest || core.rangeCalls != 1 {
+		t.Fatalf("duplicate Range status=%d calls=%d", duplicateRangeResponse.Code, core.rangeCalls)
 	}
 }
 

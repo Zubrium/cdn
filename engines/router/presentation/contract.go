@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	routemodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
@@ -106,6 +107,7 @@ type DeliveryRequest struct {
 	IfModifiedSince string
 	Range           string
 	IfRange         string
+	FormSessionTokens map[string]string
 }
 
 // PublicOperationDescriptor is immutable metadata from one compiled engine
@@ -129,6 +131,7 @@ type PublicOperationRequest struct {
 	ContentLength  int64
 	IdempotencyKey string
 	Body           io.Reader
+	FormSessionTokens map[string]string
 }
 
 type PublicOperation interface {
@@ -155,6 +158,16 @@ type DeliveryResponse struct {
 	ContentDisposition string
 	AcceptRanges       string
 	Body               io.ReadCloser
+	FormSessionCookie  *FormSessionCookieChange
+}
+
+// FormSessionCookieChange is a typed session transport instruction. HTTP
+// cookie parsing and serialization remain in the Router Presentation adapter.
+type FormSessionCookieChange struct {
+	FormID    string
+	Token     string
+	ExpiresAt time.Time
+	Clear     bool
 }
 
 type Descriptor struct{}

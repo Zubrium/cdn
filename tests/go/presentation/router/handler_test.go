@@ -170,6 +170,29 @@ func TestCreateCoreFileRouteRequiresExactPathMatch(t *testing.T) {
 	}
 }
 
+func TestCreateRegisteredOperationRouteRequiresExactPathMatch(t *testing.T) {
+	api := &fakeRouter{}
+	operations, err := NewPublicOperationRegistry(validPublicOperation("public.form-session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := validTestConfig()
+	config.PublicOperations = operations
+	handler, err := NewHandler(api, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"host":"site.example","path":"/forms","match":"prefix","target":{"kind":"registered-operation","operation_id":"public.form-session","operation_config":{}}}`
+	request := httptest.NewRequest(http.MethodPost, routesPath, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer admin-secret")
+	request.Header.Set("Idempotency-Key", "router-route-prefix-op-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || api.createInput.Target.Kind != "" {
+		t.Fatalf("prefix operation route was accepted or reached engine: status=%d input=%+v body=%s", response.Code, api.createInput, response.Body.String())
+	}
+}
+
 func TestCreateRouteRejectsUnknownMatchMode(t *testing.T) {
 	api := &fakeRouter{}
 	handler, err := NewHandler(api, validTestConfig())
@@ -200,6 +223,28 @@ func TestReplaceTargetCannotBindCoreFileToPrefixRoute(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || api.replaceCalls != 0 {
 		t.Fatalf("prefix route accepted a core-file target: status=%d replace_calls=%d body=%s", response.Code, api.replaceCalls, response.Body.String())
+	}
+}
+
+func TestReplaceTargetRejectsAmbiguousIfMatchValues(t *testing.T) {
+	const routeID = "01938f7a-68af-7c10-a51d-78b6ca125301"
+	for _, values := range [][]string{{`"4"`, `"5"`}, {`""4""`}, {"4"}, {`"04"`}} {
+		api := &fakeRouter{getRoute: engine.Route{ID: routeID, BranchID: "storefront", Match: "exact", Revision: 4}}
+		handler, err := NewHandler(api, validTestConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPut, routesPath+"/"+routeID+"/target", strings.NewReader(`{"target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125302"}}`))
+		request.Header.Set("Authorization", "Bearer admin-secret")
+		request.Header.Set("Content-Type", "application/json")
+		for _, value := range values {
+			request.Header.Add("If-Match", value)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || api.replaceCalls != 0 {
+			t.Fatalf("If-Match values %q were accepted: status=%d replace_calls=%d body=%s", values, response.Code, api.replaceCalls, response.Body.String())
+		}
 	}
 }
 
@@ -445,6 +490,28 @@ func TestCreateRouteRejectsDuplicateContentTypeHeaders(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || api.createInput.Target.Kind != "" {
 		t.Fatalf("ambiguous Content-Type reached route creation: status=%d input=%+v body=%s", response.Code, api.createInput, response.Body.String())
+	}
+}
+
+func TestCreateRouteRejectsDuplicateJSONKeysAndInvalidUTF8(t *testing.T) {
+	for _, body := range [][]byte{
+		[]byte(`{"host":"site.example","path":"/","match":"exact","target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301","kind":"registered-operation"}}`),
+		append([]byte(`{"host":"site.example","path":"/","match":"exact","target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301"},"x":"`), 0xff, '"', '}'),
+	} {
+		api := &fakeRouter{}
+		handler, err := NewHandler(api, validTestConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, routesPath, strings.NewReader(string(body)))
+		request.Header.Set("Authorization", "Bearer admin-secret")
+		request.Header.Set("Idempotency-Key", "router-route-create-0001")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || api.createInput.Target.Kind != "" {
+			t.Fatalf("ambiguous JSON reached route creation: status=%d input=%+v body=%s", response.Code, api.createInput, response.Body.String())
+		}
 	}
 }
 

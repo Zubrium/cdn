@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"mime"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -15,6 +13,7 @@ import (
 
 	engine "github.com/Zubrium/cdn/engines/content/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
 const apiPrefix = "/api/v2/admin/content"
@@ -43,15 +42,11 @@ func NewHandler(api engine.API, config Config) (*Handler, error) {
 		return nil, err
 	}
 	h := &Handler{api: api, cfg: config, transport: transport, mux: http.NewServeMux()}
-	h.mux.HandleFunc("GET "+apiPrefix+"/models", h.listModels)
-	h.mux.HandleFunc("GET "+apiPrefix+"/models/{modelID}", h.getModel)
-	h.mux.HandleFunc("PUT "+apiPrefix+"/models", h.saveModel)
-	h.mux.HandleFunc("GET "+apiPrefix+"/records", h.listRecords)
-	h.mux.HandleFunc("PUT "+apiPrefix+"/records", h.saveRecord)
-	h.mux.HandleFunc("POST "+apiPrefix+"/records/{recordID}/publish", h.publishRecord)
-	h.mux.HandleFunc("POST "+apiPrefix+"/records/{recordID}/restore", h.restoreRecord)
-	h.mux.HandleFunc("GET "+apiPrefix+"/bindings/{featureID}", h.getBindings)
-	h.mux.HandleFunc("PUT "+apiPrefix+"/bindings", h.saveBindings)
+	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.getWorkspace)
+	h.mux.HandleFunc("PUT "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.saveWorkspaceDraft)
+	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots/{snapshotID}/workspace/publish", h.publishWorkspace)
+	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}/history", h.listHistory)
+	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots/{snapshotID}/history/{historyID}/restore", h.restoreHistory)
 	return h, nil
 }
 
@@ -61,13 +56,98 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id", "cursor", "limit")
-	if !valid || !validID(query["snapshot_id"]) || len(query["cursor"]) > 1024 {
+	snapshotID := r.PathValue("snapshotID")
+	if !validID(snapshotID) {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	workspace, err := h.api.GetWorkspace(ctx, snapshotID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if workspace.SnapshotID != snapshotID || workspace.Records == nil || workspace.Selections == nil || workspace.Placements == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, workspace)
+}
+
+func (h *Handler) saveWorkspaceDraft(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var request engine.SaveWorkspaceDraftRequest
+	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	request.SnapshotID = r.PathValue("snapshotID")
+	request.IdempotencyKey, ok = readIdempotencyKey(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_idempotency_key")
+		return
+	}
+	if !validID(request.SnapshotID) || request.ExpectedRevision < 0 || request.Records == nil || request.Selections == nil ||
+		len(request.Records) > 50000 || len(request.Selections) > 50000 || !validWorkspaceInput(request) {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	workspace, err := h.api.SaveWorkspaceDraft(ctx, request)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if workspace.SnapshotID != request.SnapshotID || workspace.Records == nil || workspace.Selections == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, workspace)
+}
+
+func (h *Handler) publishWorkspace(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ExpectedRevision int64 `json:"expected_revision"`
+	}
+	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &body); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	snapshotID := r.PathValue("snapshotID")
+	idempotencyKey, valid := readIdempotencyKey(r)
+	if !valid || !validID(snapshotID) || body.ExpectedRevision < 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	workspace, err := h.api.PublishWorkspace(ctx, engine.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if workspace.SnapshotID != snapshotID {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, workspace)
+}
+
+func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	query, valid := readQuery(r, "cursor", "limit")
+	if !valid || len(query["cursor"]) > 1024 || !validID(r.PathValue("snapshotID")) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -76,201 +156,105 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.api.ListModels(ctx, query["snapshot_id"], query["cursor"], limit)
+	page, err := h.api.ListHistory(ctx, r.PathValue("snapshotID"), query["cursor"], limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
+	}
+	if page.Items == nil {
+		page.Items = []engine.HistoryItem{}
 	}
 	writeJSON(w, http.StatusOK, page)
 }
 
-func (h *Handler) getModel(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) restoreHistory(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id")
-	modelID := r.PathValue("modelID")
-	if !valid || !validID(query["snapshot_id"]) || !validID(modelID) {
+	var body struct {
+		ExpectedRevision int64 `json:"expected_revision"`
+	}
+	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &body); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	snapshotID, historyID := r.PathValue("snapshotID"), r.PathValue("historyID")
+	idempotencyKey, valid := readIdempotencyKey(r)
+	if !valid || !validID(snapshotID) || !validID(historyID) || body.ExpectedRevision < 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	model, err := h.api.GetModel(ctx, query["snapshot_id"], modelID)
+	workspace, err := h.api.RestoreHistory(ctx, engine.RestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, model)
+	if workspace.SnapshotID != snapshotID {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, workspace)
 }
 
-func (h *Handler) saveModel(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	var request engine.SaveModelRequest
-	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
-		writeDecodeError(w, err)
-		return
-	}
-	if !validID(request.SnapshotID) || (request.ModelID != "" && !validID(request.ModelID)) || !validText(request.Key, 128) ||
-		!validText(request.Name, 256) || (request.Cardinality != "many" && request.Cardinality != "singleton") ||
-		request.ExpectedRevision < 0 || len(request.Fields) > 256 {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	for _, field := range request.Fields {
-		if (field.ID != "" && !validID(field.ID)) || !validText(field.Key, 128) || !validText(field.Name, 256) || !validText(field.Type, 64) {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
+func validWorkspaceInput(request engine.SaveWorkspaceDraftRequest) bool {
+	ids := make(map[string]struct{}, len(request.Records))
+	clientKeys := make(map[string]struct{}, len(request.Records))
+	for _, record := range request.Records {
+		if !validID(record.EntityID) || record.SortOrder < 0 || record.Values == nil || (record.ID == "") == (record.ClientKey == "") {
+			return false
+		}
+		if record.ID != "" {
+			if !validID(record.ID) {
+				return false
+			}
+			if _, duplicate := ids[record.ID]; duplicate {
+				return false
+			}
+			ids[record.ID] = struct{}{}
+		} else {
+			if !validClientKey(record.ClientKey) {
+				return false
+			}
+			if _, duplicate := clientKeys[record.ClientKey]; duplicate {
+				return false
+			}
+			clientKeys[record.ClientKey] = struct{}{}
 		}
 	}
-	model, err := h.api.SaveModel(ctx, request)
-	if err != nil {
-		writeEngineError(w, err)
-		return
+	for id := range ids {
+		if _, duplicate := clientKeys[id]; duplicate {
+			return false
+		}
 	}
-	writeJSON(w, http.StatusOK, model)
-}
-
-func (h *Handler) listRecords(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
+	pairs := make(map[string]struct{}, len(request.Selections))
+	for _, selection := range request.Selections {
+		if !validID(selection.PlacementID) || !validText(selection.InputKey, 128) || (selection.Mode != "all" && selection.Mode != "ids") {
+			return false
+		}
+		key := selection.PlacementID + "\x00" + selection.InputKey
+		if _, duplicate := pairs[key]; duplicate {
+			return false
+		}
+		pairs[key] = struct{}{}
+		if selection.Mode == "all" && len(selection.RecordIDs) != 0 {
+			return false
+		}
+		seen := make(map[string]struct{}, len(selection.RecordIDs))
+		for _, id := range selection.RecordIDs {
+			if _, exists := clientKeys[id]; exists {
+				// Client keys may happen to be syntactically valid server IDs; resolve
+				// them against their explicit request-local namespace first.
+			} else if _, exists := ids[id]; !exists || !validID(id) {
+				return false
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return false
+			}
+			seen[id] = struct{}{}
+		}
 	}
-	query, valid := readQuery(r, "snapshot_id", "model_id", "cursor", "limit")
-	if !valid || !validID(query["snapshot_id"]) || !validID(query["model_id"]) || len(query["cursor"]) > 1024 {
-		writeError(w, http.StatusBadRequest, "invalid_query")
-		return
-	}
-	limit, valid := parseLimit(query["limit"], h.cfg)
-	if !valid {
-		writeError(w, http.StatusBadRequest, "invalid_query")
-		return
-	}
-	page, err := h.api.ListRecords(ctx, engine.ListRecordsRequest{SnapshotID: query["snapshot_id"], ModelID: query["model_id"], Cursor: query["cursor"], Limit: limit})
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, page)
-}
-
-func (h *Handler) saveRecord(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	var request engine.SaveRecordRequest
-	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
-		writeDecodeError(w, err)
-		return
-	}
-	if !validID(request.SnapshotID) || !validID(request.ModelID) || (request.RecordID != "" && !validID(request.RecordID)) ||
-		request.Values == nil || request.ExpectedRevision < 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	record, err := h.api.SaveRecordDraft(ctx, request)
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, record)
-}
-
-func (h *Handler) publishRecord(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	var request struct {
-		SnapshotID       string `json:"snapshot_id"`
-		ExpectedRevision int64  `json:"expected_revision"`
-	}
-	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
-		writeDecodeError(w, err)
-		return
-	}
-	recordID := r.PathValue("recordID")
-	if !validID(request.SnapshotID) || !validID(recordID) || request.ExpectedRevision < 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	record, err := h.api.PublishRecord(ctx, engine.PublishRecordRequest{SnapshotID: request.SnapshotID, RecordID: recordID, ExpectedRevision: request.ExpectedRevision})
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, record)
-}
-
-func (h *Handler) restoreRecord(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	var request struct {
-		SnapshotID       string `json:"snapshot_id"`
-		HistoryID        string `json:"history_id"`
-		ExpectedRevision int64  `json:"expected_revision"`
-	}
-	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
-		writeDecodeError(w, err)
-		return
-	}
-	recordID := r.PathValue("recordID")
-	if !validID(request.SnapshotID) || !validID(request.HistoryID) || !validID(recordID) || request.ExpectedRevision < 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	record, err := h.api.RestoreRecord(ctx, engine.RestoreRecordRequest{SnapshotID: request.SnapshotID, RecordID: recordID, HistoryID: request.HistoryID, ExpectedRevision: request.ExpectedRevision})
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, record)
-}
-
-func (h *Handler) getBindings(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	query, valid := readQuery(r, "snapshot_id")
-	featureID := r.PathValue("featureID")
-	if !valid || !validID(query["snapshot_id"]) || !validID(featureID) {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	bindings, err := h.api.GetBindings(ctx, query["snapshot_id"], featureID)
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, bindings)
-}
-
-func (h *Handler) saveBindings(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	var request engine.SaveBindingsRequest
-	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
-		writeDecodeError(w, err)
-		return
-	}
-	if !validID(request.SnapshotID) || !validID(request.FeatureID) || request.Values == nil || request.ExpectedRevision < 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	bindings, err := h.api.SaveBindings(ctx, request)
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, bindings)
+	return true
 }
 
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (context.Context, bool) {
@@ -341,26 +325,34 @@ func parseLimit(value string, config Config) (int, bool) {
 	return limit, err == nil && limit > 0 && limit <= config.MaxPageSize
 }
 
-func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, target any) error {
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		return engine.ErrInvalid
+func readIdempotencyKey(r *http.Request) (string, bool) {
+	values := r.Header.Values("Idempotency-Key")
+	if len(values) != 1 {
+		return "", false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return engine.ErrTooLarge
+	value := values[0]
+	if len(value) == 0 || len(value) > 128 || strings.TrimSpace(value) != value {
+		return "", false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune("._:-", char) {
+			continue
 		}
-		return engine.ErrInvalid
+		return "", false
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+	return value, true
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, target any) error {
+	err := httpjson.DecodeRequest(w, r, limit, target)
+	switch {
+	case errors.Is(err, httpjson.ErrTooLarge):
+		return engine.ErrTooLarge
+	case errors.Is(err, httpjson.ErrInvalid):
 		return engine.ErrInvalid
+	default:
+		return err
 	}
-	return nil
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
@@ -413,6 +405,10 @@ func validID(value string) bool {
 	return true
 }
 
+func validClientKey(value string) bool {
+	return validText(value, 128) && !strings.ContainsAny(value, "\r\n\t")
+}
+
 func validText(value string, maximum int) bool {
 	return value != "" && len(value) <= maximum && utf8.ValidString(value) && strings.TrimSpace(value) == value && !strings.ContainsRune(value, '\x00')
 }
@@ -421,7 +417,6 @@ func nilInterface(value any) bool {
 	if value == nil {
 		return true
 	}
-	// Typed nils do not satisfy the API dependency contract.
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:

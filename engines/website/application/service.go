@@ -15,10 +15,7 @@ import (
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 )
 
-var (
-	errConfigInvalid = errors.New("invalid Website configuration")
-	errDependency    = errors.New("Website dependency unavailable")
-)
+var errConfigInvalid = errors.New("invalid Website configuration")
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var snapshotIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -29,6 +26,8 @@ type RecordStore interface {
 	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
 	Batch(context.Context, []core.ModuleDataMutation) error
 	MaxPageSize() int
+	MaxBatchSize() int
+	MaxPayloadBytes() int
 }
 
 type Config struct {
@@ -68,7 +67,7 @@ type actorContextKey struct{}
 
 func NewService(config Config, store RecordStore, authority core.GroupAuthorizationCapability, sessions core.SessionCapability) (*Service, error) {
 	if !validInterface(store) || !validInterface(authority) || !validInterface(sessions) ||
-		!core.ValidAccessGroupKey(config.AccessGroup) || store.MaxPageSize() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 || len(config.Branches) > 1024 {
+		!core.ValidAccessGroupKey(config.AccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 || len(config.Branches) > 1024 {
 		return nil, errConfigInvalid
 	}
 	siteSet := make(map[string]struct{}, len(config.Sites))

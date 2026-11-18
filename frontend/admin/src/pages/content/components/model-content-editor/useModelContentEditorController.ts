@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "@/api";
 import { useAuth } from "@/app/auth";
@@ -115,12 +115,17 @@ export function useModelContentEditorController({
   const [publishPending, setPublishPending] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const saveLock = useRef(false);
+  const saveRetry = useRef<{ fingerprint: string; key: string } | null>(null);
+  const publishRetry = useRef<string | null>(null);
+  const restoreRetry = useRef<{ historyID: string; revision: number; key: string } | null>(null);
   const changeSequence = useRef(0);
   const bypassGuard = useRef(false);
   const dirty = !sameDraft(draft, savedDraft);
-  const historyQuery = useQuery({
+  const historyQuery = useInfiniteQuery({
     queryKey: ["content", "model-history", workspace.snapshot.id],
-    queryFn: ({ signal }) => api.siteBuilder.modelContentHistory(workspace.snapshot.id, signal),
+    queryFn: ({ pageParam, signal }) => api.contentEngine.history(workspace.snapshot.id, pageParam, undefined, signal),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: historyOpen,
   });
 
@@ -205,19 +210,26 @@ export function useModelContentEditorController({
     saveLock.current = true;
     const submitted = draftRef.current;
     const submittedSequence = changeSequence.current;
+    const inputs = submitted.records.map(apiModelRecordInput);
+    const fingerprint = JSON.stringify({ records: inputs, selections: submitted.selections });
+    if (!saveRetry.current || saveRetry.current.fingerprint !== fingerprint) {
+      saveRetry.current = { fingerprint, key: `content-save-${crypto.randomUUID()}` };
+    }
+    const idempotencyKey = saveRetry.current.key;
     setSaveState("saving");
     setSaveError("");
     try {
-      const saved = await api.siteBuilder.saveModelContentWorkspace(workspace.snapshot.id, revisionRef.current, submitted.records.map(apiModelRecordInput), submitted.selections);
+      const saved = await api.contentEngine.saveWorkspaceDraft(workspace.snapshot.id, revisionRef.current, inputs, submitted.selections, idempotencyKey);
+      saveRetry.current = null;
       revisionRef.current = saved.revision;
       draftBaseRevisionRef.current = saved.revision;
       setRevision(saved.revision);
       const canonical: LocalModelDraft = { records: saved.records, selections: saved.selections };
       setSavedDraft(canonical);
-      const currentDraft = remapLocalRecordIDs(draftRef.current, submitted.records, saved.records);
+      const currentDraft = remapLocalRecordIDs(draftRef.current, submitted.records, saved.records, saved.clientRecordIDs);
       draftRef.current = currentDraft;
       setDraft(currentDraft);
-      const canonicalID = canonicalRecordID(recordId, submitted.records, saved.records);
+      const canonicalID = canonicalRecordID(recordId, submitted.records, saved.records, saved.clientRecordIDs);
       if (canonicalID) setRecordId(canonicalID);
       if (changeSequence.current === submittedSequence) {
         setSaveState("saved");
@@ -372,7 +384,9 @@ export function useModelContentEditorController({
     try {
       const saved = dirty ? await saveDraft() : null;
       if (dirty && !saved) return;
-      const published = await api.siteBuilder.publishModelContent(workspace.snapshot.id, saved?.revision ?? revisionRef.current);
+      publishRetry.current ??= `content-publish-${crypto.randomUUID()}`;
+      const published = await api.contentEngine.publishWorkspace(workspace.snapshot.id, saved?.revision ?? revisionRef.current, publishRetry.current);
+      publishRetry.current = null;
       const canonical: LocalModelDraft = { records: published.records, selections: published.selections };
       draftRef.current = canonical;
       setDraft(canonical);
@@ -402,7 +416,11 @@ export function useModelContentEditorController({
     });
     if (!accepted) return;
     try {
-      const restored = await api.siteBuilder.restoreModelContent(workspace.snapshot.id, publicationId, revisionRef.current);
+      if (!restoreRetry.current || restoreRetry.current.historyID !== publicationId || restoreRetry.current.revision !== revisionRef.current) {
+        restoreRetry.current = { historyID: publicationId, revision: revisionRef.current, key: `content-restore-${crypto.randomUUID()}` };
+      }
+      const restored = await api.contentEngine.restoreHistory(workspace.snapshot.id, publicationId, revisionRef.current, restoreRetry.current.key);
+      restoreRetry.current = null;
       const canonical: LocalModelDraft = { records: restored.records, selections: restored.selections };
       draftRef.current = canonical;
       setDraft(canonical);
@@ -434,7 +452,7 @@ export function useModelContentEditorController({
     });
     if (!accepted) return;
     try {
-      const latest = await api.siteBuilder.modelContentWorkspace(workspace.snapshot.id);
+      const latest = await api.contentEngine.workspace(workspace.snapshot.id);
       const canonical: LocalModelDraft = { records: latest.records, selections: latest.selections };
       draftRef.current = canonical;
       setDraft(canonical);

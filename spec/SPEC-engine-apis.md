@@ -91,6 +91,8 @@ HTTP session transport belongs to Presentation. The Admin Presentation exchanges
 
 HTTP route names and JSON field casing are versioned by the owning Presentation module. The typed Go contracts are the engine boundary; HTTP DTOs must be adapted rather than reused as domain models.
 
+JSON request bodies accepted by HTTP Presentation handlers use one shared strict decoder: exactly one `Content-Type: application/json` value, a configured byte limit, valid UTF-8, one complete JSON object, no duplicate object keys at any depth, and no unknown struct fields. Nesting is capped at 64 levels. The owning handler maps decoder failures to its versioned API error contract; domain and engine validation remains separate. The implementation lives in the standalone `presentation/httpjson` Go module and has no Core or engine dependency.
+
 Each externally reachable Presentation module owns an OpenAPI 3.1 contract under `spec/openapi/` and its Go adapter. New target APIs use `/api/v2`; there is no legacy `/api/v1` compatibility layer. Contract changes must update OpenAPI, handler validation, Admin TypeScript types/client and acceptance scenarios together.
 
 ## State and consistency

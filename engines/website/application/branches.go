@@ -60,9 +60,21 @@ func (s *Service) AssignBranch(ctx context.Context, request websiteapi.AssignBra
 	if !exists {
 		return websiteapi.Branch{}, websiteapi.ErrNotFound
 	}
+	request.SnapshotID = strings.ToLower(request.SnapshotID)
+	registryRecord, registryState, err := s.loadSiteRegistry(ctx, configured.SiteID)
+	if err != nil {
+		return websiteapi.Branch{}, err
+	}
+	registryState.LastSequence, err = s.ensureSiteSequence(ctx, configured.SiteID, registryState)
+	if err != nil {
+		return websiteapi.Branch{}, err
+	}
 	snapshot, snapshotRecord, err := s.snapshotInSite(ctx, configured.SiteID, request.SnapshotID)
 	if err != nil {
 		return websiteapi.Branch{}, err
+	}
+	if snapshot.State != "ready" {
+		return websiteapi.Branch{}, websiteapi.ErrConflict
 	}
 	if snapshotRecord.Revision != request.ExpectedSnapshotRevision {
 		return websiteapi.Branch{}, websiteapi.ErrConflict
@@ -78,6 +90,9 @@ func (s *Service) AssignBranch(ctx context.Context, request websiteapi.AssignBra
 	}
 	if state.SnapshotID == request.SnapshotID {
 		return branchFromAssignment(configured, request.SnapshotID, currentRecord.Revision, currentRecord.UpdatedAt), nil
+	}
+	if s.store.MaxBatchSize() < 3 {
+		return websiteapi.Branch{}, websiteapi.ErrTooLarge
 	}
 
 	now := time.Now().UTC()
@@ -108,11 +123,16 @@ func (s *Service) AssignBranch(ctx context.Context, request websiteapi.AssignBra
 	if err != nil {
 		return websiteapi.Branch{}, websiteapi.ErrUnavailable
 	}
+	registryMutation, err := siteRegistryMutation(configured.SiteID, registryRecord, registryState.LastSequence)
+	if err != nil {
+		return websiteapi.Branch{}, err
+	}
 	eventKey := core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "site", ScopeID: configured.SiteID,
 		RecordKey: fmt.Sprintf("event/%s/%s/%s", configured.ID, now.Format("20060102T150405.000000000Z"), eventID)}
 	mutations := []core.ModuleDataMutation{
 		{Key: key, ExpectedRevision: currentRecord.Revision, Value: &core.ModuleDataValue{Payload: statePayload, PayloadVersion: 1, IndexData: branchIndexJSON}},
 		{Key: eventKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: eventPayload, PayloadVersion: 1, IndexData: eventIndexJSON}},
+		registryMutation,
 	}
 	if err := s.store.Batch(ctx, mutations); err != nil {
 		return websiteapi.Branch{}, mapCoreError(err)
@@ -142,6 +162,9 @@ func (s *Service) ListBranchEvents(ctx context.Context, branchID, cursor string,
 	keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "site", configured.SiteID, after, selectors, limit)
 	if err != nil {
 		return websiteapi.BranchEventPage{}, mapCoreError(err)
+	}
+	if len(keys) != len(records) {
+		return websiteapi.BranchEventPage{}, websiteapi.ErrUnavailable
 	}
 	page := websiteapi.BranchEventPage{Items: make([]websiteapi.BranchEvent, 0, len(records))}
 	for i, record := range records {
@@ -183,9 +206,10 @@ func (s *Service) loadBranchState(ctx context.Context, configured BranchConfig) 
 		RecordType string `json:"record_type"`
 		BranchID   string `json:"branch_id"`
 		SnapshotID string `json:"snapshot_id"`
+		Revision   int64  `json:"revision"`
 	}
 	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &state) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
-		index.RecordType != "branch" || index.BranchID != configured.ID || index.SnapshotID != state.SnapshotID || state.ID != configured.ID || !snapshotIDPattern.MatchString(state.SnapshotID) || state.UpdatedAt.IsZero() {
+		index.RecordType != "branch" || index.BranchID != configured.ID || index.SnapshotID != state.SnapshotID || index.Revision != record.Revision || state.ID != configured.ID || !snapshotIDPattern.MatchString(state.SnapshotID) || state.UpdatedAt.IsZero() {
 		return branchState{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
 	}
 	return state, record, nil

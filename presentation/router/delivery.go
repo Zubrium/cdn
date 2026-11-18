@@ -1,7 +1,6 @@
 package router
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +17,7 @@ import (
 	routesapp "github.com/Zubrium/cdn/engines/router/features/routes/application"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 	"github.com/google/uuid"
 )
 
@@ -174,11 +174,22 @@ func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.Delive
 		return DispatchPublicOperation(ctx, delivery.operations, route.Target, engine.PublicOperationRequest{
 			Method: request.Method, Host: route.Host, EscapedPath: path, Query: request.Query,
 			ContentType: request.ContentType, ContentLength: request.ContentLength,
-			IdempotencyKey: request.IdempotencyKey, Body: request.Body,
+			IdempotencyKey: request.IdempotencyKey, Body: request.Body, FormSessionTokens: cloneFormSessionTokens(request.FormSessionTokens),
 		})
 	default:
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
+}
+
+func cloneFormSessionTokens(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for formID, token := range source {
+		clone[formID] = token
+	}
+	return clone
 }
 
 func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
@@ -355,20 +366,15 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Ses
 	if err != nil {
 		return parsedArtifact{}, core.File{}, err
 	}
-	if int64(len(data)) != manifestFile.Size || len(data) > maxArtifactManifestBytes || !validUniqueJSON(data) {
+	if int64(len(data)) != manifestFile.Size || len(data) > maxArtifactManifestBytes {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
 	actualDigest := sha256.Sum256(data)
 	if hex.EncodeToString(actualDigest[:]) != manifestFile.SHA256 {
 		return parsedArtifact{}, core.File{}, core.ErrUnavailable
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var envelope artifactEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
-		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
-	}
-	if envelope.Format != "static-site-artifact/v1" || envelope.Entrypoints == nil || envelope.Files == nil ||
+	if err := httpjson.DecodeBytes(data, &envelope); err != nil || envelope.Format != "static-site-artifact/v1" || envelope.Entrypoints == nil || envelope.Files == nil ||
 		len(envelope.Files) == 0 || len(envelope.Files) > maxArtifactFiles || len(envelope.Entrypoints) == 0 || len(envelope.Entrypoints) > maxArtifactEntrypoints {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
@@ -471,68 +477,6 @@ func artifactRelativePath(route model.Route, requestPath string) (string, bool) 
 	}
 	canonical, err := model.NormalizePath(local)
 	return canonical, err == nil
-}
-
-func validUniqueJSON(raw []byte) bool {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if consumeJSONValue(decoder, 0) != nil {
-		return false
-	}
-	var extra any
-	return errors.Is(decoder.Decode(&extra), io.EOF)
-}
-
-func consumeJSONValue(decoder *json.Decoder, depth int) error {
-	if depth > 32 {
-		return engine.ErrInvalidTarget
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return engine.ErrInvalidTarget
-			}
-			if _, exists := seen[key]; exists {
-				return engine.ErrInvalidTarget
-			}
-			seen[key] = struct{}{}
-			if err := consumeJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim('}') {
-			return engine.ErrInvalidTarget
-		}
-	case '[':
-		for decoder.More() {
-			if err := consumeJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim(']') {
-			return engine.ErrInvalidTarget
-		}
-	default:
-		return engine.ErrInvalidTarget
-	}
-	return nil
 }
 
 func canonicalUUID(value string) bool {

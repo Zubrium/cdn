@@ -3,7 +3,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useDocumentTitle } from "@/components/common/page";
-import type { ModelContentRecord, ModelContentWorkspace, SiteSnapshot } from "@/types";
+import type { ModelContentRecord, ModelContentWorkspace, WebsiteSnapshot } from "@/types";
 import { ContentEntityPage } from "./components/model-content/ContentEntityPage";
 import { ContentOverview } from "./components/model-content/ContentOverview";
 import { ContentPlacementsPage } from "./components/model-content/ContentPlacementsPage";
@@ -30,7 +30,7 @@ export function ModelContentEditor({
   recordId: routeRecordId,
   onSnapshotChange,
 }: {
-  snapshots: SiteSnapshot[];
+  snapshots: WebsiteSnapshot[];
   workspace: ModelContentWorkspace;
   view: ModelContentEditorView;
   entityKey: string;
@@ -198,11 +198,14 @@ export function ModelContentEditor({
       <ModelContentHistoryDialog
         open={historyOpen}
         onOpenChange={setHistoryOpen}
-        items={historyQuery.data?.items}
+        items={historyQuery.data?.pages.flatMap((page) => page.items)}
         loading={historyQuery.isLoading}
+        loadingMore={historyQuery.isFetchingNextPage}
+        hasMore={historyQuery.hasNextPage}
         error={historyQuery.error}
         disabled={disabled || saveState === "conflict"}
         onRetry={() => void historyQuery.refetch()}
+        onLoadMore={() => void historyQuery.fetchNextPage()}
         onRestore={(publicationId) => void restorePublication(publicationId)}
       />
     </div>

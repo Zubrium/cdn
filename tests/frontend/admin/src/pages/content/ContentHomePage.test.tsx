@@ -1,13 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmProvider } from "../../../../../../frontend/admin/src/components/common/confirm";
 
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
-  api: { website: { snapshots: vi.fn() }, contentEngine: { models: vi.fn(), records: vi.fn() } },
+  api: { website: { allSnapshots: vi.fn() }, contentEngine: { workspace: vi.fn() } },
 }));
 
 vi.mock("@/api", () => ({ api: mocks.api }));
@@ -16,47 +16,81 @@ vi.mock("@/domains/media/MediaPickerDialog", () => ({ MediaPickerDialog: () => n
 
 import ContentHomePage from "../../../../../../frontend/admin/src/pages/content/ContentHomePage";
 
-const snapshot = { id: "snapshot-1", site_id: "site-1", name: "Homepage", sequence: 1, revision: 2, feature_pins: {}, state: "draft" };
-const model = {
-  id: "model-1", key: "products", name: "Товары", cardinality: "many" as const, revision: 3,
-  fields: [{ id: "field-1", key: "title", name: "Название", type: "text", required: false }],
-};
-const record = {
-  id: "record-1", model_id: "model-1", values: { title: "Молоко" }, revision: 4,
-  published_revision: 3, updated_at: "2026-11-18T10:00:00Z",
+const snapshotID = "11111111-1111-4111-8111-111111111111";
+const siteID = "22222222-2222-4222-8222-222222222222";
+const entityID = "33333333-3333-4333-8333-333333333333";
+const fieldID = "44444444-4444-4444-8444-444444444444";
+const recordID = "55555555-5555-4555-8555-555555555555";
+
+const snapshot = {
+  id: snapshotID,
+  site_id: siteID,
+  name: "Homepage",
+  sequence: 1,
+  revision: 2,
+  feature_pins: {},
+  state: "ready" as "ready" | "provisioning" | "failed",
 };
 
-function renderPage(level: 1 | 2) {
+const workspace = {
+  snapshot: { id: snapshotID },
+  dataModel: {
+    formatVersion: 1,
+    entities: [{
+      id: entityID,
+      key: "products",
+      name: "Товары",
+      cardinality: "many",
+      fields: [{ id: fieldID, key: "title", name: "Название", type: "text" }],
+    }],
+  },
+  revision: 4,
+  publishedRevision: 3,
+  records: [{ id: recordID, entityId: entityID, sortOrder: 0, values: { title: "Молоко" } }],
+  selections: [],
+  placements: [],
+};
+
+function renderPage(contentLevel: 1 | 2, selectedSnapshot = snapshot) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(["website", "snapshots"], { pages: [{ items: [snapshot], next_cursor: null }], pageParams: [null] });
-  client.setQueryData(["contentEngine", "models", "snapshot-1"], { pages: [{ items: [model], next_cursor: null }], pageParams: [null] });
-  client.setQueryData(["contentEngine", "records", "snapshot-1", "model-1"], { pages: [{ items: [record], next_cursor: null }], pageParams: [null] });
-  mocks.useAuth.mockReturnValue({ principal: { group_access: { content: level } } });
+  client.setQueryData(["website", "snapshots", "content"], [selectedSnapshot]);
+  client.setQueryData(["content", "model-workspace", snapshotID], workspace);
+  mocks.useAuth.mockReturnValue({ principal: { group_access: { content: contentLevel } } });
+  const router = createMemoryRouter([{ path: "*", element: createElement(ContentHomePage) }], { initialEntries: [`/content?snapshot=${snapshotID}`] });
+
   return renderToStaticMarkup(createElement(
     QueryClientProvider,
     { client },
     createElement(ConfirmProvider, null,
-      createElement(MemoryRouter, { initialEntries: ["/content?snapshot=snapshot-1"] }, createElement(ContentHomePage))),
+      createElement(RouterProvider, { router })),
   ));
 }
 
-describe("Content Engine workspace", () => {
+describe("Content workspace page", () => {
   beforeEach(() => {
-    mocks.api.website.snapshots.mockResolvedValue({ items: [snapshot], next_cursor: null });
-    mocks.api.contentEngine.models.mockResolvedValue({ items: [model], next_cursor: null });
-    mocks.api.contentEngine.records.mockResolvedValue({ items: [record], next_cursor: null });
+    mocks.api.website.allSnapshots.mockResolvedValue([snapshot]);
+    mocks.api.contentEngine.workspace.mockResolvedValue(workspace);
   });
 
-  it("renders snapshot-scoped models and records from the engine API", () => {
+  it("renders the selected snapshot's model and records from the Content workspace", () => {
     const rendered = renderPage(1);
+
     expect(rendered).toContain("Контент");
     expect(rendered).toContain("Товары");
     expect(rendered).toContain("Молоко");
-    expect(rendered).toContain("Черновик");
+    expect(rendered).toContain("Черновик 4 · опубликовано 3");
   });
 
-  it("shows write controls only to a subject with level two", () => {
-    expect(renderPage(1)).not.toContain("Новая запись");
-    expect(renderPage(2)).toContain("Новая запись");
+  it("shows publishing controls only with write access to the content group", () => {
+    expect(renderPage(1)).not.toContain("Опубликовать");
+    expect(renderPage(2)).toContain("Опубликовать");
+  });
+
+  it("does not load or expose content while its snapshot is provisioning", () => {
+    const rendered = renderPage(2, { ...snapshot, state: "provisioning" });
+
+    expect(rendered).toContain("Снапшот готовится");
+    expect(rendered).not.toContain("Молоко");
+    expect(rendered).not.toContain("Опубликовать");
   });
 });

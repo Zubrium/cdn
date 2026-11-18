@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Search } from "lucide-react";
@@ -28,7 +28,19 @@ export default function SnapshotsPage() {
   const [query, setQuery] = useState("");
   const [selectedSiteID, setSelectedSiteID] = useState("");
   const [busy, setBusy] = useState(false);
-  const snapshots = useQuery({ queryKey: ["site", "snapshot-choices"], queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal) });
+  const createAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
+  const rootRequestPayload = useRef<{
+    siteID: string;
+    name: string;
+    config: SiteConfig;
+    metadata: { formatVersion: 1; siteName: string; pages: Record<string, never> };
+    designSystem: { formatVersion: 2; groups: []; baseTokens: []; featureValues: Record<string, never>; breakpoints: []; fonts: [] };
+  } | null>(null);
+  const snapshots = useQuery({
+    queryKey: ["site", "snapshot-choices"],
+    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal),
+    refetchInterval: (query) => query.state.data?.items.some((item) => item.state === "provisioning") ? 2000 : false,
+  });
   const branches = useQuery({ queryKey: ["website", "branches"], queryFn: ({ signal }) => api.website.branches(signal) });
 
   const create = async (parentSnapshotId?: string) => {
@@ -36,27 +48,52 @@ export default function SnapshotsPage() {
     if (!trimmedName || busy) return;
     setBusy(true);
     try {
-      const parent = parentSnapshotId ? await api.siteBuilder.snapshot(parentSnapshotId) : null;
-      if (parentSnapshotId && (parent?.snapshot.contentRevision === undefined || parent.snapshot.revision === undefined)) {
+      const [parent, parentContent] = parentSnapshotId
+        ? await Promise.all([api.siteBuilder.snapshot(parentSnapshotId), api.contentEngine.workspace(parentSnapshotId)])
+        : [null, null];
+      if (parentSnapshotId && (parent?.snapshot.state !== "ready" || parent.snapshot.revision === undefined || !parentContent ||
+        !Number.isSafeInteger(parentContent.revision) || parentContent.revision < 0)) {
         throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
       }
       const configuredSites = [...new Map((branches.data?.items ?? []).map((branch) => [branch.site_id, branch.name])).entries()];
       const siteID = parent?.snapshot.siteId || selectedSiteID || (configuredSites.length === 1 ? configuredSites[0]?.[0] : undefined);
       if (!siteID) throw new Error("Выберите сайт из статической конфигурации веток.");
-      const created = await api.siteBuilder.createSnapshotFrom({
-        siteID,
-        name: trimmedName,
-        ...(parentSnapshotId
-          ? { parentSnapshotId, expectedParentRevision: parent!.snapshot.revision, expectedParentContentRevision: parent!.snapshot.contentRevision }
-          : {
-              config: emptySiteConfig(),
-              metadata: { formatVersion: 1, siteName: trimmedName, pages: {} },
-              designSystem: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
-            }),
-      });
+      let input: {
+        siteID: string;
+        name: string;
+        parentSnapshotId?: string;
+        expectedParentRevision?: number;
+        expectedParentContentRevision?: number;
+        config?: SiteConfig;
+        metadata?: { formatVersion: 1; siteName: string; pages: Record<string, never> };
+        designSystem?: { formatVersion: 2; groups: []; baseTokens: []; featureValues: Record<string, never>; breakpoints: []; fonts: [] };
+      };
+      if (parentSnapshotId) {
+        input = { siteID, name: trimmedName, parentSnapshotId, expectedParentRevision: parent!.snapshot.revision, expectedParentContentRevision: parentContent!.revision };
+      } else {
+        if (!rootRequestPayload.current || rootRequestPayload.current.siteID !== siteID || rootRequestPayload.current.name !== trimmedName) {
+          rootRequestPayload.current = {
+            siteID,
+            name: trimmedName,
+            config: emptySiteConfig(),
+            metadata: { formatVersion: 1, siteName: trimmedName, pages: {} },
+            designSystem: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
+          };
+        }
+        input = rootRequestPayload.current;
+      }
+      const fingerprint = JSON.stringify(input);
+      if (!createAttempt.current || createAttempt.current.fingerprint !== fingerprint) {
+        createAttempt.current = { fingerprint, key: `snapshot-${crypto.randomUUID()}` };
+      }
+      const created = await api.siteBuilder.createSnapshotFrom({ ...input, idempotencyKey: createAttempt.current.key });
+      createAttempt.current = null;
+      if (!parentSnapshotId) rootRequestPayload.current = null;
       setName("");
       await queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
-      toast.success(`Снапшот #${created.sequence} создан. Назначьте его в разделе «Ветки», если он должен обслуживать сайт.`);
+      toast.success(created.state === "ready"
+        ? `Снапшот #${created.sequence} создан. Назначьте его в разделе «Ветки», если он должен обслуживать сайт.`
+        : `Снапшот #${created.sequence} создан и готовится. Он появится в редакторах после завершения копирования.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Не удалось создать снапшот");
     } finally {
@@ -105,7 +142,7 @@ export default function SnapshotsPage() {
       <div className="flex flex-wrap items-end gap-2">
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-sm">
           <span className="text-xs font-medium text-muted-foreground">Название нового сайта или снапшота</span>
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Каталог или Новый стенд" aria-label="Название нового сайта или снапшота" maxLength={160} />
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Каталог или Новый стенд" aria-label="Название нового сайта или снапшота" maxLength={120} />
         </label>
         <label className="min-w-0 space-y-1 sm:w-64">
           <span className="text-xs font-medium text-muted-foreground">Сайт из конфигурации веток</span>

@@ -11,6 +11,7 @@ use (
 	./workers/media
 	./workers/prerender
 	./presentation/router
+	./presentation/httpjson
 	./presentation/admin/httpauth
 	./presentation/admin/sites
 	./presentation/admin/files
@@ -40,6 +41,7 @@ replace (
 	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ./presentation/admin/ui
 	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ./presentation/admin/files
 	github.com/Zubrium/cdn/presentation/router v0.0.0 => ./presentation/router
+	github.com/Zubrium/cdn/presentation/httpjson v0.0.0 => ./presentation/httpjson
 	github.com/Zubrium/cdn/presentation/sitesapi v0.0.0 => ./presentation/admin/sites
 	github.com/Zubrium/cdn/workers/archive v0.0.0 => ./workers/archive
 	github.com/Zubrium/cdn/workers/media v0.0.0 => ./workers/media

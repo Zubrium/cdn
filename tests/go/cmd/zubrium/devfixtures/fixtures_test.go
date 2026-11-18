@@ -57,6 +57,10 @@ func TestFixtureReadsRequireCurrentDirectGroupAccess(t *testing.T) {
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != syntheticSnapshotID {
 		t.Fatalf("read fixture snapshot: page=%+v err=%v", page, err)
 	}
+	designSystem, err := fixtures.Website.GetSnapshotDesignSystem(ctx, syntheticSnapshotID)
+	if err != nil || string(designSystem.FeatureTokens) != "[]" {
+		t.Fatalf("read fixture feature tokens: tokens=%s err=%v", designSystem.FeatureTokens, err)
+	}
 
 	denied, err := New(fakeCore{access: map[string]core.AccessLevel{}}, Config{ConfiguredGroups: configuredGroups()})
 	if err != nil {
@@ -91,7 +95,7 @@ func TestFixtureWritesNeverClaimPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixtures.Content.SaveRecordDraft(contentContext, content.SaveRecordRequest{}); !errors.Is(err, content.ErrUnavailable) {
+	if _, err := fixtures.Content.SaveWorkspaceDraft(contentContext, content.SaveWorkspaceDraftRequest{}); !errors.Is(err, content.ErrUnavailable) {
 		t.Fatalf("Content fixture reported a successful write: %v", err)
 	}
 	formsContext, err := fixtures.Forms.Authenticate(context.Background(), "valid")

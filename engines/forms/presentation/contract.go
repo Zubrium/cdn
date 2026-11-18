@@ -8,6 +8,7 @@ import (
 	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
+	schemapodel "github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 )
 
 var (
@@ -18,7 +19,10 @@ var (
 	ErrInvalid      = errors.New("invalid request")
 	ErrTooLarge     = errors.New("request too large")
 	ErrUnavailable  = errors.New("Forms dependency unavailable")
+	ErrExpired      = errors.New("form session expired")
 )
+
+type FieldDefinition = schemapodel.FieldDefinition
 
 type Contract interface {
 	platform.Module
@@ -35,6 +39,15 @@ type API interface {
 	GetSubmission(context.Context, string, string) (Submission, error)
 	SetSubmissionStatus(context.Context, SetSubmissionStatusRequest) (Submission, error)
 	DeleteSubmission(context.Context, DeleteSubmissionRequest) error
+	ValidatePublicForm(context.Context, PublicFormBinding) error
+	ValidatePublicUploadRoute(context.Context, PublicUploadRouteBinding) error
+	CreateVisitorSession(context.Context, CreateVisitorSessionRequest) (VisitorSessionCredential, error)
+	GetVisitorSession(context.Context, GetVisitorSessionRequest) (VisitorSession, error)
+	BeginVisitorUpload(context.Context, BeginVisitorUploadRequest) (VisitorUploadReservation, error)
+	CompleteVisitorUpload(context.Context, CompleteVisitorUploadRequest) (VisitorAttachment, error)
+	AbortVisitorUpload(context.Context, AbortVisitorUploadRequest) error
+	SubmitVisitorResponse(context.Context, SubmitVisitorResponseRequest) (VisitorSubmissionReceipt, error)
+	CancelVisitorSession(context.Context, CancelVisitorSessionRequest) error
 }
 
 type Schema struct {
@@ -59,12 +72,132 @@ type SaveSchemaRequest struct {
 }
 
 type Submission struct {
-	ID        string         `json:"id"`
-	FormID    string         `json:"form_id"`
-	State     string         `json:"state"`
-	Values    map[string]any `json:"values"`
-	CreatedAt time.Time      `json:"created_at"`
-	Revision  int64          `json:"revision"`
+	ID            string         `json:"id"`
+	FormID        string         `json:"form_id"`
+	SchemaVersion int64          `json:"schema_version"`
+	State         string         `json:"state"`
+	Values        map[string]any `json:"values"`
+	CreatedAt     time.Time      `json:"created_at"`
+	Revision      int64          `json:"revision"`
+}
+
+// PublicFormBinding is copied from a server-side Router route configuration.
+// Visitor requests cannot select or override any part of it.
+type PublicFormBinding struct {
+	SnapshotID    string `json:"snapshot_id"`
+	FormID        string `json:"form_id"`
+	SchemaVersion int64  `json:"schema_version"`
+}
+
+// PublicUploadRouteBinding binds an explicitly configured Router operation to
+// the immutable form schema and its private Loader destination.
+type PublicUploadRouteBinding struct {
+	PublicFormBinding
+	AccessGroup         string   `json:"access_group"`
+	MaxBytes            int64    `json:"max_bytes"`
+	AllowedContentTypes []string `json:"allowed_content_types"`
+}
+
+func (binding PublicFormBinding) Validate() error {
+	if binding.SnapshotID == "" || len(binding.SnapshotID) > 128 || binding.FormID == "" || len(binding.FormID) > 128 || binding.SchemaVersion < 1 {
+		return ErrInvalid
+	}
+	for _, value := range []string{binding.SnapshotID, binding.FormID} {
+		for _, char := range value {
+			if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '.' || char == '-' {
+				continue
+			}
+			return ErrInvalid
+		}
+	}
+	return nil
+}
+
+type VisitorSession struct {
+	ID            string         `json:"id"`
+	FormID        string         `json:"form_id"`
+	SchemaVersion int64          `json:"schema_version"`
+	Fields        map[string]any `json:"fields"`
+	ExpiresAt     time.Time      `json:"expires_at"`
+	Completed     bool           `json:"completed"`
+}
+
+type VisitorSessionCredential struct {
+	Token   string         `json:"-"`
+	Session VisitorSession `json:"session"`
+}
+
+type CreateVisitorSessionRequest struct {
+	PublicFormBinding
+}
+
+type GetVisitorSessionRequest struct {
+	PublicFormBinding
+	Token string
+}
+
+type BeginVisitorUploadRequest struct {
+	PublicFormBinding
+	Token             string
+	FieldID           string
+	IdempotencyKey    string
+	ContentType       string
+	DeclaredSize      int64
+	RouteMaxBytes     int64
+	RouteContentTypes []string
+	AccessGroup       string
+}
+
+type VisitorUploadReservation struct {
+	ID           string
+	FieldID      string
+	MaxBytes     int64
+	Completed    bool
+	FileID       string `json:"-"`
+	SHA256       string `json:"-"`
+	AttachmentID string
+	ContentType  string
+	Size         int64
+	AccessGroup  string
+}
+
+type CompleteVisitorUploadRequest struct {
+	PublicFormBinding
+	Token         string
+	ReservationID string
+	FileID        string
+	SHA256        string
+	ContentType   string
+	Size          int64
+	AccessGroup   string
+}
+
+type VisitorAttachment struct {
+	ID      string `json:"id"`
+	FieldID string `json:"field_id"`
+}
+
+type AbortVisitorUploadRequest struct {
+	PublicFormBinding
+	Token         string
+	ReservationID string
+}
+
+type SubmitVisitorResponseRequest struct {
+	PublicFormBinding
+	Token          string
+	IdempotencyKey string
+	Values         map[string]any
+}
+
+type VisitorSubmissionReceipt struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type CancelVisitorSessionRequest struct {
+	PublicFormBinding
+	Token string
 }
 
 type ListSubmissionsRequest struct {
@@ -106,6 +239,7 @@ func (Descriptor) Operations() []platform.Operation {
 		{Name: "form-schema.write", Action: platform.AccessActionWrite, ResourceType: "form-schema"},
 		{Name: "submission.list", Action: platform.AccessActionRead, ResourceType: "form-submission"},
 		{Name: "submission.read", Action: platform.AccessActionRead, ResourceType: "form-submission"},
+		{Name: "submission.export", Action: platform.AccessActionRead, ResourceType: "form-submission"},
 		{Name: "submission.status.write", Action: platform.AccessActionWrite, ResourceType: "form-submission"},
 		{Name: "submission.delete", Action: platform.AccessActionDelete, ResourceType: "form-submission"},
 	}

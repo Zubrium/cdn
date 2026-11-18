@@ -261,7 +261,9 @@ func (route Route) ValidateForStorage() error {
 		route.State != StateActive || route.Revision < 1 || route.CreatedAt.IsZero() || route.UpdatedAt.Before(route.CreatedAt) {
 		return ErrInvalidRoute
 	}
-	if err := route.Target.Validate(); err != nil || (route.Target.Kind == TargetCoreFile && route.Match != MatchExact) {
+	if err := route.Target.Validate(); err != nil ||
+		(route.Target.Kind == TargetCoreFile && route.Match != MatchExact) ||
+		(route.Target.Kind == TargetRegisteredOperation && route.Match != MatchExact) {
 		return ErrInvalidRoute
 	}
 	return nil

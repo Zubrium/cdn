@@ -30,7 +30,7 @@ const invalidCases: Array<{ name: string; operation?: RouterPublicOperation; val
 
 describe("Router target builder", () => {
   it("builds upload config from MIME types and bounds exposed by the compiled operation", () => {
-    expect(buildRouterTarget(draft, uploadOperation)).toEqual({
+    expect(buildRouterTarget(draft, [uploadOperation])).toEqual({
       kind: "registered-operation",
       operation_id: "public.form-upload",
       operation_config: {
@@ -44,23 +44,56 @@ describe("Router target builder", () => {
   });
 
   it.each(invalidCases)("rejects invalid upload target: $name", ({ operation, value }) => {
-    expect(buildRouterTarget(value, operation)).toBeNull();
+    expect(buildRouterTarget(value, operation ? [operation] : [])).toBeNull();
+  });
+
+  it("pins a form-bound upload to its schema and requires a searchable FileSet", () => {
+    const bound = {
+      ...draft,
+      bindForm: true,
+      snapshotID: "01938f7a-68af-7c10-a51d-78b6ca125301",
+      formID: "01938f7a-68af-7c10-a51d-78b6ca125302",
+      schemaVersion: 3,
+    };
+    expect(buildRouterTarget(bound, [uploadOperation])).toMatchObject({
+      operation_id: "public.form-upload",
+      operation_config: {
+        form: { enabled: true, snapshot_id: bound.snapshotID, form_id: bound.formID, schema_version: 3 },
+        file_set_id: bound.fileSetID,
+      },
+    });
+    expect(buildRouterTarget({ ...bound, fileSetID: "" }, [uploadOperation])).toBeNull();
   });
 
   it("requires an exact route for a public Core file", () => {
-    expect(buildRouterTarget({ ...draft, targetKind: "core-file", file: { id: "file-id" }, match: "prefix" }, uploadOperation)).toBeNull();
-    expect(buildRouterTarget({ ...draft, targetKind: "core-file", file: { id: "file-id" } }, uploadOperation)).toEqual({
+    expect(buildRouterTarget({ ...draft, targetKind: "core-file", file: { id: "file-id" }, match: "prefix" }, [uploadOperation])).toBeNull();
+    expect(buildRouterTarget({ ...draft, targetKind: "core-file", file: { id: "file-id" } }, [uploadOperation])).toEqual({
       kind: "core-file", file_id: "file-id",
     });
   });
 
+  it("requires exact routes for registered public operations", () => {
+    const formDraft = {
+      ...draft,
+      targetKind: "public.form-session" as const,
+      match: "exact" as const,
+      snapshotID: "01938f7a-68af-7c10-a51d-78b6ca125301",
+      formID: "01938f7a-68af-7c10-a51d-78b6ca125302",
+      schemaVersion: 1,
+    };
+    const operation: RouterPublicOperation = { ...uploadOperation, id: "public.form-session", methods: ["GET", "POST", "DELETE"] };
+    expect(buildRouterTarget({ ...formDraft, match: "prefix" }, [operation])).toBeNull();
+    expect(buildRouterTarget(formDraft, [operation])).toMatchObject({ operation_id: "public.form-session" });
+    expect(buildRouterTarget({ ...formDraft, formID: formDraft.formID.toUpperCase() }, [operation])).toBeNull();
+  });
+
   it("enables a manifest fallback only for an explicitly configured static artifact", () => {
-    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, fallbackEnabled: true }, uploadOperation)).toEqual({
+    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, fallbackEnabled: true }, [uploadOperation])).toEqual({
       kind: "static-site-artifact",
       file_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
       fallback_enabled: true,
     });
-    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, fallbackEnabled: false }, uploadOperation)).toEqual({
+    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, fallbackEnabled: false }, [uploadOperation])).toEqual({
       kind: "static-site-artifact",
       file_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
     });

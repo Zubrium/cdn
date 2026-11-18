@@ -17,6 +17,7 @@ import (
 	core "github.com/Zubrium/cdn/core/presentation"
 	loaderapi "github.com/Zubrium/cdn/engines/loader/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
 const apiPrefix = "/api/v2/files"
@@ -308,8 +309,8 @@ func (h *Handler) beginUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	key := r.Header.Get("Idempotency-Key")
-	if !validIdempotencyKey(key) {
+	key, hasOneKey := singleHeader(r, "Idempotency-Key")
+	if !hasOneKey || !validIdempotencyKey(key) {
 		writeError(w, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required")
 		return
 	}
@@ -398,14 +399,15 @@ func (h *Handler) uploadPart(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, ErrTooLarge)
 		return
 	}
-	mediaType, _, mediaErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if mediaErr != nil || mediaType != "application/octet-stream" || !validSHA256(r.Header.Get("X-Content-SHA256")) {
+	mediaType, contentTypeOK := singleMediaType(r)
+	checksum, checksumOK := singleHeader(r, "X-Content-SHA256")
+	if !contentTypeOK || mediaType != "application/octet-stream" || !checksumOK || !validSHA256(checksum) {
 		writeRequestError(w, ErrInvalid)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.cfg.MaxPartBytes)
 	defer r.Body.Close()
-	upload, err := h.loader.PutUploadPart(ctx, id, part, r.ContentLength, strings.ToLower(r.Header.Get("X-Content-SHA256")), r.Body)
+	upload, err := h.loader.PutUploadPart(ctx, id, part, r.ContentLength, strings.ToLower(checksum), r.Body)
 	if err != nil {
 		writeLoaderError(w, err, true)
 		return
@@ -629,7 +631,13 @@ func (h *Handler) downloadFile(w http.ResponseWriter, r *http.Request) {
 	var start, end int64
 	partial := false
 	var err error
-	if rawRange := r.Header.Get("Range"); rawRange != "" {
+	rangeHeaders := r.Header.Values("Range")
+	if len(rangeHeaders) > 1 {
+		writeRequestError(w, ErrInvalid)
+		return
+	}
+	if len(rangeHeaders) == 1 && rangeHeaders[0] != "" {
+		rawRange := rangeHeaders[0]
 		file, err = h.loader.StatFile(ctx, id)
 		if err == nil {
 			start, end, err = parseByteRange(rawRange, file.Size)
@@ -687,7 +695,13 @@ func (h *Handler) headFile(w http.ResponseWriter, r *http.Request) {
 	}
 	start, end := int64(0), file.Size-1
 	partial := false
-	if rawRange := r.Header.Get("Range"); rawRange != "" {
+	rangeHeaders := r.Header.Values("Range")
+	if len(rangeHeaders) > 1 {
+		writeRequestError(w, ErrInvalid)
+		return
+	}
+	if len(rangeHeaders) == 1 && rangeHeaders[0] != "" {
+		rawRange := rangeHeaders[0]
 		start, end, err = parseByteRange(rawRange, file.Size)
 		if err != nil {
 			w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(file.Size, 10))
@@ -712,11 +726,16 @@ func expectedRevision(w http.ResponseWriter, r *http.Request, fileID string) (in
 }
 
 func expectedResourceRevision(w http.ResponseWriter, r *http.Request, resourceID, resourceName string) (int64, bool) {
-	value := r.Header.Get("If-Match")
-	if value == "" {
+	values := r.Header.Values("If-Match")
+	if len(values) == 0 {
 		writeError(w, http.StatusPreconditionRequired, "revision_required", "If-Match with the current "+resourceName+" ETag is required")
 		return 0, false
 	}
+	if len(values) != 1 {
+		writeRequestError(w, ErrInvalid)
+		return 0, false
+	}
+	value := values[0]
 	if len(value) < 5 || value[0] != '"' || value[len(value)-1] != '"' {
 		writeRequestError(w, ErrInvalid)
 		return 0, false
@@ -798,30 +817,36 @@ func parseByteRange(value string, size int64) (int64, int64, error) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, destination any) error {
-	mediaType, _, mediaErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if mediaErr != nil || mediaType != "application/json" {
-		return ErrInvalid
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return ErrTooLarge
-		}
+	err := httpjson.DecodeRequest(w, r, limit, destination)
+	switch {
+	case errors.Is(err, httpjson.ErrTooLarge):
+		return ErrTooLarge
+	case errors.Is(err, httpjson.ErrInvalid):
 		return ErrInvalid
+	default:
+		return err
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return ErrTooLarge
-		}
-		return ErrInvalid
+}
+
+func singleHeader(r *http.Request, name string) (string, bool) {
+	if r == nil {
+		return "", false
 	}
-	return nil
+	values := r.Header.Values(name)
+	if len(values) != 1 || strings.TrimSpace(values[0]) != values[0] || values[0] == "" {
+		return "", false
+	}
+	return values[0], true
+}
+
+func singleMediaType(r *http.Request) (string, bool) {
+	value, valid := singleHeader(r, "Content-Type")
+	if !valid {
+		return "", false
+	}
+	mediaType, _, err := mime.ParseMediaType(value)
+	return mediaType, err == nil
 }
 
 func validatePatch(patch FileMetadataPatch, maxAttributes int64) error {

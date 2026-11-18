@@ -100,6 +100,21 @@ router_api:
     - application/pdf
     - image/jpeg
     - image/png
+  # Public form session cookies are host-only, HttpOnly and SameSite=Strict.
+  # Set secure=true whenever this listener is reached through HTTPS.
+  form_session_cookie_secure: false
+
+forms_api:
+  # This ordinary Core user must have write access to the groups used for
+  # private form attachments so Forms can clean expired sessions and delete
+  # attachments with an explicitly deleted response.
+  file_service_credential_env: ZUBRIUM_FORMS_FILE_SERVICE_CREDENTIAL
+  visitor_session_ttl: 30m
+  visitor_session_cleanup_interval: 1m
+  # CSV export has independent per-process concurrency, row and byte bounds.
+  export_max_concurrent: 2
+  export_max_rows: 10000
+  export_max_bytes: 33554432
 
 http:
   listen_address: 127.0.0.1:8080
