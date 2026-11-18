@@ -79,7 +79,7 @@ export function useModelContentEditorController({
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const principal = useAuth().principal;
-  const canPublish = canPublishContent(principal?.role);
+  const canPublish = canPublishContent(principal);
   const initialServerDraft = useMemo<LocalModelDraft>(() => ({ records: workspace.records, selections: workspace.selections }), [workspace.records, workspace.selections]);
   const [recoveryDraft] = useState(() => readRecoveryDraft(workspace.snapshot.id));
   const initialDraft = recoveryDraft ?? initialServerDraft;

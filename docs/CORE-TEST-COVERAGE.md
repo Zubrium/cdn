@@ -1,6 +1,8 @@
 # Приёмочный набор Core v2
 
-Нормативные требования — в [SPEC-core-v2.md](../spec/SPEC-core-v2.md) и [SPEC-module-data.md](../spec/SPEC-module-data.md). Контрактные проверки Core находятся в `core/access`, `core/internal/storage`, `core/internal/postgres`, `core/platform` и пакетах Loader/File API. Реализация module-data, Loader recovery, файловых наборов и их HTTP контрактов добавлена в текущий рабочий набор изменений. Проверки, записанные ниже, относятся к последнему зафиксированному QA прогону до текущих изменений TTL/idempotency и ротации cleanup cursor; эти новые пути требуют повторной приёмки перед закрытием TODO.
+> **Исторический QA документ.** Пункты и результаты ниже относятся к single-schema Core до переноса в DDD и до Core-owned Coordinator. Они не подтверждают новую схему, новые пакеты или текущую реализацию. Актуальные критерии — [SPEC-core-architecture.md](../spec/SPEC-core-architecture.md), [SPEC-coordinator-platform.md](../spec/SPEC-coordinator-platform.md) и [ACCEPTANCE-MATRIX.md](../tests/ACCEPTANCE-MATRIX.md). Цель текущего прохода — покрыть тестами не менее 60% согласованных наборов входных данных для каждого модуля; текущий статус фиксируется только в acceptance matrix после проверки.
+
+Нормативные требования старого Core описаны в [SPEC-core-v2.md](../spec/SPEC-core-v2.md) и прежней версии [SPEC-module-data.md](../spec/SPEC-module-data.md). Нижеследующие команды, цифры и результаты сохраняются только как исторические свидетельства; их нельзя переносить на новую baseline без повторного прогона.
 
 ## Покрываемые сценарии
 

@@ -11,15 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zubrium/cdn/coordinator"
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	"github.com/google/uuid"
 )
 
 type fakeJobs struct {
 	page       platform.CoordinatorJobPage
-	filter     coordinator.JobListFilter
+	filter     platform.JobListFilter
 	listCalls  int
 	listErr    error
 	retryID    uuid.UUID
@@ -30,7 +28,7 @@ type fakeJobs struct {
 type fakeGroupAuthorization struct {
 	credential string
 	group      string
-	level      access.Level
+	level      platform.AccessLevel
 	err        error
 	checks     int
 }
@@ -40,7 +38,7 @@ func (f *fakeGroupAuthorization) Authenticate(_ context.Context, credential stri
 	return platform.Session{}, f.err
 }
 
-func (f *fakeGroupAuthorization) RequireGroupLevel(_ context.Context, _ platform.Session, group string, level access.Level) error {
+func (f *fakeGroupAuthorization) RequireGroupLevel(_ context.Context, _ platform.Session, group string, level platform.AccessLevel) error {
 	f.group, f.level = group, level
 	f.checks++
 	return f.err
@@ -54,10 +52,10 @@ func TestGroupAuthorizerRechecksDirectAccessAtRequiredLevel(t *testing.T) {
 	}
 	for _, test := range []struct {
 		permission Permission
-		level      access.Level
+		level      platform.AccessLevel
 	}{
-		{permission: ReadJobs, level: access.LevelRead},
-		{permission: RetryJobs, level: access.LevelWrite},
+		{permission: ReadJobs, level: platform.AccessLevelRead},
+		{permission: RetryJobs, level: platform.AccessLevelWrite},
 	} {
 		if err := allow(context.Background(), "credential", test.permission); err != nil {
 			t.Fatalf("authorized permission %q rejected: %v", test.permission, err)
@@ -69,10 +67,10 @@ func TestGroupAuthorizerRechecksDirectAccessAtRequiredLevel(t *testing.T) {
 	if core.checks != 2 {
 		t.Fatalf("current direct assignments were not checked on every request: %d", core.checks)
 	}
-	if _, err := NewGroupAuthorizer(core, ""); !errors.Is(err, coordinator.ErrInvalid) {
+	if _, err := NewGroupAuthorizer(core, ""); !errors.Is(err, platform.ErrCoordinatorInputInvalid) {
 		t.Fatalf("empty access group accepted: %v", err)
 	}
-	if _, err := NewGroupAuthorizer((*fakeGroupAuthorization)(nil), "coordinator_jobs"); !errors.Is(err, coordinator.ErrInvalid) {
+	if _, err := NewGroupAuthorizer((*fakeGroupAuthorization)(nil), "coordinator_jobs"); !errors.Is(err, platform.ErrCoordinatorInputInvalid) {
 		t.Fatalf("typed-nil Core capability accepted: %v", err)
 	}
 }
@@ -109,7 +107,57 @@ func TestPermissionsEndpointReportsRetryCapabilityWithoutWeakeningReadGate(t *te
 	}
 }
 
-func (f *fakeJobs) List(_ context.Context, filter coordinator.JobListFilter) (platform.CoordinatorJobPage, error) {
+func TestCoordinatorAdminAcceptsPresentationCookieSessionsAndProtectsWrites(t *testing.T) {
+	jobs := &fakeJobs{}
+	var sessionPermissions []Permission
+	handler, err := NewHandler(jobs, func(context.Context, string, Permission) error {
+		return errors.New("Bearer authorizer must not receive browser session tokens")
+	}, Config{
+		DefaultPageSize: 25, MaxPageSize: 100, AllowedOrigins: []string{"https://admin.example"},
+		SessionAuthorize: func(_ context.Context, token string, permission Permission) error {
+			if token != "ss_"+strings.Repeat("A", 43) {
+				return platform.ErrUnauthorized
+			}
+			sessionPermissions = append(sessionPermissions, permission)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := httptest.NewRequest(http.MethodGet, apiPrefix, nil)
+	read.AddCookie(&http.Cookie{Name: "zubrium_admin_session", Value: "ss_" + strings.Repeat("A", 43)})
+	readResponse := httptest.NewRecorder()
+	handler.ServeHTTP(readResponse, read)
+	if readResponse.Code != http.StatusOK || jobs.listCalls != 1 || len(sessionPermissions) != 1 || sessionPermissions[0] != ReadJobs {
+		t.Fatalf("session read status=%d calls=%d permissions=%v body=%s", readResponse.Code, jobs.listCalls, sessionPermissions, readResponse.Body)
+	}
+
+	jobID := uuid.NewString()
+	write := httptest.NewRequest(http.MethodPost, apiPrefix+"/"+jobID+"/retry", nil)
+	write.AddCookie(&http.Cookie{Name: "zubrium_admin_session", Value: "ss_" + strings.Repeat("A", 43)})
+	write.Header.Set("Origin", "https://admin.example")
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, write)
+	if denied.Code != http.StatusForbidden || jobs.retryCalls != 0 {
+		t.Fatalf("session write without CSRF status=%d retries=%d", denied.Code, jobs.retryCalls)
+	}
+
+	csrf := strings.Repeat("A", 43)
+	write = httptest.NewRequest(http.MethodPost, apiPrefix+"/"+jobID+"/retry", nil)
+	write.AddCookie(&http.Cookie{Name: "zubrium_admin_session", Value: "ss_" + strings.Repeat("A", 43)})
+	write.AddCookie(&http.Cookie{Name: "zubrium_admin_csrf", Value: csrf})
+	write.Header.Set("Origin", "https://admin.example")
+	write.Header.Set("X-CSRF-Token", csrf)
+	accepted := httptest.NewRecorder()
+	handler.ServeHTTP(accepted, write)
+	if accepted.Code != http.StatusNoContent || jobs.retryCalls != 1 || len(sessionPermissions) != 2 || sessionPermissions[1] != RetryJobs {
+		t.Fatalf("valid session write failed: status=%d retries=%d permissions=%v body=%s", accepted.Code, jobs.retryCalls, sessionPermissions, accepted.Body)
+	}
+}
+
+func (f *fakeJobs) List(_ context.Context, filter platform.JobListFilter) (platform.CoordinatorJobPage, error) {
 	f.listCalls++
 	f.filter = filter
 	return f.page, f.listErr
@@ -134,7 +182,7 @@ func TestListRequiresAuthorizationAndReturnsSafeSummaries(t *testing.T) {
 	jobID := uuid.New()
 	createdAt := time.Date(2026, 11, 17, 10, 30, 0, 0, time.UTC)
 	jobs := &fakeJobs{page: platform.CoordinatorJobPage{
-		Items: []platform.CoordinatorJobSummary{{ID: jobID, SystemID: "private-system", Type: "archive.inspect/v1", State: "failed",
+		Items: []platform.CoordinatorJobSummary{{ID: jobID, Type: "archive.inspect/v1", State: "failed",
 			Attempts: 2, MaxAttempts: 5, AvailableAt: createdAt, ErrorCode: "archive_invalid", CreatedAt: createdAt, UpdatedAt: createdAt}},
 		Next: &platform.CoordinatorJobCursor{CreatedAt: createdAt, ID: jobID},
 	}}
@@ -191,7 +239,7 @@ func TestListRejectsMissingAuthRepeatedParamsAndMalformedCursor(t *testing.T) {
 		{name: "repeated limit", url: apiPrefix + "?limit=1&limit=2", header: "Bearer " + strings.Repeat("s", 48), status: http.StatusBadRequest},
 		{name: "large limit", url: apiPrefix + "?limit=101", header: "Bearer " + strings.Repeat("s", 48), status: http.StatusBadRequest},
 		{name: "malformed cursor", url: apiPrefix + "?before=not-a-cursor", header: "Bearer " + strings.Repeat("s", 48), status: http.StatusBadRequest},
-		{name: "malformed bearer", url: apiPrefix, header: "Bearer  token", status: http.StatusUnauthorized},
+		{name: "malformed bearer", url: apiPrefix, header: "Bearer token extra", status: http.StatusUnauthorized},
 		{name: "unknown query", url: apiPrefix + "?system_id=private", header: "Bearer " + strings.Repeat("s", 48), status: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -214,8 +262,8 @@ func TestListRejectsMissingAuthRepeatedParamsAndMalformedCursor(t *testing.T) {
 	request.Header.Add("Authorization", "Bearer "+strings.Repeat("t", 48))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized || jobs.listCalls != 0 {
-		t.Fatalf("ambiguous duplicate authorization headers were accepted: status=%d calls=%d", response.Code, jobs.listCalls)
+	if response.Code != http.StatusBadRequest || jobs.listCalls != 0 {
+		t.Fatalf("ambiguous duplicate authorization headers were not rejected: status=%d calls=%d", response.Code, jobs.listCalls)
 	}
 }
 
@@ -284,7 +332,7 @@ func TestNewHandlerRejectsMissingDependenciesAndInvalidLimits(t *testing.T) {
 		{jobs: nil, authorize: allow, config: Config{DefaultPageSize: 25, MaxPageSize: 100}},
 		{jobs: jobs, authorize: nil, config: Config{DefaultPageSize: 25, MaxPageSize: 100}},
 	} {
-		if _, err := NewHandler(test.jobs, test.authorize, test.config); !errors.Is(err, coordinator.ErrInvalid) {
+		if _, err := NewHandler(test.jobs, test.authorize, test.config); !errors.Is(err, platform.ErrCoordinatorInputInvalid) {
 			t.Errorf("invalid job API dependencies/config accepted: %+v err=%v", test.config, err)
 		}
 	}

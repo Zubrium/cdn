@@ -1,6 +1,6 @@
 package forms
 
-import core "github.com/Zubrium/cdn/core/platform"
+import core "github.com/Zubrium/cdn/core/presentation"
 
 const moduleID = "forms"
 

@@ -41,6 +41,5 @@ export const queryKeys = {
     list: (principalID: string) => ["tokens", "list", principalID] as const,
     detail: (id: string) => ["tokens", "detail", id] as const,
   },
-  overview: ["overview"] as const,
   health: ["health"] as const,
 };

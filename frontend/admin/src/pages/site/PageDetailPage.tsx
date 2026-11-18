@@ -36,7 +36,7 @@ export default function PageDetailPage() {
   const [routeDialog, setRouteDialog] = useState<RouteDialogState | null>(null);
   const [seoImagePicker, setSeoImagePicker] = useState(false);
   const [newBuildId, setNewBuildId] = useState("");
-  const buildsQuery = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.siteBuilder.featureBuilds(signal) });
+  const buildsQuery = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.website.featureBuilds(signal) });
   const selected = selectedFeatures(config);
   const availableBuilds = (buildsQuery.data?.items ?? []).filter((build) => !selected.has(build.key) || selected.get(build.key) === build.version);
   const buildGroups = groupFeatureBuilds(availableBuilds);

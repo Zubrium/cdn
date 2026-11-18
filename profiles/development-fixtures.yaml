@@ -1,0 +1,17 @@
+version: 1
+engines:
+  - website
+  - content
+  - forms
+  - loader
+workers: []
+apis:
+  admin:
+    - website
+    - content
+    - forms
+    - files
+    - coordinator
+    - identity
+  public: []
+development_fixtures: true

@@ -1,0 +1,236 @@
+openapi: 3.1.0
+info:
+  title: Zubrium Content Admin API
+  version: 2.0.0
+  description: >-
+    Snapshot-scoped models, record drafts/publication, history restoration and
+    feature bindings. Content Engine owns the data and enforces group access.
+servers: [{ url: / }]
+security:
+  - AdminSession: []
+  - BearerCredential: []
+paths:
+  /api/v2/admin/content/models:
+    get:
+      operationId: listContentModels
+      parameters:
+        - { $ref: '#/components/parameters/SnapshotID' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Snapshot-scoped model page., content: { application/json: { schema: { $ref: '#/components/schemas/ModelPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: saveContentModel
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SaveModel' } } }
+      responses:
+        '200': { description: Saved model., content: { application/json: { schema: { $ref: '#/components/schemas/Model' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/content/models/{modelID}:
+    get:
+      operationId: getContentModel
+      parameters:
+        - { name: modelID, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/SnapshotID' }
+      responses:
+        '200': { description: Model., content: { application/json: { schema: { $ref: '#/components/schemas/Model' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/content/records:
+    get:
+      operationId: listContentRecords
+      parameters:
+        - { $ref: '#/components/parameters/SnapshotID' }
+        - { name: model_id, in: query, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Record page., content: { application/json: { schema: { $ref: '#/components/schemas/RecordPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: saveContentRecordDraft
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SaveRecord' } } }
+      responses:
+        '200': { description: Saved draft., content: { application/json: { schema: { $ref: '#/components/schemas/Record' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/content/records/{recordID}/publish:
+    post:
+      operationId: publishContentRecord
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ name: recordID, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RevisionCommand' } } }
+      responses:
+        '200': { description: Published record., content: { application/json: { schema: { $ref: '#/components/schemas/Record' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/content/records/{recordID}/restore:
+    post:
+      operationId: restoreContentRecord
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ name: recordID, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/RevisionCommand' }
+                - type: object
+                  required: [history_id]
+                  properties: { history_id: { type: string } }
+      responses:
+        '200': { description: Restored record draft., content: { application/json: { schema: { $ref: '#/components/schemas/Record' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/content/bindings:
+    put:
+      operationId: saveFeatureBindings
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SaveBindings' } } }
+      responses:
+        '200': { description: Saved structural bindings., content: { application/json: { schema: { $ref: '#/components/schemas/Bindings' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/content/bindings/{featureID}:
+    get:
+      operationId: getFeatureBindings
+      parameters:
+        - { name: featureID, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/SnapshotID' }
+      responses:
+        '200': { description: Feature's structural bindings., content: { application/json: { schema: { $ref: '#/components/schemas/Bindings' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
+    BearerCredential: { type: http, scheme: bearer }
+  parameters:
+    SnapshotID: { name: snapshot_id, in: query, required: true, schema: { type: string } }
+    Cursor: { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+  schemas:
+    Model:
+      type: object
+      required: [id, key, name, cardinality, fields, revision]
+      properties:
+        id: { type: string }
+        key: { type: string }
+        name: { type: string }
+        cardinality: { type: string, enum: [many, singleton] }
+        fields: { type: array, items: { $ref: '#/components/schemas/ModelField' } }
+        revision: { type: integer, minimum: 0 }
+    ModelField:
+      type: object
+      required: [id, key, name, type, required]
+      properties:
+        id: { type: string }
+        key: { type: string }
+        name: { type: string }
+        type: { type: string }
+        required: { type: boolean }
+    ModelPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Model' } }, next_cursor: { type: string } }
+    SaveModel:
+      type: object
+      additionalProperties: false
+      required: [snapshot_id, key, name, cardinality, fields, expected_revision]
+      properties:
+        snapshot_id: { type: string }
+        model_id: { type: string }
+        key: { type: string }
+        name: { type: string }
+        cardinality: { type: string, enum: [many, singleton] }
+        fields: { type: array, items: { $ref: '#/components/schemas/ModelFieldInput' } }
+        expected_revision: { type: integer, minimum: 0 }
+    ModelFieldInput:
+      type: object
+      additionalProperties: false
+      required: [key, name, type, required]
+      properties:
+        id: { type: string }
+        key: { type: string }
+        name: { type: string }
+        type: { type: string }
+        required: { type: boolean }
+    Record:
+      type: object
+      required: [id, model_id, values, revision, published_revision, updated_at]
+      properties:
+        id: { type: string }
+        model_id: { type: string }
+        values: { type: object, additionalProperties: true }
+        revision: { type: integer, minimum: 0 }
+        published_revision: { type: integer, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+    RecordPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Record' } }, next_cursor: { type: string } }
+    SaveRecord:
+      type: object
+      additionalProperties: false
+      required: [snapshot_id, model_id, values, expected_revision]
+      properties:
+        snapshot_id: { type: string }
+        model_id: { type: string }
+        record_id: { type: string }
+        values: { type: object, additionalProperties: true }
+        expected_revision: { type: integer, minimum: 0 }
+    RevisionCommand:
+      type: object
+      additionalProperties: false
+      required: [snapshot_id, expected_revision]
+      properties: { snapshot_id: { type: string }, expected_revision: { type: integer, minimum: 0 } }
+    Bindings:
+      type: object
+      required: [snapshot_id, feature_id, values, revision]
+      properties:
+        snapshot_id: { type: string }
+        feature_id: { type: string }
+        values: { type: object, additionalProperties: true }
+        revision: { type: integer, minimum: 0 }
+    SaveBindings:
+      type: object
+      additionalProperties: false
+      required: [snapshot_id, feature_id, values, expected_revision]
+      properties:
+        snapshot_id: { type: string }
+        feature_id: { type: string }
+        values: { type: object, additionalProperties: true }
+        expected_revision: { type: integer, minimum: 0 }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+  responses:
+    Error:
+      description: Stable machine-readable error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

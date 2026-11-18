@@ -1,26 +1,34 @@
-# Инвентаризация контрактов для модульного перехода
+# Инвентаризация модульной платформы
 
-Статус: начальная source-инвентаризация, не полный контрактный набор и не свидетельство проверки. Эталон — `c710fae` на `dev_v2`. Дальнейший перенос должен добавить точные примеры запросов и ответов и исполняемые сравнения.
+Статус: карта целевых границ для `dev_v2`, не свидетельство полной реализации. Архитектурный источник истины — [SPEC-core-architecture.md](../spec/SPEC-core-architecture.md); внешние engine-контракты описаны в спецификациях `spec/SPEC-*-engine.md`. Исторические реализации и QA-результаты относятся только к указанным в отчётах коммитам.
 
-Это инвентаризация внешнего поведения `legacy/`, а не требования к внутренней модели нового Core. Целевая модель Core — [SPEC-core-v2.md](../spec/SPEC-core-v2.md): она исключает роли, владельцев и версии файлов, индивидуальные файловые права, публичное чтение Core и Core-реестр ссылок. По решению пользователя поле `role` и старая матрица ролей удаляются из нового API и админки: это исключение из совместимости, а не требование воспроизвести роли в адаптере. Остальные исторические контракты, Sitepack, публичную выдачу и редакционные сценарии нужно воспроизвести в engines/presentation. Паритет пока не подтверждён.
-
-| Граница | Текущий источник истины | Что необходимо сохранить |
+| Граница | Целевой контракт | Владелец состояния и интеграции |
 | --- | --- | --- |
-| Admin и public HTTP | `presentation/http/routes.go` и handlers, включая отдельную регистрацию файловых маршрутов | Методы, пути, ответы и ошибки, лимиты, CORS, публичные и административные listeners; исключение — удаляемые `role` и старая матрица ролей |
-| Идентичности и ключи | `features/auth`, `presentation/http/middleware`, `frontend/admin/src/lib/permissions.ts` | Отказ до изменения данных и безопасный жизненный цикл ключей; legacy `role` и матрица четырёх ролей явно исключены из нового контракта |
-| Снапшоты и ветки | `spec/SPEC-branches-snapshots.md`, `spec/SPEC-route-targets.md` | Дерево, назначение на настроенные ветки, публикация, откат и независимые маршруты |
-| Контент | `spec/SPEC-data-model.md` | Snapshot-scoped flat models, many/singleton, drafts, публикация, история и revisions |
-| Импорт и экспорт | `spec/SPEC-sitepack.md` | Текущий поддерживаемый Sitepack с моделью, содержимым, сборками и необходимыми media; пользователи, токены, заявки и назначения веток в Sitepack не входят |
-| Публичные фичи | `spec/SPEC-feature-runtime.md`, `spec/SPEC-public-server-rendering.md` | Manifest, `legacy-react-v1`, `static-module-v1`, `static-html-v1`, markup и lifecycle |
-| Файлы и медиа | `spec/SPEC-files.md` и файловые handlers | Владелец, public/private, доступ сервисов, потоковые операции, Range и безопасное удаление |
-| Админка | `frontend/admin/src/app/router.tsx`, `docs/FRONTEND_ARCHITECTURE.md` | Маршруты, workflow, защиту несохранённых данных и destructive confirmations |
-| Конфигурация | `spec/SPEC-configuration.md`, `.env.example` | Явные настройки, секреты и политики; в новой реализации YAML loader является package приложения, а не отдельным модулем |
-| Application / Composition | `go.work`, `cmd/zubrium` | Статическую регистрацию модулей и запуск единственного Core Atlas migration set; YAML только настраивает скомпонованные модули |
-| Presentation | `presentation/http/routes.go`, engine handlers и `docs/API.md` | Router, File API, Admin API и Admin UI; File API вызывает Loader Engine contract, остальные адаптеры — типизированные контракты соответствующих engines |
-| Данные engines | `core.module_data`, [SPEC-module-data.md](../spec/SPEC-module-data.md) | Все persistent данные движков в JSONB; namespace/scope, typed selectors/indexes, TTL, CAS и атомарный batch через scoped Core API |
+| Core | Единый API, identities, права групп, файлы, staging, file sets, engine data, cache и durable workflows | Только Core владеет PostgreSQL, S3 и кэшем; компоненты получают scoped capabilities с нейтральными именами |
+| Core Coordinator | Регистрация нейтральных `engine`, `worker`, `entrypoint`, lifecycle, readiness, задачи и durable workflow | Application слой Core; операции и payload остаются непрозрачными для Core |
+| PostgreSQL | Одна DB на систему, schemas `access`, `files`, `uploads`, `file_index`, `engine_data`, `coordination`; один fresh Atlas baseline | Все SQL адаптеры находятся в Core infrastructure; DDL только в Atlas migration files |
+| Engine data | Общая таблица `engine_data.records` с engine namespace, JSONB, CAS, TTL и ограниченными индексами | Core проверяет scope и лимиты, но не разбирает предметный payload |
+| Composition | Статическая сборка модулей, YAML-конфигурация уже собранных компонентов и простой DI | `cmd/zubrium`; конфигурация не загружает произвольный Go-код |
+| Presentation | Router, File API, Admin API и Admin UI | Каждый адаптер вызывает публичный контракт владельца сценария; прямой доступ к Core storage отсутствует |
+| Website | Фичи, сайты, их сборка и статические артефакты | Website; изменения публикуются отдельными Core workflow и Router-вызовами |
+| Content | Модели, записи, локали, черновики и публикации контента | Content; durable payload хранится через `engine_data.records` |
+| Forms | Схемы форм, сессии, ответы и вложения | Forms; файлы и права остаются Core API, состояние Forms хранится через engine data |
+| Loader | Возобновляемые upload sessions, части, idempotency и cleanup | Loader владеет протоколом; временные и конечные байты доступны только через Core |
+| Router | Явные публичные маршруты, delivery и настройки маршрута | Router; Core не хранит таблицы продуктовых маршрутов или публикаций |
+| Workers | Архив, медиа и prerender как нейтрально зарегистрированные операции | Каждый worker владеет своим handler и payload; Coordinator не знает продуктовых типов |
 
+## Правила зависимости
 
+```text
+presentation -> application -> domain
+infrastructure -> domain/application ports
+engines and workers -> Core presentation contracts
+```
 
-Целевая инфраструктурная граница: одна PostgreSQL-база и схема `core`; только Core владеет DSN и подключением. Engine не имеет собственной DB, схемы, SQL-доступа или Atlas migration set. Все persistent данные engines хранятся в одной таблице `core.module_data` как JSONB-документы; модуль получает доступ только к собственному `module_id` через scoped typed Go API. Loader хранит upload-сессии/части/idempotency/cleanup entries в своём namespace этой таблицы, а байты staging передаёт через Core API. Core-модель файлов, групп, identities и наборов остаётся нормализованной Core-таблицами; File API вызывает Loader, который делегирует Core.
+`domain` содержит Core-модели, ошибки и repository ports; моделям разрешены только проверяющие конструкторы. `application` содержит политики доступа, валидацию входов, сценарии использования и Coordinator. `infrastructure` реализует PostgreSQL, S3 и cache. `presentation` публикует стабильные capabilities и связывает зависимости: в том числе `GroupAuthorizationCapability` и `StagedFilesCapability`. Имена контрактов описывают возможности Core, а не конкретного потребителя; внешний composition root назначает их компонентам. Реализации `application`, `domain` и `infrastructure` доступны внешним модулям только через `core/presentation`. SQL DDL отсутствует в production Go-коде.
 
-Карта относится к существующей системе и целевому переходу. YAML-конфигурация остаётся отдельной ответственностью в коде composition root; отдельные `config/*` Go modules удалены. Presentation владеет всеми точками входа и Admin UI. Действующий Sitepack не переносит пользователей или сервисные credentials; их перенос нельзя считать выполненным через импорт Sitepack.
+Core не содержит понятий snapshots, sites, routes, forms, feature builds или публикаций. Межкомпонентная автоматизация строится на зарегистрированных operation ID/version, непрозрачных JSON payload/result, идемпотентности, зависимостях, leases, fencing и явной отмене. Синхронный контракт между движками Core не навязывает.
+
+## Правило для legacy-контрактов
+
+Legacy остаётся исходным материалом для конкретных product API и пользовательских сценариев, но не для внутренней схемы Core. Сохранение внешнего поведения определяется владельческой спецификацией в `spec/`. Поля `role`, старая ролевая матрица и старые Core/storage модели не входят в целевой API. Эта карта не означает, что перечисленные движки или маршруты полностью реализованы.

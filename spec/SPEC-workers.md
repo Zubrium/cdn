@@ -1,86 +1,45 @@
-# Workers: task contract and implementation status
+# Worker контракты и безопасность исполнения
 
-Статус: общий durable task loop реализован в `coordinator/`; production
-обработчики Archive, Media и Prerender и их runtime factories ещё не реализованы.
-Архитектура модулей и автопубликация описаны в
-[SPEC-coordinator-platform.md](SPEC-coordinator-platform.md), а транзакционные
-гарантии — в [SPEC-coordinator-implementation.md](SPEC-coordinator-implementation.md).
+Статус: нейтральный worker contract согласован; production обработчики и изоляция тяжёлого кода реализуются по отдельным acceptance пакетам. Coordinator и общие гарантии определены в [SPEC-coordinator-platform.md](SPEC-coordinator-platform.md).
 
-## Общий контракт исполнения
+## Worker и Core
 
-Worker — статически подключаемый task handler, не Engine. Coordinator выбирает
-работу по `job_type`; worker получает только DTO задачи и ограниченный typed
-Core capability, не получает DSN, SQL, S3 credentials или произвольные команды.
-Модули не вызывают друг друга напрямую. Фабрика выбранного worker должна
-зарегистрировать только поддерживаемые версии handler до `Ready`; отсутствующая
-реализация должна завершить startup ошибкой, не объявляя worker доступным.
+Worker — статически включённый обработчик зарегистрированной component operation/version. Он не является engine и не обращается к PostgreSQL, S3 или cache напрямую. Вход и результат — ограниченные нейтральные DTO; file IDs, engine record IDs и иные ссылки остаются непрозрачными для Coordinator.
 
-Core хранит durable job ID, system, type, idempotency key, object payload,
-state, attempt counters, database-clock availability/lease timestamps, owner,
-configuration epoch, fencing token, result и безопасный error code. Claim
-атомарен и конкурентно-безопасен; takeover истёкшей lease получает новый
-fencing token. Completion/failure/extension отклоняются для старого owner,
-epoch, token или истёкшей lease. Внешние эффекты at-least-once и обязаны иметь
-стабильные idempotency keys и reconciliation. Секреты и диагностические
-сообщения не сохраняются в payload/error/result.
+Handler получает context с отменой, deadline и данные одной задачи. Он возвращает ограниченный JSON result, безопасный machine error code или список дочерних операций. Регистрация передаётся из статической composition root; профиль не может указать произвольный импорт, команду или executable.
 
-`WorkerPool` ограничивает число параллельных задач, lease duration, task
-timeout, polling, retry delay и результат. Ошибка durable store делает pool
-unready и останавливает его sibling workers. Обработчик обязан кооперативно
-завершаться при отмене context: Go не может безопасно прервать зависшую
-goroutine. Недоверенный или тяжёлый код должен исполняться в отдельно
-supervised процессе/контейнере с OS CPU, memory, filesystem, network и
-wall-clock limits. In-process timeout не является sandbox.
+Внешние эффекты могут выполняться более одного раза: гарантия Coordinator — at-least-once. Каждый handler обязан использовать стабильный idempotency key либо reconciliation до повторного внешнего действия. Секреты передаются через Core capability/secret provider или opaque references; они не помещаются в task payload, result, logs или error code.
 
-Временные ошибки получают ограниченный exponential retry со стабильным jitter;
-постоянные ошибки переводят задачу в `failed`; после исчерпания попыток
-оператор должен иметь авторизованный способ проверить состояние и явно
-повторить задание. В Coordinator persistence есть internal `GetJob`/`Retry`, но
-admin job-list/retry API и UI пока не подключены.
+## Retry, timeout и граница процесса
 
-## Archive Worker
+Core ограничивает concurrency, task timeout, attempt count, lease, polling, exponential backoff, payload/result размер и число динамических дочерних задач. Ошибка хранения, отказ renewal или потеря instance lease делает Core unhealthy и останавливает claims. Потеря lease отдельной задачи ожидаема: устаревший worker не может обновить задачу или породить детей после смены fencing token.
 
-Принимает Core file ID ZIP, целевой FileSet и явные лимиты. Перед распаковкой
-проверяет central directory, manifest и каждый entry; запрещает traversal,
-абсолютные/неоднозначные пути, symlinks, дубликаты, чрезмерные размеры и
-compression ratio. Выходные immutable files и FileSet membership создаёт через
-Core с наследованием разрешённых групп; повторяемые шаги адресуются стабильными
-ID/idempotency keys. Неполный результат не регистрируется Website как готовая
-feature version. Исходный ZIP удаляется только после durable фиксации и
-проверки результата. Сейчас есть только ZIP inspection; сохранение файлов,
-durable retry/recovery и handler registration отсутствуют.
+Отмена context — кооперативная. Go не может безопасно завершить зависшую goroutine. CPU/memory-heavy, network-facing или недоверенная обработка (в том числе Chromium и декодеры медиа) должна исполняться в отдельно supervised процессе/контейнере с явными CPU, memory, filesystem, network и wall-clock ограничениями. In-process timeout не является sandbox.
 
-## Media Worker
+Ошибки handler нормализуются к bounded machine code. Диагностический текст, stack trace, payload и результат не возвращаются в административную сводку. Повтор разрешается отдельной авторизованной операцией; уже совершённый внешний side effect не отменяется Core.
 
-Принимает исходный Core file ID и allowlisted preset с версией. Выход — новый
-immutable Core file с согласованными группами и метаданными; исходник
-сохраняется. Fingerprint включает hash источника и preset version. Декодеры
-должны иметь лимиты времени, памяти, размеров, frames и числа outputs; нельзя
-строить shell-команду из пользовательских параметров или разрешать произвольный
-network fetch. Сейчас пакет содержит контракт, но не processor/handler.
+## Специфичные worker сценарии
 
-## Prerender Worker
+### Archive
 
-Принимает immutable render plan с точными snapshot/feature/provider/content
-revisions и Core file IDs. Первая стадия создаёт site base, вторая — artifact
-для опубликованной ревизии контента. Результаты сохраняются через Core как
-immutable files. Каждая стадия повторяема по стабильному job key; ошибка второй
-стадии оставляет текущую Router target активной. Chromium/runtime изолируется
-от секретов и Core credentials; ограничения сети и ресурсов задаются явно.
-Сейчас пакет содержит контракт, но не Chromium runner/handler и не OS sandbox.
+Archive импортирует ZIP как обычный Core file reference, валидирует central directory, manifest и каждый entry до записи результата. Запрещены absolute/traversal/ambiguous paths, symlinks, дубликаты, чрезмерные размеры, число записей и compression ratio. Для распаковки проверяются хэши нераспакованных bytes; вывод создаётся как immutable Core files в наборе, созданном Website по configuration. Частичный output не помечается готовым. Повторяемые шаги используют стабильные keys; исходный ZIP удаляется только после durable фиксации и проверки результата.
+
+Сейчас существует ZIP inspection в `workers/archive/inspect.go`; полноценный Core-backed import handler и его runtime factory ещё не подключены.
+
+### Media
+
+Media принимает immutable Core file ID и allowlisted preset с версией. Output — новый immutable file с согласованными metadata и правами. Fingerprint включает checksum источника и preset version. Декодеры ограничиваются по времени, памяти, размеру, frame count и output count. Произвольные shell-команды и network fetch запрещены.
+
+Сейчас есть контракт `workers/media/contract.go`; processor и task handler не реализованы.
+
+### Prerender
+
+Prerender получает версионированный opaque render plan, а не предметные типы в Core. Каждый результат сохраняется через ограниченную Core file capability. Результат одной стадии не публикуется до полной проверки. Сбои оставляют текущее опубликованное состояние движка без изменений; публикация и Router activation являются product-owned workflow, зарегистрированным как обычная component operation.
+
+Сейчас есть контракт `workers/prerender/contract.go`; Chromium runner, handler и изоляция процесса не реализованы.
 
 ## Приёмочные сценарии
 
-Исполняемые tests для generic worker loop находятся в
-`tests/go/coordinator/workers_test.go`, а transaction/fencing tests — в
-`tests/go/core/internal/postgres/coordinator_test.go`. Они покрывают safe error
-codes, результат, panic/timeout, sibling cancellation, idempotent enqueue,
-concurrent reclaim, fencing token, epoch changes и атомарную route activation.
-Эти tests не подтверждают extraction/processing handlers, process isolation,
-реальный S3, retry после каждого внешнего эффекта, authenticated operator API
-или достижение общего целевого покрытия 60% для каждого worker.
+Каждый отдельный набор входных данных считается отдельным сценарием согласно [ACCEPTANCE-MATRIX.md](../tests/ACCEPTANCE-MATRIX.md). Для общего WorkerPool нужны реальные проверки: дубликатная регистрация, неверная версия, payload/result bounds, cancellation, timeout, panic, store failures, sibling cancellation, retry/backoff, delayed tasks, atomic child creation, concurrent claim, lease takeover, stale fencing и shutdown. Unit проверки с fake полезны, но не заменяют disposable PostgreSQL.
 
-Будущие probe/OCR/transcription/export/sitemap/link-check workers допускаются
-только после отдельного input/output, permission, resource-limit и retry
-контракта. Loader session cleanup остаётся обязанностью Loader/Core, пока не
-согласован отдельный перенос.
+Для Archive нужны реальные повреждённые ZIP, path traversal (включая Windows drive paths), symlink, duplicate entries, max-size/count/ratio и digest сценарии; затем — end-to-end сохранение в disposable Core/S3. Для Media и Prerender знаменатель acceptance сначала задаётся их публичными контрактами и ресурсными лимитами. Ни contract-only пакет, ни описание теста не считаются покрытой функциональностью.

@@ -10,8 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Zubrium/cdn/core/access"
-	core "github.com/Zubrium/cdn/core/platform"
+	core "github.com/Zubrium/cdn/core/presentation"
 	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )
@@ -185,7 +184,7 @@ func (s *Service) validUpload(upload storedUpload, id, principalID string) bool 
 		return false
 	}
 	for i, group := range upload.Input.Groups {
-		if !access.ValidGroupKey(group) || (i > 0 && upload.Input.Groups[i-1] >= group) {
+		if !core.ValidAccessGroupKey(group) || (i > 0 && upload.Input.Groups[i-1] >= group) {
 			return false
 		}
 	}

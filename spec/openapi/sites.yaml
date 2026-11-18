@@ -1,0 +1,417 @@
+openapi: 3.1.0
+info:
+  title: Zubrium Sites API
+  version: 2.0.0
+  description: >-
+    Website owns feature import, snapshots, builds and media derivative work.
+    Imports accept only a readable Core source-file ID; Website creates its
+    destination FileSet from startup configuration. Admin pagination defaults
+    and limits are configured explicitly at startup.
+servers: [{ url: / }]
+security:
+  - AdminSession: []
+  - BearerCredential: []
+paths:
+  /api/v2/admin/sites/feature-imports:
+    post:
+      operationId: beginFeatureImport
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_file_id]
+              properties:
+                source_file_id: { type: string, format: uuid }
+                expected_sha256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+      responses:
+        '202':
+          description: Import work accepted. Website creates its FileSet from startup configuration.
+          headers: { Location: { schema: { type: string } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/FeatureImport' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/feature-imports/{id}:
+    get:
+      operationId: getFeatureImport
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Current import state., content: { application/json: { schema: { $ref: '#/components/schemas/FeatureImport' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/features:
+    get:
+      operationId: listFeatureCatalog
+      parameters:
+        - { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200': { description: Immutable feature versions visible to Website., content: { application/json: { schema: { $ref: '#/components/schemas/FeatureVersionPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/features/{featureID}/versions:
+    get:
+      operationId: listFeatureVersions
+      parameters:
+        - { name: featureID, in: path, required: true, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200': { description: Feature version page., content: { application/json: { schema: { $ref: '#/components/schemas/FeatureVersionPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/features/{featureID}/versions/{version}:
+    get:
+      operationId: getFeatureVersion
+      parameters:
+        - { name: featureID, in: path, required: true, schema: { type: string } }
+        - { name: version, in: path, required: true, schema: { type: string, maxLength: 128 } }
+      responses:
+        '200': { description: Feature version manifest and file index., content: { application/json: { schema: { $ref: '#/components/schemas/FeatureVersion' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/snapshots:
+    get:
+      operationId: listSnapshots
+      parameters:
+        - { name: site_id, in: query, schema: { type: string, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$' } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Snapshot page for accessible sites., content: { application/json: { schema: { $ref: '#/components/schemas/SnapshotPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createSnapshot
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [site_id, name, expected_revision, expected_content_revision, payload]
+              properties:
+                site_id: { type: string, minLength: 1, maxLength: 128 }
+                parent_id: { type: string, minLength: 1, maxLength: 128 }
+                name: { type: string, minLength: 1, maxLength: 160 }
+                expected_revision: { type: integer, minimum: 0, description: Parent snapshot revision, or zero for a root snapshot. }
+                expected_content_revision: { type: integer, minimum: 0, description: Parent content revision, or zero for a root snapshot. }
+                payload: { $ref: '#/components/schemas/SnapshotPayload' }
+      responses:
+        '201': { description: Snapshot created from a complete immutable payload., headers: { Location: { schema: { type: string } }, ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/snapshots/{snapshotID}:
+    get:
+      operationId: getSnapshot
+      parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Snapshot metadata and complete Website-owned payload., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteSnapshot
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { name: snapshotID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+        - { name: If-Match, in: header, required: true, schema: { type: string, pattern: '^"[1-9][0-9]*"$' } }
+      responses:
+        '204': { description: Snapshot deleted or children reparented after ownership checks. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/snapshots/{snapshotID}/design-system:
+    get:
+      operationId: getSnapshotDesignSystem
+      parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }]
+      responses:
+        '200': { description: Snapshot-scoped structured design-system values and declarations for the pinned feature versions., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/SnapshotDesignSystem' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/branches:
+    get:
+      operationId: listConfiguredBranches
+      responses:
+        '200': { description: Static branch topology and current independent assignments., content: { application/json: { schema: { $ref: '#/components/schemas/BranchPage' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/branches/{branchID}/snapshot:
+    put:
+      operationId: assignBranchSnapshot
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ name: branchID, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [snapshot_id, expected_revision, expected_snapshot_revision]
+              properties:
+                snapshot_id: { type: string, format: uuid }
+                expected_revision: { type: integer, minimum: 1 }
+                expected_snapshot_revision: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Independent branch assignment changed; ETag contains the new branch revision., headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Branch' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/branches/{branchID}/events:
+    get:
+      operationId: listBranchAssignmentEvents
+      parameters:
+        - { name: branchID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Cursor-paginated assignment history., content: { application/json: { schema: { $ref: '#/components/schemas/BranchEventPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/snapshots/{snapshotID}/features/{featureID}:
+    put:
+      operationId: pinFeatureVersion
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { name: snapshotID, in: path, required: true, schema: { type: string } }
+        - { name: featureID, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [version, expected_revision], properties: { version: { type: string }, expected_revision: { type: integer, minimum: 0 } } } } }
+      responses:
+        '200': { description: Feature pin updated., content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/builds:
+    post:
+      operationId: buildSnapshot
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [snapshot_id], properties: { snapshot_id: { type: string } } } } }
+      responses:
+        '202': { description: Build accepted., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/BuildJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/builds/{jobID}:
+    get:
+      operationId: getBuild
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Build state., content: { application/json: { schema: { $ref: '#/components/schemas/BuildJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/media/derivatives:
+    post:
+      operationId: createMediaDerivative
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [source_file_id, feature_id, profile], properties: { source_file_id: { type: string, format: uuid }, feature_id: { type: string }, profile: { type: string } } } } }
+      responses:
+        '202': { description: Derivative job accepted., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/MediaJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/sites/media/jobs/{jobID}:
+    get:
+      operationId: getMediaJob
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Derivative state., content: { application/json: { schema: { $ref: '#/components/schemas/MediaJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
+    BearerCredential: { type: http, scheme: bearer }
+  parameters:
+    Cursor: { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+  schemas:
+    FeatureImport:
+      type: object
+      required: [id, source_file_id, state, source_deleted, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        source_file_id: { type: string, format: uuid }
+        feature_id: { type: string }
+        version: { type: string }
+        file_set_id: { type: string, format: uuid }
+        state: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        error_code: { type: string }
+        source_deleted: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FeatureVersionPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/FeatureVersion' } }, next_cursor: { type: string } }
+    FeatureVersion:
+      type: object
+      required: [feature_id, version, manifest, file_set_id, files, digest, artifact_size, created_at, state]
+      properties:
+        feature_id: { type: string }
+        version: { type: string }
+        manifest: { type: string, contentEncoding: base64 }
+        file_set_id: { type: string, format: uuid }
+        files: { type: object, additionalProperties: { type: string, format: uuid } }
+        digest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        artifact_size: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        state: { type: string }
+    Snapshot:
+      type: object
+      required: [id, site_id, name, sequence, revision, feature_pins, state]
+      properties:
+        id: { type: string }
+        site_id: { type: string }
+        parent_id: { type: string }
+        parent_name: { type: string }
+        parent_sequence: { type: integer, minimum: 1 }
+        name: { type: string }
+        sequence: { type: integer, minimum: 1 }
+        revision: { type: integer, minimum: 1 }
+        content_revision: { type: integer, minimum: 0 }
+        digest: { type: string }
+        created_at: { type: string, format: date-time }
+        feature_pins: { type: object, additionalProperties: { type: string } }
+        state: { type: string }
+        payload: { $ref: '#/components/schemas/SnapshotPayload' }
+    SnapshotPayload:
+      type: object
+      additionalProperties: false
+      required: [config, metadata, design_system]
+      x-max-serialized-bytes: 13631488
+      properties:
+        config: { type: object, description: Versioned Website structure and route tree., x-max-serialized-bytes: 8388608 }
+        metadata: { type: object, description: Versioned site and page metadata., x-max-serialized-bytes: 1048576 }
+        design_system: { type: object, description: Versioned snapshot design tokens., x-max-serialized-bytes: 4194304 }
+    SnapshotDesignSystem:
+      type: object
+      additionalProperties: false
+      required: [snapshot, design_system, feature_tokens]
+      properties:
+        snapshot: { $ref: '#/components/schemas/Snapshot' }
+        design_system: { type: object }
+        feature_tokens: { type: array, items: { type: object } }
+    SnapshotPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }, next_cursor: { type: string } }
+    Branch:
+      type: object
+      required: [id, name, site_id, listen_address, cors_origins, indexable, snapshot_id, revision, enabled, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        site_id: { type: string, format: uuid }
+        listen_address: { type: string, minLength: 1, maxLength: 255, description: Configured host:port listener address. }
+        cors_origins: { type: array, description: Canonical HTTP(S) origins without path, query, fragment, user info, wildcard host, explicit default port, or duplicate values., items: { type: string, format: uri } }
+        indexable: { type: boolean }
+        snapshot_id: { type: [string, 'null'], format: uuid }
+        revision: { type: integer, minimum: 1 }
+        enabled: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    BranchPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Branch' } } }
+    BranchEvent:
+      type: object
+      required: [id, branch_id, snapshot_id, snapshot_name, snapshot_sequence, action, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        branch_id: { type: string, format: uuid }
+        snapshot_id: { type: string, format: uuid }
+        snapshot_name: { type: string, minLength: 1, maxLength: 160 }
+        snapshot_sequence: { type: integer, minimum: 1 }
+        action: { type: string, enum: [assigned] }
+        created_at: { type: string, format: date-time }
+    BranchEventPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/BranchEvent' } }, next_cursor: { type: string } }
+    BuildJob:
+      type: object
+      required: [id, snapshot_id, state, created_at, updated_at]
+      properties:
+        id: { type: string }
+        snapshot_id: { type: string }
+        state: { type: string }
+        artifact_manifest_file_id: { type: string, format: uuid }
+        error_code: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MediaJob:
+      type: object
+      required: [id, source_file_id, profile, state, created_at, updated_at]
+      properties:
+        id: { type: string }
+        source_file_id: { type: string, format: uuid }
+        derivative_file_id: { type: string, format: uuid }
+        profile: { type: string }
+        state: { type: string }
+        error_code: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+  responses:
+    Error:
+      description: Stable machine-readable error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

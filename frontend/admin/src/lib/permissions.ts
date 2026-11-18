@@ -1,45 +1,64 @@
-import type { Role } from "@/types";
+import type { GroupLevel, Principal } from "@/types";
 
-export function canManageSchema(role?: Role | null): boolean {
-  return role === "admin" || role === "moderator";
+export function hasGroupAccess(
+  principal: Principal | null | undefined,
+  group: string,
+  minimum: Exclude<GroupLevel, 0> = 1,
+): boolean {
+  return (principal?.group_access?.[group] ?? 0) >= minimum;
 }
 
-export function canManageFeatures(role?: Role | null): boolean {
-  return role === "admin" || role === "moderator";
+export function hasAnyGroupAccess(
+  principal: Principal | null | undefined,
+  minimum: Exclude<GroupLevel, 0> = 1,
+): boolean {
+  return Object.values(principal?.group_access ?? {}).some((level) => level >= minimum);
 }
 
-export function canPublishContent(role?: Role | null): boolean {
-	return role === "admin" || role === "moderator" || role === "staff" || role === "user";
+export function canManageAdministrators(principal?: Principal | null): boolean {
+  return principal?.can_manage_administrators === true;
 }
 
-export function canPromoteContent(role?: Role | null): boolean {
-  return role === "admin" || role === "moderator";
+export function canManageSchema(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "features", 2);
 }
 
-export function canManageMedia(role?: Role | null): boolean {
-	return role === "admin" || role === "moderator" || role === "staff" || role === "user";
+export function canManageFeatures(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "features", 2);
 }
 
-export function canManageAccess(role?: Role | null): boolean {
-  return role === "admin";
+export function canReadFeatures(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "features", 1);
 }
 
-export function canManageSettings(role?: Role | null): boolean {
-  return role === "admin";
+export function canPublishContent(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "content", 2);
 }
 
-export function canViewSubmissions(role?: Role | null): boolean {
-	return role === "admin" || role === "moderator" || role === "staff" || role === "user";
+export function canPromoteContent(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "content", 2);
 }
 
-export function canManageSubmissions(role?: Role | null): boolean {
-  return role === "admin" || role === "moderator";
+export function canManageMedia(principal?: Principal | null): boolean {
+  return hasAnyGroupAccess(principal, 1);
 }
 
-export function canManageReleases(role?: Role | null): boolean {
-  return role === "admin" || role === "moderator";
+export function canManageAccess(principal?: Principal | null): boolean {
+  return canManageAdministrators(principal);
 }
 
-export function canCreateFeature(role?: Role | null): boolean {
-  return role === "admin" || role === "moderator";
+export function canViewSubmissions(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "forms", 1);
+}
+
+export function canManageSubmissions(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "forms", 2);
+}
+
+export function canManageReleases(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "features", 2);
+}
+
+export function canCreateFeature(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "features", 2);
 }

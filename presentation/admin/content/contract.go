@@ -1,5 +1,5 @@
-// Package content defines the admin adapter dependency on Content Engine.
-package content
+// Package contentapi defines the Content Admin HTTP adapter contract.
+package contentapi
 
 import engine "github.com/Zubrium/cdn/engines/content/presentation"
 

@@ -1,9 +1,9 @@
-//go:build full
+//go:build full && !devfixtures && !router
 
 package main
 
 import (
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	"testing"
 )
 

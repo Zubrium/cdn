@@ -3,7 +3,7 @@ package presentation
 import (
 	"testing"
 
-	"github.com/Zubrium/cdn/core/access"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/website"
 )
 
@@ -13,7 +13,7 @@ func TestWebsiteDescriptorDeclaresItsOperationsAndData(t *testing.T) {
 		t.Fatal("Website descriptor must expose its typed operation inventory")
 	}
 	for _, operation := range operations {
-		if operation.Name == "" || operation.ResourceType == "" || !access.ValidAction(operation.Action) {
+		if operation.Name == "" || operation.ResourceType == "" || !platform.ValidAccessAction(operation.Action) {
 			t.Fatalf("invalid Website operation: %#v", operation)
 		}
 	}

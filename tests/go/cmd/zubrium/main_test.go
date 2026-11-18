@@ -40,6 +40,7 @@ func TestCheckConfig(t *testing.T) {
   access_groups:
     content: 2
     coordinator_jobs: 2
+    router_routes: 2
   cache_max_bytes: 1048576
   cache_ttl: 5m
   max_metadata_bytes: 65536
@@ -54,6 +55,8 @@ func TestCheckConfig(t *testing.T) {
   maintenance_interval: 1m
   maintenance_timeout: 30s
   pending_ttl: 1h
+  session_idle_ttl: 8h
+  session_absolute_ttl: 168h
   maintenance_batch_size: 100
   module_data:
     max_payload_bytes: 1048576
@@ -61,7 +64,7 @@ func TestCheckConfig(t *testing.T) {
     max_batch_bytes: 8388608
     max_page_bytes: 16777216
     max_selectors: 16
-    max_selector_values: 64
+    max_selector_values: 256
     max_page_size: 100
     max_batch_operations: 64
 loader:
@@ -86,6 +89,24 @@ file_api:
   max_groups_per_file: 8
   default_page_size: 25
   max_page_size: 100
+admin_api:
+  max_json_bytes: 1048576
+  default_page_size: 25
+  max_page_size: 100
+  session_cookie_secure: false
+  allowed_origins: [http://127.0.0.1:8080]
+router_api:
+  max_json_bytes: 1048576
+  default_page_size: 25
+  max_page_size: 100
+  branch_id: branch-a
+  service_credential_env: TEST_ROUTER_SERVICE
+  public_listen_address: 127.0.0.1:8081
+  upload_staging_directory: /tmp/zubrium-router-upload-qa
+  upload_max_file_bytes: 524288
+  upload_max_concurrent: 1
+  upload_max_staged_bytes: 524288
+  upload_allowed_content_types: [image/png]
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s
@@ -95,7 +116,6 @@ http:
   shutdown_timeout: 15s
   max_header_bytes: 65536
 coordinator:
-  system_id: test-system
   job_access_group: coordinator_jobs
   jobs_page_default: 25
   jobs_page_maximum: 100
@@ -108,7 +128,9 @@ coordinator:
   retry_base: 2s
   retry_maximum: 1m
   max_attempts: 3
-  bindings: []
+  max_workflow_tasks: 1000
+  max_children_per_task: 16
+  workflow_retention: 48h
 `
 	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 		t.Fatal(err)
@@ -117,6 +139,7 @@ coordinator:
 	t.Setenv("TEST_MIGRATION_DB", "postgres://migrator:test-only@127.0.0.1:5432/zubrium_core_qa_unit")
 	t.Setenv("TEST_ACCESS", "test")
 	t.Setenv("TEST_SECRET", "test")
+	t.Setenv("TEST_ROUTER_SERVICE", "test")
 	out.Reset()
 	stderr.Reset()
 	if code := run([]string{"--check-config", path}, &out, &stderr); code != 0 {

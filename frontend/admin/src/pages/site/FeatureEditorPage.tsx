@@ -18,7 +18,7 @@ export default function FeatureEditorPage() {
   const confirm = useConfirm();
   const page = config.pages.find((item) => item.id === pageId);
   const placement = page?.placements.find((item) => item.id === placementId);
-  const buildsQuery = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.siteBuilder.featureBuilds(signal) });
+  const buildsQuery = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.website.featureBuilds(signal) });
   const build = buildsQuery.data && placement ? buildFor(buildsQuery.data.items, placement) : undefined;
   useDocumentTitle(build?.name ?? "Настройки фичи");
   const snapshotId = searchParams.get("snapshot") ?? "";

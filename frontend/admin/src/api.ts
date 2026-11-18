@@ -1,55 +1,77 @@
-import type { BranchRecord, SnapshotDetail } from "@/types";
 import type {
   ApiErrorDetail,
   ApiErrorPayload,
+  JsonObject,
+  AccessGroup,
   CoordinatorJob,
   CoordinatorJobPermissions,
-  CreateTokenInput,
-  CreatedToken,
-  DesignSystem,
-  DesignSystemState,
-  DesignTokenDefinition,
-  Environment,
-  EnvironmentPatch,
+  ContentBindings,
+  ContentModel,
+  ContentRecord,
+  CreatedPrincipal,
+  Credential,
+  GroupLevel,
+  IssuedCredential,
   FeatureBuild,
-  Feature,
-  FeatureListParams,
-  FeatureVersion,
+  FeatureManifest,
+  FormSchema,
+  FormSubmission,
   ListResponse,
   Media,
-  FileLimits, FileReference, FileUploadSession, FileVisibility,
+  FileLimits, FileUploadSession,
+  FileSet,
   MediaListParams,
   MediaRenditionContext,
   MediaRenditionState,
   MediaStatus,
-  Overview,
   Principal,
-  Settings,
-  SiteEnvironment,
+  RouterRoute,
+  RouterRouteMatch,
+  RouterRoutePage,
+  RouterRouteTarget,
+  RouterPublicOperation,
+  RouterPublicOperationPage,
   SiteConfig,
   SiteMetadata,
-  SiteMetadataState,
   SiteSnapshot,
-  SiteSnapshotList,
-  SnapshotEvent,
   ModelContentHistoryResponse,
   ModelContentRecordInput,
   ModelContentSelection,
   ModelContentWorkspace,
-  Submission,
-  SubmissionFilters,
-  SubmissionListResponse,
-  SubmissionStatus,
-  Token,
+  WebsiteFeatureImport,
+  WebsiteFeatureVersion,
+  WebsiteFeatureVersionPage,
+  WebsiteBuild,
+  WebsiteMediaJob,
+  WebsiteBranch,
+  WebsiteBranchEvent,
+  WebsiteBranchEventPage,
+  WebsiteSnapshot,
+  WebsiteSnapshotPage,
+  WebsiteSnapshotPayload,
 } from "./types";
 
-import type { SnapshotDesignWorkspace, StructuredDesignSystem } from "@/domains/design-system/types";
+import type { SnapshotDesignWorkspace, SnapshotFeatureToken, StructuredDesignSystem } from "@/domains/design-system/types";
 
-export const TOKEN_STORAGE_KEY = "we_admin_token";
 export const UNAUTHORIZED_EVENT = "we:unauthorized";
+const syntheticDataModeListeners = new Set<() => void>();
+let syntheticDataMode = false;
 
-const API_ROOT = "/api/v1";
-const ADMIN_ROOT = `${API_ROOT}/admin`;
+export function getSyntheticDataMode(): boolean {
+  return syntheticDataMode;
+}
+
+export function subscribeSyntheticDataMode(listener: () => void): () => void {
+  syntheticDataModeListeners.add(listener);
+  return () => syntheticDataModeListeners.delete(listener);
+}
+
+function observeResponseDataMode(response: Response): void {
+  if (syntheticDataMode || response.headers.get("X-Zubrium-Data-Mode") !== "synthetic") return;
+  syntheticDataMode = true;
+  for (const listener of syntheticDataModeListeners) listener();
+}
+
 const ADMIN_V2_ROOT = "/api/v2/admin";
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -57,6 +79,7 @@ type QueryValue = string | number | boolean | null | undefined;
 interface RequestOptions {
   method?: string;
   body?: unknown;
+  headers?: Record<string, string>;
   query?: Record<string, QueryValue>;
   signal?: AbortSignal;
   /** Login/me checks handle their own 401 state. */
@@ -65,6 +88,349 @@ interface RequestOptions {
 
 function arrayOrEmpty<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function containsCodePoint(value: string, predicate: (codePoint: number) => boolean): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && predicate(codePoint)) return true;
+  }
+  return false;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return containsCodePoint(value, (codePoint) => codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f));
+}
+
+function hasAsciiControlOrSpace(value: string): boolean {
+  return containsCodePoint(value, (codePoint) => codePoint <= 0x20 || codePoint === 0x7f);
+}
+
+function hasWhitespaceOrAsciiControl(value: string): boolean {
+  return /\s/u.test(value) || containsCodePoint(value, (codePoint) => codePoint <= 0x1f || codePoint === 0x7f);
+}
+
+function hasAsciiControl(value: string): boolean {
+  return containsCodePoint(value, (codePoint) => codePoint <= 0x1f || codePoint === 0x7f);
+}
+
+function invalidFeatureCatalog(): ApiError {
+  return new ApiError(502, "invalid_response", "Каталог фич содержит некорректные данные");
+}
+
+const uuidValuePattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function invalidWebsiteBranch(): ApiError {
+  return new ApiError(502, "invalid_response", "Сервер вернул некорректную конфигурацию ветки");
+}
+
+function validateWebsiteBranch(value: unknown): WebsiteBranch {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
+    typeof value.site_id !== "string" || !uuidValuePattern.test(value.site_id) ||
+    typeof value.name !== "string" || value.name.trim() !== value.name || Array.from(value.name).length < 1 || Array.from(value.name).length > 100 ||
+    hasControlCharacters(value.name) ||
+    typeof value.listen_address !== "string" || !validBranchListenAddress(value.listen_address) ||
+    !Array.isArray(value.cors_origins) || !value.cors_origins.every((origin) => typeof origin === "string" && validBranchOrigin(origin)) ||
+    new Set(value.cors_origins).size !== value.cors_origins.length ||
+    typeof value.indexable !== "boolean" ||
+    (value.snapshot_id !== null && (typeof value.snapshot_id !== "string" || !uuidValuePattern.test(value.snapshot_id))) ||
+    !Number.isSafeInteger(value.revision) || Number(value.revision) < 1 ||
+    typeof value.enabled !== "boolean" || typeof value.updated_at !== "string" || !value.updated_at.includes("T") || !Number.isFinite(Date.parse(value.updated_at))) {
+    throw invalidWebsiteBranch();
+  }
+  return value as unknown as WebsiteBranch;
+}
+
+function validBranchListenAddress(value: string): boolean {
+  if (value.length === 0 || value.length > 255) return false;
+  const match = /^(?:\[[^\]\s]+\]|[^:\s]*):([0-9]{1,5})$/.exec(value);
+  if (!match) return false;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function validBranchOrigin(value: string): boolean {
+  if (value.length === 0 || value.length > 512) return false;
+  try {
+    const origin = new URL(value);
+    return (origin.protocol === "https:" || origin.protocol === "http:") && origin.origin === value &&
+      !origin.username && !origin.password && !/[*,%]/u.test(origin.host);
+  } catch {
+    return false;
+  }
+}
+
+function validateWebsiteBranchEvent(value: unknown, branchID: string): WebsiteBranchEvent {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
+    value.branch_id !== branchID || typeof value.snapshot_id !== "string" || !uuidValuePattern.test(value.snapshot_id) ||
+    typeof value.snapshot_name !== "string" || value.snapshot_name.trim() !== value.snapshot_name || Array.from(value.snapshot_name).length < 1 ||
+    Array.from(value.snapshot_name).length > 160 || hasControlCharacters(value.snapshot_name) ||
+    !Number.isSafeInteger(value.snapshot_sequence) || Number(value.snapshot_sequence) < 1 || value.action !== "assigned" ||
+    typeof value.created_at !== "string" || !value.created_at.includes("T") || !Number.isFinite(Date.parse(value.created_at))) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную историю назначений ветки");
+  }
+  return value as unknown as WebsiteBranchEvent;
+}
+
+function invalidRouterRoute(): ApiError {
+  return new ApiError(502, "invalid_response", "Сервер вернул некорректный публичный маршрут");
+}
+
+function invalidRouterOperation(): ApiError {
+  return new ApiError(502, "invalid_response", "Сервер вернул некорректную публичную операцию");
+}
+
+function validateRouterPublicOperation(value: unknown): RouterPublicOperation {
+  const methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
+  if (!isRecord(value) || typeof value.id !== "string" || !/^public\.[A-Za-z0-9._-]{1,121}$/.test(value.id) ||
+    !Number.isSafeInteger(value.contract_version) || Number(value.contract_version) < 1 ||
+    !Array.isArray(value.methods) || value.methods.length < 1 || value.methods.length > 6 ||
+    !value.methods.every((method) => typeof method === "string" && methods.includes(method)) || new Set(value.methods).size !== value.methods.length ||
+    !Number.isSafeInteger(value.max_request_bytes) || Number(value.max_request_bytes) < 1 ||
+    !Array.isArray(value.allowed_content_types) || value.allowed_content_types.length < 1 || value.allowed_content_types.length > 32 ||
+    !value.allowed_content_types.every((type) => typeof type === "string" && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(type)) ||
+    new Set(value.allowed_content_types.map((type) => typeof type === "string" ? type.toLowerCase() : "")).size !== value.allowed_content_types.length) {
+    throw invalidRouterOperation();
+  }
+  if (value.id === "public.form-upload" && value.allowed_content_types.some((type) => typeof type === "string" &&
+    ["application/ecmascript", "application/javascript", "application/x-httpd-php", "application/xhtml+xml", "application/xml",
+      "image/svg+xml", "text/css", "text/html", "text/javascript", "text/xml"].includes(type.toLowerCase()))) {
+    throw invalidRouterOperation();
+  }
+  return value as unknown as RouterPublicOperation;
+}
+
+function invalidFileSet(): ApiError {
+  return new ApiError(502, "invalid_response", "Сервер вернул некорректный набор файлов");
+}
+
+function validateFileSet(value: unknown): FileSet {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
+    typeof value.namespace !== "string" || !/^[a-z][a-z0-9_-]*(?:\/[a-z][a-z0-9_-]*)*$/.test(value.namespace) || value.namespace.length > 64 ||
+    typeof value.name !== "string" || value.name.trim() !== value.name || value.name.length < 1 || value.name.length > 255 ||
+    hasControlCharacters(value.name) ||
+    typeof value.managementGroup !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(value.managementGroup) ||
+    !Number.isSafeInteger(value.revision) || Number(value.revision) < 1 ||
+    typeof value.createdAt !== "string" || !value.createdAt.includes("T") || !Number.isFinite(Date.parse(value.createdAt)) ||
+    typeof value.updatedAt !== "string" || !value.updatedAt.includes("T") || !Number.isFinite(Date.parse(value.updatedAt))) {
+    throw invalidFileSet();
+  }
+  return value as unknown as FileSet;
+}
+
+function validPublicUploadRouteConfig(config: Record<string, unknown>): boolean {
+  const allowedKeys = new Set(["enabled", "access_group", "file_set_id", "max_bytes", "allowed_content_types"]);
+  if (Object.keys(config).some((key) => !allowedKeys.has(key)) || config.enabled !== true ||
+    typeof config.access_group !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(config.access_group) ||
+    (config.file_set_id !== undefined && (typeof config.file_set_id !== "string" || !uuidValuePattern.test(config.file_set_id))) ||
+    !Number.isSafeInteger(config.max_bytes) || Number(config.max_bytes) < 1 ||
+    !Array.isArray(config.allowed_content_types) || config.allowed_content_types.length < 1 || config.allowed_content_types.length > 32) {
+    return false;
+  }
+  const seen = new Set<string>();
+  for (const value of config.allowed_content_types) {
+    if (typeof value !== "string" || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(value)) return false;
+    const normalized = value.toLowerCase();
+    if (["application/ecmascript", "application/javascript", "application/x-httpd-php", "application/xhtml+xml",
+      "application/xml", "image/svg+xml", "text/css", "text/html", "text/javascript", "text/xml"].includes(normalized) || seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+  }
+  return true;
+}
+
+function validateRouterRoute(value: unknown): RouterRoute {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
+    typeof value.branch_id !== "string" || value.branch_id.length === 0 || value.branch_id.length > 128 ||
+    hasAsciiControlOrSpace(value.branch_id) ||
+    typeof value.host !== "string" || value.host.length === 0 || value.host.length > 253 ||
+    value.host.trim() !== value.host || hasWhitespaceOrAsciiControl(value.host) ||
+    typeof value.path !== "string" || !value.path.startsWith("/") || value.path.length > 2048 ||
+    value.path.trim() !== value.path || hasAsciiControl(value.path) || value.path.includes("?") || value.path.includes("#") ||
+    (value.match !== "exact" && value.match !== "prefix") || typeof value.state !== "string" || value.state.length === 0 ||
+    !Number.isSafeInteger(value.revision) || Number(value.revision) < 1 ||
+    typeof value.created_at !== "string" || !value.created_at.includes("T") || !Number.isFinite(Date.parse(value.created_at)) ||
+    typeof value.updated_at !== "string" || !value.updated_at.includes("T") || !Number.isFinite(Date.parse(value.updated_at)) ||
+    !isRecord(value.target)) {
+    throw invalidRouterRoute();
+  }
+
+  if (value.target.kind === "core-file" || value.target.kind === "static-site-artifact") {
+    if (typeof value.target.file_id !== "string" || !uuidValuePattern.test(value.target.file_id) ||
+      (value.target.kind === "core-file" && (value.match !== "exact" || value.target.fallback_enabled === true)) ||
+      (value.target.kind === "static-site-artifact" && value.target.fallback_enabled !== undefined && typeof value.target.fallback_enabled !== "boolean") ||
+      !hasOnlyKeys(value.target, value.target.kind === "core-file" ? ["kind", "file_id"] : ["kind", "file_id", "fallback_enabled"])) {
+      throw invalidRouterRoute();
+    }
+  } else if (value.target.kind === "registered-operation") {
+    if (typeof value.target.operation_id !== "string" || !/^public\.[A-Za-z0-9._-]{1,121}$/.test(value.target.operation_id) ||
+      !isRecord(value.target.operation_config) || !hasOnlyKeys(value.target, ["kind", "operation_id", "operation_config"])) {
+      throw invalidRouterRoute();
+    }
+    if (value.target.operation_id === "public.form-upload" && !validPublicUploadRouteConfig(value.target.operation_config)) {
+      throw invalidRouterRoute();
+    }
+  } else {
+    throw invalidRouterRoute();
+  }
+
+  return value as unknown as RouterRoute;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  const allow = new Set(allowed);
+  return Object.keys(value).every((key) => allow.has(key));
+}
+
+type SnapshotDetail = {
+  snapshot: SiteSnapshot;
+  payload: { config: SiteConfig; metadata?: SiteMetadata; designSystem?: StructuredDesignSystem };
+};
+
+function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
+	const valid = validateWebsiteSnapshot(snapshot);
+  return {
+    id: valid.id,
+    siteId: valid.site_id,
+    revision: valid.revision,
+    parentSnapshotId: valid.parent_id,
+    parentSequence: valid.parent_sequence,
+    parentName: valid.parent_name,
+    sequence: valid.sequence,
+    name: valid.name,
+    digest: valid.digest ?? "",
+    contentRevision: valid.content_revision,
+    createdAt: valid.created_at ?? "",
+    warnings: valid.warnings,
+    createdByName: valid.created_by_name,
+    creationSummary: valid.creation_summary,
+  };
+}
+
+function validateWebsiteSnapshot(value: unknown): WebsiteSnapshot {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id || typeof value.site_id !== "string" || !value.site_id ||
+    typeof value.name !== "string" || !value.name || typeof value.sequence !== "number" || !Number.isSafeInteger(value.sequence) || value.sequence < 1 ||
+    typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.state !== "string" || !value.state ||
+    !isRecord(value.feature_pins) || !Object.values(value.feature_pins).every((version) => typeof version === "string") ||
+    (value.parent_id !== undefined && typeof value.parent_id !== "string") ||
+    (value.parent_name !== undefined && typeof value.parent_name !== "string") ||
+    (value.parent_sequence !== undefined && (typeof value.parent_sequence !== "number" || !Number.isSafeInteger(value.parent_sequence) || value.parent_sequence < 1)) ||
+    (value.content_revision !== undefined && (typeof value.content_revision !== "number" || !Number.isSafeInteger(value.content_revision) || value.content_revision < 0)) ||
+    (value.digest !== undefined && typeof value.digest !== "string") ||
+    (value.created_at !== undefined && typeof value.created_at !== "string") ||
+    (value.created_by_name !== undefined && typeof value.created_by_name !== "string") ||
+    (value.warnings !== undefined && (!Array.isArray(value.warnings) || !value.warnings.every((warning) => typeof warning === "string"))) ||
+    (value.payload !== undefined && !isRecord(value.payload))) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректный снапшот");
+  }
+  return value as unknown as WebsiteSnapshot;
+}
+
+function structuredDesignSystem(value: unknown): StructuredDesignSystem {
+  if (!isRecord(value) || value.formatVersion !== 2 || !Array.isArray(value.groups) || !Array.isArray(value.baseTokens) ||
+    !isRecord(value.featureValues) || !Array.isArray(value.breakpoints) || !Array.isArray(value.fonts)) {
+    throw new ApiError(502, "invalid_response", "Снапшот содержит некорректную дизайн-систему");
+  }
+  return value as unknown as StructuredDesignSystem;
+}
+
+function snapshotPayloadFromWebsite(payload: WebsiteSnapshotPayload): SnapshotDetail["payload"] {
+  if (!isRecord(payload.config) || ![2, 3].includes(Number(payload.config.formatVersion)) || !Array.isArray(payload.config.pages) ||
+    !isRecord(payload.config.routeTree) || !isRecord(payload.metadata) || payload.metadata.formatVersion !== 1) {
+    throw new ApiError(502, "invalid_response", "Снапшот содержит некорректную конфигурацию сайта");
+  }
+  return {
+    config: payload.config,
+    metadata: payload.metadata,
+    designSystem: structuredDesignSystem(payload.design_system),
+  };
+}
+
+function snapshotFeatureTokens(value: unknown): SnapshotFeatureToken[] {
+  if (!Array.isArray(value)) throw new ApiError(502, "invalid_response", "Сервер вернул некорректные декларации токенов фич");
+  const kinds = new Set(["color", "length", "number", "font", "shadow"]);
+  return value.map((item) => {
+    if (!isRecord(item) || typeof item.featureKey !== "string" || !item.featureKey || typeof item.featureName !== "string" ||
+      !isRecord(item.definition) || typeof item.definition.key !== "string" || !item.definition.key ||
+      typeof item.definition.label !== "string" || typeof item.definition.group !== "string" ||
+      typeof item.definition.kind !== "string" || !kinds.has(item.definition.kind) || !isRecord(item.definition.default)) {
+      throw new ApiError(502, "invalid_response", "Сервер вернул некорректные декларации токенов фич");
+    }
+    return item as unknown as SnapshotFeatureToken;
+  });
+}
+
+function siteSnapshotDetailFromWebsite(snapshot: WebsiteSnapshot): SnapshotDetail {
+  if (!snapshot.payload) throw new ApiError(502, "invalid_response", "Сервер не вернул payload снапшота");
+  return { snapshot: siteSnapshotFromWebsite(snapshot), payload: snapshotPayloadFromWebsite(snapshot.payload) };
+}
+
+function decodeFeatureManifest(encoded: string): FeatureManifest {
+  if (encoded.length === 0 || encoded.length > 1_400_000) throw invalidFeatureCatalog();
+  try {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (!isRecord(value) || value.formatVersion !== 2 ||
+      typeof value.key !== "string" || !value.key ||
+      typeof value.name !== "string" ||
+      typeof value.version !== "string" ||
+      typeof value.engineApi !== "string" ||
+      !Array.isArray(value.slots) || !value.slots.every((slot) => typeof slot === "string") ||
+      !isRecord(value.arguments) || !Array.isArray(value.dataInputs)) {
+      throw invalidFeatureCatalog();
+    }
+    return value as unknown as FeatureManifest;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw invalidFeatureCatalog();
+  }
+}
+
+function featureBuildFromCatalog(item: WebsiteFeatureVersion): FeatureBuild {
+  if (!item || typeof item.feature_id !== "string" || !item.feature_id ||
+    typeof item.version !== "string" || !item.version ||
+    typeof item.file_set_id !== "string" ||
+    typeof item.digest !== "string" || !/^[a-f0-9]{64}$/i.test(item.digest) ||
+    !Number.isSafeInteger(item.artifact_size) || item.artifact_size < 0 ||
+    typeof item.created_at !== "string" || item.state !== "ready" || !isRecord(item.files) ||
+    !Object.values(item.files).every((fileID) => typeof fileID === "string")) {
+    throw invalidFeatureCatalog();
+  }
+  const manifest = decodeFeatureManifest(item.manifest);
+  if (manifest.version !== item.version) throw invalidFeatureCatalog();
+  return {
+    id: `${item.feature_id}@${item.version}`,
+    featureId: item.feature_id,
+    key: manifest.key,
+    name: manifest.name,
+    version: item.version,
+    schemaVersionId: item.file_set_id,
+    digest: item.digest,
+    artifactSize: item.artifact_size,
+    manifest,
+    createdAt: item.created_at,
+  };
+}
+
+function parseFeatureImport(value: unknown): WebsiteFeatureImport {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id ||
+    typeof value.source_file_id !== "string" || !value.source_file_id ||
+    !["queued", "running", "succeeded", "failed", "cancelled"].includes(String(value.state)) ||
+    typeof value.source_deleted !== "boolean" ||
+    typeof value.created_at !== "string" || typeof value.updated_at !== "string" ||
+    (value.feature_id !== undefined && typeof value.feature_id !== "string") ||
+    (value.version !== undefined && typeof value.version !== "string") ||
+    (value.file_set_id !== undefined && typeof value.file_set_id !== "string") ||
+    (value.error_code !== undefined && typeof value.error_code !== "string")) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректное состояние импорта фичи");
+  }
+  return value as unknown as WebsiteFeatureImport;
 }
 
 // The API omits empty `recordIds` for `all` selections. Normalize optional
@@ -102,14 +468,6 @@ async function requestList<T>(
     items: arrayOrEmpty(response?.items),
     next_cursor: response?.next_cursor ?? null,
   };
-}
-
-async function requestItems<T>(
-  path: string,
-  options: RequestOptions = {},
-): Promise<{ items: T[] }> {
-  const response = await request<{ items?: T[] | null } | null>(path, options);
-  return { items: arrayOrEmpty(response?.items) };
 }
 
 export class ApiError extends Error {
@@ -187,28 +545,6 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-export function getStoredToken(): string | null {
-  try {
-    const token = window.localStorage.getItem(TOKEN_STORAGE_KEY);
-    return token && token.trim() ? token.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-export function setStoredToken(token: string | null): void {
-  try {
-    if (token) {
-      window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    } else {
-      window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Storage can be unavailable in hardened browser modes. The app still
-    // works for the current tab until reload.
-  }
-}
-
 function notifyUnauthorized(message: string): void {
   window.dispatchEvent(
     new CustomEvent<string>(UNAUTHORIZED_EVENT, { detail: message }),
@@ -229,9 +565,13 @@ function buildUrl(
   return `${url.pathname}${url.search}`;
 }
 
-function authHeaders(): Record<string, string> {
-  const token = getStoredToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+function csrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const values = document.cookie.split(";").map((part) => part.trim())
+    .filter((part) => part.startsWith("zubrium_admin_csrf="));
+  if (values.length !== 1) return null;
+  const value = values[0]!.slice("zubrium_admin_csrf=".length);
+  return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
 }
 
 async function parseErrorResponse(response: Response): Promise<ApiError> {
@@ -244,10 +584,11 @@ async function parseErrorResponse(response: Response): Promise<ApiError> {
         parsed &&
         typeof parsed === "object" &&
         "error" in parsed &&
-        parsed.error &&
-        typeof parsed.error === "object"
+        parsed.error
       ) {
-        payload = (parsed as { error: ApiErrorPayload }).error;
+        const error = (parsed as { error: unknown }).error;
+        if (typeof error === "object") payload = error as ApiErrorPayload;
+        else if (typeof error === "string") payload = { code: error, message: error };
       }
     }
   } catch {
@@ -280,8 +621,13 @@ async function rawRequest(
 ): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: "application/json",
-    ...authHeaders(),
+    ...options.headers,
   };
+  const method = (options.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+  }
   let body: BodyInit | undefined;
   if (options.body !== undefined) {
     if (options.body instanceof Blob) {
@@ -296,7 +642,7 @@ async function rawRequest(
   let response: Response;
   try {
     response = await fetch(buildUrl(path, options.query), {
-      method: options.method ?? "GET",
+      method,
       headers,
       body,
       signal: options.signal,
@@ -310,6 +656,8 @@ async function rawRequest(
       "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.",
     );
   }
+
+  observeResponseDataMode(response);
 
   if (response.status === 401 && !options.suppressUnauthorizedEvent) {
     notifyUnauthorized("Сессия истекла. Войдите снова.");
@@ -352,25 +700,244 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
   return fallback;
 }
 
-async function requestBlob(
-  path: string,
-  options: RequestOptions = {},
-): Promise<{ blob: Blob; filename: string }> {
-  const response = await rawRequest(path, options);
-  if (!response.ok) throw await parseErrorResponse(response);
-  const blob = await response.blob();
+const encoded = (value: string) => encodeURIComponent(value);
+
+interface CoreFile {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  revision: number;
+  groups: string[];
+  attributes?: Record<string, string>;
+}
+
+function toMedia(file: CoreFile): Media {
   return {
-    blob,
-    filename: filenameFromDisposition(
-      response.headers.get("Content-Disposition"),
-      "export.csv",
-    ),
+    id: file.id,
+    revision: file.revision,
+    sha256: file.sha256,
+    groups: arrayOrEmpty(file.groups),
+    original_filename: file.name,
+    content_type: file.contentType,
+    size_bytes: file.size,
+    status: "ready",
+    variants: {},
+    created_at: "",
+    updated_at: "",
   };
 }
 
-const encoded = (value: string) => encodeURIComponent(value);
-
 export const api = {
+  website: {
+    snapshots(siteID?: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteSnapshotPage> {
+      return requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, cursor, limit } });
+    },
+    async allSnapshots(signal?: AbortSignal, siteID?: string): Promise<WebsiteSnapshot[]> {
+      const items: WebsiteSnapshot[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
+        const page = await requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, cursor } });
+        items.push(...page.items.map(validateWebsiteSnapshot));
+        const nextCursor = page.next_cursor || undefined;
+        if (!nextCursor) return items;
+        if (seenCursors.has(nextCursor)) throw new ApiError(502, "invalid_pagination", "Сервер вернул повторный указатель списка снапшотов");
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+      throw new ApiError(502, "snapshot_list_too_large", "Список снапшотов превышает допустимый размер");
+    },
+    branches(signal?: AbortSignal) {
+      return requestList<unknown>(`${ADMIN_V2_ROOT}/sites/branches`, { signal }).then((page) => ({
+        items: page.items.map(validateWebsiteBranch),
+        next_cursor: page.next_cursor,
+      }));
+    },
+    assignBranch(branchID: string, snapshotID: string, expectedRevision: number, expectedSnapshotRevision: number): Promise<WebsiteBranch> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/branches/${encoded(branchID)}/snapshot`, {
+        method: "PUT",
+        body: { snapshot_id: snapshotID, expected_revision: expectedRevision, expected_snapshot_revision: expectedSnapshotRevision },
+      }).then((value) => {
+        const branch = validateWebsiteBranch(value);
+        if (branch.id !== branchID || branch.snapshot_id !== snapshotID || branch.revision <= expectedRevision) throw invalidWebsiteBranch();
+        return branch;
+      });
+    },
+    branchEvents(branchID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteBranchEventPage> {
+      return requestList<unknown>(`${ADMIN_V2_ROOT}/sites/branches/${encoded(branchID)}/events`, {
+        signal, query: { cursor, limit },
+      }).then((page) => {
+        if (page.next_cursor && page.next_cursor.length > 1024) throw new ApiError(502, "invalid_response", "Сервер вернул некорректный указатель истории ветки");
+        return { items: page.items.map((item) => validateWebsiteBranchEvent(item, branchID)), next_cursor: page.next_cursor };
+      });
+    },
+    featureCatalog(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
+      return request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features`, { signal, query: { cursor, limit } });
+    },
+    featureVersions(featureID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
+      return request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features/${encoded(featureID)}/versions`, { signal, query: { cursor, limit } });
+    },
+    featureVersion(featureID: string, version: string, signal?: AbortSignal): Promise<WebsiteFeatureVersion> {
+      return request<WebsiteFeatureVersion>(`${ADMIN_V2_ROOT}/sites/features/${encoded(featureID)}/versions/${encoded(version)}`, { signal });
+    },
+    snapshot(id: string, signal?: AbortSignal): Promise<WebsiteSnapshot> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(id)}`, { signal }).then((value) => {
+        const snapshot = validateWebsiteSnapshot(value);
+        if (snapshot.id !== id) throw new ApiError(502, "invalid_response", "Сервер вернул другой снапшот");
+        return snapshot;
+      });
+    },
+    createSnapshot(input: { site_id: string; parent_id?: string; name: string; expected_revision: number; expected_content_revision: number; payload: WebsiteSnapshotPayload }, idempotencyKey: string): Promise<WebsiteSnapshot> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/snapshots`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input }).then(validateWebsiteSnapshot);
+    },
+    deleteSnapshot(id: string, revision: number): Promise<void> {
+      if (!Number.isSafeInteger(revision) || revision < 1) throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия снапшота");
+      return request<void>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
+    },
+    pinFeatureVersion(snapshotID: string, featureID: string, version: string, expectedRevision: number): Promise<WebsiteSnapshot> {
+      return request<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(snapshotID)}/features/${encoded(featureID)}`, {
+        method: "PUT", body: { version, expected_revision: expectedRevision },
+      });
+    },
+    buildSnapshot(snapshotID: string, idempotencyKey: string): Promise<WebsiteBuild> {
+      return request<WebsiteBuild>(`${ADMIN_V2_ROOT}/sites/builds`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { snapshot_id: snapshotID },
+      });
+    },
+    build(id: string, signal?: AbortSignal): Promise<WebsiteBuild> {
+      return request<WebsiteBuild>(`${ADMIN_V2_ROOT}/sites/builds/${encoded(id)}`, { signal });
+    },
+    createMediaDerivative(input: { source_file_id: string; feature_id: string; profile: string }, idempotencyKey: string): Promise<WebsiteMediaJob> {
+      return request<WebsiteMediaJob>(`${ADMIN_V2_ROOT}/sites/media/derivatives`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
+      });
+    },
+    mediaJob(id: string, signal?: AbortSignal): Promise<WebsiteMediaJob> {
+      return request<WebsiteMediaJob>(`${ADMIN_V2_ROOT}/sites/media/jobs/${encoded(id)}`, { signal });
+    },
+    async featureBuilds(signal?: AbortSignal): Promise<{ items: FeatureBuild[] }> {
+      const items: FeatureBuild[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
+        const page = await request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features`, { signal, query: { cursor } });
+        if (!page || !Array.isArray(page.items)) throw invalidFeatureCatalog();
+        items.push(...page.items.map(featureBuildFromCatalog));
+        if (page.next_cursor != null && typeof page.next_cursor !== "string") throw invalidFeatureCatalog();
+        const nextCursor = page.next_cursor || undefined;
+        if (!nextCursor) return { items };
+        if (seenCursors.has(nextCursor)) throw invalidFeatureCatalog();
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+      throw new ApiError(502, "catalog_too_large", "Каталог фич превышает допустимый размер");
+    },
+    beginFeatureImport(sourceFileID: string, idempotencyKey: string, expectedSHA256?: string): Promise<WebsiteFeatureImport> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/feature-imports`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: { source_file_id: sourceFileID, ...(expectedSHA256 ? { expected_sha256: expectedSHA256 } : {}) },
+      }).then(parseFeatureImport);
+    },
+    featureImport(id: string, signal?: AbortSignal): Promise<WebsiteFeatureImport> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/feature-imports/${encoded(id)}`, { signal }).then(parseFeatureImport);
+    },
+  },
+
+  contentEngine: {
+    models(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
+      return requestList<ContentModel>(`${ADMIN_V2_ROOT}/content/models`, { signal, query: { snapshot_id: snapshotID, cursor, limit } });
+    },
+    model(snapshotID: string, modelID: string, signal?: AbortSignal): Promise<ContentModel> {
+      return request<ContentModel>(`${ADMIN_V2_ROOT}/content/models/${encoded(modelID)}`, { signal, query: { snapshot_id: snapshotID } });
+    },
+    saveModel(input: { snapshot_id: string; model_id?: string; key: string; name: string; cardinality: "many" | "singleton"; fields: Array<Omit<ContentModel["fields"][number], "id"> & { id?: string }>; expected_revision: number }): Promise<ContentModel> {
+      return request<ContentModel>(`${ADMIN_V2_ROOT}/content/models`, { method: "PUT", body: input });
+    },
+    records(snapshotID: string, modelID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
+      return requestList<ContentRecord>(`${ADMIN_V2_ROOT}/content/records`, { signal, query: { snapshot_id: snapshotID, model_id: modelID, cursor, limit } });
+    },
+    saveRecord(input: { snapshot_id: string; model_id: string; record_id?: string; values: Record<string, unknown>; expected_revision: number }): Promise<ContentRecord> {
+      return request<ContentRecord>(`${ADMIN_V2_ROOT}/content/records`, { method: "PUT", body: input });
+    },
+    publishRecord(snapshotID: string, recordID: string, expectedRevision: number): Promise<ContentRecord> {
+      return request<ContentRecord>(`${ADMIN_V2_ROOT}/content/records/${encoded(recordID)}/publish`, { method: "POST", body: { snapshot_id: snapshotID, expected_revision: expectedRevision } });
+    },
+    restoreRecord(snapshotID: string, recordID: string, historyID: string, expectedRevision: number): Promise<ContentRecord> {
+      return request<ContentRecord>(`${ADMIN_V2_ROOT}/content/records/${encoded(recordID)}/restore`, { method: "POST", body: { snapshot_id: snapshotID, history_id: historyID, expected_revision: expectedRevision } });
+    },
+    bindings(snapshotID: string, featureID: string, signal?: AbortSignal): Promise<ContentBindings> {
+      return request<ContentBindings>(`${ADMIN_V2_ROOT}/content/bindings/${encoded(featureID)}`, { signal, query: { snapshot_id: snapshotID } });
+    },
+    saveBindings(input: { snapshot_id: string; feature_id: string; values: Record<string, unknown>; expected_revision: number }): Promise<ContentBindings> {
+      return request<ContentBindings>(`${ADMIN_V2_ROOT}/content/bindings`, { method: "PUT", body: input });
+    },
+  },
+
+  formsEngine: {
+    schemas(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
+      return requestList<FormSchema>(`${ADMIN_V2_ROOT}/forms/schemas`, { signal, query: { snapshot_id: snapshotID, cursor, limit } });
+    },
+    schema(snapshotID: string, schemaID: string, signal?: AbortSignal): Promise<FormSchema> {
+      return request<FormSchema>(`${ADMIN_V2_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal, query: { snapshot_id: snapshotID } });
+    },
+    saveSchema(input: { snapshot_id: string; schema_id?: string; key: string; fields: Record<string, unknown>; expected_revision: number }): Promise<FormSchema> {
+      return request<FormSchema>(`${ADMIN_V2_ROOT}/forms/schemas`, { method: "PUT", body: input });
+    },
+    submissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, cursor?: string, limit?: number, signal?: AbortSignal) {
+      return requestList<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions`, { signal, query: { snapshot_id: snapshotID, ...filters, cursor, limit } });
+    },
+    submission(snapshotID: string, id: string, signal?: AbortSignal): Promise<FormSubmission> {
+      return request<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}`, { signal, query: { snapshot_id: snapshotID } });
+    },
+    setSubmissionStatus(snapshotID: string, id: string, status: string, expectedRevision: number): Promise<FormSubmission> {
+      return request<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}/status`, { method: "PATCH", body: { snapshot_id: snapshotID, status, expected_revision: expectedRevision } });
+    },
+    deleteSubmission(snapshotID: string, id: string, revision: number): Promise<void> {
+      return request(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}`, {
+        method: "DELETE", query: { snapshot_id: snapshotID }, headers: { "If-Match": `"r${revision}"` },
+      });
+    },
+  },
+
+  router: {
+    operations: {
+      async list(signal?: AbortSignal): Promise<RouterPublicOperationPage> {
+        const response = await request<unknown>(`${ADMIN_V2_ROOT}/router/operations`, { signal });
+        if (!isRecord(response) || !Array.isArray(response.items)) throw invalidRouterOperation();
+        return { items: response.items.map(validateRouterPublicOperation) };
+      },
+    },
+    routes: {
+      async list(params: { host?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal): Promise<RouterRoutePage> {
+        const page = await requestList<unknown>(`${ADMIN_V2_ROOT}/router/routes`, { signal, query: params });
+        return { items: page.items.map(validateRouterRoute), next_cursor: page.next_cursor ?? undefined };
+      },
+      get(id: string, signal?: AbortSignal): Promise<RouterRoute> {
+        return request<unknown>(`${ADMIN_V2_ROOT}/router/routes/${encoded(id)}`, { signal }).then((value) => {
+          const route = validateRouterRoute(value);
+          if (route.id !== id) throw invalidRouterRoute();
+          return route;
+        });
+      },
+      create(input: { host: string; path: string; match: RouterRouteMatch; target: RouterRouteTarget }, idempotencyKey: string): Promise<RouterRoute> {
+        return request<unknown>(`${ADMIN_V2_ROOT}/router/routes`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input }).then(validateRouterRoute);
+      },
+      replaceTarget(id: string, target: RouterRouteTarget, revision: number): Promise<RouterRoute> {
+        return request<unknown>(`${ADMIN_V2_ROOT}/router/routes/${encoded(id)}/target`, { method: "PUT", headers: { "If-Match": `"${revision}"` }, body: { target } }).then((value) => {
+          const route = validateRouterRoute(value);
+          if (route.id !== id || route.revision <= revision) throw invalidRouterRoute();
+          return route;
+        });
+      },
+      delete(id: string, revision: number): Promise<void> {
+        return request(`${ADMIN_V2_ROOT}/router/routes/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
+      },
+    },
+  },
+
   coordinator: {
     jobs: {
       list(params: { type?: string; state?: string; limit?: number; before?: string }, signal?: AbortSignal) {
@@ -390,205 +957,110 @@ export const api = {
 
   auth: {
     me(signal?: AbortSignal): Promise<Principal> {
-      return request<Principal>(`${ADMIN_ROOT}/me`, {
+      return request<{ principal: Principal }>(`${ADMIN_V2_ROOT}/session`, {
         signal,
         suppressUnauthorizedEvent: true,
-      });
+      }).then((response) => response.principal);
     },
-  },
-
-  overview: {
-    async get(signal?: AbortSignal): Promise<Overview> {
-      const overview = await request<Overview>(`${ADMIN_ROOT}/overview`, { signal });
-      return {
-        ...overview,
-        attention: {
-          ...overview?.attention,
-          draft_model_snapshots: arrayOrEmpty(overview?.attention?.draft_model_snapshots),
-          new_submissions: arrayOrEmpty(overview?.attention?.new_submissions),
-          failed_media: arrayOrEmpty(overview?.attention?.failed_media),
-        },
-        recent_activity: arrayOrEmpty(overview?.recent_activity),
-      };
-    },
-  },
-
-  tokens: {
-    list(cursor?: string | null, signal?: AbortSignal): Promise<ListResponse<Token>> {
-      return requestList<Token>(`${ADMIN_ROOT}/tokens`, {
-        signal,
-        query: { cursor },
-      });
-    },
-    get(id: string): Promise<Token> {
-      return request<Token>(`${ADMIN_ROOT}/tokens/${encoded(id)}`);
-    },
-    create(input: CreateTokenInput): Promise<CreatedToken> {
-      return request<CreatedToken>(`${ADMIN_ROOT}/tokens`, {
+    async login(credential: string): Promise<Principal> {
+      const response = await request<{ principal: Principal }>(`${ADMIN_V2_ROOT}/session`, {
         method: "POST",
-        body: input,
+        body: { credential },
+        suppressUnauthorizedEvent: true,
       });
+      return response.principal;
     },
-    revoke(id: string): Promise<void> {
-      return request<void>(`${ADMIN_ROOT}/tokens/${encoded(id)}`, {
-        method: "DELETE",
-      });
+    logout(): Promise<void> {
+      return request<void>(`${ADMIN_V2_ROOT}/session`, { method: "DELETE", suppressUnauthorizedEvent: true });
     },
   },
 
-  features: {
-    list(
-      params: FeatureListParams = {},
-      signal?: AbortSignal,
-    ): Promise<ListResponse<Feature>> {
-      return requestList<Feature>(`${ADMIN_ROOT}/features`, {
-        signal,
-        query: {
-          status: params.status,
-          type: params.type,
-          q: params.q,
-          limit: params.limit,
-          cursor: params.cursor,
-        },
-      });
+  principals: {
+    list(signal?: AbortSignal): Promise<Principal[]> {
+      return request<Principal[]>(`${ADMIN_V2_ROOT}/principals`, { signal });
     },
-    versions(id: string, signal?: AbortSignal): Promise<{ items: FeatureVersion[] }> {
-      return requestItems<FeatureVersion>(
-        `${ADMIN_ROOT}/features/${encoded(id)}/versions`,
-        { signal },
-      );
+    create(input: { name: string; can_manage_administrators: boolean; group_access: Record<string, GroupLevel>; expires_at?: string }): Promise<CreatedPrincipal> {
+      return request<CreatedPrincipal>(`${ADMIN_V2_ROOT}/principals`, { method: "POST", body: input });
     },
-  },
-
-  forms: {
-    branches(signal?: AbortSignal): Promise<{ items: Array<{ id: string; name: string; enabled: boolean }> }> {
-      return request(`${ADMIN_ROOT}/submission-branches`, { signal });
+    deactivate(id: string): Promise<void> {
+      return request<void>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}`, { method: "DELETE" });
     },
-    submissions(
-      key: string,
-      filters: SubmissionFilters,
-      cursor?: string | null,
-      limit?: number,
-      signal?: AbortSignal,
-    ): Promise<SubmissionListResponse> {
-      return request<SubmissionListResponse | null>(
-        key ? `${ADMIN_ROOT}/forms/${encoded(key)}/submissions` : `${ADMIN_ROOT}/submissions`,
-        {
-          signal,
-          query: {
-            limit,
-            cursor,
-            branchId: filters.branchId,
-            environment: filters.environment,
-            status: filters.status,
-            created_from: filters.created_from,
-            created_to: filters.created_to,
-            q: filters.q,
-            field: filters.field,
-            include_archived: filters.include_archived ? "true" : undefined,
-            sort: filters.sort,
-          },
-        },
-      ).then((response) => ({
-        items: arrayOrEmpty(response?.items),
-        next_cursor: response?.next_cursor ?? null,
-        fields: arrayOrEmpty(response?.fields),
-      }));
+    setAdministratorManagement(id: string, enabled: boolean): Promise<void> {
+      return request<void>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}/management`, { method: "PATCH", body: { enabled } });
     },
-    get(id: string, signal?: AbortSignal): Promise<Submission> {
-      return request<Submission>(`${ADMIN_ROOT}/submissions/${encoded(id)}`, {
-        signal,
-      });
+    credentials(id: string, signal?: AbortSignal): Promise<Credential[]> {
+      return request<Credential[]>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}/credentials`, { signal });
     },
-    updateStatus(id: string, status: SubmissionStatus): Promise<Submission> {
-      return request<Submission>(
-        `${ADMIN_ROOT}/submissions/${encoded(id)}/status`,
-        { method: "PATCH", body: { status } },
-      );
+    issueCredential(id: string, expires_at?: string): Promise<IssuedCredential> {
+      return request<IssuedCredential>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}/credentials`, { method: "POST", body: { expires_at } });
     },
-    archive(id: string): Promise<Submission> {
-      return request<Submission>(
-        `${ADMIN_ROOT}/submissions/${encoded(id)}/archive`,
-        { method: "POST" },
-      );
+    revokeCredential(id: string): Promise<void> {
+      return request<void>(`${ADMIN_V2_ROOT}/credentials/${encoded(id)}`, { method: "DELETE" });
     },
-    remove(id: string): Promise<void> {
-      return request<void>(`${ADMIN_ROOT}/submissions/${encoded(id)}`, {
-        method: "DELETE",
-      });
+    groups(signal?: AbortSignal): Promise<AccessGroup[]> {
+      return request<AccessGroup[]>(`${ADMIN_V2_ROOT}/access-groups`, { signal });
     },
-    exportCsv(
-      key: string,
-      filters: SubmissionFilters,
-    ): Promise<{ blob: Blob; filename: string }> {
-      return requestBlob(key ? `${ADMIN_ROOT}/forms/${encoded(key)}/submissions/export` : `${ADMIN_ROOT}/submissions/export`, {
-        query: {
-          branchId: filters.branchId,
-          environment: filters.environment,
-          status: filters.status,
-          created_from: filters.created_from,
-          created_to: filters.created_to,
-          q: filters.q,
-          field: filters.field,
-          include_archived: filters.include_archived ? "true" : undefined,
-          sort: filters.sort,
-        },
-      });
+    groupAccess(principalId: string, group: string, signal?: AbortSignal): Promise<{ principal_id: string; group: string; level: GroupLevel }> {
+      return request(`${ADMIN_V2_ROOT}/principals/${encoded(principalId)}/groups/${encoded(group)}`, { signal });
+    },
+    setGroupAccess(principalId: string, group: string, level: GroupLevel): Promise<void> {
+      return request<void>(`${ADMIN_V2_ROOT}/principals/${encoded(principalId)}/groups/${encoded(group)}`, { method: "PUT", body: { level } });
     },
   },
 
   media: {
     limits(signal?: AbortSignal): Promise<FileLimits> {
-      return request<FileLimits>(`${ADMIN_V2_ROOT}/files/limits`, { signal });
+      return request<FileLimits>("/api/v2/files/limits", { signal });
     },
-    references(id: string, signal?: AbortSignal): Promise<{items:FileReference[];revision:string;externalReferencesDiscoverable:boolean}> {
-      return request(`${ADMIN_V2_ROOT}/files/objects/${encoded(id)}/references`, {signal});
-    },
-    createUpload(input: {name:string;size:number;sha256:string;visibility:FileVisibility}): Promise<FileUploadSession> {
-      return request(`${ADMIN_V2_ROOT}/files/uploads`,{method:"POST",body:input});
+    createUpload(input: {name:string;size:number;sha256:string;contentType:string;groups:string[]}, idempotencyKey: string): Promise<FileUploadSession> {
+      return request("/api/v2/files/uploads",{method:"POST",body:input,headers:{"Idempotency-Key":idempotencyKey}});
     },
     uploadStatus(id:string): Promise<FileUploadSession> {
-      return request(`${ADMIN_V2_ROOT}/files/uploads/${encoded(id)}`);
+      return request(`/api/v2/files/uploads/${encoded(id)}`);
     },
     commitUpload(id:string): Promise<{id:string}> {
-      return request(`${ADMIN_V2_ROOT}/files/uploads/${encoded(id)}/commit`,{method:"POST"});
+      return request(`/api/v2/files/uploads/${encoded(id)}/commit`,{method:"POST"});
     },
     abortUpload(id:string): Promise<void> {
-      return request(`${ADMIN_V2_ROOT}/files/uploads/${encoded(id)}`,{method:"DELETE"});
-    },
-    createLink(id:string,ttlSeconds:number):Promise<{url:string;expiresAt:string}> {
-      return request(`${ADMIN_V2_ROOT}/files/objects/${encoded(id)}/links`,{method:"POST",body:{ttlSeconds}});
+      return request(`/api/v2/files/uploads/${encoded(id)}`,{method:"DELETE"});
     },
 
-    list(params: MediaListParams = {}, signal?: AbortSignal): Promise<ListResponse<Media>> {
-      return requestList<Media>(`${ADMIN_ROOT}/media`, {
+    async list(params: MediaListParams = {}, signal?: AbortSignal): Promise<ListResponse<Media>> {
+      const response = await request<{items?: CoreFile[] | null; nextCursor?: string | null}>("/api/v2/files", {
         signal,
         query: {
-          status: params.status,
-          type: params.type,
           q: params.q,
-          created_from: params.created_from,
-          created_to: params.created_to,
-          min_size: params.min_size,
-          max_size: params.max_size,
-          sort: params.sort,
           limit: params.limit,
           cursor: params.cursor,
         },
       });
+      return {items: arrayOrEmpty(response?.items).map(toMedia), next_cursor: response?.nextCursor ?? null};
     },
-    get(id: string, signal?: AbortSignal): Promise<Media> {
-      return request<Media>(`${ADMIN_ROOT}/media/${encoded(id)}`, { signal });
-    },
-    rename(id: string, filename: string): Promise<Media> {
-      return request<Media>(`${ADMIN_ROOT}/media/${encoded(id)}`, {
-        method: "PATCH",
-        body: { filename },
+    async fileSets(params: { namespace?: string; query?: string; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<ListResponse<FileSet>> {
+      const response = await request<{ items?: unknown[] | null; nextCursor?: string | null } | null>("/api/v2/files/sets", {
+        signal,
+        query: { namespace: params.namespace, q: params.query, limit: params.limit, cursor: params.cursor },
       });
+      const nextCursor = response && response.nextCursor;
+      if (!isRecord(response) || !Array.isArray(response.items) ||
+        (nextCursor != null && (typeof nextCursor !== "string" || nextCursor.length > 2048))) {
+        throw invalidFileSet();
+      }
+      return { items: response.items.map(validateFileSet), next_cursor: typeof nextCursor === "string" ? nextCursor : null };
+    },
+    async get(id: string, signal?: AbortSignal): Promise<Media> {
+      return toMedia(await request<CoreFile>(`/api/v2/files/objects/${encoded(id)}`, { signal }));
+    },
+    async rename(id: string, filename: string, revision: number): Promise<Media> {
+      return toMedia(await request<CoreFile>(`/api/v2/files/objects/${encoded(id)}`, {
+        method: "PATCH",
+        body: { name: filename },
+        headers: { "If-Match": `"${id}-r${revision}"` },
+      }));
     },
     prepareRenditions(id: string, context: MediaRenditionContext): Promise<MediaRenditionState> {
       return request<MediaRenditionState>(
-        `${ADMIN_V2_ROOT}/media/${encoded(id)}/renditions/prepare`,
+        `${ADMIN_V2_ROOT}/sites/media/${encoded(id)}/renditions/prepare`,
         {
           method: "POST",
           body: {
@@ -608,7 +1080,7 @@ export const api = {
       signal?: AbortSignal,
     ): Promise<MediaRenditionState> {
       return request<MediaRenditionState>(
-        `${ADMIN_V2_ROOT}/media/${encoded(id)}/renditions/state`,
+        `${ADMIN_V2_ROOT}/sites/media/${encoded(id)}/renditions/state`,
         {
           signal,
           query: {
@@ -622,56 +1094,10 @@ export const api = {
         },
       );
     },
-    retry(id: string): Promise<Media> {
-      return request<Media>(`${ADMIN_ROOT}/media/${encoded(id)}/retry`, {
-        method: "POST",
-      });
-    },
-    remove(id: string, confirm = false, referencesRevision?: string): Promise<void> {
-      return request<void>(`${ADMIN_ROOT}/media/${encoded(id)}`, {
-        method: "DELETE", query: { confirm: confirm ? "true" : undefined, referencesRevision },
-      });
-    },
-  },
-
-  settings: {
-    async get(signal?: AbortSignal): Promise<Settings> {
-      const settings = await request<Settings>(`${ADMIN_ROOT}/settings`, { signal });
-      return {
-        ...settings,
-        public_api: {
-          ...settings?.public_api,
-          cors_origins: arrayOrEmpty(settings?.public_api?.cors_origins),
-        },
-        media: {
-          ...settings?.media,
-          accepted_types: arrayOrEmpty(settings?.media?.accepted_types),
-          image_variants: arrayOrEmpty(settings?.media?.image_variants),
-        },
-        roles: arrayOrEmpty(settings?.roles)
-          .filter((role) => role && typeof role === "object")
-          .map((role) => ({
-            ...role,
-            notes: arrayOrEmpty(role.notes),
-            permissions: arrayOrEmpty(role.permissions)
-              .filter((permission) => permission && typeof permission === "object")
-              .map((permission) => ({
-                ...permission,
-                actions: arrayOrEmpty(permission.actions),
-              })),
-          })),
-      };
-    },
-  },
-
-  environments: {
-    list(signal?: AbortSignal): Promise<{ items: SiteEnvironment[] }> {
-      return requestItems<SiteEnvironment>(`${ADMIN_ROOT}/site/environments`, { signal });
-    },
-    update(key: Environment, patch: EnvironmentPatch): Promise<SiteEnvironment> {
-      return request<SiteEnvironment>(`${ADMIN_ROOT}/site/environments/${encoded(key)}`, {
-        method: "PATCH",
-        body: patch,
+    remove(id: string, revision: number): Promise<void> {
+      return request<void>(`/api/v2/files/objects/${encoded(id)}`, {
+        method: "DELETE",
+        headers: { "If-Match": `"${id}-r${revision}"` },
       });
     },
   },
@@ -722,25 +1148,52 @@ export const api = {
       }
       return { blob: new Blob(chunks, { type: "application/zip" }), filename };
     },
-    branches(signal?: AbortSignal): Promise<{items: BranchRecord[]}> {return requestItems<BranchRecord>(`${ADMIN_V2_ROOT}/branches`,{signal});},
-    assignBranch(id: string,snapshotId: string,revision: number,contentRevision: number): Promise<BranchRecord> {return request<BranchRecord>(`${ADMIN_V2_ROOT}/branches/${encoded(id)}/snapshot`,{method:"PUT",body:{snapshotId,revision,contentRevision}});},
-    snapshot(id: string,signal?: AbortSignal): Promise<SnapshotDetail> {return request<SnapshotDetail>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(id)}`,{signal});},
-    createSnapshotFrom(input: {name: string;parentSnapshotId?: string;expectedParentContentRevision?: number;config?: SiteConfig;metadata?: SiteMetadata;designSystem?: StructuredDesignSystem}): Promise<SiteSnapshot> {return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots`,{method:"POST",body:input});},
-    deleteSnapshot(id: string): Promise<void> {return request<void>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(id)}`,{method:"DELETE"});},
+    async snapshot(id: string, signal?: AbortSignal): Promise<SnapshotDetail> {
+      return siteSnapshotDetailFromWebsite(await api.website.snapshot(id, signal));
+    },
+    async createSnapshotFrom(input: {
+      name: string;
+      siteID?: string;
+      parentSnapshotId?: string;
+      expectedParentRevision?: number;
+      expectedParentContentRevision?: number;
+      idempotencyKey?: string;
+      config?: SiteConfig;
+      metadata?: SiteMetadata;
+      designSystem?: StructuredDesignSystem;
+    }): Promise<SiteSnapshot> {
+      const parent = input.parentSnapshotId ? await api.website.snapshot(input.parentSnapshotId) : undefined;
+      if (input.parentSnapshotId && (!parent?.payload || input.expectedParentRevision === undefined || input.expectedParentContentRevision === undefined)) {
+        throw new ApiError(400, "invalid_snapshot_parent", "Для создания потомка обновите снапшот и повторите действие");
+      }
+      const config = input.config ?? parent?.payload?.config;
+      const metadata = input.metadata ?? parent?.payload?.metadata;
+      const designSystem = input.designSystem ?? (parent?.payload ? structuredDesignSystem(parent.payload.design_system) : undefined);
+      const siteID = input.siteID ?? parent?.site_id;
+      if (!siteID || !config || !metadata || !designSystem) {
+        throw new ApiError(400, "invalid_snapshot_payload", "Выберите настроенный сайт и задайте полную конфигурацию снапшота");
+      }
+      const snapshotName = input.name.trim();
+      const created = await api.website.createSnapshot({
+        site_id: siteID,
+        ...(input.parentSnapshotId ? { parent_id: input.parentSnapshotId } : {}),
+        name: snapshotName,
+        expected_revision: input.expectedParentRevision ?? 0,
+        expected_content_revision: input.expectedParentContentRevision ?? 0,
+        payload: { config, metadata, design_system: designSystem as unknown as JsonObject },
+      }, input.idempotencyKey ?? `snapshot-${crypto.randomUUID()}`);
+      if (created.site_id !== siteID || created.parent_id !== input.parentSnapshotId || created.name !== snapshotName || !created.payload) {
+        throw new ApiError(502, "invalid_response", "Сервер создал снапшот с неожиданными данными");
+      }
+      snapshotPayloadFromWebsite(created.payload);
+      return siteSnapshotFromWebsite(created);
+    },
+    deleteSnapshot(id: string, revision: number): Promise<void> {
+      return api.website.deleteSnapshot(id, revision);
+    },
 
     async contentSnapshots(signal?: AbortSignal): Promise<{ items: SiteSnapshot[] }> {
-      const items: SiteSnapshot[] = [];
-      const seen = new Set<number>();
-      let cursor: number | undefined;
-      do {
-        const page = await request<{ items?: SiteSnapshot[]; nextCursor?: number | null }>(`${ADMIN_V2_ROOT}/content/snapshots`, { signal, query: { beforeSequence: cursor } });
-        items.push(...arrayOrEmpty(page.items));
-        if (page.nextCursor == null) break;
-        if (seen.has(page.nextCursor)) throw new Error("Сервер вернул повторный указатель списка снапшотов");
-        seen.add(page.nextCursor);
-        cursor = page.nextCursor;
-      } while (cursor !== undefined);
-      return { items };
+      return { items: (await api.website.allSnapshots(signal)).map(siteSnapshotFromWebsite) };
     },
     async modelContentWorkspace(snapshotId: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
       const workspace = await request<ModelContentWorkspace>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotId)}/model`, { signal });
@@ -772,100 +1225,16 @@ export const api = {
         body: { revision },
       }).then(normalizeModelContentWorkspace);
     },
-    featureBuilds(signal?: AbortSignal): Promise<{ items: FeatureBuild[] }> {
-      return requestItems<FeatureBuild>(`${ADMIN_V2_ROOT}/feature-builds`, { signal });
-    },
     designSnapshot(snapshotId: string, signal?: AbortSignal): Promise<SnapshotDesignWorkspace> {
-      return request<SnapshotDesignWorkspace>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(snapshotId)}/design-system`, { signal });
-    },
-    saveDesignSnapshot(snapshotId: string, designSystem: StructuredDesignSystem, name: string): Promise<SiteSnapshot> {
-      return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(snapshotId)}/design-system`, { method: "POST", body: { name, designSystem } });
-    },
-    metadata(signal?: AbortSignal): Promise<SiteMetadataState> {
-      return request<SiteMetadataState>(`${ADMIN_V2_ROOT}/site/metadata`, { signal });
-    },
-    saveMetadata(revision: number, metadata: SiteMetadata): Promise<SiteMetadataState> {
-      return request<SiteMetadataState>(`${ADMIN_V2_ROOT}/site/metadata`, {
-        method: "PUT",
-        body: { revision, metadata },
+      return request<{ snapshot: WebsiteSnapshot; design_system: JsonObject; feature_tokens: unknown }>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(snapshotId)}/design-system`, { signal }).then((value) => {
+        const snapshot = validateWebsiteSnapshot(value.snapshot);
+        if (snapshot.id !== snapshotId) throw new ApiError(502, "invalid_response", "Сервер вернул дизайн-систему другого снапшота");
+        return {
+          snapshot: siteSnapshotFromWebsite(snapshot),
+          designSystem: structuredDesignSystem(value.design_system),
+          featureTokens: snapshotFeatureTokens(value.feature_tokens),
+        };
       });
-    },
-    publishMetadata(): Promise<SiteMetadataState> {
-      return request<SiteMetadataState>(`${ADMIN_V2_ROOT}/site/metadata/publish`, { method: "POST", body: {} });
-    },
-    promoteMetadata(): Promise<SiteMetadataState> {
-      return request<SiteMetadataState>(`${ADMIN_V2_ROOT}/site/metadata/promote`, { method: "POST", body: {} });
-    },
-    designSystem(signal?: AbortSignal): Promise<{ state: DesignSystemState; definitions: DesignTokenDefinition[] }> {
-      return request(`${ADMIN_V2_ROOT}/site/design-system`, { signal });
-    },
-    saveDesignSystem(revision: number, designSystem: DesignSystem): Promise<{ state: DesignSystemState; definitions: DesignTokenDefinition[] }> {
-      return request(`${ADMIN_V2_ROOT}/site/design-system`, { method: "PUT", body: { revision, designSystem } });
-    },
-    previewDesignSystem(designSystem: DesignSystem): Promise<{ token: string }> {
-      return request(`${ADMIN_V2_ROOT}/site/design-system/preview`, { method: "POST", body: { designSystem } });
-    },
-    async snapshots(beforeSequence?: number, signal?: AbortSignal): Promise<SiteSnapshotList> {
-      const snapshots = await request<SiteSnapshotList>(`${ADMIN_V2_ROOT}/site/snapshots`, {
-        signal,
-        query: { beforeSequence },
-      });
-      return {
-        ...snapshots,
-        items: arrayOrEmpty(snapshots?.items),
-        active: snapshots?.active ?? { dev: "", prod: "" },
-        activeSnapshots: snapshots?.activeSnapshots ?? { dev: null, prod: null },
-        nextCursor: snapshots?.nextCursor ?? undefined,
-      };
-    },
-    async snapshotEvents(branchId: string, before?: string, signal?: AbortSignal): Promise<{ items: SnapshotEvent[]; nextCursor?: string }> {
-      const result = await request<{ items: SnapshotEvent[]; nextCursor?: string | null }>(`${ADMIN_V2_ROOT}/site/snapshot-events`, {
-        signal, query: { branchId, before },
-      });
-      return { items: arrayOrEmpty(result.items), nextCursor: result.nextCursor ?? undefined };
-    },
-    createSnapshot(name: string): Promise<SiteSnapshot> {
-      return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots`, {
-        method: "POST",
-        body: { name },
-      });
-    },
-    deploySnapshot(id: string, environment: Environment): Promise<SiteSnapshot> {
-      return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(id)}/deploy`, {
-        method: "POST",
-        body: { environment },
-      });
-    },
-    promote(id: string): Promise<SiteSnapshot> {
-      return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(id)}/promote`, {
-        method: "POST",
-        body: {},
-      });
-    },
-    rollback(id: string, environment: Environment): Promise<SiteSnapshot> {
-      return request<SiteSnapshot>(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(id)}/rollback`, {
-        method: "POST",
-        body: { environment },
-      });
-    },
-    async importFeatureBuild(file: File): Promise<FeatureBuild> {
-      const headers: Record<string, string> = {
-        Accept: "application/json",
-        "Content-Type": "application/zip",
-        ...authHeaders(),
-      };
-      let response: Response;
-      try {
-        response = await fetch(`${ADMIN_V2_ROOT}/feature-builds`, {
-          method: "POST",
-          headers,
-          body: file,
-        });
-      } catch {
-        throw new ApiError(0, "network_error", "Не удалось загрузить сборку фичи");
-      }
-      if (!response.ok) throw await parseErrorResponse(response);
-      return response.json() as Promise<FeatureBuild>;
     },
   },
 
@@ -873,7 +1242,7 @@ export const api = {
 
 export function publicMediaPath(id: string, variant?: string): string {
   const suffix = variant ? `?variant=${encodeURIComponent(variant)}` : "";
-  return `/media/${id}${suffix}`;
+  return `/api/v2/files/objects/${encodeURIComponent(id)}/content${suffix}`;
 }
 
 export function absolutePublicMediaUrl(id: string, variant?: string): string {
@@ -883,13 +1252,13 @@ export function absolutePublicMediaUrl(id: string, variant?: string): string {
 // Browser uploads use the same resumable owner-scoped API as server clients.
 // The worker hashes 1 MiB blocks and never reads the whole file into memory.
 type HashResult = {sha256:string;parts:string[]};
-type PendingUpload = {id:string;sha256:string;partBytes:number;expiresAt:string};
-function pendingKey(file:File,visibility:FileVisibility):string {
-  return `we:upload:${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}:${visibility}`;
+type PendingUpload = {id?:string;idempotencyKey:string;sha256:string;partBytes:number;expiresAt:string};
+function pendingKey(file:File,groups:string[]):string {
+  return `we:upload:v2:${file.size}:${file.lastModified}:${[...groups].sort().join(",")}`;
 }
 function savedUpload(key:string):PendingUpload|null {
   try { const value=JSON.parse(localStorage.getItem(key) ?? "null") as PendingUpload|null;
-    return value && typeof value.id==="string" && typeof value.sha256==="string" && typeof value.partBytes==="number" && typeof value.expiresAt==="string" ? value : null;
+    return value && (value.id===undefined || typeof value.id==="string") && typeof value.idempotencyKey==="string" && typeof value.sha256==="string" && typeof value.partBytes==="number" && typeof value.expiresAt==="string" ? value : null;
   } catch { return null; }
 }
 function rememberUpload(key:string,value:PendingUpload|null):void {
@@ -915,9 +1284,10 @@ function hashFile(file:File,partBytes:number,onProgress:(progress:number)=>void,
 function uploadPart(id:string,number:number,blob:Blob,sha256:string,onProgress:(fraction:number)=>void,signal?:AbortSignal):Promise<FileUploadSession> {
   return new Promise((resolve,reject)=>{
     if(signal?.aborted){reject(new DOMException("Aborted","AbortError"));return;}
-    const xhr=new XMLHttpRequest();xhr.open("PUT",buildUrl(`${ADMIN_V2_ROOT}/files/uploads/${encoded(id)}/parts/${number}`));
+    const xhr=new XMLHttpRequest();xhr.open("PUT",buildUrl(`/api/v2/files/uploads/${encoded(id)}/parts/${number}`));
     xhr.responseType="json";xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.setRequestHeader("X-Content-SHA256",sha256);
-    const token=getStoredToken();if(token)xhr.setRequestHeader("Authorization",`Bearer ${token}`);
+    xhr.withCredentials=true;
+    const csrf=csrfToken();if(csrf)xhr.setRequestHeader("X-CSRF-Token",csrf);
     const abort=()=>xhr.abort();signal?.addEventListener("abort",abort,{once:true});
     const cleanup=()=>signal?.removeEventListener("abort",abort);
     xhr.upload.onprogress=event=>{if(event.lengthComputable&&event.total>0)onProgress(event.loaded/event.total);};
@@ -928,23 +1298,30 @@ function uploadPart(id:string,number:number,blob:Blob,sha256:string,onProgress:(
     xhr.send(blob);
   });
 }
-export async function uploadMediaFile(file:File,onProgress:(percent:number|null)=>void,signal?:AbortSignal,visibility:FileVisibility="public"):Promise<Media> {
+export async function uploadMediaFile(file:File,groups:string[],onProgress:(percent:number|null)=>void,signal?:AbortSignal):Promise<Media> {
+  if(groups.length===0||groups.some(group=>!/^[a-z][a-z0-9_-]{0,63}$/.test(group)))throw new Error("Выберите группу с правом записи");
   const limits=await api.media.limits(signal);
   if(file.size<1||file.size>limits.maxBytes)throw new Error("Размер файла превышает разрешённый сервером или файл пуст");
-  const key=pendingKey(file,visibility);const saved=savedUpload(key);
+  const key=pendingKey(file,groups);const saved=savedUpload(key);
   const partBytes=saved && Date.parse(saved.expiresAt)>Date.now() ? saved.partBytes : limits.partBytes;
   if(!Number.isSafeInteger(partBytes)||partBytes<1||partBytes>limits.maxBytes)throw new Error("Сервер вернул некорректный размер части");
   let session:FileUploadSession|undefined;
   try {
     onProgress(0);const hashes=await hashFile(file,partBytes,fraction=>onProgress(Math.floor(fraction*20)),signal);
-    if(saved&&saved.sha256===hashes.sha256&&saved.partBytes===partBytes&&Date.parse(saved.expiresAt)>Date.now()){
-      try {session=await api.media.uploadStatus(saved.id);}catch(error){if(!(error instanceof ApiError)||![404,410].includes(error.status))throw error;rememberUpload(key,null);}
-      if(session&&(session.sha256!==hashes.sha256||session.size!==file.size||session.visibility!==visibility||session.partSize!==partBytes||session.state==="cancelled"))session=undefined;
+    const resumeSaved=saved&&saved.sha256===hashes.sha256&&saved.partBytes===partBytes&&Date.parse(saved.expiresAt)>Date.now()?saved:null;
+    const idempotencyKey=resumeSaved?.idempotencyKey??`upload-${crypto.randomUUID()}`;
+    if(resumeSaved?.id){
+      try {session=await api.media.uploadStatus(resumeSaved.id);}catch(error){if(!(error instanceof ApiError)||![404,410].includes(error.status))throw error;rememberUpload(key,null);}
+      if(session&&(session.partSize!==partBytes||session.state==="aborted"))session=undefined;
     }
-    if(!session)session=await api.media.createUpload({name:file.name,size:file.size,sha256:hashes.sha256,visibility});
-    rememberUpload(key,{id:session.id,sha256:hashes.sha256,partBytes:session.partSize,expiresAt:session.expiresAt});
-    if(session.state!=="complete") {
-      const completed=new Map(session.parts.filter(part=>part.ready).map(part=>[part.number,part]));
+    if(!session){
+      rememberUpload(key,{idempotencyKey,sha256:hashes.sha256,partBytes,expiresAt:new Date(Date.now()+15*60_000).toISOString()});
+      session=await api.media.createUpload({name:file.name,size:file.size,sha256:hashes.sha256,contentType:file.type||"application/octet-stream",groups},idempotencyKey);
+    }
+    rememberUpload(key,{id:session.id,idempotencyKey,sha256:hashes.sha256,partBytes:session.partSize,expiresAt:session.expiresAt});
+    if(session.state==="committed"&&session.fileId){const result=await api.media.get(session.fileId,signal);rememberUpload(key,null);onProgress(100);return result;}
+    if(session.state!=="committed") {
+      const completed=new Map(session.parts.map(part=>[part.number,part]));
       let transferred=0;
       for(let index=0;index<hashes.parts.length;index++){
         if(signal?.aborted)throw new DOMException("Aborted","AbortError");
@@ -953,7 +1330,7 @@ export async function uploadMediaFile(file:File,onProgress:(percent:number|null)
         if(existing && (existing.sha256!==expected||existing.size!==end-start))throw new Error("Сохранённая часть не совпадает с файлом. Отмените загрузку и начните заново.");
         if(!existing) {
           const refreshed = await uploadPart(session.id,index+1,file.slice(start,end),expected,fraction=>onProgress(20+Math.round(75*(transferred+fraction*(end-start))/file.size)),signal);
-          rememberUpload(key,{id:session.id,sha256:hashes.sha256,partBytes:session.partSize,expiresAt:refreshed.expiresAt});
+          rememberUpload(key,{id:session.id,idempotencyKey,sha256:hashes.sha256,partBytes:session.partSize,expiresAt:refreshed.expiresAt});
         }
         transferred+=end-start;onProgress(20+Math.round(75*transferred/file.size));
       }
@@ -966,13 +1343,6 @@ export async function uploadMediaFile(file:File,onProgress:(percent:number|null)
 }
 
 export function isUploadAccepted(file:File):boolean {return file.size>0;}
-
-export const submissionStatusOptions: SubmissionStatus[] = [
-  "new",
-  "in_progress",
-  "processed",
-  "rejected",
-];
 
 export const mediaStatusValues: MediaStatus[] = [
   "processing",

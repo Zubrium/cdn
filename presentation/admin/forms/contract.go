@@ -1,5 +1,5 @@
-// Package forms defines the admin adapter dependency on Forms Engine.
-package forms
+// Package formsapi defines the Forms Admin HTTP adapter contract.
+package formsapi
 
 import engine "github.com/Zubrium/cdn/engines/forms/presentation"
 

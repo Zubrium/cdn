@@ -5,26 +5,44 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
 )
 
 // CoreAdapter maps the Core identity capability onto the HTTP-facing API and
 // keeps account creation plus its explicit initial group grants atomic.
-type CoreAdapter struct{ core platform.IdentityAdminCapability }
+type CoreAdapter struct {
+	core     platform.IdentityAdminCapability
+	sessions platform.SessionCapability
+}
 
-func NewCoreAdapter(core platform.IdentityAdminCapability) (*CoreAdapter, error) {
-	if core == nil { return nil, errors.New("Core identity administration capability is required") }
-	return &CoreAdapter{core: core}, nil
+func NewCoreAdapter(core platform.IdentityAdminCapability, sessions platform.SessionCapability) (*CoreAdapter, error) {
+	if core == nil || sessions == nil {
+		return nil, errors.New("Core identity and session capabilities are required")
+	}
+	return &CoreAdapter{core: core, sessions: sessions}, nil
 }
 
 func (a *CoreAdapter) Authenticate(ctx context.Context, credential string) (platform.Session, error) {
 	return a.core.Authenticate(ctx, credential)
 }
 
+func (a *CoreAdapter) CreateSession(ctx context.Context, credential string) (platform.CreatedSession, error) {
+	return a.sessions.CreateSession(ctx, credential)
+}
+
+func (a *CoreAdapter) AuthenticateSession(ctx context.Context, token string) (platform.Session, platform.Principal, error) {
+	return a.sessions.AuthenticateSession(ctx, token)
+}
+
+func (a *CoreAdapter) RevokeSession(ctx context.Context, token string) error {
+	return a.sessions.RevokeSession(ctx, token)
+}
+
 func (a *CoreAdapter) CreatePrincipal(ctx context.Context, session platform.Session, input CreatePrincipalRequest) (PrincipalCreated, error) {
 	id, credential, err := a.core.CreatePrincipalWithAccess(ctx, session, input.Name, input.ExpiresAt, input.CanManageAdministrators, input.GroupAccess)
-	if err != nil { return PrincipalCreated{}, err }
+	if err != nil {
+		return PrincipalCreated{}, err
+	}
 	return PrincipalCreated{ID: id, Name: input.Name, Credential: credential}, nil
 }
 
@@ -52,11 +70,11 @@ func (a *CoreAdapter) RevokeCredential(ctx context.Context, session platform.Ses
 	return a.core.RevokeCredential(ctx, session, credentialID)
 }
 
-func (a *CoreAdapter) SetGroupAccess(ctx context.Context, session platform.Session, principalID, group string, level access.Level) error {
+func (a *CoreAdapter) SetGroupAccess(ctx context.Context, session platform.Session, principalID, group string, level platform.AccessLevel) error {
 	return a.core.SetGroupAccess(ctx, session, principalID, group, level)
 }
 
-func (a *CoreAdapter) GroupAccess(ctx context.Context, session platform.Session, principalID, group string) (access.Level, error) {
+func (a *CoreAdapter) GroupAccess(ctx context.Context, session platform.Session, principalID, group string) (platform.AccessLevel, error) {
 	return a.core.GroupAccess(ctx, session, principalID, group)
 }
 

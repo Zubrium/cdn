@@ -1,17 +1,23 @@
 # Router Engine — целевая спецификация
 
-Статус: согласованная целевая спецификация; Engine и HTTP адаптер остаются незавершёнными. Router v1 принимает только явную цель Core file или manifest `static-site-artifact/v1`; handler-маршрутов нет. Coordinator может автоматически переключать один route после успешной публикации, но это не меняет допустимые типы route targets. Cache по умолчанию `no-store`; fallback неявно не применяется. Общие правила Core и изоляции engine data определены в [SPEC-core-v2.md](SPEC-core-v2.md) и [SPEC-module-data.md](SPEC-module-data.md). Контракт статического сайта: [SPEC-static-site-artifact.md](SPEC-static-site-artifact.md). Сборка сайта и feature catalog: [SPEC-website-engine.md](SPEC-website-engine.md).
+Статус: согласованная целевая спецификация; Router API и delivery каркас реализованы частично, поведение остаётся предметом отложенной проверки. Route target может быть Core file, manifest `static-site-artifact/v1` или зарегистрированной публичной operation. Operations доступны только если входят в скомпилированный профиль и зарегистрированы типизированным контрактом; произвольные callbacks и URL запрещены. Это позволяет Forms/Loader реализовать отдельно настроенные анонимные upload routes без прямого доступа Router к хранилищу. Загрузка закрыта по умолчанию и становится анонимной только для явно включённого маршрута. Загруженный Core file всегда остаётся приватным; публичная выдача требует отдельного явно настроенного GET route. Публичный `core-file` GET route связывается ровно с одним `file_id` из сохранённой конфигурации и использует exact path matching; посетитель не передаёт ID и не выбирает файл через FileSet. Router не реализует request-rate limiting. Публичный Router listener нельзя выставлять напрямую: его следует держать за внешним proxy. Выбор, настройка и эксплуатация proxy и его admission policy — ответственность deployer, а не этого приложения. Coordinator может автоматически переключать один file/artifact route после успешной публикации; он не меняет public operation routes. Cache по умолчанию `no-store`; fallback неявно не применяется. Общие правила Core и изоляции engine data определены в [SPEC-core-architecture.md](SPEC-core-architecture.md) и [SPEC-module-data.md](SPEC-module-data.md). Контракт статического сайта: [SPEC-static-site-artifact.md](SPEC-static-site-artifact.md). Сборка сайта и feature catalog: [SPEC-website-engine.md](SPEC-website-engine.md).
 
-Router не зависит от Website и не понимает снапшоты, версии фич, manifest, Content или формы. Он принимает только общий файл либо нейтральный static-site artifact и сопоставляет явный публичный route с этой целью.
+Router не зависит от Website и не понимает снапшоты или версии фич. Каждый branch обслуживается отдельным Router процессом. Публичный listener следует держать за внешним proxy; Router сам не ограничивает частоту запросов, а выбор и настройка proxy относятся к развёртыванию. Router внутри выбранной branch сопоставляет настроенный path с общим файлом, нейтральным static-site artifact или абстрактной зарегистрированной public operation. Он не реализует бизнес-правила Content/Forms и не вызывает движки по сети: operation предоставляется статическим composition root как типизированная Go capability.
+
+`profiles/router.yaml` собирает самостоятельный production профиль Core + Loader + Router с File, Identity, Coordinator и Router Admin API, публичным Router listener и `public.form-upload`. Он не выбирает Website, Content, Forms или development fixtures: Loader upload независим от Forms и может быть подключён формой отдельным этапом. Профиль собирается `make build-router` и проверяется `make test-router`; адрес listener задаётся оператором в Router-конфигурации. Профиль не устанавливает, не выбирает и не настраивает внешний proxy.
 
 ## 1. Ответственности и API
 
 Router является отдельным engine module и предоставляет два раздельных внешних контракта:
 
-1. **Settings API** — авторизованное управление соответствием ветки/host/path цели (один Core file или static-site artifact manifest), проверка конфликтов, чтение revision и атомарное переключение.
-2. **Delivery API** — публичная выдача только по заранее сохранённым mappings. В URL нельзя передать произвольный Core file ID или module-data key.
+1. **Settings API** — авторизованное управление соответствием branch/host/path file, artifact или зарегистрированной operation, проверка конфликтов, чтение revision и атомарное переключение.
+2. **Delivery API** — публичная выдача только по заранее сохранённым mappings. Route может вызвать лишь operation из неизменяемого каталога текущей сборки. В URL нельзя передать произвольный Core file ID, module-data key, operation name или параметры назначения загрузки.
 
 Админский клиент сначала вызывает Website Sites API и получает `artifact_manifest_file_id`; затем отдельным запросом вызывает Router Settings API. Нет Website→Router или Router→Website вызовов.
+
+Settings API предоставляет `GET /api/v2/admin/router/operations`: он требует ту же аутентификацию, что и настройки маршрутов, и возвращает только отсортированные неизменяемые descriptors операций, скомпилированных в текущий build profile (`id`, версия контракта, методы, предел тела запроса и MIME allowlist). Endpoint не раскрывает callbacks, route config, Loader credentials или содержимое файлов. Admin использует descriptor `public.form-upload` для построения допустимых настроек: только при наличии `POST`, `max_bytes` не выше `max_request_bytes`, выбранные MIME-типы должны быть подмножеством allowlist. Если каталог недоступен или операция не зарегистрирована, создание upload route закрыто; обычные file/artifact routes остаются доступны.
+
+Префикс `/api/v2/admin/` зарезервирован целиком и никогда не попадает в публичный Delivery catch-all, даже если для запроса используется неподдерживаемый HTTP-метод или percent-encoded path; неизвестный путь под этим префиксом возвращает `404`.
 
 ```mermaid
 flowchart TB
@@ -21,9 +27,11 @@ flowchart TB
     Settings[Router Settings API]
     Delivery[Router Delivery API]
     Core[Core unified API]
-    Data[(core.module_data)]
-    Files[(Core files / S3 gateway)]
+    Data[(engine_data.records)]
+    Files[(Core file storage)]
     SiteArtifact[static-site-artifact/v1]
+    Registry[compiled public operation registry]
+    PublicOperation[registered Forms / Loader operation]
 
     Client -->|1 build selected snapshot| SiteAPI
     SiteAPI --> Website
@@ -36,19 +44,22 @@ flowchart TB
     Delivery -->|resolve configured route only| Core
     Core --> Files
     Delivery --> SiteArtifact
+    Delivery --> Registry
+    Registry -->|typed local call| PublicOperation
+    PublicOperation --> Core
 ```
 
 ## 2. Независимость от снапшотов и веток
 
-Router не хранит `snapshot_id`, `feature_id`, Website build inputs, branch-to-snapshot assignment или Website status. Для Router целевая сущность — immutable Core file ID, содержащий один файл, либо Core file ID нейтрального artifact manifest.
+Router не хранит `snapshot_id`, `feature_id`, Website build inputs, branch-to-snapshot assignment или Website status. Для Router целевая сущность — immutable Core file ID одного файла, Core file ID нейтрального artifact manifest или registered operation ID из текущего build profile. Operation route ссылается на скомпилированный ID; посетитель не выбирает operation.
 
-Topology веток, публичные hostnames, порты, CORS/indexing policy и доступные branch IDs конфигурируются статически при запуске. Router не создаёт и не переименовывает ветки во время работы. Route records могут ссылаться только на объявленную ветку. Обновление snapshot/site выполняется так: Website строит новый artifact; клиент проверяет `ready`; Settings API атомарно переключает один route на новый artifact ID через CAS. Это две операции, а не распределённая транзакция. При ошибке CAS конкретный route сохраняет прежнее значение. Если клиент обновляет несколько routes последовательно, уже успешно обновлённые записи остаются новыми, а остальные сохраняют старые значения; клиент показывает частичный результат и может повторить оставшиеся операции.
+Topology веток, публичные hostnames, порты, CORS/indexing policy и доступные branch IDs конфигурируются статически при запуске. На каждый branch запускается отдельный Router процесс с соответствующим `branch_id` и configured `public_listen_address`; эти два процесса-локальных значения не входят в общий Coordinator config fingerprint. Общие эксплуатационные настройки и build profile между процессами должны совпадать. Router не создаёт и не переименовывает ветки во время работы. Route records могут ссылаться только на объявленную ветку. Обновление snapshot/site выполняется так: Website строит новый artifact; клиент проверяет `ready`; Settings API атомарно переключает один route на новый artifact ID через CAS. Это две операции, а не распределённая транзакция. При ошибке CAS конкретный route сохраняет прежнее значение. Если клиент обновляет несколько routes последовательно, уже успешно обновлённые записи остаются новыми, а остальные сохраняют старые значения; клиент показывает частичный результат и может повторить оставшиеся операции.
 
 Website snapshots никогда не передаются Delivery API и не разрешаются динамически на запросе. Так Router остаётся заменяемым и не связывает публичную раздачу с внутренней моделью Website.
 
 ## 3. Постоянная конфигурация
 
-Route mappings хранятся Router в namespace `router` таблицы `core.module_data`, TTL `0`. Router владеет JSON payload и его версией; Core владеет физическим хранением и CAS. Локальный cache конфигурации допустим только как производный cache с проверкой revision/invalidation и fail-closed поведением, согласованным с [SPEC-module-data.md](SPEC-module-data.md).
+Route mappings хранятся Router в namespace `router` таблицы `engine_data.records`, TTL `0`. Router владеет JSON payload и его версией; Core владеет физическим хранением и CAS. Локальный cache конфигурации допустим только как производный cache с проверкой revision/invalidation и fail-closed поведением, согласованным с [SPEC-module-data.md](SPEC-module-data.md).
 
 Логическая запись маршрута включает:
 
@@ -56,8 +67,10 @@ Route mappings хранятся Router в namespace `router` таблицы `cor
 - `branch_id` из startup config;
 - нормализованный host scope (только из разрешённой конфигурации);
 - канонический path/prefix и тип matching;
-- `target.kind = core-file | static-site-artifact`;
-- `target.file_id` — Core UUID, не URL пользователя;
+- `target.kind = core-file | static-site-artifact | registered-operation`;
+- `target.file_id` — Core UUID для file/artifact, не URL пользователя;
+- `target.operation_id` и версия контракта — только для operation из build profile;
+- `target.config` — типизированная конфигурация operation. Для upload route она задаёт destination access group и optional FileSet, максимальный размер и точный MIME allowlist; запрос содержит ровно один raw file body. Loader session expiry и multipart part limits задаются явно в startup config Loader, а staging concurrency/budget — в Router operation deployment config. Конфигурация никогда не берётся из visitor URL/body. Она включает анонимную загрузку только при явном включении route; Core file всегда остаётся приватным. Публичный `core-file` GET route привязывается к одному настроенному `file_id`, требует exact match и не читает ID или FileSet из запроса;
 - ожидаемую revision для CAS и audit metadata без секретов;
 - только разрешённые cache/security-header policies;
 - состояние `active` (чернового неявно публичного route нет).
@@ -66,11 +79,11 @@ Route records могут храниться отдельными CAS-докум�
 
 ### 3.1 Права на настройку
 
-Settings API требует аутентификацию. Управление маршрутами ограничивается выделенной статической access group, например `router.routes`: уровень `1` даёт чтение конфигурации, уровень `2` — создание, изменение, переключение и удаление route. Эта группа объявляется в startup YAML; отсутствие группы или назначения означает отказ. Неявное право только из-за слова «admin» не возникает.
+Settings API требует аутентификацию. Управление маршрутами ограничивается выделенной статической access group, например `router_routes`: уровень `1` даёт чтение конфигурации, уровень `2` — создание, изменение, переключение и удаление route. Эта группа объявляется в startup YAML; отсутствие группы или назначения означает отказ. Неявное право только из-за слова «admin» не возникает.
 
 Router runtime использует отдельную обычную Core user identity с минимальными read grants для целевых файлов и artifact assets. Delivery API не получает обход авторизации Core. Если доступ runtime principal отозван, выдача закрывается при актуальной проверке Core.
 
-Обновление route не может увеличить Core grants. Установка цели должна проверить, что Router identity имеет возможность прочитать файл/manifest и его допустимые dependencies. Если API не может безопасно проверить все права, target не активируется.
+Обновление route не может увеличить Core grants. Установка file/artifact цели должна проверить, что Router identity имеет возможность прочитать файл/manifest и его допустимые dependencies. Для operation target проверяются наличие operation в каталоге сборки и соответствие конфигурации её схеме. Публичная загрузка дополнительно требует текущий уровень `2` у Router service identity в настроенной группе загрузки и в `management_group` указанного FileSet. Эта проверка выполняется при создании/замене route и перед staging каждого запроса; Loader повторно проверяет права в момент записи. Отсутствующая или недоступная группа/FileSet закрывает операцию. Если API не может безопасно проверить необходимые права или ограничения, target не активируется.
 
 ## 4. Settings API
 
@@ -78,7 +91,7 @@ Router runtime использует отдельную обычную Core user 
 
 - `ListRoutes(branch, filter)` — только с уровнем чтения конфигурационной группы;
 - `GetRoute(route_id)` — вернуть mapping и revision, не раскрывая недоступные Core objects;
-- `CreateRoute(route_spec, idempotency_key)` — проверить host/path/branch/target, конфликт и Core grants;
+- `CreateRoute(route_spec, idempotency_key)` — проверить host/path/branch/target, конфликт, Core grants или регистрацию/schema operation;
 - `ReplaceTarget(route_id, new_target, expected_revision)` — атомарный CAS target binding;
 - `UpdatePolicy(route_id, policy, expected_revision)` — изменить только allowlisted serving/cache policy;
 - `DeleteRoute(route_id, expected_revision)` — удалить mapping через явную аутентифицированную операцию.
@@ -93,14 +106,23 @@ Router runtime использует отдельную обычную Core user 
 
 ### 5.1 Matching и нормализация
 
-- Host берётся из доверенной конфигурации reverse proxy/входного listener, с безопасной обработкой `Forwarded`/`X-Forwarded-Host`; не доверять произвольным forwarded headers.
+- Route host сопоставляется со стандартным HTTP Host запроса; forwarded-заголовки не участвуют в выборе route.
 - Branch определяется слушающим endpoint/статической конфигурацией, не user query/header.
+- Текущий публичный Router не ограничивает частоту запросов, в том числе по IP. Его listener нельзя выставлять напрямую в публичную сеть: deployer должен закрыть его за внешним proxy. Выбор, настройка и эксплуатация proxy, включая его admission policy, остаются ответственностью deployer и не входят в приложение или этот репозиторий.
 - Path нормализуется ровно один раз: reject encoded separators/dot-segments, NUL и неоднозначную кодировку; привести percent encoding по единому алгоритму до matching.
 - Route precedence фиксирован: exact match выше longest-prefix; равный конфликт запрещён до публикации. Не использовать порядок строк БД как порядок маршрутизации.
 - Prefix target вычисляет только относительный путь внутри artifact manifest. `..`, абсолютный путь и неразрешённая запись manifest отвергаются.
-- Никаких динамических callbacks, reverse proxy к произвольному адресу, произвольного Go handler или прямого пути к S3 в первой версии.
+- Никаких динамических callbacks, reverse proxy к произвольному адресу, произвольного Go handler или прямого пути к S3. Нельзя исполнить operation, отсутствующую в каталоге текущего build profile. Для зарегистрированной operation Router передаёт только нормализованный HTTP request envelope и сохранённую server-side route config; операция сама проверяет метод/схему и выполняет предметную авторизацию.
 
-Для `core-file` Router отдаёт этот файл. Для `static-site-artifact` Router читает и проверяет нейтральный manifest через Core, разрешает путь в перечисленный `file_id` и затем читает этот файл. Путь без записи в manifest возвращает 404. Fallback возможен только при явно сохранённой route policy и указанном в manifest fallback; автоматическая выдача `index.html` запрещена.
+Каталог public operations собирается из статических импортов выбранного build profile и проверяет уникальность ID при запуске. Контракт operation объявляет версию, разрешённые HTTP-методы, точные допустимые media types и максимальный размер тела. Перед dispatch Router повторно валидирует сохранённый target/config, метод, тип содержимого, idempotency key и размер; повторяющиеся `Content-Type` или `Idempotency-Key` отклоняются как неоднозначный запрос. Превышение объявленного лимита возвращает `413`; chunked/неизвестное тело остаётся потоком через ограниченный reader. Upload operation должна дочитать поток до EOF и проверить все ошибки чтения до commit. Envelope не содержит cookies и произвольных заголовков; Presentation отвечает за cookie transport и преобразует его в отдельные типизированные данные сессии, если операция требует сессию.
+
+Для `core-file` Router обслуживает только GET/HEAD и отдаёт ровно настроенный файл только при exact path match. Новая загрузка не становится публичной автоматически: для её `file_id` оператор отдельно создаёт GET route. FileSet не является механизмом публичного поиска/выдачи. Для `static-site-artifact` Router читает и проверяет нейтральный manifest через Core, разрешает путь в перечисленный `file_id` и затем читает этот файл. Путь без записи в manifest возвращает 404. `registered-operation` вызывает только локальную типизированную capability, зарегистрированную при старте; неизвестная operation возвращает контролируемую ошибку без fallback. Fallback возможен только при явно сохранённой route policy и указанном в manifest fallback; автоматическая выдача `index.html` запрещена.
+
+Анонимный upload выполняется только через явно включённую зарегистрированную operation `public.form-upload`. Для неё нужны Router и Loader, Forms не обязателен. Конфигурация route обязана задавать `enabled: true`, существующую access group, лимит байтов и непустой список допустимых MIME types; FileSet необязателен. Router передаёт запрос operation, которая сначала проверяет настроенную серверную Loader-учётную запись, затем ограниченно сохраняет тело в отдельной приватной staging-директории (абсолютный путь с правами каталога `0700`), вычисляет размер и SHA-256 и только после полного чтения создаёт Loader upload session. Временные файлы создаются с правами `0600` и удаляются при завершении запроса. Серверная конфигурация задаёт максимальное число одновременно staging-запросов и общий байтовый бюджет; произведение числа слотов на максимальный размер файла не может превысить этот бюджет. Публичный listener должен быть скрыт за внешним proxy; Router сам не ограничивает частоту запросов, а выбор и настройка proxy остаются ответственностью deployer.
+
+Operation генерирует имя файла и стабильный Loader idempotency key из route scope и обязательного visitor `Idempotency-Key`; переданные посетителем group, FileSet ID, file ID и имя не используются. При повторе с тем же ключом и теми же байтами Loader безопасно продолжает части и commit; другой файл под тем же ключом приводит к отказу. Loader повторно проверяет размер, checksum и актуальный уровень доступа `2` к upload group. При настроенном FileSet operation добавляет готовый файл в этот набор с revision retry; сбой индекса возвращает временную ошибку, а повторный запрос завершает добавление без второй копии файла. Из-за возможного сбоя между S3 commit и FileSet membership уже сохранённый файл остаётся приватным в access group и может быть доиндексирован идемпотентным повтором.
+
+Upload принимает один raw file body на запрос; multipart parsing не является частью Router. Allowed MIME types задаются явно и сверяются по базовому media type; активные browser types (`text/html`, JavaScript, SVG, XML, CSS и т. п.) запрещены для этой operation. Файловые байты никогда не проходят через Core напрямую из Router: весь lifecycle выполняет Loader. Core file остаётся приватным; анонимная выдача включается отдельно настроенным GET route. Публичный listener должен быть скрыт за внешним proxy. Router сам не ограничивает частоту запросов; выбор и настройка proxy относятся к deployment и не реализуются приложением.
 
 ### 5.2 HTTP-ответ и безопасность
 
@@ -123,7 +145,7 @@ sequenceDiagram
     participant W as Website Sites API
     participant C as Core
     participant R as Router Settings API
-    participant D as core.module_data
+    participant D as engine_data.records
     participant P as Public client
 
     A->>W: build(snapshot_id, expected_revision)
@@ -169,7 +191,7 @@ Atomicity распространяется на один route binding. Если
 8. недоступного/частичного artifact, checksum/content-type mismatch и отказа до переключения;
 9. старого route при Website build failure и CAS conflict;
 10. cache headers, ETag/conditional GET, Range policy, CORS/indexing и безопасных response headers;
-11. невозможности Router→Website RPC, произвольного handler или произвольного Core UUID в публичном запросе;
+11. невозможности Router→Website RPC, вызова не зарегистрированной operation, произвольного handler/URL/Core UUID/group/FileSet/visibility в visitor request;
 12. хранения route records только через Router-scoped Core module-data API.
 
 Browser QA не отправляет writes в общий или production API. Используется уникальная изолированная конфигурация и disposable данные.
@@ -179,4 +201,4 @@ Browser QA не отправляет writes в общий или production API.
 1. CAS и атомарность применяются к одной записи route. Последовательное обновление набора может завершиться частично и должно отображать это состояние клиенту.
 2. Cache-Control по умолчанию — `no-store`; immutable cache задаётся только явной настройкой.
 3. Неизвестный путь artifact возвращает 404. Любой fallback должен быть настроен явно; автоматического SPA fallback нет.
-4. Router v1 не принимает handler callbacks, engine operation names или произвольные URL targets.
+4. Router вызывает только зарегистрированные в сборке public operations; route config может ссылаться на operation ID из этого каталога, но не задаёт произвольный callback/URL. Публичная загрузка допускается только через явно настроенную operation и проходит через Loader.

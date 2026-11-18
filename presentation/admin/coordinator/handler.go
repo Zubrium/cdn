@@ -12,12 +12,10 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/Zubrium/cdn/coordinator"
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
 	"github.com/google/uuid"
 )
 
@@ -35,7 +33,7 @@ const (
 )
 
 type JobControl interface {
-	List(context.Context, coordinator.JobListFilter) (platform.CoordinatorJobPage, error)
+	List(context.Context, platform.JobListFilter) (platform.CoordinatorJobPage, error)
 	Retry(context.Context, uuid.UUID) error
 }
 
@@ -48,14 +46,14 @@ type AuthorizeFunc func(context.Context, string, Permission) error
 // against PostgreSQL for every request.
 type GroupAuthorization interface {
 	Authenticate(context.Context, string) (platform.Session, error)
-	RequireGroupLevel(context.Context, platform.Session, string, access.Level) error
+	RequireGroupLevel(context.Context, platform.Session, string, platform.AccessLevel) error
 }
 
 // NewGroupAuthorizer maps job listing to group read and manual retry to group
 // write. No administrator-management or global-role shortcut is accepted.
 func NewGroupAuthorizer(core GroupAuthorization, group string) (AuthorizeFunc, error) {
-	if nilInterface(core) || !access.ValidGroupKey(group) {
-		return nil, coordinator.ErrInvalid
+	if nilInterface(core) || !platform.ValidAccessGroupKey(group) {
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	return func(ctx context.Context, credential string, permission Permission) error {
 		if ctx == nil || credential == "" {
@@ -65,9 +63,9 @@ func NewGroupAuthorizer(core GroupAuthorization, group string) (AuthorizeFunc, e
 		if err != nil {
 			return err
 		}
-		level := access.LevelRead
+		level := platform.AccessLevelRead
 		if permission == RetryJobs {
-			level = access.LevelWrite
+			level = platform.AccessLevelWrite
 		} else if permission != ReadJobs {
 			return platform.ErrForbidden
 		}
@@ -76,15 +74,19 @@ func NewGroupAuthorizer(core GroupAuthorization, group string) (AuthorizeFunc, e
 }
 
 type Config struct {
-	DefaultPageSize int
-	MaxPageSize     int
+	DefaultPageSize  int
+	MaxPageSize      int
+	AllowedOrigins   []string
+	SessionAuthorize AuthorizeFunc
 }
 
 type Handler struct {
-	jobs      JobControl
-	authorize AuthorizeFunc
-	cfg       Config
-	mux       *http.ServeMux
+	jobs             JobControl
+	authorize        AuthorizeFunc
+	sessionAuthorize AuthorizeFunc
+	transport        *adminhttpauth.Transport
+	cfg              Config
+	mux              *http.ServeMux
 }
 
 type Cursor struct {
@@ -120,9 +122,20 @@ type errorResponse struct {
 
 func NewHandler(jobs JobControl, authorize AuthorizeFunc, config Config) (*Handler, error) {
 	if nilInterface(jobs) || authorize == nil || config.DefaultPageSize < 1 || config.MaxPageSize < config.DefaultPageSize || config.MaxPageSize > maxPageLimit {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
-	handler := &Handler{jobs: jobs, authorize: authorize, cfg: config, mux: http.NewServeMux()}
+	var transport *adminhttpauth.Transport
+	if len(config.AllowedOrigins) > 0 {
+		var err error
+		transport, err = adminhttpauth.New(config.AllowedOrigins)
+		if err != nil {
+			return nil, platform.ErrCoordinatorInputInvalid
+		}
+	}
+	if config.SessionAuthorize != nil && transport == nil {
+		return nil, platform.ErrCoordinatorInputInvalid
+	}
+	handler := &Handler{jobs: jobs, authorize: authorize, sessionAuthorize: config.SessionAuthorize, transport: transport, cfg: config, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET "+apiPrefix, handler.list)
 	handler.mux.HandleFunc("GET "+apiPrefix+"/permissions", handler.permissions)
 	handler.mux.HandleFunc("POST "+apiPrefix+"/{jobID}/retry", handler.retry)
@@ -133,12 +146,7 @@ func (h *Handler) permissions(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeRequest(w, r, ReadJobs) {
 		return
 	}
-	credential, ok := bearerCredential(r.Header.Values("Authorization")[0])
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	err := invokeAuthorizer(h.authorize, r.Context(), credential, RetryJobs)
+	err := h.authorizationError(r, RetryJobs)
 	if errors.Is(err, platform.ErrForbidden) {
 		writeJSON(w, http.StatusOK, PermissionsResponse{CanRetry: false})
 		return
@@ -205,7 +213,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		before = cursor
 	}
-	page, err := h.jobs.List(r.Context(), coordinator.JobListFilter{
+	page, err := h.jobs.List(r.Context(), platform.JobListFilter{
 		Type: typeValue, State: stateValue, Limit: limit, Before: before,
 	})
 	if err != nil {
@@ -247,32 +255,28 @@ func (h *Handler) retry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authorizeRequest(w http.ResponseWriter, r *http.Request, permission Permission) bool {
-	values := r.Header.Values("Authorization")
-	if len(values) != 1 {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return false
-	}
-	credential, ok := bearerCredential(values[0])
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return false
-	}
-	if err := invokeAuthorizer(h.authorize, r.Context(), credential, permission); err != nil {
+	if err := h.authorizationError(r, permission); err != nil {
 		writeAuthorizationError(w, err)
 		return false
 	}
 	return true
 }
 
-func bearerCredential(value string) (string, bool) {
-	if !strings.HasPrefix(value, "Bearer ") {
-		return "", false
+func (h *Handler) authorizationError(r *http.Request, permission Permission) error {
+	credential, err := adminhttpauth.Resolve(r)
+	if err != nil {
+		return err
 	}
-	credential := strings.TrimPrefix(value, "Bearer ")
-	if credential == "" || len(credential) > 512 || strings.TrimSpace(credential) != credential || strings.ContainsAny(credential, " \t\r\n") {
-		return "", false
+	if credential.Session {
+		if h.sessionAuthorize == nil || h.transport == nil {
+			return errors.New("Coordinator session authorization unavailable")
+		}
+		if err := h.transport.ValidateSessionRequest(r); err != nil {
+			return adminhttpauth.ErrForbidden
+		}
+		return invokeAuthorizer(h.sessionAuthorize, r.Context(), credential.Value, permission)
 	}
-	return credential, true
+	return invokeAuthorizer(h.authorize, r.Context(), credential.Value, permission)
 }
 
 func invokeAuthorizer(authorize AuthorizeFunc, ctx context.Context, credential string, permission Permission) (err error) {
@@ -305,42 +309,44 @@ func encodeCursor(cursor platform.CoordinatorJobCursor) string {
 
 func decodeCursor(value string) (*platform.CoordinatorJobCursor, error) {
 	if value == "" || len(value) > maxCursorBytes {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(decoded))
 	decoder.DisallowUnknownFields()
 	var cursor Cursor
 	if err := decoder.Decode(&cursor); err != nil {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	canonical, err := json.Marshal(cursor)
 	if err != nil || !bytes.Equal(canonical, decoded) {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
 	if err != nil || createdAt.IsZero() || createdAt.UTC().Format(time.RFC3339Nano) != cursor.CreatedAt {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	id, err := uuid.Parse(cursor.ID)
 	if err != nil || id == uuid.Nil || id.String() != cursor.ID {
-		return nil, coordinator.ErrInvalid
+		return nil, platform.ErrCoordinatorInputInvalid
 	}
 	return &platform.CoordinatorJobCursor{CreatedAt: createdAt.UTC(), ID: id}, nil
 }
 
 func writeAuthorizationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, platform.ErrUnauthorized):
+	case errors.Is(err, platform.ErrUnauthorized), errors.Is(err, adminhttpauth.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, platform.ErrForbidden):
+	case errors.Is(err, platform.ErrForbidden), errors.Is(err, adminhttpauth.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
+	case errors.Is(err, adminhttpauth.ErrAmbiguous):
+		writeError(w, http.StatusBadRequest, "ambiguous_authentication")
 	default:
 		writeError(w, http.StatusServiceUnavailable, "authorization_unavailable")
 	}
@@ -348,7 +354,7 @@ func writeAuthorizationError(w http.ResponseWriter, err error) {
 
 func writeOperationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, coordinator.ErrInvalid):
+	case errors.Is(err, platform.ErrCoordinatorInputInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request")
 	case errors.Is(err, platform.ErrCoordinatorJobMissing):
 		writeError(w, http.StatusNotFound, "not_found")

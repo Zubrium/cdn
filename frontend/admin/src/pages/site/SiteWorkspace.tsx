@@ -12,6 +12,7 @@ import type { SiteConfig, SiteMetadata, SiteSnapshot } from "@/types";
 import { hasCompetingSiteDraftChange, parseSiteDraft, siteDraftKey } from "./workspace-draft";
 import type { StructuredDesignSystem } from "@/domains/design-system/types";
 import { featureVersionChanges, normalizeFeatureComposition } from "./feature-selection";
+import { siteContextQuery } from "./site-query";
 
 type Workspace = {
   config: SiteConfig;
@@ -79,10 +80,14 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const selected = params.get("snapshot") ?? "";
+  const requestedSiteID = params.get("site_id") ?? "";
+  const [rootSiteSelection, setRootSiteSelection] = useState(requestedSiteID);
   useDocumentTitle("Снапшоты");
 
   const snapshots = useQuery({ queryKey: ["site", "snapshot-choices"], queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal) });
-  const waitingForSelection = !selected && (snapshots.isLoading || snapshots.isError || Boolean(snapshots.data?.items.length));
+  const branches = useQuery({ queryKey: ["website", "branches"], queryFn: ({ signal }) => api.website.branches(signal) });
+  const configuredSiteIDs = [...new Set((branches.data?.items ?? []).map((branch) => branch.site_id))].sort();
+  const waitingForSelection = !selected && (snapshots.isLoading || branches.isLoading || snapshots.isError || branches.isError || Boolean(snapshots.data?.items.length));
   const [config, setConfig] = useState<SiteConfig | null>(null);
   const [savedConfig, setSavedConfig] = useState<SiteConfig | null>(null);
   const [metadata, setMetadata] = useState<SiteMetadata>({formatVersion: 1, siteName: "Website", pages: {}});
@@ -90,6 +95,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const [designSystem, setDesignSystem] = useState<StructuredDesignSystem>(emptyDesignSystem);
   const [savedDesignSystem, setSavedDesignSystem] = useState<StructuredDesignSystem>(emptyDesignSystem);
   const [snapshot, setSnapshot] = useState<SiteSnapshot | null>(null);
+  const rootSiteID = requestedSiteID || rootSiteSelection || snapshot?.siteId || (configuredSiteIDs.length === 1 ? configuredSiteIDs[0]! : "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
@@ -245,10 +251,12 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     setSaving(true);
     setConflict(false);
     try {
-	  let parentSnapshotRequest: { parentSnapshotId: string; expectedParentContentRevision: number } | undefined;
+	  let parentSnapshotRequest: { parentSnapshotId: string; expectedParentRevision: number; expectedParentContentRevision: number } | undefined;
 	  if (snapshot) {
-	    const parentDetail = await api.siteBuilder.snapshot(snapshot.id);
-	    parentSnapshotRequest = { parentSnapshotId: snapshot.id, expectedParentContentRevision: parentDetail.snapshot.contentRevision ?? snapshot.contentRevision ?? 0 };
+	    if (snapshot.revision === undefined || snapshot.contentRevision === undefined) {
+	      throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
+	    }
+	    parentSnapshotRequest = { parentSnapshotId: snapshot.id, expectedParentRevision: snapshot.revision, expectedParentContentRevision: snapshot.contentRevision };
 	    if (changedDuringSave()) {
 	      toast.info("Настройки изменились во время проверки. Сохраните их ещё раз.");
 	      return false;
@@ -274,6 +282,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
 	    }
 	  }
       const created = await api.siteBuilder.createSnapshotFrom({
+        siteID: snapshot?.siteId ?? rootSiteID,
         name: name?.trim() || (snapshot ? childSnapshotName(snapshot) : "Новый сайт"),
         ...(parentSnapshotRequest ?? {}),
         config: submitted,
@@ -306,7 +315,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
       setSnapshot(created);
       createdSelection.current = created.id;
       guardBypass.current = true;
-      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", created.id); return next; }, { replace: true });
+      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", created.id); next.delete("site_id"); return next; }, { replace: true });
       void queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
       void queryClient.invalidateQueries({ queryKey: ["content"] });
       toast.success(`Создан снапшот #${created.sequence}`);
@@ -324,9 +333,9 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [saving, snapshot, setParams, queryClient, confirm, principal, selected, persistLocal]);
+  }, [saving, snapshot, rootSiteID, setParams, queryClient, confirm, principal, selected, persistLocal]);
 
-  if (snapshots.error) return <ErrorState error={snapshots.error} title="Не удалось загрузить снапшоты" onRetry={() => void snapshots.refetch()} />;
+  if (snapshots.error || branches.error) return <ErrorState error={snapshots.error ?? branches.error} title="Не удалось загрузить конфигурацию сайта" onRetry={() => { void snapshots.refetch(); void branches.refetch(); }} />;
   if (loading || snapshots.isLoading || (!selected && Boolean(snapshots.data?.items.length))) return <p className="p-8 text-sm text-muted-foreground">Загружаем снапшот…</p>;
   if (error || !config) return <ErrorState error={error} title="Не удалось загрузить снапшот" onRetry={() => void reload()} />;
 
@@ -335,7 +344,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     || location.pathname === "/site/data-model"
     || location.pathname.startsWith("/site/data-model/");
   return (
-    <WorkspaceContext.Provider value={{ config, metadata, designSystem, revision: snapshot?.sequence ?? 0, snapshot, dirty: allDirty, saving, conflict, localSaveError, update, updateMetadata, updateDesignSystem, save, reload }}>
+    <WorkspaceContext.Provider value={{ config, metadata, designSystem, revision: snapshot?.revision ?? 0, snapshot, dirty: allDirty, saving, conflict, localSaveError, update, updateMetadata, updateDesignSystem, save, reload }}>
       {guard.dialog}
       <div className={canvas ? "flex h-full min-h-0 flex-col" : "min-w-0"}>
         <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
@@ -346,11 +355,32 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             guardBypass.current = true;
             if (location.pathname.startsWith("/site/data-model/")) {
               const next = new URLSearchParams(location.search);
-              if (value === "new") next.delete("snapshot");
-              else next.set("snapshot", value);
+              if (value === "new") {
+                next.delete("snapshot");
+                if (snapshot?.siteId) {
+                  next.set("site_id", snapshot.siteId);
+                  setRootSiteSelection(snapshot.siteId);
+                }
+              } else {
+                next.set("snapshot", value);
+                next.delete("site_id");
+              }
               navigate({ pathname: "/site/data-model", search: next.size ? `?${next}` : "" });
             } else {
-              setParams((current) => { const next = new URLSearchParams(current); if (value === "new") next.delete("snapshot"); else next.set("snapshot", value); return next; });
+              setParams((current) => {
+                const next = new URLSearchParams(current);
+                if (value === "new") {
+                  next.delete("snapshot");
+                  if (snapshot?.siteId) {
+                    next.set("site_id", snapshot.siteId);
+                    setRootSiteSelection(snapshot.siteId);
+                  }
+                } else {
+                  next.set("snapshot", value);
+                  next.delete("site_id");
+                }
+                return next;
+              });
             }
           }}>
             <SelectTrigger className="w-full sm:w-80" aria-label="Рабочий снапшот"><SelectValue /></SelectTrigger>
@@ -359,12 +389,21 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
               {snapshots.data?.items.map((item) => <SelectItem key={item.id} value={item.id}>#{item.sequence} · {item.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          {!selected && <Select value={rootSiteID || "none"} disabled={saving || configuredSiteIDs.length === 0} onValueChange={(siteID) => {
+            setRootSiteSelection(siteID === "none" ? "" : siteID);
+            setParams((current) => { const next = new URLSearchParams(current); if (siteID && siteID !== "none") next.set("site_id", siteID); else next.delete("site_id"); return next; });
+          }}>
+            <SelectTrigger className="w-full sm:w-72" aria-label="Сайт из конфигурации веток"><SelectValue placeholder="Выберите сайт" /></SelectTrigger>
+            <SelectContent>
+              {configuredSiteIDs.length === 0 ? <SelectItem value="none" disabled>Нет настроенных сайтов</SelectItem> : configuredSiteIDs.map((siteID) => <SelectItem key={siteID} value={siteID}>Сайт · {siteID}</SelectItem>)}
+            </SelectContent>
+          </Select>}
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
             {siteEditorModes.map(([path, label]) => {
               const active = location.pathname === path
                 || path === "/site/pages" && location.pathname.startsWith("/site/pages/")
                 || path === "/site/data-model" && location.pathname.startsWith("/site/data-model/");
-              return <Link key={path} to={`${path}${selected ? `?snapshot=${encodeURIComponent(selected)}` : ""}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
+              return <Link key={path} to={`${path}${siteContextQuery(selected, rootSiteID)}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
             })}
           </nav>
           <span role="status" aria-live="polite" className={`ml-auto text-xs ${allDirty ? "text-warning" : "text-success"}`}>{allDirty ? "Есть изменения" : "Сохранено"}</span>
@@ -372,7 +411,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             if (allDirty && !(await confirm({ title: "Загрузить актуальную версию?", description: "Несохранённые изменения локальной рабочей копии будут заменены.", confirmLabel: "Загрузить", cancelLabel: "Остаться", destructive: true }))) return;
             await reload();
           }}>Загрузить актуальную версию</Button>}
-          <Button type="button" size="sm" className="ml-auto" disabled={!allDirty || saving} onClick={() => void save()}>{saving ? "Сохраняем…" : "Сохранить"}</Button>
+          <Button type="button" size="sm" className="ml-auto" disabled={!allDirty || saving || (!snapshot && !rootSiteID)} onClick={() => void save()}>{saving ? "Сохраняем…" : "Сохранить"}</Button>
           {localSaveError && <span role="alert" className="text-xs text-destructive">Локальное автосохранение недоступно или копия изменена в другой вкладке. Сохраните изменения в снапшот.</span>}
         </div>
         {snapshot?.warnings && snapshot.warnings.length > 0 && (

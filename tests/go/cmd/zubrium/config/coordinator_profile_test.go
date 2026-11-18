@@ -4,50 +4,50 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Zubrium/cdn/coordinator"
+	platform "github.com/Zubrium/cdn/core/presentation"
+	routermodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
-func TestResolvedCoordinatorBindingsMatchCompiledPublicationProfile(t *testing.T) {
-	minimal := coordinator.BuildPlan{Components: []string{"core", "coordinator", "engine.loader", "admin.files"}}
-	publication := coordinator.BuildPlan{Components: []string{
-		"core", "coordinator", "engine.website", "engine.content", "engine.router",
-		"worker.prerender", "automation.site-publication",
-	}}
+func TestCoordinatorAdminAPIRequiresConfiguredAccessGroup(t *testing.T) {
+	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "admin.coordinator"}}
+	resolved := Resolved{Coordinator: CoordinatorSettings{JobsPageDefault: 25, JobsPageMaximum: 100}}
+	if err := resolved.ValidateBuildPlan(plan); err == nil {
+		t.Fatal("Coordinator Admin API without a configured group was accepted")
+	}
+	resolved.Coordinator.JobAccessGroup = "coordinator_jobs"
+	resolved.Core.AccessGroups = map[string]platform.AccessLevel{"coordinator_jobs": platform.AccessLevelNone}
+	if err := resolved.ValidateBuildPlan(plan); err != nil {
+		t.Fatalf("explicitly configured zero-access group should remain valid: %v", err)
+	}
+	delete(resolved.Core.AccessGroups, "coordinator_jobs")
+	if err := resolved.ValidateBuildPlan(plan); err == nil {
+		t.Fatal("Coordinator API group missing from Core config was accepted")
+	}
+}
 
-	t.Run("minimal profile accepts no publication bindings", func(t *testing.T) {
-		resolved := Resolved{Coordinator: CoordinatorSettings{Bindings: []coordinator.PublicationBinding{}}}
-		if err := resolved.ValidateBuildPlan(minimal); err != nil {
-			t.Fatalf("empty publication configuration rejected: %v", err)
-		}
-	})
-
-	t.Run("bindings require publication components", func(t *testing.T) {
-		resolved := Resolved{Coordinator: CoordinatorSettings{Bindings: []coordinator.PublicationBinding{{}}}}
-		if err := resolved.ValidateBuildPlan(minimal); err == nil {
-			t.Fatal("profile without publication runtime accepted configured route bindings")
-		}
-	})
-
-	t.Run("automation requires at least one binding", func(t *testing.T) {
-		resolved := Resolved{Coordinator: CoordinatorSettings{Bindings: []coordinator.PublicationBinding{}}}
-		if err := resolved.ValidateBuildPlan(publication); err == nil {
-			t.Fatal("publication profile without a route binding was accepted")
-		}
-	})
-
-	t.Run("full publication configuration is accepted", func(t *testing.T) {
-		resolved := Resolved{Coordinator: CoordinatorSettings{Bindings: []coordinator.PublicationBinding{{}}}}
-		if err := resolved.ValidateBuildPlan(publication); err != nil {
-			t.Fatalf("compatible publication profile rejected: %v", err)
-		}
-	})
+func TestPublicRouterLeavesListenerExposureToDeployment(t *testing.T) {
+	resolved := Resolved{
+		Core: platform.RuntimeConfig{
+			AccessGroups: map[string]platform.AccessLevel{"router_routes": platform.AccessLevelWrite},
+			ModuleData:    platform.ModuleDataLimits{MaxSelectorValues: routermodel.MaxRoutePathSelectorValues},
+		},
+		RouterAPI: RouterAPISettings{
+			BranchID:            "main",
+			ServiceCredential:   "router-service-credential",
+			PublicListenAddress: "0.0.0.0:8081",
+		},
+	}
+	plan := platform.BuildPlan{Components: []string{"engine.router", "public.router"}}
+	if err := resolved.ValidateBuildPlan(plan); err != nil {
+		t.Fatalf("Router must leave listener exposure and proxy topology to deployment configuration: %v", err)
+	}
 }
 
 func TestBuildProfileParticipatesInCoordinatorFingerprint(t *testing.T) {
-	resolved := Resolved{CoordinatorFingerprint: strings.Repeat("a", 64), Coordinator: CoordinatorSettings{Bindings: []coordinator.PublicationBinding{}}}
-	firstPlan := coordinator.BuildPlan{Components: []string{"core", "coordinator", "engine.loader"}}
-	reorderedPlan := coordinator.BuildPlan{Components: []string{"engine.loader", "core", "coordinator"}}
-	secondPlan := coordinator.BuildPlan{Components: []string{"core", "coordinator", "engine.loader", "worker.archive"}}
+	resolved := Resolved{CoordinatorFingerprint: strings.Repeat("a", 64)}
+	firstPlan := platform.BuildPlan{Components: []string{"core", "engine.loader"}}
+	reorderedPlan := platform.BuildPlan{Components: []string{"engine.loader", "core"}}
+	secondPlan := platform.BuildPlan{Components: []string{"core", "engine.loader", "worker.archive"}}
 
 	first, err := resolved.WithBuildPlan(firstPlan)
 	if err != nil {
@@ -59,6 +59,6 @@ func TestBuildProfileParticipatesInCoordinatorFingerprint(t *testing.T) {
 	}
 	second, err := resolved.WithBuildPlan(secondPlan)
 	if err != nil || second.CoordinatorFingerprint == first.CoordinatorFingerprint {
-		t.Fatalf("different compiled components shared one Coordinator fingerprint: same=%v err=%v", second.CoordinatorFingerprint == first.CoordinatorFingerprint, err)
+		t.Fatalf("different compiled components shared a fingerprint: same=%v err=%v", second.CoordinatorFingerprint == first.CoordinatorFingerprint, err)
 	}
 }

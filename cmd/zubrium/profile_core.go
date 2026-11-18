@@ -1,12 +1,13 @@
-//go:build !full
+//go:build !full && !devfixtures && !router
 
 package main
 
-import (
-	"github.com/Zubrium/cdn/coordinator"
-	"github.com/Zubrium/cdn/core/platform"
-)
+import "github.com/Zubrium/cdn/core/presentation"
 
-func registerProfile(registry *platform.Registry) error { return RegisterGeneratedEngines(registry) }
+func registerProfile(registry *presentation.Registry) error {
+	return RegisterGeneratedEngines(registry)
+}
 
-func compiledBuildPlan() coordinator.BuildPlan { return GeneratedBuildPlan() }
+func compiledBuildPlan() presentation.BuildPlan { return GeneratedBuildPlan() }
+
+func compiledDevelopmentFixtures() bool { return GeneratedDevelopmentFixtures() }

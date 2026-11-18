@@ -8,7 +8,7 @@ import (
 	"hash"
 	"io"
 
-	core "github.com/Zubrium/cdn/core/platform"
+	core "github.com/Zubrium/cdn/core/presentation"
 )
 
 type stagedReader struct {

@@ -33,11 +33,11 @@ export default function RouterPage() {
   const [systemPagesOpen, setSystemPagesOpen] = useState(false);
   const snapshotId = searchParams.get("snapshot") ?? "";
   const suffix = snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : "";
-  const featureBuilds = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.siteBuilder.featureBuilds(signal) });
+  const featureBuilds = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.website.featureBuilds(signal) });
   const media = useQuery({ queryKey: ["media", "public-file-routes"], queryFn: ({ signal }) => api.media.list({ status: "ready", limit: 200 }, signal) });
   const groups = useMemo(() => {
     const featureNames = new Map((featureBuilds.data?.items ?? []).map((build) => [build.key, build.name]));
-    const fileNames = new Map((media.data?.items ?? []).filter((item) => item.visibility === "public").map((item) => [item.id, item.original_filename]));
+    const fileNames = new Map((media.data?.items ?? []).map((item) => [item.id, item.original_filename]));
     return groupPageEntries(sortPageEntries(filterPageEntries(pageListEntries(config.routeTree, config.pages, featureNames, fileNames), query), sort));
   }, [config.pages, config.routeTree, featureBuilds.data, media.data, query, sort]);
   const entryCount = groups.reduce((count, group) => count + group.entries.length, 0);

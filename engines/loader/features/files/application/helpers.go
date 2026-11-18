@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	core "github.com/Zubrium/cdn/core/platform"
+	core "github.com/Zubrium/cdn/core/presentation"
 	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )

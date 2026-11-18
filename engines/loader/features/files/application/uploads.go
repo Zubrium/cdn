@@ -12,8 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Zubrium/cdn/core/access"
-	core "github.com/Zubrium/cdn/core/platform"
+	core "github.com/Zubrium/cdn/core/presentation"
 	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )
@@ -29,7 +28,7 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 	idempotencyKey := input.IdempotencyKey
 	seenGroups := make(map[string]struct{}, len(input.Groups))
 	for _, group := range input.Groups {
-		if !access.ValidGroupKey(group) {
+		if !core.ValidAccessGroupKey(group) {
 			return api.UploadSession{}, api.ErrInvalid
 		}
 		if _, exists := seenGroups[group]; exists {
@@ -37,7 +36,7 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 		}
 		seenGroups[group] = struct{}{}
 	}
-	if err := s.identity.RequireGroupLevel(ctx, request.session, input.Groups, access.LevelWrite); err != nil {
+	if err := s.identity.RequireGroupLevel(ctx, request.session, input.Groups, core.AccessLevelWrite); err != nil {
 		return api.UploadSession{}, mapCoreError(err)
 	}
 	partCount := expectedPartCount(input.Size, s.cfg.PartSize)
@@ -205,7 +204,7 @@ func (s *Service) PutUploadPart(ctx context.Context, id string, number int, size
 			}
 		}
 	}
-	if err := s.identity.RequireGroupLevel(ctx, request.session, upload.Input.Groups, access.LevelWrite); err != nil {
+	if err := s.identity.RequireGroupLevel(ctx, request.session, upload.Input.Groups, core.AccessLevelWrite); err != nil {
 		return api.UploadSession{}, mapCoreError(err)
 	}
 	hash := sha256.New()
@@ -362,7 +361,7 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 	if err := validateParts(upload, parts, s.cfg.PartSize, s.cfg.MaxParts); err != nil {
 		return api.File{}, err
 	}
-	if err := s.identity.RequireGroupLevel(ctx, request.session, upload.Input.Groups, access.LevelWrite); err != nil {
+	if err := s.identity.RequireGroupLevel(ctx, request.session, upload.Input.Groups, core.AccessLevelWrite); err != nil {
 		return api.File{}, mapCoreError(err)
 	}
 	fileBody, release, err := s.commitReader(ctx, request, upload, parts)

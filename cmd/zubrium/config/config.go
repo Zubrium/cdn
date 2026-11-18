@@ -7,54 +7,55 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Zubrium/cdn/coordinator"
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
+	routermodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 	"github.com/Zubrium/cdn/presentation/fileapi"
-	"github.com/google/uuid"
-
 	"gopkg.in/yaml.v3"
 )
 
 type Core struct {
-	DatabaseURLEnv          string                   `yaml:"database_url_env"`
-	MigrationDatabaseURLEnv string                   `yaml:"migration_database_url_env"`
-	S3Endpoint              string                   `yaml:"s3_endpoint"`
-	S3Region                string                   `yaml:"s3_region"`
-	S3Bucket                string                   `yaml:"s3_bucket"`
-	S3AccessKeyEnv          string                   `yaml:"s3_access_key_env"`
-	S3SecretKeyEnv          string                   `yaml:"s3_secret_key_env"`
-	S3PathStyle             bool                     `yaml:"s3_path_style"`
-	S3AllowInsecureHTTP     bool                     `yaml:"s3_allow_insecure_http"`
-	BootstrapSecretEnv      string                   `yaml:"bootstrap_secret_env"`
-	AtlasBinary             string                   `yaml:"atlas_binary"`
-	MigrationLockTimeout    string                   `yaml:"migration_lock_timeout"`
-	AccessGroups            map[string]*access.Level `yaml:"access_groups"`
-	MinConnections          int32                    `yaml:"min_connections"`
-	MaxConnections          int32                    `yaml:"max_connections"`
-	ConnectTimeout          string                   `yaml:"connect_timeout"`
-	MaxLifetime             string                   `yaml:"max_lifetime"`
-	MaxIdleTime             string                   `yaml:"max_idle_time"`
-	HealthInterval          string                   `yaml:"health_interval"`
-	CacheMaxBytes           int64                    `yaml:"cache_max_bytes"`
-	CacheTTL                string                   `yaml:"cache_ttl"`
-	MaxMetadataBytes        int64                    `yaml:"max_metadata_bytes"`
-	MaxObjectBytes          int64                    `yaml:"max_object_bytes"`
-	MaxCachedObjectBytes    int64                    `yaml:"max_cached_object_bytes"`
-	MaintenanceInterval     string                   `yaml:"maintenance_interval"`
-	MaintenanceTimeout      string                   `yaml:"maintenance_timeout"`
-	PendingTTL              string                   `yaml:"pending_ttl"`
-	MaintenanceBatchSize    int                      `yaml:"maintenance_batch_size"`
-	ModuleData              ModuleData               `yaml:"module_data"`
+	DatabaseURLEnv          string                           `yaml:"database_url_env"`
+	MigrationDatabaseURLEnv string                           `yaml:"migration_database_url_env"`
+	S3Endpoint              string                           `yaml:"s3_endpoint"`
+	S3Region                string                           `yaml:"s3_region"`
+	S3Bucket                string                           `yaml:"s3_bucket"`
+	S3AccessKeyEnv          string                           `yaml:"s3_access_key_env"`
+	S3SecretKeyEnv          string                           `yaml:"s3_secret_key_env"`
+	S3PathStyle             bool                             `yaml:"s3_path_style"`
+	S3AllowInsecureHTTP     bool                             `yaml:"s3_allow_insecure_http"`
+	BootstrapSecretEnv      string                           `yaml:"bootstrap_secret_env"`
+	AtlasBinary             string                           `yaml:"atlas_binary"`
+	MigrationLockTimeout    string                           `yaml:"migration_lock_timeout"`
+	AccessGroups            map[string]*platform.AccessLevel `yaml:"access_groups"`
+	MinConnections          int32                            `yaml:"min_connections"`
+	MaxConnections          int32                            `yaml:"max_connections"`
+	ConnectTimeout          string                           `yaml:"connect_timeout"`
+	MaxLifetime             string                           `yaml:"max_lifetime"`
+	MaxIdleTime             string                           `yaml:"max_idle_time"`
+	HealthInterval          string                           `yaml:"health_interval"`
+	CacheMaxBytes           int64                            `yaml:"cache_max_bytes"`
+	CacheTTL                string                           `yaml:"cache_ttl"`
+	MaxMetadataBytes        int64                            `yaml:"max_metadata_bytes"`
+	MaxObjectBytes          int64                            `yaml:"max_object_bytes"`
+	MaxCachedObjectBytes    int64                            `yaml:"max_cached_object_bytes"`
+	MaintenanceInterval     string                           `yaml:"maintenance_interval"`
+	MaintenanceTimeout      string                           `yaml:"maintenance_timeout"`
+	PendingTTL              string                           `yaml:"pending_ttl"`
+	MaintenanceBatchSize    int                              `yaml:"maintenance_batch_size"`
+	SessionIdleTTL          string                           `yaml:"session_idle_ttl"`
+	SessionAbsoluteTTL      string                           `yaml:"session_absolute_ttl"`
+	ModuleData              ModuleData                       `yaml:"module_data"`
 }
 
 type ModuleData struct {
@@ -94,6 +95,31 @@ type FileAPI struct {
 	MaxPageSize       int   `yaml:"max_page_size"`
 }
 
+type AdminAPI struct {
+	MaxJSONBytes        int64    `yaml:"max_json_bytes"`
+	DefaultPageSize     int      `yaml:"default_page_size"`
+	MaxPageSize         int      `yaml:"max_page_size"`
+	SessionCookieSecure *bool    `yaml:"session_cookie_secure"`
+	AllowedOrigins      []string `yaml:"allowed_origins"`
+}
+
+// RouterAPI carries shared Router policy plus the process-local binding for
+// the single branch served by this process. BranchID and PublicListenAddress
+// are intentionally excluded from the shared Coordinator fingerprint.
+type RouterAPI struct {
+	MaxJSONBytes              int64    `yaml:"max_json_bytes"`
+	DefaultPageSize           int      `yaml:"default_page_size"`
+	MaxPageSize               int      `yaml:"max_page_size"`
+	BranchID                  string   `yaml:"branch_id"`
+	ServiceCredentialEnv      string   `yaml:"service_credential_env"`
+	PublicListenAddress       string   `yaml:"public_listen_address"`
+	UploadStagingDirectory    string   `yaml:"upload_staging_directory"`
+	UploadMaxFileBytes        int64    `yaml:"upload_max_file_bytes"`
+	UploadMaxConcurrent       int      `yaml:"upload_max_concurrent"`
+	UploadMaxStagedBytes      int64    `yaml:"upload_max_staged_bytes"`
+	UploadAllowedContentTypes []string `yaml:"upload_allowed_content_types"`
+}
+
 type HTTP struct {
 	ListenAddress     string `yaml:"listen_address"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
@@ -114,103 +140,133 @@ type HTTPServerConfig struct {
 	MaxHeaderBytes    int
 }
 
-type PublicationBinding struct {
-	SiteID      string `yaml:"site_id"`
-	ContentID   string `yaml:"content_id"`
-	RouteID     string `yaml:"route_id"`
-	AutoPublish *bool  `yaml:"auto_publish"`
-}
-
 type CoordinatorConfig struct {
-	SystemID          string               `yaml:"system_id"`
-	JobAccessGroup    string               `yaml:"job_access_group"`
-	JobsPageDefault   int                  `yaml:"jobs_page_default"`
-	JobsPageMaximum   int                  `yaml:"jobs_page_maximum"`
-	InstanceLease     string               `yaml:"instance_lease"`
-	HeartbeatInterval string               `yaml:"heartbeat_interval"`
-	WorkerConcurrency int                  `yaml:"worker_concurrency"`
-	JobLease          string               `yaml:"job_lease"`
-	TaskTimeout       string               `yaml:"task_timeout"`
-	PollInterval      string               `yaml:"poll_interval"`
-	RetryBase         string               `yaml:"retry_base"`
-	RetryMaximum      string               `yaml:"retry_maximum"`
-	MaxAttempts       int                  `yaml:"max_attempts"`
-	Bindings          []PublicationBinding `yaml:"bindings"`
+	JobAccessGroup     string `yaml:"job_access_group"`
+	JobsPageDefault    int    `yaml:"jobs_page_default"`
+	JobsPageMaximum    int    `yaml:"jobs_page_maximum"`
+	InstanceLease      string `yaml:"instance_lease"`
+	HeartbeatInterval  string `yaml:"heartbeat_interval"`
+	WorkerConcurrency  int    `yaml:"worker_concurrency"`
+	JobLease           string `yaml:"job_lease"`
+	TaskTimeout        string `yaml:"task_timeout"`
+	PollInterval       string `yaml:"poll_interval"`
+	RetryBase          string `yaml:"retry_base"`
+	RetryMaximum       string `yaml:"retry_maximum"`
+	MaxAttempts        int    `yaml:"max_attempts"`
+	MaxWorkflowTasks   int    `yaml:"max_workflow_tasks"`
+	MaxChildrenPerTask int    `yaml:"max_children_per_task"`
+	WorkflowRetention  string `yaml:"workflow_retention"`
 }
 
 type CoordinatorSettings struct {
-	SystemID          string
-	JobAccessGroup    string
-	JobsPageDefault   int
-	JobsPageMaximum   int
-	InstanceLease     time.Duration
-	HeartbeatInterval time.Duration
-	WorkerConcurrency int
-	JobLease          time.Duration
-	TaskTimeout       time.Duration
-	PollInterval      time.Duration
-	RetryBase         time.Duration
-	RetryMaximum      time.Duration
-	MaxAttempts       int
-	Bindings          []coordinator.PublicationBinding
+	JobAccessGroup     string
+	JobsPageDefault    int
+	JobsPageMaximum    int
+	InstanceLease      time.Duration
+	HeartbeatInterval  time.Duration
+	WorkerConcurrency  int
+	JobLease           time.Duration
+	TaskTimeout        time.Duration
+	PollInterval       time.Duration
+	RetryBase          time.Duration
+	RetryMaximum       time.Duration
+	MaxAttempts        int
+	MaxWorkflowTasks   int
+	MaxChildrenPerTask int
+	WorkflowRetention  time.Duration
+}
+
+type AdminAPISettings struct {
+	MaxJSONBytes        int64
+	DefaultPageSize     int
+	MaxPageSize         int
+	SessionCookieSecure bool
+	AllowedOrigins      []string
+}
+
+type RouterAPISettings struct {
+	MaxJSONBytes              int64
+	DefaultPageSize           int
+	MaxPageSize               int
+	BranchID                  string
+	ServiceCredential         string
+	PublicListenAddress       string
+	UploadStagingDirectory    string
+	UploadMaxFileBytes        int64
+	UploadMaxConcurrent       int
+	UploadMaxStagedBytes      int64
+	UploadAllowedContentTypes []string
 }
 
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
 	FileAPI                fileapi.Config
+	AdminAPI               AdminAPISettings
+	RouterAPI              RouterAPISettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
 }
 
-var ErrCoordinatorProfileMismatch = errors.New("Coordinator publication settings do not match the compiled profile")
+var ErrCoordinatorProfileMismatch = errors.New("Coordinator settings do not match the compiled profile")
 
-// ValidateBuildPlan prevents startup configuration from advertising a
-// publication workflow that has no selected engine and worker implementation.
-// Empty binding lists are valid only when publication automation is not selected.
-func (r Resolved) ValidateBuildPlan(plan coordinator.BuildPlan) error {
+// ValidateBuildPlan verifies that the optional coordinator API is backed by a
+// configured access group. Workflow inputs and component wiring stay engine-owned.
+func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 	selected := make(map[string]struct{}, len(plan.Components))
 	for _, component := range plan.Components {
 		selected[component] = struct{}{}
 	}
-	_, hasAutomation := selected["automation.site-publication"]
-	if hasAutomation != (len(r.Coordinator.Bindings) > 0) {
-		return ErrCoordinatorProfileMismatch
-	}
-	if !hasAutomation {
-		if _, hasCoordinatorAPI := selected["admin.coordinator"]; hasCoordinatorAPI {
-			if !access.ValidGroupKey(r.Coordinator.JobAccessGroup) {
-				return ErrCoordinatorProfileMismatch
-			}
-			if _, configured := r.Core.AccessGroups[r.Coordinator.JobAccessGroup]; !configured {
-				return ErrCoordinatorProfileMismatch
-			}
-		}
-		return nil
-	}
-	for _, required := range []string{
-		"engine.website", "engine.content", "engine.router", "worker.prerender",
-	} {
-		if _, ok := selected[required]; !ok {
-			return ErrCoordinatorProfileMismatch
-		}
-	}
 	if _, hasCoordinatorAPI := selected["admin.coordinator"]; hasCoordinatorAPI {
-		if !access.ValidGroupKey(r.Coordinator.JobAccessGroup) {
+		if !platform.ValidAccessGroupKey(r.Coordinator.JobAccessGroup) {
 			return ErrCoordinatorProfileMismatch
 		}
 		if _, configured := r.Core.AccessGroups[r.Coordinator.JobAccessGroup]; !configured {
 			return ErrCoordinatorProfileMismatch
 		}
 	}
+	if _, hasRouterAPI := selected["admin.router"]; hasRouterAPI {
+		if _, configured := r.Core.AccessGroups["router_routes"]; !configured {
+			return errors.New("Router Admin API requires Core access group router_routes")
+		}
+	}
+	if _, hasRouterEngine := selected["engine.router"]; hasRouterEngine && r.Core.ModuleData.MaxSelectorValues < routermodel.MaxRoutePathSelectorValues {
+		return fmt.Errorf("Router requires Core module_data.max_selector_values >= %d for bounded path resolution", routermodel.MaxRoutePathSelectorValues)
+	}
+	if _, hasRouterEngine := selected["engine.router"]; hasRouterEngine {
+		if !validBranchID(r.RouterAPI.BranchID) || r.RouterAPI.ServiceCredential == "" {
+			return errors.New("Router Engine requires a static branch_id and service credential")
+		}
+		if _, configured := r.Core.AccessGroups["router_routes"]; !configured {
+			return errors.New("Router Engine requires Core access group router_routes")
+		}
+	}
+	if _, hasPublicRouter := selected["public.router"]; hasPublicRouter {
+		if _, hasRouterEngine := selected["engine.router"]; !hasRouterEngine {
+			return errors.New("public Router requires engine.router")
+		}
+	}
+	if _, hasPublicUpload := selected["public.form-upload"]; hasPublicUpload {
+		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
+			return errors.New("public.form-upload requires public.router")
+		}
+		settings := r.RouterAPI
+		if settings.UploadStagingDirectory == "" || !filepath.IsAbs(settings.UploadStagingDirectory) || filepath.Clean(settings.UploadStagingDirectory) != settings.UploadStagingDirectory || settings.UploadStagingDirectory == string(filepath.Separator) ||
+			settings.UploadMaxFileBytes <= 0 || settings.UploadMaxFileBytes > r.Loader.MaxFileBytes || settings.UploadMaxConcurrent <= 0 || settings.UploadMaxConcurrent > 1024 ||
+			settings.UploadMaxStagedBytes <= 0 || settings.UploadMaxFileBytes > settings.UploadMaxStagedBytes/int64(settings.UploadMaxConcurrent) ||
+			!validUploadContentTypes(settings.UploadAllowedContentTypes) {
+			return errors.New("public.form-upload requires explicit staging, size, concurrency, and MIME limits within Loader capacity")
+		}
+	}
 	return nil
 }
 
-// WithBuildPlan binds the compiled component set into the instance fingerprint
-// so replicas built from different profiles cannot join the same Coordinator
-// system. The input order is canonicalized before hashing.
-func (r Resolved) WithBuildPlan(plan coordinator.BuildPlan) (Resolved, error) {
+// WithBuildPlan binds the compiled component set into the system fingerprint
+// so processes built from different profiles cannot join the same Coordinator
+// system. Router branch selection and its listener are process-local; all
+// shared operational settings and the input order remain fingerprinted.
+func (r Resolved) WithBuildPlan(plan platform.BuildPlan) (Resolved, error) {
 	if err := r.ValidateBuildPlan(plan); err != nil {
 		return Resolved{}, err
 	}
@@ -245,14 +301,17 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if getenv == nil {
 		return Resolved{}, errors.New("missing environment lookup")
 	}
-	durations := []string{c.Core.ConnectTimeout, c.Core.MaxLifetime, c.Core.MaxIdleTime, c.Core.HealthInterval, c.Core.MigrationLockTimeout, c.Core.CacheTTL, c.Core.MaintenanceInterval, c.Core.MaintenanceTimeout, c.Core.PendingTTL}
-	var parsed [9]time.Duration
+	durations := []string{c.Core.ConnectTimeout, c.Core.MaxLifetime, c.Core.MaxIdleTime, c.Core.HealthInterval, c.Core.MigrationLockTimeout, c.Core.CacheTTL, c.Core.MaintenanceInterval, c.Core.MaintenanceTimeout, c.Core.PendingTTL, c.Core.SessionIdleTTL, c.Core.SessionAbsoluteTTL}
+	var parsed [11]time.Duration
 	for i, value := range durations {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration <= 0 {
 			return Resolved{}, errors.New("invalid Core duration")
 		}
 		parsed[i] = duration
+	}
+	if parsed[9] > parsed[10] || parsed[10] > 365*24*time.Hour {
+		return Resolved{}, errors.New("invalid Core session lifetime configuration")
 	}
 	loaderDurationValues := []string{c.Loader.SessionTTL, c.Loader.CommitTimeout, c.Loader.SessionCacheTTL, c.Loader.CleanupInterval}
 	var loaderDurations [4]time.Duration
@@ -267,8 +326,9 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		return Resolved{}, errors.New("Loader session and commit timeouts overflow")
 	}
 	coordinatorDurationValues := []string{c.Coordinator.InstanceLease, c.Coordinator.HeartbeatInterval, c.Coordinator.JobLease,
-		c.Coordinator.TaskTimeout, c.Coordinator.PollInterval, c.Coordinator.RetryBase, c.Coordinator.RetryMaximum}
-	var coordinatorDurations [7]time.Duration
+		c.Coordinator.TaskTimeout, c.Coordinator.PollInterval, c.Coordinator.RetryBase, c.Coordinator.RetryMaximum,
+		c.Coordinator.WorkflowRetention}
+	var coordinatorDurations [8]time.Duration
 	for i, value := range coordinatorDurationValues {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration <= 0 {
@@ -276,31 +336,18 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		}
 		coordinatorDurations[i] = duration
 	}
-	if !coordinatorSystemID.MatchString(c.Coordinator.SystemID) || coordinatorDurations[0] < 3*time.Second || coordinatorDurations[0] > time.Hour ||
+	if coordinatorDurations[0] < 3*time.Second || coordinatorDurations[0] > time.Hour ||
 		coordinatorDurations[1] >= coordinatorDurations[0]/3 || coordinatorDurations[2] < 3*time.Second || coordinatorDurations[2] > time.Hour ||
 		coordinatorDurations[3] > 24*time.Hour || coordinatorDurations[4] >= coordinatorDurations[2] ||
 		coordinatorDurations[5] > coordinatorDurations[6] || coordinatorDurations[6] > 24*time.Hour ||
-		c.Coordinator.WorkerConcurrency < 1 || c.Coordinator.WorkerConcurrency > 256 || c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 || c.Coordinator.Bindings == nil ||
+		c.Coordinator.WorkerConcurrency < 1 || c.Coordinator.WorkerConcurrency > 256 || c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 ||
+		c.Coordinator.MaxWorkflowTasks < 1 || c.Coordinator.MaxWorkflowTasks > 100000 ||
+		c.Coordinator.MaxChildrenPerTask < 0 || c.Coordinator.MaxChildrenPerTask > 256 ||
+		coordinatorDurations[7] > 365*24*time.Hour ||
 		c.Coordinator.JobsPageDefault < 1 || c.Coordinator.JobsPageMaximum < c.Coordinator.JobsPageDefault || c.Coordinator.JobsPageMaximum > 200 ||
-		(c.Coordinator.JobAccessGroup != "" && !access.ValidGroupKey(c.Coordinator.JobAccessGroup)) {
+		(c.Coordinator.JobAccessGroup != "" && !platform.ValidAccessGroupKey(c.Coordinator.JobAccessGroup)) {
 		return Resolved{}, errors.New("invalid Coordinator configuration")
 	}
-	bindings := make([]coordinator.PublicationBinding, 0, len(c.Coordinator.Bindings))
-	routeIDs := make(map[uuid.UUID]struct{}, len(c.Coordinator.Bindings))
-	for _, binding := range c.Coordinator.Bindings {
-		siteID, siteErr := uuid.Parse(binding.SiteID)
-		contentID, contentErr := uuid.Parse(binding.ContentID)
-		routeID, routeErr := uuid.Parse(binding.RouteID)
-		if siteErr != nil || contentErr != nil || routeErr != nil || siteID == uuid.Nil || contentID == uuid.Nil || routeID == uuid.Nil || binding.AutoPublish == nil {
-			return Resolved{}, errors.New("invalid Coordinator publication binding")
-		}
-		if _, exists := routeIDs[routeID]; exists {
-			return Resolved{}, errors.New("duplicate Coordinator route binding")
-		}
-		routeIDs[routeID] = struct{}{}
-		bindings = append(bindings, coordinator.PublicationBinding{SiteID: siteID, ContentID: contentID, RouteID: routeID, AutoPublish: *binding.AutoPublish})
-	}
-	sort.Slice(bindings, func(i, j int) bool { return bindings[i].RouteID.String() < bindings[j].RouteID.String() })
 	httpDurationValues := []string{c.HTTP.ReadHeaderTimeout, c.HTTP.ReadTimeout, c.HTTP.WriteTimeout, c.HTTP.IdleTimeout, c.HTTP.ShutdownTimeout}
 	var httpDurations [5]time.Duration
 	for i, value := range httpDurationValues {
@@ -321,13 +368,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		c.Core.CacheMaxBytes <= 0 || c.Core.MaxCachedObjectBytes > c.Core.CacheMaxBytes || c.Core.MaintenanceBatchSize <= 0 || c.Core.AtlasBinary == "" || !platform.ValidModuleDataLimits(moduleDataLimits) {
 		return Resolved{}, errors.New("invalid Core storage, cache, database pool capacity for Loader and Coordinator, or module-data configuration")
 	}
-	accessGroups := make(map[string]access.Level, len(c.Core.AccessGroups))
+	accessGroups := make(map[string]platform.AccessLevel, len(c.Core.AccessGroups))
 	for key, configuredLevel := range c.Core.AccessGroups {
-		level := access.LevelWrite
+		level := platform.AccessLevelWrite
 		if configuredLevel != nil {
 			level = *configuredLevel
 		}
-		if !access.ValidGroupKey(key) || level > access.LevelWrite {
+		if !platform.ValidAccessGroupKey(key) || level > platform.AccessLevelWrite {
 			return Resolved{}, errors.New("invalid configured access group")
 		}
 		accessGroups[key] = level
@@ -353,6 +400,18 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		c.FileAPI.MaxGroupsPerFile <= 0 || c.FileAPI.MaxGroupsPerFile > 64 || c.FileAPI.DefaultPageSize <= 0 || c.FileAPI.MaxPageSize < c.FileAPI.DefaultPageSize || c.FileAPI.MaxPageSize > 1000 {
 		return Resolved{}, errors.New("invalid File API request limits")
 	}
+	if c.AdminAPI.MaxJSONBytes <= 0 || c.AdminAPI.MaxJSONBytes > 1<<20 ||
+		c.AdminAPI.DefaultPageSize <= 0 || c.AdminAPI.MaxPageSize < c.AdminAPI.DefaultPageSize || c.AdminAPI.MaxPageSize > 500 ||
+		c.AdminAPI.SessionCookieSecure == nil || !validAdminOrigins(c.AdminAPI.AllowedOrigins) {
+		return Resolved{}, errors.New("Admin API request limits, session cookie, and allowed origins must be explicitly configured")
+	}
+	if c.RouterAPI.MaxJSONBytes <= 0 || c.RouterAPI.MaxJSONBytes > 1<<20 ||
+		c.RouterAPI.DefaultPageSize <= 0 || c.RouterAPI.MaxPageSize < c.RouterAPI.DefaultPageSize || c.RouterAPI.MaxPageSize > 100 {
+		return Resolved{}, errors.New("Router API request and pagination limits must be explicitly configured")
+	}
+	if c.RouterAPI.ServiceCredentialEnv != "" && (!envName.MatchString(c.RouterAPI.ServiceCredentialEnv) || len(c.RouterAPI.ServiceCredentialEnv) > 128) {
+		return Resolved{}, errors.New("invalid Router service credential environment name")
+	}
 	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
 		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
 	}
@@ -373,6 +432,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if err := platform.ValidateDatabaseURLs(dbURL, migrationDBURL); err != nil {
 		return Resolved{}, err
 	}
+	var routerServiceCredential string
+	if c.RouterAPI.ServiceCredentialEnv != "" {
+		routerServiceCredential = getenv(c.RouterAPI.ServiceCredentialEnv)
+		if routerServiceCredential == "" || strings.ContainsRune(routerServiceCredential, '\x00') {
+			return Resolved{}, errors.New("configured Router service credential is empty or invalid")
+		}
+	}
 	if c.Core.AccessGroups == nil {
 		return Resolved{}, errors.New("Core access_groups must be configured explicitly")
 	}
@@ -392,6 +458,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		MaxObjectBytes: c.Core.MaxObjectBytes, MaxCachedObjectBytes: c.Core.MaxCachedObjectBytes,
 		ModuleData:          moduleDataLimits,
 		MaintenanceInterval: parsed[6], MaintenanceTimeout: parsed[7], PendingTTL: parsed[8], MaintenanceBatchSize: c.Core.MaintenanceBatchSize,
+		SessionIdleTTL: parsed[9], SessionAbsoluteTTL: parsed[10],
 	}
 	loaderConfig := loaderapp.Config{PartSize: c.Loader.PartSize, MaxFileBytes: c.Loader.MaxFileBytes, MaxPartBytes: c.Loader.MaxPartBytes, MaxParts: c.Loader.MaxParts,
 		MaxConcurrentCommits: c.Loader.MaxConcurrentCommits,
@@ -409,28 +476,39 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, errors.New("cannot fingerprint Coordinator configuration")
 	}
-	return Resolved{Core: coreConfig, Loader: loaderConfig, FileAPI: fileAPIConfig, Coordinator: CoordinatorSettings{
-		SystemID: c.Coordinator.SystemID, JobAccessGroup: c.Coordinator.JobAccessGroup,
-		JobsPageDefault: c.Coordinator.JobsPageDefault, JobsPageMaximum: c.Coordinator.JobsPageMaximum,
-		InstanceLease: coordinatorDurations[0], HeartbeatInterval: coordinatorDurations[1],
-		WorkerConcurrency: c.Coordinator.WorkerConcurrency, JobLease: coordinatorDurations[2], TaskTimeout: coordinatorDurations[3],
-		PollInterval: coordinatorDurations[4], RetryBase: coordinatorDurations[5], RetryMaximum: coordinatorDurations[6],
-		MaxAttempts: c.Coordinator.MaxAttempts, Bindings: bindings,
-	}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
-		ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
-		ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}}, nil
+	return Resolved{Core: coreConfig, Loader: loaderConfig, FileAPI: fileAPIConfig,
+		AdminAPI: AdminAPISettings{MaxJSONBytes: c.AdminAPI.MaxJSONBytes, DefaultPageSize: c.AdminAPI.DefaultPageSize, MaxPageSize: c.AdminAPI.MaxPageSize,
+			SessionCookieSecure: *c.AdminAPI.SessionCookieSecure,
+			AllowedOrigins:      append([]string(nil), c.AdminAPI.AllowedOrigins...)},
+		RouterAPI: RouterAPISettings{MaxJSONBytes: c.RouterAPI.MaxJSONBytes, DefaultPageSize: c.RouterAPI.DefaultPageSize, MaxPageSize: c.RouterAPI.MaxPageSize,
+			BranchID: c.RouterAPI.BranchID, ServiceCredential: routerServiceCredential, PublicListenAddress: c.RouterAPI.PublicListenAddress,
+			UploadStagingDirectory: c.RouterAPI.UploadStagingDirectory, UploadMaxFileBytes: c.RouterAPI.UploadMaxFileBytes,
+			UploadMaxConcurrent: c.RouterAPI.UploadMaxConcurrent, UploadMaxStagedBytes: c.RouterAPI.UploadMaxStagedBytes,
+			UploadAllowedContentTypes: append([]string(nil), c.RouterAPI.UploadAllowedContentTypes...)},
+		Coordinator: CoordinatorSettings{
+			JobAccessGroup:  c.Coordinator.JobAccessGroup,
+			JobsPageDefault: c.Coordinator.JobsPageDefault, JobsPageMaximum: c.Coordinator.JobsPageMaximum,
+			InstanceLease: coordinatorDurations[0], HeartbeatInterval: coordinatorDurations[1],
+			WorkerConcurrency: c.Coordinator.WorkerConcurrency, JobLease: coordinatorDurations[2], TaskTimeout: coordinatorDurations[3],
+			PollInterval: coordinatorDurations[4], RetryBase: coordinatorDurations[5], RetryMaximum: coordinatorDurations[6],
+			MaxAttempts: c.Coordinator.MaxAttempts, MaxWorkflowTasks: c.Coordinator.MaxWorkflowTasks,
+			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[7],
+		}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
+			ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
+			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}}, nil
 }
 
 type Config struct {
 	Core        Core              `yaml:"core"`
 	Loader      Loader            `yaml:"loader"`
 	FileAPI     FileAPI           `yaml:"file_api"`
+	AdminAPI    AdminAPI          `yaml:"admin_api"`
+	RouterAPI   RouterAPI         `yaml:"router_api"`
 	HTTP        HTTP              `yaml:"http"`
 	Coordinator CoordinatorConfig `yaml:"coordinator"`
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-var coordinatorSystemID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 func configFingerprint(config Config, runtimeURL, migrationURL string) (string, error) {
 	config.Core.DatabaseURLEnv = ""
@@ -438,21 +516,12 @@ func configFingerprint(config Config, runtimeURL, migrationURL string) (string, 
 	config.Core.S3AccessKeyEnv = ""
 	config.Core.S3SecretKeyEnv = ""
 	config.Core.BootstrapSecretEnv = ""
-	bindings := make([]PublicationBinding, 0, len(config.Coordinator.Bindings))
-	for _, binding := range config.Coordinator.Bindings {
-		siteID, siteErr := uuid.Parse(binding.SiteID)
-		contentID, contentErr := uuid.Parse(binding.ContentID)
-		routeID, routeErr := uuid.Parse(binding.RouteID)
-		if siteErr != nil || contentErr != nil || routeErr != nil || siteID == uuid.Nil || contentID == uuid.Nil || routeID == uuid.Nil || binding.AutoPublish == nil {
-			return "", errors.New("invalid Coordinator publication binding")
-		}
-		bindings = append(bindings, PublicationBinding{SiteID: siteID.String(), ContentID: contentID.String(),
-			RouteID: routeID.String(), AutoPublish: binding.AutoPublish})
-	}
-	config.Coordinator.Bindings = bindings
-	sort.Slice(config.Coordinator.Bindings, func(i, j int) bool {
-		return config.Coordinator.Bindings[i].RouteID < config.Coordinator.Bindings[j].RouteID
-	})
+	// Each public Router process serves exactly one configured branch. Branch
+	// selection and its listener are deployment-local bindings, while
+	// every shared Router policy (credentials, limits, staging, and APIs) must
+	// remain identical for processes sharing the same Core Coordinator.
+	config.RouterAPI.BranchID = ""
+	config.RouterAPI.PublicListenAddress = ""
 	databaseIdentity := func(value string) (string, error) {
 		parsed, err := url.Parse(value)
 		if err != nil || parsed.Host == "" || parsed.Path == "" {
@@ -593,4 +662,70 @@ func validListenAddress(value string) bool {
 	}
 	port, err := strconv.Atoi(portText)
 	return err == nil && port > 0 && port <= 65535
+}
+
+func validBranchID(value string) bool {
+	if value == "" || len(value) > 128 || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, char := range value {
+		if char < 0x21 || char == 0x7f || char == '/' || char == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+func validUploadContentTypes(values []string) bool {
+	if len(values) == 0 || len(values) > 32 {
+		return false
+	}
+	active := map[string]struct{}{
+		"application/ecmascript": {}, "application/javascript": {}, "application/x-httpd-php": {}, "application/xhtml+xml": {},
+		"application/xml": {}, "image/svg+xml": {}, "text/css": {}, "text/html": {}, "text/javascript": {}, "text/xml": {},
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		mediaType, parameters, err := mime.ParseMediaType(value)
+		if err != nil || value == "" || value != strings.TrimSpace(value) || len(parameters) != 0 || strings.Contains(mediaType, "*") {
+			return false
+		}
+		if _, blocked := active[mediaType]; blocked {
+			return false
+		}
+		if _, duplicate := seen[mediaType]; duplicate {
+			return false
+		}
+		seen[mediaType] = struct{}{}
+	}
+	return true
+}
+
+func validAdminOrigins(values []string) bool {
+	if len(values) == 0 || len(values) > 32 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		parsed, err := url.Parse(value)
+		if err != nil || value == "" || len(value) > 512 || value != strings.TrimSpace(value) ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+			parsed.Host != strings.ToLower(parsed.Host) || strings.ContainsAny(parsed.Host, "*%,") || strings.HasSuffix(parsed.Host, ":") ||
+			parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
+			parsed.RawFragment != "" || parsed.Opaque != "" || value != parsed.Scheme+"://"+parsed.Host {
+			return false
+		}
+		if port := parsed.Port(); port != "" {
+			portNumber, err := strconv.Atoi(port)
+			if err != nil || portNumber < 1 || portNumber > 65535 ||
+				(parsed.Scheme == "http" && portNumber == 80) || (parsed.Scheme == "https" && portNumber == 443) {
+				return false
+			}
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
 }

@@ -21,7 +21,7 @@ export default function FeatureRegistryPage() {
   const [pendingVersions, setPendingVersions] = useState<Record<string, string>>({});
 
   const refresh = async () => {
-    const result = await api.siteBuilder.featureBuilds();
+    const result = await api.website.featureBuilds();
     setItems(result.items);
   };
   const retry = async () => {
@@ -37,7 +37,7 @@ export default function FeatureRegistryPage() {
   };
   useEffect(() => {
     let active = true;
-    api.siteBuilder.featureBuilds()
+    api.website.featureBuilds()
       .then((result) => { if (active) setItems(result.items); })
       .catch((reason: unknown) => { if (active) setError(reason); })
       .finally(() => { if (active) setLoading(false); });

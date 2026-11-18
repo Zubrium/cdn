@@ -1,14 +1,22 @@
-//go:build !full
+//go:build !full && !devfixtures && !router
 
 package main
 
 import (
 	"errors"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	"testing"
 )
 
 func TestCoreProfileDoesNotEnableEngines(t *testing.T) {
+	plan := compiledBuildPlan()
+	selected := make(map[string]bool, len(plan.Components))
+	for _, component := range plan.Components {
+		selected[component] = true
+	}
+	if !selected["admin.identity"] || !selected["admin.files"] {
+		t.Fatalf("Admin identity API must share the File API listener in the minimal profile: %v", plan.Components)
+	}
 	r := platform.NewRegistry()
 	if err := registerProfile(r); err != nil {
 		t.Fatal(err)

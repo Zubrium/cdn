@@ -16,7 +16,6 @@ import {
 import { useAuth } from "@/app/auth";
 import { ApiError } from "@/api";
 import { errorMessage } from "@/lib/errors";
-import { roleLabels } from "@/lib/format";
 import { useDocumentTitle } from "@/components/common/page";
 import { BrandSymbol } from "@/components/common/brand-symbol";
 import { ThemeToggle } from "@/components/common/theme-toggle";
@@ -25,7 +24,7 @@ import { Input, Label } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
 const loginSchema = z.object({
-  token: z.string().trim().min(1, "Введите Bearer-токен"),
+  credential: z.string().trim().min(1, "Введите учётный ключ"),
 });
 
 type LoginValues = z.infer<typeof loginSchema>;
@@ -59,7 +58,7 @@ export function LoginPage() {
     formState: { errors, isSubmitting },
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { token: "" },
+    defaultValues: { credential: "" },
   });
 
   if (auth.status === "checking") {
@@ -87,7 +86,7 @@ export function LoginPage() {
             </div>
             <h1 className="text-lg font-semibold">Сессия недоступна</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Не удалось проверить сохранённый токен. Это может быть временная
+              Не удалось проверить сессию. Это может быть временная
               проблема сети или недоступность API.
             </p>
             {auth.error && (
@@ -101,7 +100,7 @@ export function LoginPage() {
                 Повторить
               </Button>
               <Button variant="outline" onClick={() => auth.logout()}>
-                Войти другим токеном
+                Войти снова
               </Button>
             </div>
           </div>
@@ -117,7 +116,7 @@ export function LoginPage() {
   const onSubmit = async (values: LoginValues) => {
     setSubmitError(null);
     try {
-      await auth.login(values.token);
+      await auth.login(values.credential);
       navigate(from, { replace: true });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -164,7 +163,7 @@ export function LoginPage() {
                 Войти в Zubrium
               </h1>
               <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
-                Вставьте Bearer-токен, выданный администратором.
+              Введите выданный вам ключ учётной записи.
               </p>
             </div>
 
@@ -189,20 +188,20 @@ export function LoginPage() {
               noValidate
             >
               <div className="space-y-2">
-                <Label htmlFor="token">Bearer-токен</Label>
+                <Label htmlFor="credential">Учётный ключ</Label>
                 <div className="relative">
                   <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
-                    id="token"
+                    id="credential"
                     type={showToken ? "text" : "password"}
                     autoComplete="off"
                     autoCapitalize="off"
                     spellCheck={false}
                     className="pl-9 pr-10 font-mono text-xs"
-                    placeholder="ct_live_…"
-                    aria-invalid={Boolean(errors.token)}
-                    aria-describedby={errors.token ? "token-error" : undefined}
-                    {...register("token", {
+                placeholder="Введите ключ учётной записи"
+                    aria-invalid={Boolean(errors.credential)}
+                    aria-describedby={errors.credential ? "credential-error" : undefined}
+                    {...register("credential", {
                       onChange: () => {
                         if (auth.notice) auth.clearNotice();
                       },
@@ -214,19 +213,18 @@ export function LoginPage() {
                     size="icon"
                     className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                     onClick={() => setShowToken((value) => !value)}
-                    aria-label={showToken ? "Скрыть токен" : "Показать токен"}
+                    aria-label={showToken ? "Скрыть ключ" : "Показать ключ"}
                   >
                     {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
-                {errors.token && (
-                  <p id="token-error" className="text-xs text-destructive">
-                    {errors.token.message}
+                {errors.credential && (
+                  <p id="credential-error" className="text-xs text-destructive">
+                    {errors.credential.message}
                   </p>
                 )}
                 <p className="text-2xs leading-5 text-muted-foreground">
-                  Токен хранится только в этом браузере. Роль токена определяет
-                  доступ к разделам.
+                  Ключ используется только для входа. После проверки сервер создаёт защищённую сессию; ключ в браузере не сохраняется.
                 </p>
               </div>
 
@@ -236,10 +234,6 @@ export function LoginPage() {
               </Button>
             </form>
 
-            <div className="mt-6 rounded-md border border-border bg-muted/30 p-3 text-2xs leading-5 text-muted-foreground">
-              Пользовательские токены могут пройти проверку, но не получают доступ к
-              администрированию. Это ограничение серверной части.
-            </div>
           </div>
         </div>
       </main>
@@ -263,17 +257,14 @@ export function NoAccessScreen() {
           </div>
           <h1 className="text-lg font-semibold">Нет доступа к администрированию</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Токен <strong className="text-foreground">{principal?.name}</strong>{" "}
-            действителен, но имеет роль «
-            {principal ? roleLabels[principal.role] : "Пользователь"}». Этой роли
-            недостаточно для панели управления.
+            Учётная запись <strong className="text-foreground">{principal?.name}</strong>{" "}
+            активна, но ей не выданы права ни на одну группу системы.
           </p>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            Попросите администратора выпустить токен с ролью «Модератор» или
-            «Администратор».
+            Попросите пользователя с правом управления администраторами назначить необходимые уровни доступа к группам.
           </p>
           <Button className="mt-5" onClick={() => logout()}>
-            Войти с другим токеном
+            Войти с другим ключом
           </Button>
         </div>
       </div>

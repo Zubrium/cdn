@@ -10,8 +10,8 @@ use (
 	./workers/archive
 	./workers/media
 	./workers/prerender
-	./coordinator
 	./presentation/router
+	./presentation/admin/httpauth
 	./presentation/admin/sites
 	./presentation/admin/files
 	./presentation/admin/main
@@ -24,7 +24,6 @@ use (
 )
 
 replace (
-	github.com/Zubrium/cdn/coordinator v0.0.0 => ./coordinator
 	github.com/Zubrium/cdn/core v0.0.0 => ./core
 	github.com/Zubrium/cdn/cmd/zubrium v0.0.0 => ./cmd/zubrium
 	github.com/Zubrium/cdn/engines/content v0.0.0 => ./engines/content
@@ -33,6 +32,7 @@ replace (
 	github.com/Zubrium/cdn/engines/website v0.0.0 => ./engines/website
 	github.com/Zubrium/cdn/engines/router v0.0.0 => ./engines/router
 	github.com/Zubrium/cdn/presentation/admin/content v0.0.0 => ./presentation/admin/content
+	github.com/Zubrium/cdn/presentation/admin/httpauth v0.0.0 => ./presentation/admin/httpauth
 	github.com/Zubrium/cdn/presentation/admin/coordinator v0.0.0 => ./presentation/admin/coordinator
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ./presentation/admin/forms
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ./presentation/admin/router

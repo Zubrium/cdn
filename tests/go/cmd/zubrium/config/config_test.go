@@ -1,12 +1,11 @@
 package appconfig
 
 import (
-	"errors"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/Zubrium/cdn/coordinator"
-	"github.com/Zubrium/cdn/core/access"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
 )
 
@@ -20,6 +19,8 @@ const validCoreYAML = `core:
   s3_access_key_env: S3_KEY
   s3_secret_key_env: S3_SECRET
   s3_allow_insecure_http: true
+  session_idle_ttl: 8h
+  session_absolute_ttl: 168h
   module_data:
     max_payload_bytes: 1048576
     max_index_bytes: 65536
@@ -74,24 +75,39 @@ func TestCoordinatorFingerprintIncludesConnectionPolicyAndOmitsCredentials(t *te
 	}
 }
 
-func TestCoordinatorFingerprintNormalizesConfiguredUUIDBindings(t *testing.T) {
-	cfg := validRuntimeConfig()
-	autoPublish := true
-	first := PublicationBinding{SiteID: "a0b1c2d3-e4f5-4678-9abc-def012345678", ContentID: "b0b1c2d3-e4f5-4678-9abc-def012345678",
-		RouteID: "c0b1c2d3-e4f5-4678-9abc-def012345678", AutoPublish: &autoPublish}
-	second := PublicationBinding{SiteID: "d0b1c2d3-e4f5-4678-9abc-def012345678", ContentID: "e0b1c2d3-e4f5-4678-9abc-def012345678",
-		RouteID: "f0b1c2d3-e4f5-4678-9abc-def012345678", AutoPublish: &autoPublish}
-	cfg.Coordinator.Bindings = []PublicationBinding{first, second}
-	want, err := configFingerprint(cfg, "postgres://runtime@127.0.0.1:5432/core", "postgres://migrator@127.0.0.1:5432/core")
+func TestCoordinatorFingerprintAllowsPerBranchRouterProcesses(t *testing.T) {
+	firstConfig := validRuntimeConfig()
+	firstConfig.RouterAPI.BranchID = "preview"
+	firstConfig.RouterAPI.PublicListenAddress = "127.0.0.1:8081"
+	first, err := configFingerprint(firstConfig,
+		"postgres://runtime:secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"postgres://migrator:secret@127.0.0.1:5432/zubrium_core_qa_unit")
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.SiteID, first.ContentID, first.RouteID = strings.ToUpper(first.SiteID), strings.ToUpper(first.ContentID), strings.ToUpper(first.RouteID)
-	second.SiteID, second.ContentID, second.RouteID = strings.ToUpper(second.SiteID), strings.ToUpper(second.ContentID), strings.ToUpper(second.RouteID)
-	cfg.Coordinator.Bindings = []PublicationBinding{second, first}
-	got, err := configFingerprint(cfg, "postgres://runtime@127.0.0.1:5432/core", "postgres://migrator@127.0.0.1:5432/core")
-	if err != nil || got != want {
-		t.Fatalf("equivalent route bindings changed the instance fingerprint: equal=%v err=%v", got == want, err)
+
+	secondConfig := firstConfig
+	secondConfig.RouterAPI.BranchID = "production"
+	secondConfig.RouterAPI.PublicListenAddress = "127.0.0.1:8082"
+	second, err := configFingerprint(secondConfig,
+		"postgres://runtime:rotated@127.0.0.1:5432/zubrium_core_qa_unit",
+		"postgres://migrator:rotated@127.0.0.1:5432/zubrium_core_qa_unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatal("Router processes serving different statically configured branches must share the system fingerprint")
+	}
+
+	secondConfig.RouterAPI.UploadMaxFileBytes++
+	changedGlobalConfig, err := configFingerprint(secondConfig,
+		"postgres://runtime:secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"postgres://migrator:secret@127.0.0.1:5432/zubrium_core_qa_unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedGlobalConfig == first {
+		t.Fatal("shared Router security limits must remain part of the system fingerprint")
 	}
 }
 
@@ -105,6 +121,9 @@ func TestResolveUsesExplicitEnvironmentAndPoolSettings(t *testing.T) {
 	resolved, err := config.Resolve(func(key string) string { return values[key] })
 	if err != nil || resolved.Core.Database.URL != values["DB"] || resolved.Core.S3.SecretKey != values["SECRET"] {
 		t.Fatalf("resolve: %v", err)
+	}
+	if resolved.AdminAPI.DefaultPageSize != 50 || resolved.AdminAPI.MaxPageSize != 200 {
+		t.Fatalf("Admin API pagination settings = (%d, %d), want (50, 200)", resolved.AdminAPI.DefaultPageSize, resolved.AdminAPI.MaxPageSize)
 	}
 	delete(values, "SECRET")
 	if _, err := config.Resolve(func(key string) string { return values[key] }); err == nil {
@@ -123,17 +142,121 @@ func TestResolveUsesExplicitEnvironmentAndPoolSettings(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsInvalidAdminPageLimits(t *testing.T) {
+	getenv := func(key string) string {
+		return map[string]string{
+			"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+			"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+			"ACCESS":       "access", "SECRET": "secret",
+		}[key]
+	}
+	for _, limits := range [][2]int{{0, 200}, {50, 49}, {50, 501}, {501, 501}} {
+		config := validRuntimeConfig()
+		config.AdminAPI.DefaultPageSize, config.AdminAPI.MaxPageSize = limits[0], limits[1]
+		if _, err := config.Resolve(getenv); err == nil {
+			t.Fatalf("invalid Admin API page limits (%d, %d) were accepted", limits[0], limits[1])
+		}
+	}
+}
+
+func TestResolveRejectsInvalidRouterRequestAndPageLimits(t *testing.T) {
+	getenv := func(key string) string {
+		return map[string]string{
+			"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+			"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+			"ACCESS":       "access", "SECRET": "secret",
+		}[key]
+	}
+	for _, limits := range [][2]int{{0, 100}, {25, 24}, {25, 101}, {101, 101}} {
+		config := validRuntimeConfig()
+		config.RouterAPI.DefaultPageSize, config.RouterAPI.MaxPageSize = limits[0], limits[1]
+		if _, err := config.Resolve(getenv); err == nil {
+			t.Fatalf("invalid Router pagination limits accepted: %v", limits)
+		}
+	}
+	config := validRuntimeConfig()
+	config.RouterAPI.MaxJSONBytes = 0
+	if _, err := config.Resolve(getenv); err == nil {
+		t.Fatal("missing Router request-size limit accepted")
+	}
+}
+
+func TestResolveRequiresExplicitOrderedSessionLifetimes(t *testing.T) {
+	values := map[string]string{
+		"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"ACCESS":       "access", "SECRET": "secret",
+	}
+	getenv := func(key string) string { return values[key] }
+	for _, tc := range []struct {
+		name     string
+		idle     string
+		absolute string
+	}{
+		{name: "missing idle lifetime", idle: "", absolute: "168h"},
+		{name: "idle exceeds absolute", idle: "8h", absolute: "7h"},
+		{name: "absolute exceeds supported maximum", idle: "8h", absolute: "8761h"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := validRuntimeConfig()
+			config.Core.SessionIdleTTL = tc.idle
+			config.Core.SessionAbsoluteTTL = tc.absolute
+			if _, err := config.Resolve(getenv); err == nil {
+				t.Fatal("invalid session lifetime configuration was accepted")
+			}
+		})
+	}
+	config := validRuntimeConfig()
+	resolved, err := config.Resolve(getenv)
+	if err != nil || resolved.Core.SessionIdleTTL != 8*time.Hour || resolved.Core.SessionAbsoluteTTL != 7*24*time.Hour {
+		t.Fatalf("resolve session lifetimes: idle=%s absolute=%s err=%v", resolved.Core.SessionIdleTTL, resolved.Core.SessionAbsoluteTTL, err)
+	}
+}
+
+func TestResolveRequiresExactUniqueAdminOrigins(t *testing.T) {
+	getenv := func(key string) string {
+		return map[string]string{
+			"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+			"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+			"ACCESS":       "access", "SECRET": "secret",
+		}[key]
+	}
+	for _, origins := range [][]string{
+		nil,
+		{"https://admin.example.com/path"},
+		{"https://user@admin.example.com"},
+		{"https://admin.example.com?mode=1"},
+		{"https://admin.example.com:70000"},
+		{"https://admin.example.com:443"},
+		{"https://ADMIN.example.com"},
+		{"https://admin.example.com:"},
+		{"https://*.example.com"},
+		{"https://admin.example.com", "https://admin.example.com"},
+	} {
+		config := validRuntimeConfig()
+		config.AdminAPI.AllowedOrigins = origins
+		if _, err := config.Resolve(getenv); err == nil {
+			t.Fatalf("invalid Admin API origins were accepted: %#v", origins)
+		}
+	}
+	config := validRuntimeConfig()
+	config.AdminAPI.AllowedOrigins = []string{"https://admin.example.com", "http://127.0.0.1:8080"}
+	if _, err := config.Resolve(getenv); err != nil {
+		t.Fatalf("valid exact origins were rejected: %v", err)
+	}
+}
+
 func TestBootstrapGroupLevelDefaultsToWriteUnlessExplicitlySet(t *testing.T) {
 	withGroups := strings.Replace(validCoreYAML, "  access_groups: {}\n", "  access_groups:\n    defaulted: null\n    denied: 0\n", 1)
 	loaded, err := Load(strings.NewReader(withGroups))
-	if err != nil || loaded.Core.AccessGroups["defaulted"] != nil || loaded.Core.AccessGroups["denied"] == nil || *loaded.Core.AccessGroups["denied"] != access.LevelNone {
+	if err != nil || loaded.Core.AccessGroups["defaulted"] != nil || loaded.Core.AccessGroups["denied"] == nil || *loaded.Core.AccessGroups["denied"] != platform.AccessLevelNone {
 		t.Fatalf("YAML did not preserve omitted versus explicit bootstrap levels: groups=%+v err=%v", loaded.Core.AccessGroups, err)
 	}
-	read := access.LevelRead
-	denied := access.LevelNone
-	jobAccess := access.LevelWrite
+	read := platform.AccessLevelRead
+	denied := platform.AccessLevelNone
+	jobAccess := platform.AccessLevelWrite
 	cfg := validRuntimeConfig()
-	cfg.Core.AccessGroups = map[string]*access.Level{"defaulted": nil, "readers": &read, "denied": &denied, "coordinator_jobs": &jobAccess}
+	cfg.Core.AccessGroups = map[string]*platform.AccessLevel{"defaulted": nil, "readers": &read, "denied": &denied, "coordinator_jobs": &jobAccess}
 	values := map[string]string{
 		"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
 		"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
@@ -143,7 +266,7 @@ func TestBootstrapGroupLevelDefaultsToWriteUnlessExplicitlySet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]access.Level{"defaulted": access.LevelWrite, "readers": access.LevelRead, "denied": access.LevelNone} {
+	for key, want := range map[string]platform.AccessLevel{"defaulted": platform.AccessLevelWrite, "readers": platform.AccessLevelRead, "denied": platform.AccessLevelNone} {
 		if got := resolved.Core.AccessGroups[key]; got != want {
 			t.Errorf("bootstrap initial access for %q = %d, want %d", key, got, want)
 		}
@@ -239,42 +362,28 @@ func TestResolveRejectsSharedRuntimeAndMigrationDatabaseUser(t *testing.T) {
 }
 
 func validRuntimeConfig() Config {
-	groupWrite := access.LevelWrite
+	groupWrite := platform.AccessLevelWrite
+	secureCookie := false
 	return Config{
 		Core: Core{DatabaseURLEnv: "DB", MigrationDatabaseURLEnv: "MIGRATION_DB", S3AccessKeyEnv: "ACCESS", S3SecretKeyEnv: "SECRET",
 			S3Endpoint: "http://localhost:9000", S3Region: "local", S3Bucket: "test", S3AllowInsecureHTTP: true,
-			AtlasBinary: "atlas", MigrationLockTimeout: "30s", AccessGroups: map[string]*access.Level{"content": &groupWrite, "coordinator_jobs": &groupWrite},
+			AtlasBinary: "atlas", MigrationLockTimeout: "30s", AccessGroups: map[string]*platform.AccessLevel{"content": &groupWrite, "coordinator_jobs": &groupWrite},
 			ModuleData:    ModuleData{MaxPayloadBytes: 1 << 20, MaxIndexBytes: 1 << 16, MaxBatchBytes: 8 << 20, MaxPageBytes: 16 << 20, MaxSelectors: 16, MaxSelectorValues: 64, MaxPageSize: 100, MaxBatchOperations: 64},
 			CacheMaxBytes: 1 << 20, CacheTTL: "5m", MaxMetadataBytes: 1 << 16, MaxObjectBytes: 1 << 20, MaxCachedObjectBytes: 512,
 			MaintenanceInterval: "1m", MaintenanceTimeout: "30s", PendingTTL: "1h", MaintenanceBatchSize: 100,
+			SessionIdleTTL: "8h", SessionAbsoluteTTL: "168h",
 			MinConnections: 0, MaxConnections: 7, ConnectTimeout: "2s", MaxLifetime: "1h", MaxIdleTime: "5m", HealthInterval: "30s"},
 		Loader: Loader{PartSize: 64 << 10, MaxFileBytes: 1 << 20, MaxPartBytes: 64 << 10, MaxParts: 16, MaxConcurrentCommits: 1, SessionTTL: "1h", CommitTimeout: "1m", Mode: "auto",
 			BufferThreshold: 64 << 10, MaxBufferedBytes: 128 << 10, SessionCacheEntries: 100, SessionCacheMaxBytes: 1 << 20,
 			SessionCacheTTL: "1m", CleanupInterval: "1m", CleanupBatchSize: 100},
-		FileAPI: FileAPI{MaxJSONBytes: 1 << 20, MaxAttributeBytes: 1 << 15, MaxGroupsPerFile: 8, DefaultPageSize: 25, MaxPageSize: 100},
-		HTTP:    HTTP{ListenAddress: "127.0.0.1:8080", ReadHeaderTimeout: "5s", ReadTimeout: "5m", WriteTimeout: "0s", IdleTimeout: "1m", ShutdownTimeout: "15s", MaxHeaderBytes: 1 << 16},
-		Coordinator: CoordinatorConfig{SystemID: "test-system", JobAccessGroup: "coordinator_jobs", JobsPageDefault: 25, JobsPageMaximum: 100,
+		FileAPI:   FileAPI{MaxJSONBytes: 1 << 20, MaxAttributeBytes: 1 << 15, MaxGroupsPerFile: 8, DefaultPageSize: 25, MaxPageSize: 100},
+		AdminAPI:  AdminAPI{MaxJSONBytes: 1 << 20, DefaultPageSize: 50, MaxPageSize: 200, SessionCookieSecure: &secureCookie, AllowedOrigins: []string{"http://127.0.0.1:8080"}},
+		RouterAPI: RouterAPI{MaxJSONBytes: 1 << 20, DefaultPageSize: 25, MaxPageSize: 100},
+		HTTP:      HTTP{ListenAddress: "127.0.0.1:8080", ReadHeaderTimeout: "5s", ReadTimeout: "5m", WriteTimeout: "0s", IdleTimeout: "1m", ShutdownTimeout: "15s", MaxHeaderBytes: 1 << 16},
+		Coordinator: CoordinatorConfig{JobAccessGroup: "coordinator_jobs", JobsPageDefault: 25, JobsPageMaximum: 100,
 			InstanceLease: "30s", HeartbeatInterval: "5s", WorkerConcurrency: 2,
-			JobLease: "20s", TaskTimeout: "15m", PollInterval: "1s", RetryBase: "2s", RetryMaximum: "1m", MaxAttempts: 3, Bindings: []PublicationBinding{}},
-	}
-}
-
-func TestCoordinatorAdminAPIRequiresConfiguredJobAccessGroup(t *testing.T) {
-	plan := coordinator.BuildPlan{Components: []string{"core", "coordinator", "engine.loader", "admin.files", "admin.coordinator"}}
-	resolved := Resolved{CoordinatorFingerprint: strings.Repeat("a", 64), Coordinator: CoordinatorSettings{
-		Bindings: []coordinator.PublicationBinding{}, JobsPageDefault: 25, JobsPageMaximum: 100,
-	}}
-	if err := resolved.ValidateBuildPlan(plan); !errors.Is(err, ErrCoordinatorProfileMismatch) {
-		t.Fatalf("Coordinator API without an explicit group was accepted: %v", err)
-	}
-	resolved.Coordinator.JobAccessGroup = "coordinator_jobs"
-	resolved.Core.AccessGroups = map[string]access.Level{"coordinator_jobs": access.LevelNone}
-	if err := resolved.ValidateBuildPlan(plan); err != nil {
-		t.Fatalf("explicitly configured zero-access group should be valid for runtime authorization: %v", err)
-	}
-	delete(resolved.Core.AccessGroups, "coordinator_jobs")
-	if err := resolved.ValidateBuildPlan(plan); !errors.Is(err, ErrCoordinatorProfileMismatch) {
-		t.Fatalf("Coordinator API group missing from Core config was accepted: %v", err)
+			JobLease: "20s", TaskTimeout: "15m", PollInterval: "1s", RetryBase: "2s", RetryMaximum: "1m",
+			MaxAttempts: 3, MaxWorkflowTasks: 1000, MaxChildrenPerTask: 16, WorkflowRetention: "48h"},
 	}
 }
 

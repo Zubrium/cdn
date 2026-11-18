@@ -11,13 +11,16 @@ export type JsonValue =
 
 export type JsonObject = { [key: string]: JsonValue };
 
-export type Role = "admin" | "moderator" | "staff" | "user";
-export type FeatureType = "feature" | "form";
-export type FeatureStatus = "active" | "archived";
-export type VersionStatus = "draft" | "published";
+export interface DesignFont {
+  family: string;
+  mediaId: string;
+  weight: string;
+  style: "normal" | "italic";
+  unicodeRange?: string;
+}
+
+export type GroupLevel = 0 | 1 | 2;
 export type MediaStatus = "processing" | "ready" | "failed" | "deleted";
-export type SubmissionStatus = "new" | "in_progress" | "processed" | "rejected";
-export type Environment = "dev" | "prod";
 
 export interface ApiErrorDetail {
   path?: string;
@@ -38,6 +41,220 @@ export interface ListResponse<T> {
 }
 
 export type CoordinatorJobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type FeatureImportState = CoordinatorJobState;
+
+export interface WebsiteFeatureImport {
+  id: string;
+  source_file_id: string;
+  feature_id?: string;
+  version?: string;
+  file_set_id?: string;
+  state: FeatureImportState;
+  error_code?: string;
+  source_deleted: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebsiteFeatureVersion {
+  feature_id: string;
+  version: string;
+  /** JSON manifest encoded as base64 by Go's []byte JSON representation. */
+  manifest: string;
+  file_set_id: string;
+  files: Record<string, string>;
+  digest: string;
+  artifact_size: number;
+  created_at: string;
+  state: string;
+}
+
+export interface WebsiteFeatureVersionPage {
+  items: WebsiteFeatureVersion[];
+  next_cursor?: string | null;
+}
+
+export interface WebsiteSnapshot {
+  id: string;
+  site_id: string;
+  parent_id?: string;
+  parent_name?: string;
+  parent_sequence?: number;
+  name: string;
+  sequence: number;
+  content_revision?: number;
+  digest?: string;
+  created_at?: string;
+  created_by_name?: string;
+  warnings?: string[];
+  creation_summary?: SnapshotCreationSummary;
+  revision: number;
+  feature_pins: Record<string, string>;
+  state: string;
+  payload?: WebsiteSnapshotPayload;
+}
+
+export interface WebsiteSnapshotPayload {
+  config: SiteConfig;
+  metadata: SiteMetadata;
+  design_system: JsonObject;
+}
+
+export interface WebsiteSnapshotPage {
+  items: WebsiteSnapshot[];
+  next_cursor: string | null;
+}
+
+export interface WebsiteBranch {
+  id: string;
+  name: string;
+  site_id: string;
+  listen_address: string;
+  cors_origins: string[];
+  indexable: boolean;
+  snapshot_id: string | null;
+  revision: number;
+  enabled: boolean;
+  updated_at: string;
+}
+
+export interface WebsiteBranchEvent {
+  id: string;
+  branch_id: string;
+  snapshot_id: string;
+  snapshot_name: string;
+  snapshot_sequence: number;
+  action: "assigned";
+  created_at: string;
+}
+
+export interface WebsiteBranchEventPage {
+  items: WebsiteBranchEvent[];
+  next_cursor: string | null;
+}
+
+export interface WebsiteBuild {
+  id: string;
+  snapshot_id: string;
+  state: string;
+  artifact_manifest_file_id?: string;
+  error_code?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebsiteMediaJob {
+  id: string;
+  source_file_id: string;
+  derivative_file_id?: string;
+  profile: string;
+  state: string;
+  error_code?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContentModelField {
+  id: string;
+  key: string;
+  name: string;
+  type: string;
+  required: boolean;
+}
+
+export interface ContentModel {
+  id: string;
+  key: string;
+  name: string;
+  cardinality: "many" | "singleton";
+  fields: ContentModelField[];
+  revision: number;
+}
+
+export interface ContentRecord {
+  id: string;
+  model_id: string;
+  values: Record<string, unknown>;
+  revision: number;
+  published_revision: number;
+  updated_at: string;
+}
+
+export interface ContentBindings {
+  snapshot_id: string;
+  feature_id: string;
+  values: Record<string, unknown>;
+  revision: number;
+}
+
+export interface FormSchema {
+  id: string;
+  key: string;
+  version: number;
+  fields: Record<string, unknown>;
+  revision: number;
+}
+
+export interface FormSubmission {
+  id: string;
+  form_id: string;
+  state: string;
+  values: Record<string, unknown>;
+  created_at: string;
+  revision: number;
+}
+
+export interface RouterCoreFileRouteTarget {
+  kind: "core-file";
+  file_id: string;
+}
+
+export interface RouterStaticSiteArtifactRouteTarget {
+  kind: "static-site-artifact";
+  file_id: string;
+  fallback_enabled?: boolean;
+}
+
+export type RouterRouteTargetFile = RouterCoreFileRouteTarget | RouterStaticSiteArtifactRouteTarget;
+
+export interface RouterRouteTargetOperation {
+  kind: "registered-operation";
+  operation_id: string;
+  operation_config: Record<string, unknown>;
+}
+
+export type RouterRouteTarget = RouterRouteTargetFile | RouterRouteTargetOperation;
+export type RouterRouteMatch = "exact" | "prefix";
+
+export interface RouterRoute {
+  id: string;
+  branch_id: string;
+  host: string;
+  path: string;
+  match: RouterRouteMatch;
+  target: RouterRouteTarget;
+  state: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RouterRoutePage {
+  items: RouterRoute[];
+  next_cursor?: string;
+}
+
+export interface RouterPublicOperation {
+  id: string;
+  contract_version: number;
+  methods: string[];
+  max_request_bytes: number;
+  allowed_content_types: string[];
+}
+
+export interface RouterPublicOperationPage {
+  items: RouterPublicOperation[];
+}
 
 export interface CoordinatorJob {
   id: string;
@@ -64,56 +281,36 @@ export interface CoordinatorJobPermissions {
 export interface Principal {
   id: string;
   name: string;
-  role: Role;
-  created_by?: string;
-  expires_at: string | null;
-  created_at: string;
+  active: boolean;
+  can_manage_administrators: boolean;
+  group_access: Record<string, GroupLevel>;
 }
 
-export interface Token {
+export interface Credential {
   id: string;
-  name: string;
-  role: Role;
-  created_by: string | null;
+  principal_id: string;
+  created_at: string;
   expires_at: string | null;
   revoked_at: string | null;
-  last_used_at: string | null;
-  created_at: string;
 }
 
-export interface CreatedToken {
+export interface CreatedPrincipal {
   id: string;
   name: string;
-  token: string;
-  role: Role;
-  expires_at: string | null;
-  created_at: string;
+  credential: string;
 }
 
-export interface Feature {
+export interface IssuedCredential {
   id: string;
+  principal_id: string;
+  credential: string;
+  expires_at?: string | null;
+}
+
+export interface AccessGroup {
   key: string;
-  name: string;
-  type: FeatureType;
-  status: FeatureStatus;
-  revision: number;
-  draft_version_id: string | null;
-  dev_version_id: string | null;
-  prod_version_id: string | null;
-  created_by?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FeatureVersion {
-  id: string;
-  feature_id: string;
-  version: number;
-  schema: JsonObject;
-  status: VersionStatus;
-  created_by?: string;
-  created_at: string;
-  published_at: string | null;
+  active: boolean;
+  level: GroupLevel;
 }
 
 export interface MediaRenditionContext {
@@ -123,41 +320,6 @@ export interface MediaRenditionContext {
   schemaKind: "arguments" | "dataInputs";
   fieldPath: string;
   buildDigest: string;
-}
-
-export interface DesignFont {
-  family: string;
-  mediaId: string;
-  weight: string;
-  style: "normal" | "italic";
-  unicodeRange?: string;
-}
-
-export interface DesignSystem {
-  formatVersion: 1;
-  tokens: Record<string, string>;
-  mobileTokens: Record<string, string>;
-  fonts: DesignFont[];
-  fontRoles: Record<"body" | "display" | "header" | "hero", string>;
-  brandLogoMediaId?: string;
-}
-
-export interface DesignSystemState {
-  revision: number;
-  draft: DesignSystem;
-  updatedAt: string;
-}
-
-export interface DesignTokenDefinition {
-  key: string;
-  label: string;
-  group: string;
-  kind: "color" | "value";
-  default: string;
-  min?: number;
-  max?: number;
-  unit?: string;
-  scope?: "mobile";
 }
 
 export interface MediaRenditionOutput {
@@ -176,74 +338,24 @@ export interface MediaRenditionState {
   error?: string;
 }
 
-export interface EntryDetail {
+export interface FileLimits { maxBytes: number; partBytes: number; maxUploadParts: number }
+export interface FileUploadPart { number: number; size: number; sha256: string }
+export interface FileUploadSession { id: string; fileId?: string; partSize: number; state: "uploading" | "committing" | "committed" | "aborted"; expiresAt: string; parts: FileUploadPart[] }
+export interface FileSet {
   id: string;
-  feature_id: string;
-  single_slot: boolean;
-  sort_order: number;
+  namespace: string;
+  name: string;
+  managementGroup: string;
   revision: number;
-  draft_version_id: string | null;
-  dev_version_id: string | null;
-  prod_version_id: string | null;
-  created_by?: string;
-  created_at: string;
-  updated_at: string;
-  archived_at: string | null;
-  feature_key: string;
-  feature_type: FeatureType;
-  draft: EntryVersion | null;
-  dev: EntryVersion | null;
-  prod: EntryVersion | null;
+  createdAt: string;
+  updatedAt: string;
 }
-
-export interface EntryVersion {
-  id: string;
-  entry_id: string;
-  version: number;
-  schema_version_id: string;
-  data: JsonObject;
-  status: VersionStatus;
-  created_by?: string;
-  created_at: string;
-  published_at: string | null;
-}
-
-export interface Submission {
-  branchId: string;
-  id: string;
-  feature_id: string;
-  feature_key: string;
-  schema_version_id: string;
-  environment: string;
-  data: JsonObject;
-  status: SubmissionStatus;
-  processed_by: string | null;
-  created_at: string;
-  updated_at: string;
-  archived_at?: string | null;
-  deleted_at?: string | null;
-}
-
-export interface SubmissionField {
-  key: string;
-  label: string;
-}
-
-export type SubmissionListResponse = ListResponse<Submission> & {
-  fields: SubmissionField[];
-};
-
-export interface FileLimits { maxBytes: number; partBytes: number; linkMaxTTLSeconds: number }
-export interface FileReference { kind: string; id: string; description: string }
-export type FileVisibility = "public" | "private";
-export interface FileUploadPart { number: number; size: number; sha256: string; ready: boolean }
-export interface FileUploadSession { id: string; fileId: string; name: string; size: number; sha256: string; visibility: FileVisibility; partSize: number; state: "uploading" | "complete" | "cancelled"; expiresAt: string; parts: FileUploadPart[] }
 export interface Media {
-  ownerId?: string;
-  visibility?: FileVisibility;
+  revision: number;
   sha256?: string;
+  groups?: string[];
   id: string;
-  object_key: string;
+  object_key?: string;
   original_filename: string;
   content_type: string;
   size_bytes: number;
@@ -252,34 +364,6 @@ export interface Media {
   uploaded_by?: string;
   created_at: string;
   updated_at: string;
-}
-
-export interface SubmissionFilters {
-  branchId?: string;
-  environment?: Environment | "";
-  status?: SubmissionStatus | "";
-  created_from?: string;
-  created_to?: string;
-  q?: string;
-  field?: string;
-  include_archived?: boolean;
-  sort?: "asc" | "desc";
-}
-
-export interface FeatureListParams {
-  status?: FeatureStatus | "";
-  type?: FeatureType | "";
-  q?: string;
-  limit?: number;
-  cursor?: string | null;
-}
-
-export interface EntryListParams {
-  include_archived?: boolean;
-  q?: string;
-  limit?: number;
-  cursor?: string | null;
-  sort?: "manual";
 }
 
 export interface MediaListParams {
@@ -297,121 +381,13 @@ export interface MediaListParams {
 
 export type MediaSort = "new" | "old" | "name" | "size_desc" | "size_asc";
 
-export interface CreateTokenInput {
-  name: string;
-  role: Role;
-  expires_at?: string;
-}
-
-export interface OverviewCounts {
-  features_active: number;
-  features_archived: number;
-  draft_model_snapshots: number;
-  draft_model_records: number;
-  new_submissions: number;
-  media_ready: number;
-  failed_media: number;
-}
-
-export interface OverviewDraftModelSnapshot {
-  snapshot_id: string;
-  name: string;
-  revision: number;
-  updated_at: string;
-}
-
-export interface OverviewSubmission {
-  id: string;
-  feature_key: string;
-  status: SubmissionStatus;
-  created_at: string;
-  data_preview: string;
-}
-
-export interface OverviewFailedMedia {
-  id: string;
-  original_filename: string;
-  created_at: string;
-}
-
-export interface OverviewActivity {
-  kind: "feature" | "content" | "submission" | "media";
-  title: string;
-  feature_key: string | null;
-  occurred_at: string;
-}
-
-export interface Overview {
-  counts: OverviewCounts;
-  attention: {
-    draft_model_snapshots: OverviewDraftModelSnapshot[];
-    new_submissions: OverviewSubmission[];
-    failed_media: OverviewFailedMedia[];
-  };
-  recent_activity: OverviewActivity[];
-}
-
-export interface SettingsLimits {
-  max_json_bytes: number;
-  max_upload_bytes: number;
-  form_rate_limit: number;
-  form_rate_window_seconds: number;
-  admin_page_size: number;
-  public_page_size: number;
-  submission_export_max_rows: number;
-  submission_export_max_bytes: number;
-}
-
-export interface SettingsPublicAPI {
-	runtime_path: string;
-  forms_path: string;
-  admin_path: string;
-  media_path: string;
-  cors_enabled: boolean;
-  cors_origins: string[];
-}
-
-export interface SettingsMedia {
-  accepted_types: string[];
-  max_upload_bytes: number;
-  image_variants: string[];
-}
-
-export interface SettingsRolePermission {
-  resource: string;
-  actions: string[];
-}
-
-export interface SettingsRole {
-  id: Role;
-  label: string;
-  summary: string;
-  permissions: SettingsRolePermission[];
-  notes: string[];
-}
-
-export interface Settings {
-  limits: SettingsLimits;
-  public_api: SettingsPublicAPI;
-  media: SettingsMedia;
-  roles: SettingsRole[];
-}
-
-
 export interface FeatureManifest {
   formatVersion: 2;
   key: string;
   name: string;
   version: string;
   engineApi: string;
-  entry?: string;
-  styles?: string[];
-  sharedStyles?: string[];
-  runtime?: {
-    abi: "static-module-v1" | "static-html-v1";
-    entry: string;
-    styles?: string[];
-  };
+  runtime?: JsonObject;
   slots: string[];
   arguments: JsonObject;
   dataInputs: DataInputPort[];
@@ -598,6 +574,8 @@ export interface SiteConfig {
 export interface SiteSnapshot {
   contentRevision?: number;
   id: string;
+  siteId?: string;
+  revision?: number;
   parentSnapshotId?: string;
   parentSequence?: number;
   parentName?: string;
@@ -701,24 +679,6 @@ export interface ModelContentHistoryResponse {
   items: ModelContentHistoryItem[];
 }
 
-export interface SiteSnapshotList {
-  items: SiteSnapshot[];
-  active: Record<Environment, string>;
-  activeSnapshots?: Record<Environment, SiteSnapshot | null>;
-  events?: SnapshotEvent[];
-  nextCursor?: number;
-}
-
-export interface SnapshotEvent {
-  id: string;
-  snapshotId: string;
-  sequence: number;
-  name: string;
-  environment: Environment;
-  action: string;
-  createdAt: string;
-}
-
 export interface SiteMetadataOverride {
  noIndex?: boolean;
   siteName?: string | null;
@@ -741,56 +701,4 @@ export interface SiteMetadata {
   ogDescription?: string;
   ogImageMediaId?: string;
   pages?: Record<string, SiteMetadataOverride>;
-}
-
-export interface SiteMetadataPage {
-  id: string;
-  name: string;
-}
-
-export interface SiteMetadataState {
-  revision: number;
-  devRevision: number;
-  prodRevision: number;
-  pages: SiteMetadataPage[];
-  draft: SiteMetadata;
-  dev: SiteMetadata;
-  prod: SiteMetadata;
-  updatedAt: string;
-}
-
-export interface EnvironmentPatch {
-  revision: number;
-  name?: string;
-  public_base_url?: string;
-  cors_origins?: string[];
-}
-
-export interface SiteEnvironment {
-  key: Environment;
-  name: string;
-  public_base_url: string;
-  http_port: number;
-  cors_origins: string[];
-  active_snapshot_id?: string | null;
-  revision: number;
-  updated_at: string;
-}
-
-
-export interface BranchRecord {
- id: string;
- name: string;
- httpAddr: string;
- corsOrigins: string[];
- indexable: boolean;
- snapshotId: string | null;
- revision: number;
- enabled: boolean;
- updatedAt: string;
-}
-
-export interface SnapshotDetail {
- snapshot: SiteSnapshot;
- payload: {config: SiteConfig; metadata?: SiteMetadata; designSystem?: DesignSystem};
 }

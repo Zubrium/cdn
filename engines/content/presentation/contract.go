@@ -4,10 +4,20 @@ package presentation
 
 import (
 	"context"
+	"errors"
 	"time"
 
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
+)
+
+var (
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
+	ErrNotFound     = errors.New("not found")
+	ErrConflict     = errors.New("revision conflict")
+	ErrInvalid      = errors.New("invalid request")
+	ErrTooLarge     = errors.New("request too large")
+	ErrUnavailable  = errors.New("Content dependency unavailable")
 )
 
 type Contract interface {
@@ -17,6 +27,7 @@ type Contract interface {
 
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
+	AuthenticateSession(context.Context, string) (context.Context, error)
 	ListModels(context.Context, string, string, int) (ModelPage, error)
 	GetModel(context.Context, string, string) (Model, error)
 	SaveModel(context.Context, SaveModelRequest) (Model, error)
@@ -118,17 +129,21 @@ type SaveBindingsRequest struct {
 
 type Descriptor struct{}
 
+func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
+	return platform.ComponentDescriptor{ID: "engine.content", Kind: "engine", Version: 1}
+}
+
 func (Descriptor) Operations() []platform.Operation {
 	return []platform.Operation{
-		{Name: "model.list", Action: access.Read, ResourceType: "content-model"},
-		{Name: "model.read", Action: access.Read, ResourceType: "content-model"},
-		{Name: "model.write", Action: access.Write, ResourceType: "content-model"},
-		{Name: "record.list", Action: access.Read, ResourceType: "content-record"},
-		{Name: "record.write", Action: access.Write, ResourceType: "content-record"},
-		{Name: "record.publish", Action: access.Write, ResourceType: "content-record"},
-		{Name: "record.restore", Action: access.Write, ResourceType: "content-record"},
-		{Name: "binding.read", Action: access.Read, ResourceType: "content-binding"},
-		{Name: "binding.write", Action: access.Write, ResourceType: "content-binding"},
+		{Name: "model.list", Action: platform.AccessActionRead, ResourceType: "content-model"},
+		{Name: "model.read", Action: platform.AccessActionRead, ResourceType: "content-model"},
+		{Name: "model.write", Action: platform.AccessActionWrite, ResourceType: "content-model"},
+		{Name: "record.list", Action: platform.AccessActionRead, ResourceType: "content-record"},
+		{Name: "record.write", Action: platform.AccessActionWrite, ResourceType: "content-record"},
+		{Name: "record.publish", Action: platform.AccessActionWrite, ResourceType: "content-record"},
+		{Name: "record.restore", Action: platform.AccessActionWrite, ResourceType: "content-record"},
+		{Name: "binding.read", Action: platform.AccessActionRead, ResourceType: "content-binding"},
+		{Name: "binding.write", Action: platform.AccessActionWrite, ResourceType: "content-binding"},
 	}
 }
 

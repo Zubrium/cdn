@@ -1,6 +1,7 @@
-import type { Role } from "@/types";
+import type { Principal } from "@/types";
+import { hasGroupAccess } from "@/lib/permissions";
 
-/** Only administrators may delete files, matching the API role gate. */
-export function canDeleteGalleryFile(role?: Role | null): boolean {
-  return role === "admin";
+/** File actions are visible only when one of that file's groups grants write. */
+export function canDeleteGalleryFile(principal?: Principal | null, groups: string[] = []): boolean {
+  return groups.some((group) => hasGroupAccess(principal, group, 2));
 }

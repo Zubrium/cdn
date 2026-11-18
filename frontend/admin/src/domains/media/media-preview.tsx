@@ -1,7 +1,6 @@
 import { FileText, Film, ImageOff, File } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import type { Media } from "@/types";
-import { api, publicMediaPath } from "@/api";
+import { publicMediaPath } from "@/api";
 import { cn } from "@/lib/utils";
 
 export function mediaPreviewUrl(media: Media, variant?: string): string {
@@ -17,24 +16,10 @@ export function isVideoMedia(media: Media): boolean {
   return media.content_type.startsWith("video/");
 }
 
-/** Private previews receive short-lived signed URLs, never public S3 paths. */
+/** Admin previews use the authenticated Core file endpoint on the same origin. */
 export function useMediaPreviewUrl(media: Media | null, variant?: string): string | null {
-  const isPrivate = media?.visibility === "private";
-  const limits = useQuery({ queryKey: ["file-limits"], queryFn: ({ signal }) => api.media.limits(signal), enabled: isPrivate });
-  const ttlSeconds = limits.data?.linkMaxTTLSeconds ?? 0;
-  const link = useQuery({
-    queryKey: ["private-media-preview", media?.id, ttlSeconds],
-    queryFn: () => api.media.createLink(media!.id, ttlSeconds),
-    enabled: Boolean(isPrivate && media && ttlSeconds > 0),
-    staleTime: ttlSeconds * 800,
-    refetchInterval: ttlSeconds > 0 ? ttlSeconds * 800 : false,
-  });
   if (!media) return null;
-  if (!isPrivate) return mediaPreviewUrl(media, variant);
-  if (!link.data) return null;
-  const url = new URL(link.data.url, window.location.origin);
-  if (variant && media.variants[variant]) url.searchParams.set("variant", variant);
-  return url.toString();
+  return mediaPreviewUrl(media, variant);
 }
 
 export function MediaThumb({

@@ -1,8 +1,6 @@
 import type { Media } from "@/types";
-import { MediaStatusBadge } from "@/components/common/status-badges";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatBytes, formatDate, formatDateTime } from "@/lib/format";
+import { formatBytes } from "@/lib/format";
 import { MediaThumb } from "@/domains/media/media-preview";
 import { MediaActions, mimeLabel } from "./MediaDetailDialog";
 
@@ -23,10 +21,6 @@ export function MediaGridCard({
       >
         <div className="relative aspect-[4/3] bg-muted/40">
           <MediaThumb media={media} />
-          <span className="absolute left-2 top-2">
-            <MediaStatusBadge status={media.status} />
-          </span>
-          {media.visibility === "private" && <span className="absolute right-2 top-2"><Badge variant="secondary">Закрытый</Badge></span>}
         </div>
         <div className="p-3">
           <p
@@ -38,9 +32,7 @@ export function MediaGridCard({
           <p className="mt-0.5 truncate text-2xs text-muted-foreground">
             {mimeLabel(media.content_type)} · {formatBytes(media.size_bytes)}
           </p>
-          <p className="mt-0.5 text-2xs text-muted-foreground">
-            {formatDate(media.created_at)}
-          </p>
+          <p className="mt-0.5 truncate text-2xs text-muted-foreground">{(media.groups ?? []).join(" · ")}</p>
         </div>
       </button>
       <div className="flex items-center justify-between border-t border-border px-2 py-1">
@@ -68,8 +60,7 @@ export function MediaTable({
             <th scope="col">Файл</th>
             <th scope="col">Тип</th>
             <th scope="col">Размер</th>
-            <th scope="col">Статус</th>
-            <th scope="col">Загружен</th>
+            <th scope="col">Группы доступа</th>
             <th scope="col"><span className="sr-only">Действия</span></th>
           </tr>
         </thead>
@@ -109,10 +100,7 @@ export function MediaTable({
                 {formatBytes(media.size_bytes)}
               </td>
               <td>
-                <MediaStatusBadge status={media.status} />
-              </td>
-              <td className="text-xs text-muted-foreground">
-                {formatDateTime(media.created_at)}
+                <span className="text-xs text-muted-foreground">{(media.groups ?? []).join(" · ") || "—"}</span>
               </td>
               <td>
                 <div className="flex items-center justify-end gap-1">

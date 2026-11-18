@@ -1,0 +1,157 @@
+openapi: 3.1.0
+info:
+  title: Zubrium Forms Admin API
+  version: 2.0.0
+  description: >-
+    Form schemas and immutable submissions. Forms Engine owns visitor sessions,
+    upload references, lifecycle validation and group authorization. Submitted
+    answers can be viewed or deleted; edits to answers are not supported.
+servers: [{ url: / }]
+security:
+  - AdminSession: []
+  - BearerCredential: []
+paths:
+  /api/v2/admin/forms/schemas:
+    get:
+      operationId: listFormSchemas
+      parameters:
+        - { $ref: '#/components/parameters/SnapshotID' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Form schemas., content: { application/json: { schema: { $ref: '#/components/schemas/SchemaPage' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: saveFormSchema
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SaveSchema' } } }
+      responses:
+        '200': { description: Saved schema., content: { application/json: { schema: { $ref: '#/components/schemas/Schema' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/forms/schemas/{schemaID}:
+    get:
+      operationId: getFormSchema
+      parameters:
+        - { name: schemaID, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/SnapshotID' }
+      responses:
+        '200': { description: Form schema., content: { application/json: { schema: { $ref: '#/components/schemas/Schema' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/forms/submissions:
+    get:
+      operationId: listFormSubmissions
+      parameters:
+        - { $ref: '#/components/parameters/SnapshotID' }
+        - { name: form_id, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string, maxLength: 64 } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Submission page; inaccessible submissions are omitted., content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/forms/submissions/{submissionID}:
+    get:
+      operationId: getFormSubmission
+      parameters:
+        - { name: submissionID, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/SnapshotID' }
+      responses:
+        '200': { description: Submission with immutable answer values., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteFormSubmission
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { name: submissionID, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/SnapshotID' }
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string, pattern: '^"r[0-9]+"$' }
+      responses:
+        '204': { description: Submission and all its upload attachments were deleted. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/forms/submissions/{submissionID}/status:
+    patch:
+      operationId: setFormSubmissionStatus
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ name: submissionID, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [snapshot_id, status, expected_revision], properties: { snapshot_id: { type: string }, status: { type: string, maxLength: 64 }, expected_revision: { type: integer, minimum: 0 } } } } }
+      responses:
+        '200': { description: Status changed; answer values remain immutable., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
+    BearerCredential: { type: http, scheme: bearer }
+  parameters:
+    SnapshotID: { name: snapshot_id, in: query, required: true, schema: { type: string } }
+    Cursor: { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+  schemas:
+    Schema:
+      type: object
+      required: [id, key, version, fields, revision]
+      properties:
+        id: { type: string }
+        key: { type: string }
+        version: { type: integer, minimum: 1 }
+        fields: { type: object, additionalProperties: true }
+        revision: { type: integer, minimum: 0 }
+    SaveSchema:
+      type: object
+      additionalProperties: false
+      required: [snapshot_id, key, fields, expected_revision]
+      properties:
+        snapshot_id: { type: string }
+        schema_id: { type: string }
+        key: { type: string }
+        fields: { type: object, additionalProperties: true }
+        expected_revision: { type: integer, minimum: 0 }
+    SchemaPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Schema' } }, next_cursor: { type: string } }
+    Submission:
+      type: object
+      required: [id, form_id, state, values, created_at, revision]
+      properties:
+        id: { type: string }
+        form_id: { type: string }
+        state: { type: string }
+        values: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        revision: { type: integer, minimum: 0 }
+    SubmissionPage:
+      type: object
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Submission' } }, next_cursor: { type: string } }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+  responses:
+    Error:
+      description: Stable machine-readable error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

@@ -1241,3 +1241,64 @@ Disposable PostgreSQL 16 ran only in task-owned containers with `/var/lib/postgr
 Frontend workspace limitations: `pnpm --filter @website-engine/admin typecheck`, `test`, and `build` pass. Root `pnpm typecheck` and `pnpm lint` cannot run because the current new product tree has no `pkg/runtime/scripts` source configured by the root scripts (`legacy/pkg/runtime/scripts` remains in legacy). This is an incomplete public-runtime scaffold, not an Admin Coordinator failure.
 
 Not included in the completed Coordinator subsystem: Website/Content publication triggers, production Archive/Media/Prerender handlers and process isolation, Router runtime service, provider compatibility and multi-site snapshot orchestration, or live authenticated Admin API + PostgreSQL end-to-end testing. These remain explicit product integration work; the full profile continues to fail closed where runtime factories are absent. No system-wide 60% acceptance coverage claim is made.
+
+### Core and Coordinator: fresh final verification — 17 November 2026
+
+After the Core layers were placed directly under the module root, the final verification was repeated on the current workspace:
+
+```text
+make build build-full test vet    PASS (exit 0)
+make coverage                    PASS (exit 0; 70.3% aggregate Go statement coverage; 70% gate)
+git diff --check                 PASS (staged and unstaged changes)
+Core boundary lint               PASS (20 repository-local Go modules checked)
+```
+
+The coverage command uses `-count=1` and ran against freshly recreated disposable databases. All required Core and Coordinator database URL variables were configured, targeting 23 distinct disposable databases. It passed the Core and Coordinator PostgreSQL suites, including:
+
+```text
+TestDisposableDelayedWorkflowTaskWaitsUntilAvailableAt
+TestDisposableCompletedWorkflowResultSurvivesInstanceRestart
+TestDisposableRunningTaskResumesAfterInstanceRestart
+TestDisposableExpiredTaskLeaseCanBeTakenOverWithNewFencingToken
+TestDisposableWorkflowRetentionPrunesExpiredResults
+TestDisposableCrossWorkflowDependencyIsRejectedAtomically
+TestDisposableTaskWaitsForItsExplicitDependency
+TestDisposableExpiredTaskAtMaxAttemptsFailsWorkflow
+```
+
+Additional checks confirmed that `core/domain`, `core/application`, `core/infrastructure`, and `core/presentation` are direct children of `core/`; no nested directory named `internal` exists. `TestCoreLayersLiveDirectlyUnderModuleRoot` enforces this. A source scan found no schema DDL in Core Go files. Core Go modules expose the public contracts through `core/presentation`; the boundary lint rejects cross-module imports into Core implementation packages.
+
+The first PostgreSQL assertion attempt compared raw JSON bytes and failed because PostgreSQL `jsonb` normalizes whitespace. The assertions were corrected to compare decoded JSON fields; the focused PostgreSQL cases and the subsequent clean full coverage run passed. This was a test assertion correction, not a production behavior change.
+
+Disposable resource inventory and cleanup:
+
+| Resource | Exact identity | Final state |
+| --- | --- | --- |
+| PostgreSQL container | `zubrium-core-qa-20261117-r3-pg`, ID `b506981f16af68089e5db42d958048a51dd332855b6468229c2690ad09d2c8c2`, image `postgres:16-alpine` | Stopped and removed after confirming no active test sessions |
+| Loopback port | `127.0.0.1:32776` | Released after container removal |
+| Anonymous Docker volume | `91b722c7582f438fd092366b685f9574b0b9ebbbda25b2bea57e58136783c117` | Removed with the exact task-owned container |
+| Databases | `zubrium_core_qa_<name>_<suffix>`, where `<suffix>` is `r3`, `r4`, or `r5`, and `<name>` is one of `api`, `bootstrap`, `coordinator`, `coordinator_cancel`, `coordinator_children`, `coordinator_delayed`, `coordinator_dependency`, `coordinator_dependency_wait`, `coordinator_exhausted`, `coordinator_restart`, `coordinator_restart_pending`, `coordinator_retention`, `coordinator_retry`, `coordinator_stale_capability`, `coordinator_takeover`, `coordinator_workflow`, `coordinator_workflow_race`, `credential_race`, `groups`, `manager_race`, `platform`, `runtime_role`, `schema` | All 69 were inside the removed disposable container |
+| Temporary QA files | `/tmp/zubrium-core-coordinator-qa-20261117-r3` (including `qa.env`, `qa-r4.env`, and `qa-r5.env`) | Removed; credential values are not retained in this report |
+| Atlas CLI | v1.3.0, SHA-256 `4e5ffdc10b2b4fd3a06074aba72848150907d5316cacad7b19bae6c6ae3db991`; binary and installer were under the temporary path above | Removed |
+
+S3 integration used the in-process local protocol mock; no external bucket or object was created. No existing database, file, running product, or Vitasil resource was changed. The 70.3% value is Go statement coverage and does not calculate the separately agreed system-wide 60% functional acceptance target; that target's complete per-module input-case denominator is still open.
+
+### Presentation API v2 implementation sweep — 18 November 2026
+
+Full-workspace verification remains deferred until the implementation sweep is complete under `AGENTS.md`; the focused checks recorded below were run to validate the Admin regression and standalone Router profile.
+
+- Updated `AGENTS.md` to keep the new Admin on direct group grants and one user type, with the historical role matrix scoped to `legacy/`.
+- Added v2 Sites, Content, and Forms HTTP adapters and their independent OpenAPI descriptions; Identity remains mounted on the shared File API listener. Sites now includes a cursor-paginated snapshot list used by the new Admin clients and Content/Forms screens. Production Website, Content, and Forms factories remain unavailable. Router delivery and its Loader upload operation are production components, now selectable without those engines through `profiles/router.yaml`.
+- Replaced hard-coded Sites pagination with explicit `admin_api.default_page_size` and `admin_api.max_page_size` settings; added configuration and handler regression scenarios. Sites responses now apply `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` at the handler boundary.
+- Aligned the Admin feature registry with the Sites API: ZIPs are selected from Loader-uploaded Core files, catalog pagination uses configured server limits, and imports run through idempotent cookie-authenticated jobs whose state survives a page reload for the same principal. Added API and ZIP-picker regression scenarios; these remain unrun in this deferred verification phase.
+- The Router public-operation registry/dispatch is production-composed. A Loader-backed `public.form-upload` operation validates explicit route config, authenticates its server-only Loader credential before staging, bounds request bytes and concurrent staging, writes temporary bodies in a private directory with `0600` file permissions, computes SHA-256 before creating a Loader upload, derives a route-scoped idempotency key, streams validated parts to Loader, and retries FileSet revision conflicts. The build-profile graph treats it as a Router+Loader capability independent from Forms. Acceptance scenarios cover route validation, size/type rejection (including the dispatch stream limit), auth failure, body-read failure, changed-body idempotency conflicts, FileSet retry/recovery, and profile composition. Router's HTTP adapter rejects duplicate Content-Type/idempotency headers before route creation or public dispatch. The Admin has a separate Router settings screen for explicit file/artifact routes and `public.form-upload`, plus a separate Website snapshot list contract. Content and submissions pages use the typed v2 engine APIs for models/records and forms/submissions. Regression scenarios cover read/write controls and v2 snapshot pagination; the final verification must record their outcomes. The new standalone Router profile avoids selecting unimplemented Website/Content/Forms runtime factories. The GET route returns one fixed `file_id` at an exact path. Per-IP limits and all external proxy setup belong to deployment and are not implemented here. Structural Website editor migration, Forms schema editing/export, the shared Admin UI runtime, and remaining Admin SPA/API alignment remain outstanding.
+
+Verification update, 18 November 2026:
+
+- Admin TypeScript checks, scoped ESLint, the production Admin build, and the full Admin unit suite passed. The suite now reports 45 files and 190 tests; React Router emits existing `useLayoutEffect` SSR warnings, but no test failed.
+- Isolated Chromium QA used a loopback mock that only returned `401` for `/api/v2/admin/session`; it did not access application data. At 1280px light and 360px dark, the login screen had no horizontal overflow. Empty-key validation and rejected-credential feedback were exercised. A fresh unauthenticated `401` previously showed the misleading “Сессия истекла” notice; the Admin now treats a missing session as anonymous and retains the expiry notice for later unauthorized API events.
+- The frontend workspace-wide `pnpm typecheck` and `pnpm lint` remain blocked because configured `pkg/runtime/scripts` sources are absent. The target runtime module is still incomplete; checks were not redirected to `legacy/`.
+- `make build` passed, compiling both the default profile and `-tags=router`; `make build-router` also passed. `make test-router` passed for the command composition, profile parser, profile generator, and configuration packages. Its first run exposed a `TestCheckConfig` fixture that omitted the Router access group; the fixture was extended with an isolated loopback Router/upload config and the target then passed. After that run, an application-side loopback-only validation was removed to keep proxy topology under deployer control; the new regression case accepting a non-loopback listener is present but awaits the final verification pass. These focused checks do not replace the deferred workspace suite.
+- Production factories for Website, Content, and Forms remain absent, and the shared Admin UI runtime is incomplete. The Router profile builds the API/listener and does not claim those engine or static UI workflows. The browser used a Vite Admin screen and a local auth-only mock; no real authenticated API, production proxy, database, storage, or running Vitasil resource was contacted.
+
+The public Router rate-limit boundary is a deployment requirement only: Router has no built-in request-rate restriction and its public listener must stay behind an external proxy. Proxy selection, configuration, and operation belong to the deployer; no proxy or gateway implementation is part of this application.

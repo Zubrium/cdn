@@ -38,6 +38,7 @@ type Config struct {
 	MaxGroupsPerFile  int
 	DefaultPageSize   int
 	MaxPageSize       int
+	AllowedOrigins    []string
 }
 
 func (c Config) validate() error {

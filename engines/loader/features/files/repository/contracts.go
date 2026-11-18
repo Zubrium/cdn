@@ -5,11 +5,11 @@ package repository
 import (
 	"context"
 
-	core "github.com/Zubrium/cdn/core/platform"
+	core "github.com/Zubrium/cdn/core/presentation"
 )
 
-type Identity = core.LoaderIdentityCapability
-type Files = core.LoaderFilesCapability
+type Identity = core.GroupAuthorizationCapability
+type Files = core.StagedFilesCapability
 
 type ModuleData interface {
 	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)

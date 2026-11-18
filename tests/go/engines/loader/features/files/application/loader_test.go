@@ -13,8 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zubrium/cdn/core/access"
-	core "github.com/Zubrium/cdn/core/platform"
+	core "github.com/Zubrium/cdn/core/presentation"
 	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )
@@ -25,12 +24,30 @@ type testIdentity struct {
 	active      bool
 }
 
+type testCoreSessions struct {
+	session   core.Session
+	principal core.Principal
+	err       error
+	token     string
+}
+
+func (*testCoreSessions) CreateSession(context.Context, string) (core.CreatedSession, error) {
+	return core.CreatedSession{}, nil
+}
+
+func (s *testCoreSessions) AuthenticateSession(_ context.Context, token string) (core.Session, core.Principal, error) {
+	s.token = token
+	return s.session, s.principal, s.err
+}
+
+func (*testCoreSessions) RevokeSession(context.Context, string) error { return nil }
+
 func (i *testIdentity) Authenticate(context.Context, string) (core.Session, core.Principal, error) {
 	return core.Session{}, core.Principal{ID: i.principalID, Active: i.active}, nil
 }
 
-func (i *testIdentity) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, required access.Level) error {
-	if !i.writable || len(groups) == 0 || required != access.LevelWrite {
+func (i *testIdentity) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, required core.AccessLevel) error {
+	if !i.writable || len(groups) == 0 || required != core.AccessLevelWrite {
 		return core.ErrForbidden
 	}
 	return nil
@@ -367,6 +384,47 @@ func newTestServiceWithFiles(t *testing.T, files Files, data *testData) (*Servic
 		t.Fatal(err)
 	}
 	return service, ctx, id
+}
+
+func TestAuthenticateSessionUsesCoreSessionAndRejectsInactivePrincipal(t *testing.T) {
+	identity := &testIdentity{principalID: uuid.NewString(), writable: true, active: true}
+	data := newTestData()
+	sessions := &testCoreSessions{principal: core.Principal{ID: identity.principalID, Active: true}}
+	service, err := New(identity, newTestFiles(), data, testLoaderConfig(), sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := service.AuthenticateSession(context.Background(), "opaque-session-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions.token != "opaque-session-token" {
+		t.Fatalf("Core session token=%q", sessions.token)
+	}
+	principal, ok := ctx.Value(authKey{}).(authenticated)
+	if !ok || principal.principalID != identity.principalID {
+		t.Fatalf("authenticated context=%+v", principal)
+	}
+
+	sessions.principal.Active = false
+	if _, err := service.AuthenticateSession(context.Background(), "opaque-session-token"); !errors.Is(err, api.ErrUnauthorized) {
+		t.Fatalf("inactive session principal returned %v", err)
+	}
+
+	serviceWithoutSessions, err := New(identity, newTestFiles(), newTestData(), testLoaderConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serviceWithoutSessions.AuthenticateSession(context.Background(), "opaque-session-token"); !errors.Is(err, api.ErrUnauthorized) {
+		t.Fatalf("unconfigured session auth returned %v", err)
+	}
+}
+
+func testLoaderConfig() Config {
+	return Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, SessionTTL: time.Hour,
+		CommitTimeout: time.Minute, Mode: ModeAuto, BufferThreshold: 8, MaxBufferedBytes: 16,
+		SessionCacheEntries: 8, SessionCacheMaxBytes: 1 << 20, SessionCacheTTL: time.Minute,
+		CleanupInterval: time.Minute, CleanupBatchSize: 16}
 }
 
 func TestBeginUploadIdempotencyIsPrincipalScopedAndDoesNotCollapseKeys(t *testing.T) {

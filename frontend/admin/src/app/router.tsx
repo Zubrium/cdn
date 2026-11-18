@@ -11,15 +11,14 @@ import { LoginPage, NoAccessScreen } from "@/app/pages/LoginPage";
 import NotFoundPage, { RouteErrorPage } from "@/app/pages/NotFoundPage";
 import { LoadingPage } from "@/components/common/page";
 import { redirectLocation } from "./legacy-routes";
+import { canManageAdministrators, hasAnyGroupAccess, hasGroupAccess } from "@/lib/permissions";
 
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const ContentHomePage = lazy(() => import("@/pages/content/ContentHomePage"));
 const SubmissionsPage = lazy(() => import("@/pages/submissions/SubmissionsPage"));
 const MediaPage = lazy(() => import("@/pages/media/MediaPage"));
 const AccessLayout = lazy(() => import("@/pages/access/AccessLayout"));
-const TokensPage = lazy(() => import("@/pages/access/TokensPage"));
 const UsersPage = lazy(() => import("@/pages/access/UsersPage"));
-const RolesPage = lazy(() => import("@/pages/access/RolesPage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const RouterPage = lazy(() => import("@/pages/site/RouterPage"));
 const PageDetailPage = lazy(() => import("@/pages/site/PageDetailPage"));
@@ -37,6 +36,7 @@ const SiteWorkspace = lazy(() => import("@/pages/site/SiteWorkspace").then((modu
 const SiteMetadataPage = lazy(() => import("@/pages/content/SiteMetadataPage"));
 const BackendPage = lazy(() => import("@/pages/site/BackendPage"));
 const CoordinatorJobsPage = lazy(() => import("@/pages/coordinator/CoordinatorJobsPage"));
+const RouterRoutesPage = lazy(() => import("@/pages/router/RouterRoutesPage"));
 
 function RedirectWithSearch({ to }: { to: string }) {
   const location = useLocation();
@@ -92,9 +92,33 @@ function RequireAuth() {
 function RequireSiteManager({ children }: { children?: React.ReactNode }) {
   const auth = useAuth();
   if (!auth.principal) return <LoadingPage />;
-  if (auth.principal.role !== "admin" && auth.principal.role !== "moderator") return <NoAccessScreen />;
+  if (!hasGroupAccess(auth.principal, "features", 2)) return <NoAccessScreen />;
   // Rendering children instead of an Outlet keeps the parent route's outlet
   // context intact (useOutletContext inside children must still see it).
+  if (children) return <>{children}</>;
+  return <Outlet />;
+}
+
+function RequireGroup({ group, level = 1, children }: { group: string; level?: 1 | 2; children?: React.ReactNode }) {
+  const auth = useAuth();
+  if (!auth.principal) return <LoadingPage />;
+  if (!hasGroupAccess(auth.principal, group, level)) return <NoAccessScreen />;
+  if (children) return <>{children}</>;
+  return <Outlet />;
+}
+
+function RequireAdministratorManagement({ children }: { children?: React.ReactNode }) {
+  const auth = useAuth();
+  if (!auth.principal) return <LoadingPage />;
+  if (!canManageAdministrators(auth.principal)) return <NoAccessScreen />;
+  if (children) return <>{children}</>;
+  return <Outlet />;
+}
+
+function RequireAnyGroup({ children }: { children?: React.ReactNode }) {
+  const auth = useAuth();
+  if (!auth.principal) return <LoadingPage />;
+  if (!hasAnyGroupAccess(auth.principal)) return <NoAccessScreen />;
   if (children) return <>{children}</>;
   return <Outlet />;
 }
@@ -115,10 +139,10 @@ export const router = createBrowserRouter(
           element: <AppShell />,
           children: [
             { index: true, element: <DashboardPage /> },
-            { path: "content", element: <ContentHomePage /> },
-            { path: "content/entities/:entityKey", element: <ContentHomePage /> },
-            { path: "content/entities/:entityKey/records/:recordId", element: <ContentHomePage /> },
-            { path: "content/placements", element: <ContentHomePage /> },
+            { path: "content", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
+            { path: "content/entities/:entityKey", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
+            { path: "content/entities/:entityKey/records/:recordId", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
+            { path: "content/placements", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
             { path: "site-metadata", element: <RequireSiteManager><RedirectWithSearch to="/site/settings" /></RequireSiteManager> },
             { path: "snapshots", element: <RequireSiteManager><SnapshotManagementLayout /></RequireSiteManager>, children: [
               { index: true, element: <Navigate to="tree" replace /> },
@@ -130,10 +154,11 @@ export const router = createBrowserRouter(
             { path: "site/snapshots", element: <RedirectWithSearch to="/snapshots/tree" /> },
             { path: "features", element: <Navigate to="/content" replace /> },
             { path: "features/:featureId/*", element: <Navigate to="/content" replace /> },
-            { path: "submissions", element: <SubmissionsPage /> },
-            { path: "submissions/:submissionId", element: <SubmissionsPage /> },
-            { path: "media", element: <MediaPage /> },
-            { path: "coordinator/jobs", element: <CoordinatorJobsPage /> },
+            { path: "submissions", element: <RequireGroup group="forms"><SubmissionsPage /></RequireGroup> },
+            { path: "submissions/:submissionId", element: <RequireGroup group="forms"><SubmissionsPage /></RequireGroup> },
+            { path: "media", element: <RequireAnyGroup><MediaPage /></RequireAnyGroup> },
+            { path: "coordinator/jobs", element: <RequireGroup group="coordinator_jobs"><CoordinatorJobsPage /></RequireGroup> },
+            { path: "router/routes", element: <RequireGroup group="router_routes"><RouterRoutesPage /></RequireGroup> },
             {
               element: <RequireSiteManager />,
               children: [{
@@ -156,20 +181,18 @@ export const router = createBrowserRouter(
               }],
             },
             {
-              element: <RequireSiteManager />,
+              element: <RequireAdministratorManagement />,
               children: [{
               path: "access",
               element: <AccessLayout />,
               children: [
-                { index: true, element: <Navigate to="tokens" replace /> },
-                { path: "tokens", element: <TokensPage /> },
+                { index: true, element: <Navigate to="users" replace /> },
                 { path: "users", element: <UsersPage /> },
-                { path: "roles", element: <RolesPage /> },
               ],
             }],
             },
             {
-              element: <RequireSiteManager />,
+              element: <RequireGroup group="features" level={1} />,
               children: [{ path: "settings", element: <SettingsPage /> }],
             },
             {

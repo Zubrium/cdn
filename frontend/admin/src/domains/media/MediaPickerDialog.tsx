@@ -25,16 +25,7 @@ import { EmptyState, ErrorState, LoadingPage } from "@/components/common/page";
 import { MediaStatusBadge } from "@/components/common/status-badges";
 import { MediaThumb } from "./media-preview";
 import { prepareMediaRenditions } from "./rendition-preparation";
-
-type Accept = "image" | "raster-image" | "video" | "font" | "all";
-
-function accepts(media: Media, accept: Accept): boolean {
-  if (accept === "image") return media.content_type.startsWith("image/");
-  if (accept === "raster-image") return ["image/jpeg", "image/png", "image/webp"].includes(media.content_type);
-  if (accept === "video") return media.content_type.startsWith("video/");
-  if (accept === "font") return media.content_type === "font/woff2";
-  return true;
-}
+import { acceptsMedia, type MediaAccept } from "./media-acceptance";
 
 export function MediaPickerDialog({
   open,
@@ -51,7 +42,7 @@ export function MediaPickerDialog({
   onClose: () => void;
   onSelect: (media: Media[]) => void;
   mode?: "single" | "multiple";
-  accept?: Accept;
+  accept?: MediaAccept;
   initialSelected?: string[];
   title?: string;
   preparation?: MediaRenditionContext;
@@ -97,7 +88,7 @@ export function MediaPickerDialog({
     () =>
       loadedItems.filter(
         (media) =>
-          media.visibility !== "private" && accepts(media, accept) &&
+          acceptsMedia(media, accept) &&
           (!search.trim() ||
             media.original_filename.toLowerCase().includes(search.trim().toLowerCase())),
       ),
@@ -107,7 +98,7 @@ export function MediaPickerDialog({
   const selectedMedia = useMemo(
     () => selectedIds
       .map((id) => selectedItems[id] ?? loadedItems.find((media) => media.id === id))
-      .filter((media): media is Media => Boolean(media && media.visibility !== "private")),
+      .filter((media): media is Media => Boolean(media)),
     [loadedItems, selectedIds, selectedItems],
   );
 
@@ -156,9 +147,9 @@ export function MediaPickerDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Выбираются ID медиаобъектов, а не URL. После выбора блок сохраняет
-            ссылку на файл. Для сайта доступны публичные файлы. Новые файлы добавляются
-            отдельно в медиатеке.
+            {accept === "zip"
+              ? "Выберите готовый ZIP-файл из Core. Если архива ещё нет, сначала загрузите его в медиатеке."
+              : "Выбираются ID медиаобъектов, а не URL. После выбора блок сохраняет ссылку на файл. Новые файлы добавляются отдельно в медиатеке."}
           </DialogDescription>
         </DialogHeader>
 
@@ -194,11 +185,11 @@ export function MediaPickerDialog({
             <EmptyState
               icon={ImagePlus}
               title={search ? "Файлы не найдены" : "Нет доступных файлов"}
-              description={
-                search
-                  ? "Измените запрос или добавьте файл в медиатеке."
-                  : "Добавьте изображение или видео в медиатеке, затем выберите его здесь."
-              }
+              description={search
+                ? "Измените запрос или добавьте файл в медиатеке."
+                : accept === "zip"
+                  ? "Загрузите ZIP-архив в медиатеке и выберите его здесь."
+                  : "Добавьте изображение или видео в медиатеке, затем выберите его здесь."}
               action={
                 <Button asChild variant="outline">
                   <Link to="/media" target="_blank" rel="noreferrer">

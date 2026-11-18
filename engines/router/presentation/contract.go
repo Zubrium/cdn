@@ -4,29 +4,32 @@ package presentation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
-	"strings"
-	"time"
 
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
-	"github.com/google/uuid"
+	platform "github.com/Zubrium/cdn/core/presentation"
+	routemodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
 const (
-	TargetCoreFile          = "core-file"
-	TargetStaticSiteArtifact = "static-site-artifact"
+	TargetCoreFile                = routemodel.TargetCoreFile
+	TargetStaticSiteArtifact      = routemodel.TargetStaticSiteArtifact
+	TargetRegisteredOperation     = routemodel.TargetRegisteredOperation
+	maxPublicOperationConfigBytes = 64 << 10
 )
 
-var ErrInvalidTarget = errors.New("invalid route target")
+var ErrInvalidTarget = routemodel.ErrInvalidRoute
 var (
-	ErrUnauthorized = errors.New("unauthorized")
-	ErrForbidden    = errors.New("forbidden")
-	ErrNotFound     = errors.New("not found")
-	ErrConflict     = errors.New("revision conflict")
-	ErrInvalid      = errors.New("invalid route request")
-	ErrUnavailable  = errors.New("Router dependency unavailable")
+	ErrUnauthorized                 = errors.New("unauthorized")
+	ErrForbidden                    = errors.New("forbidden")
+	ErrNotFound                     = errors.New("not found")
+	ErrConflict                     = errors.New("revision conflict")
+	ErrInvalid                      = errors.New("invalid route request")
+	ErrUnavailable                  = errors.New("Router dependency unavailable")
+	ErrTooLarge                     = errors.New("public operation request exceeds its size limit")
+	ErrInvalidPublicOperation       = errors.New("invalid public operation")
+	ErrPublicOperationNotRegistered = errors.New("public operation is not registered")
 )
 
 type Contract interface {
@@ -37,6 +40,7 @@ type Contract interface {
 
 type SettingsAPI interface {
 	Authenticate(context.Context, string) (context.Context, error)
+	AuthenticateSession(context.Context, string) (context.Context, error)
 	ListRoutes(context.Context, ListRoutesRequest) (RoutePage, error)
 	GetRoute(context.Context, string) (Route, error)
 	CreateRoute(context.Context, CreateRouteRequest) (Route, error)
@@ -48,34 +52,13 @@ type DeliveryAPI interface {
 	Deliver(context.Context, DeliveryRequest) (DeliveryResponse, error)
 }
 
-type RouteTarget struct {
-	Kind   string `json:"kind"`
-	FileID string `json:"file_id"`
+type RouteTarget = routemodel.Target
+
+func ValidPublicOperationID(value string) bool {
+	return routemodel.ValidPublicOperationID(value)
 }
 
-func (target RouteTarget) Validate() error {
-	if target.Kind != TargetCoreFile && target.Kind != TargetStaticSiteArtifact {
-		return ErrInvalidTarget
-	}
-	id, err := uuid.Parse(target.FileID)
-	if err != nil || id == uuid.Nil || strings.ContainsAny(target.FileID, "/\\?#") {
-		return ErrInvalidTarget
-	}
-	return nil
-}
-
-type Route struct {
-	ID        string      `json:"id"`
-	BranchID  string      `json:"branch_id"`
-	Host      string      `json:"host"`
-	Path      string      `json:"path"`
-	Match     string      `json:"match"`
-	Target    RouteTarget `json:"target"`
-	State     string      `json:"state"`
-	Revision  int64       `json:"revision"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
-}
+type Route = routemodel.Route
 
 type ListRoutesRequest struct {
 	BranchID string
@@ -90,12 +73,12 @@ type RoutePage struct {
 }
 
 type CreateRouteRequest struct {
-	BranchID      string      `json:"branch_id"`
-	Host          string      `json:"host"`
-	Path          string      `json:"path"`
-	Match         string      `json:"match"`
-	Target        RouteTarget `json:"target"`
-	IdempotencyKey string     `json:"-"`
+	BranchID       string      `json:"branch_id"`
+	Host           string      `json:"host"`
+	Path           string      `json:"path"`
+	Match          string      `json:"match"`
+	Target         RouteTarget `json:"target"`
+	IdempotencyKey string      `json:"-"`
 }
 
 type ReplaceRouteTargetRequest struct {
@@ -110,39 +93,84 @@ type DeleteRouteRequest struct {
 }
 
 type DeliveryRequest struct {
-	BranchID   string
-	Host       string
-	Method     string
-	EscapedPath string
-	Query      string
-	IfNoneMatch string
+	BranchID        string
+	Host            string
+	Method          string
+	EscapedPath     string
+	Query           string
+	ContentType     string
+	ContentLength   int64
+	IdempotencyKey  string
+	Body            io.Reader
+	IfNoneMatch     string
 	IfModifiedSince string
-	Range      string
-	IfRange    string
+	Range           string
+	IfRange         string
+}
+
+// PublicOperationDescriptor is immutable metadata from one compiled engine
+// operation. Only operations with a public.* ID may be put on a Router route.
+type PublicOperationDescriptor struct {
+	ID                  string   `json:"id"`
+	ContractVersion     int      `json:"contract_version"`
+	Methods             []string `json:"methods"`
+	MaxRequestBytes     int64    `json:"max_request_bytes"`
+	AllowedContentTypes []string `json:"allowed_content_types"`
+}
+
+// PublicOperationRequest contains a normalized request and the server-side
+// route configuration. Cookies and arbitrary HTTP headers are never forwarded.
+type PublicOperationRequest struct {
+	Method         string
+	Host           string
+	EscapedPath    string
+	Query          string
+	ContentType    string
+	ContentLength  int64
+	IdempotencyKey string
+	Body           io.Reader
+}
+
+type PublicOperation interface {
+	Descriptor() PublicOperationDescriptor
+	ValidateRouteConfig(json.RawMessage) error
+	Execute(context.Context, json.RawMessage, PublicOperationRequest) (DeliveryResponse, error)
+}
+
+// PublicOperationCatalog is built from static imports selected by the profile.
+// It cannot load callbacks, modules, or network destinations from route data.
+type PublicOperationCatalog interface {
+	ListPublicOperations(context.Context) ([]PublicOperationDescriptor, error)
+	ResolvePublicOperation(context.Context, string) (PublicOperation, error)
+	ValidatePublicOperationTarget(context.Context, RouteTarget) error
 }
 
 type DeliveryResponse struct {
-	StatusCode        int
-	ContentType       string
-	ContentLength     int64
-	ETag              string
-	LastModified      string
-	CacheControl      string
+	StatusCode         int
+	ContentType        string
+	ContentLength      int64
+	ETag               string
+	LastModified       string
+	CacheControl       string
 	ContentDisposition string
-	AcceptRanges      string
-	Body              io.ReadCloser
+	AcceptRanges       string
+	Body               io.ReadCloser
 }
 
 type Descriptor struct{}
 
+func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
+	return platform.ComponentDescriptor{ID: "engine.router", Kind: "engine", Version: 1}
+}
+
 func (Descriptor) Operations() []platform.Operation {
 	return []platform.Operation{
-		{Name: "route.list", Action: access.Read, ResourceType: "router-route"},
-		{Name: "route.read", Action: access.Read, ResourceType: "router-route"},
-		{Name: "route.create", Action: access.Write, ResourceType: "router-route"},
-		{Name: "route.target.replace", Action: access.Write, ResourceType: "router-route"},
-		{Name: "route.delete", Action: access.Delete, ResourceType: "router-route"},
-		{Name: "route.deliver", Action: access.Read, ResourceType: "configured-route"},
+		{Name: "route.list", Action: platform.AccessActionRead, ResourceType: "router-route"},
+		{Name: "route.read", Action: platform.AccessActionRead, ResourceType: "router-route"},
+		{Name: "route.create", Action: platform.AccessActionWrite, ResourceType: "router-route"},
+		{Name: "route.target.replace", Action: platform.AccessActionWrite, ResourceType: "router-route"},
+		{Name: "route.delete", Action: platform.AccessActionDelete, ResourceType: "router-route"},
+		{Name: "route.deliver", Action: platform.AccessActionRead, ResourceType: "configured-route"},
 	}
 }
 

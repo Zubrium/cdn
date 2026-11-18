@@ -1,271 +1,162 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import {
-  Download,
-  Inbox,
-} from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Trash2 } from "lucide-react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api";
-import type {
-  SubmissionFilters,
-  SubmissionStatus,
-} from "@/types";
-import { queryKeys } from "@/lib/query-keys";
-import {
-  DEFAULT_SUBMISSION_SORT,
-  hasActiveSubmissionFilters,
-  RESET_SUBMISSION_FILTERS,
-  submissionListHref,
-} from "./filters";
-import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { errorMessage } from "@/lib/errors";
-import { downloadBlob, dateInputToRfc3339 } from "@/lib/format";
+import { useAuth } from "@/app/auth";
+import { EmptyState, ErrorState, LoadingPage, PageHeader, useDocumentTitle } from "@/components/common/page";
+import { useConfirm } from "@/components/common/confirm";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  EmptyState,
-  ErrorState,
-  PageHeader,
-  TableSkeleton,
-  useDocumentTitle,
-} from "@/components/common/page";
-import { SubmissionDetail } from "./components/SubmissionDetail";
-import { SubmissionResults } from "./components/SubmissionResults";
-import { SubmissionFiltersPanel } from "./components/submissions-page/SubmissionFiltersPanel";
+import { hasGroupAccess } from "@/lib/permissions";
+import { errorMessage } from "@/lib/errors";
+import type { FormSubmission } from "@/types";
 
-function useSubmissionFilterParams() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const form = searchParams.get("form") ?? "";
-  const status = (searchParams.get("status") ?? "all") as SubmissionStatus | "all";
-  const branchId = searchParams.get("branchId") ?? "all";
-  const field = searchParams.get("field") ?? "";
-  const from = searchParams.get("from") ?? "";
-  const to = searchParams.get("to") ?? "";
-  const sort = searchParams.get("sort") ?? DEFAULT_SUBMISSION_SORT;
-  const archived = searchParams.get("archived") === "1";
-  const q = searchParams.get("q") ?? "";
+const pageSize = 100;
+const snapshotKey = ["website", "snapshots"] as const;
+const statusValues = ["new", "in_progress", "processed", "rejected"];
 
-  const update = useCallback(
-    (values: Record<string, string | null>, replace = false) => {
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          Object.entries(values).forEach(([key, value]) => {
-            if (value === null || value === "" || value === "all") {
-              next.delete(key);
-            } else {
-              next.set(key, value);
-            }
-          });
-          return next;
-        },
-        { replace },
-      );
-    },
-    [setSearchParams],
-  );
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value, null, 2);
+}
 
-  return { form, branchId, status, field, from, to, sort, archived, q, update };
+function summary(values: Record<string, unknown>): string {
+  return Object.values(values).filter((value) => value !== null && value !== "").slice(0, 3).map((value) => typeof value === "object" ? "…" : String(value)).join(" · ");
+}
+
+function dateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function snapshotLabel(id: string, siteID: string): string {
+  return `Сайт ${siteID.slice(0, 8)} · снапшот ${id.slice(0, 8)}`;
 }
 
 export default function SubmissionsPage() {
-  const { submissionId } = useParams<{ submissionId: string }>();
-  const location = useLocation();
-  const navigate = useNavigate();
+  useDocumentTitle("Заявки");
+  const { submissionId = "" } = useParams();
+  const { principal } = useAuth();
+  const canManage = hasGroupAccess(principal, "forms", 2);
   const queryClient = useQueryClient();
-  const { form, branchId, status, field, from, to, sort, archived, q, update } =
-    useSubmissionFilterParams();
-  const [searchInput, setSearchInput] = useState(q);
-  const debouncedSearch = useDebouncedValue(searchInput, 300);
-
-  useDocumentTitle(submissionId ? "Заявка" : "Заявки");
-
-  useEffect(() => {
-    setSearchInput(q);
-  }, [q]);
-
-  useEffect(() => {
-    if (debouncedSearch !== q) {
-      update({ q: debouncedSearch || null }, true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch]);
-
-  const branchesQuery = useQuery({ queryKey: ["submission-branches"], queryFn: ({ signal }) => api.forms.branches(signal) });
-  const branchName = (id: string) => branchesQuery.data?.items.find((branch) => branch.id === id)?.name ?? "Недоступная ветка";
-  const formsQuery = useQuery({
-    queryKey: queryKeys.features.list({ type: "form" }),
-    queryFn: async ({ signal }) => {
-      const items = [];
-      let cursor: string | null = null;
-      do {
-        const page = await api.features.list({ type: "form", status: "", cursor }, signal);
-        items.push(...page.items);
-        if (page.next_cursor && page.next_cursor === cursor) throw new Error("Не удалось загрузить список форм: повторился указатель страницы.");
-        cursor = page.next_cursor;
-      } while (cursor);
-      return { items };
-    },
-  });
-  const forms = useMemo(
-    () => formsQuery.data?.items.filter((item) => item.type === "form") ?? [],
-    [formsQuery.data],
-  );
-
-  const filters = useMemo<SubmissionFilters>(
-    () => ({
-      branchId: branchId === "all" ? undefined : branchId,
-      status: status === "all" ? "" : status,
-      created_from: dateInputToRfc3339(from, "start"),
-      created_to: dateInputToRfc3339(to, "end"),
-      q: q || undefined,
-      field: field || undefined,
-      include_archived: archived,
-      sort: sort as "asc" | "desc",
-    }),
-    [branchId, status, from, to, q, field, archived, sort],
-  );
-
-  const submissionsQuery = useInfiniteQuery({
-    queryKey: queryKeys.submissions.list(form, {
-      status,
-      branchId,
-      field,
-      from,
-      to,
-      sort,
-      archived,
-      q,
-    }),
-    queryFn: ({ pageParam, signal }) =>
-      api.forms.submissions(
-        form,
-        filters,
-        pageParam ?? undefined,
-        undefined,
-        signal,
-      ),
+  const confirm = useConfirm();
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const snapshots = useInfiniteQuery({
+    queryKey: snapshotKey,
+    queryFn: ({ pageParam, signal }) => api.website.snapshots(undefined, pageParam ?? undefined, pageSize, signal),
     initialPageParam: null as string | null,
-    getNextPageParam: (lastPage) => lastPage.next_cursor,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+  const snapshotItems = useMemo(() => snapshots.data?.pages.flatMap((page) => page.items) ?? [], [snapshots.data]);
+  const requestedSnapshotID = params.get("snapshot") ?? "";
+  const selectedSnapshot = snapshotItems.find((item) => item.id === requestedSnapshotID) ?? snapshotItems[0];
+  const snapshotID = selectedSnapshot?.id ?? "";
+  useEffect(() => {
+    if (!snapshotID || requestedSnapshotID === snapshotID) return;
+    const next = new URLSearchParams(params);
+    next.set("snapshot", snapshotID);
+    setParams(next, { replace: true });
+  }, [params, requestedSnapshotID, setParams, snapshotID]);
+
+  const schemas = useInfiniteQuery({
+    queryKey: ["formsEngine", "schemas", snapshotID],
+    queryFn: ({ pageParam, signal }) => api.formsEngine.schemas(snapshotID, pageParam ?? undefined, pageSize, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: Boolean(snapshotID),
+  });
+  const schemaItems = useMemo(() => schemas.data?.pages.flatMap((page) => page.items) ?? [], [schemas.data]);
+  const requestedFormID = params.get("form") ?? "";
+  const formID = schemaItems.some((schema) => schema.id === requestedFormID) ? requestedFormID : schemaItems[0]?.id ?? "";
+  const state = params.get("state") ?? "";
+  useEffect(() => {
+    if (!formID || requestedFormID === formID) return;
+    const next = new URLSearchParams(params);
+    next.set("form", formID);
+    setParams(next, { replace: true });
+  }, [formID, params, requestedFormID, setParams]);
+
+  const submissions = useInfiniteQuery({
+    queryKey: ["formsEngine", "submissions", snapshotID, formID, state],
+    queryFn: ({ pageParam, signal }) => api.formsEngine.submissions(snapshotID, { form_id: formID || undefined, state: state || undefined }, pageParam ?? undefined, pageSize, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: Boolean(snapshotID && formID),
+  });
+  const submissionItems = useMemo(() => submissions.data?.pages.flatMap((page) => page.items) ?? [], [submissions.data]);
+  const selectedForm = schemaItems.find((item) => item.id === formID);
+  const detail = useQuery({
+    queryKey: ["formsEngine", "submission", snapshotID, submissionId],
+    queryFn: ({ signal }) => api.formsEngine.submission(snapshotID, submissionId, signal),
+    enabled: Boolean(snapshotID && submissionId),
   });
 
-  const formFields = useMemo(
-    () => submissionsQuery.data?.pages[0]?.fields ?? [],
-    [submissionsQuery.data],
-  );
-
-  const loaded = useMemo(
-    () => submissionsQuery.data?.pages.flatMap((page) => page.items) ?? [],
-    [submissionsQuery.data],
-  );
-
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.overview });
-  };
-
-  const exportMutation = useMutation({
-    mutationFn: () => api.forms.exportCsv(form, filters),
-    onSuccess: ({ blob, filename }) => {
-      downloadBlob(blob, filename);
-      toast.success("Экспорт заявок готов");
+  const statusMutation = useMutation({
+    mutationFn: (next: string) => {
+      const current = detail.data;
+      if (!current) throw new Error("Заявка ещё не загружена");
+      return api.formsEngine.setSubmissionStatus(snapshotID, current.id, next, current.revision);
+    },
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(["formsEngine", "submission", snapshotID, updated.id], updated);
+      await queryClient.invalidateQueries({ queryKey: ["formsEngine", "submissions", snapshotID] });
+      toast.success("Статус заявки изменён");
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (submission: FormSubmission) => {
+      const accepted = await confirm({
+        title: "Удалить заявку и вложения?",
+        description: "Заявка и все её вложения будут удалены окончательно. Действие нельзя отменить.",
+        confirmLabel: "Удалить заявку",
+        destructive: true,
+      });
+      if (!accepted) return false;
+      await api.formsEngine.deleteSubmission(snapshotID, submission.id, submission.revision);
+      return true;
+    },
+    onSuccess: async (deleted) => {
+      if (!deleted) return;
+      await queryClient.invalidateQueries({ queryKey: ["formsEngine", "submissions", snapshotID] });
+      await queryClient.removeQueries({ queryKey: ["formsEngine", "submission", snapshotID, submissionId] });
+      toast.success("Заявка удалена");
+      navigate(`/submissions?snapshot=${encodeURIComponent(snapshotID)}&form=${encodeURIComponent(formID)}`);
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+
+  if (snapshots.isLoading) return <LoadingPage label="Загружаем снапшоты…" />;
+  if (snapshots.error) return <div className="page-grid"><ErrorState error={snapshots.error} title="Не удалось загрузить снапшоты" onRetry={() => void snapshots.refetch()} /></div>;
+  if (!selectedSnapshot) return <div className="page-grid"><PageHeader title="Заявки" description="Ответы на опубликованные формы." /><EmptyState title="Нет доступных снапшотов" description="Заявки появятся после настройки и публикации форм." /></div>;
+  if (schemas.isLoading) return <LoadingPage label="Загружаем формы…" />;
+  if (schemas.error) return <div className="page-grid"><ErrorState error={schemas.error} title="Не удалось загрузить формы" onRetry={() => void schemas.refetch()} /></div>;
+
   if (submissionId) {
-    return (
-      <SubmissionDetail
-        submissionId={submissionId}
-        onBack={() => navigate(submissionListHref(location.search))}
-        onChanged={invalidate}
-      />
-    );
+    if (detail.isLoading) return <LoadingPage label="Загружаем заявку…" />;
+    if (detail.error) return <div className="page-grid"><ErrorState error={detail.error} title="Не удалось загрузить заявку" onRetry={() => void detail.refetch()} /><Button type="button" variant="outline" onClick={() => navigate(`/submissions?snapshot=${encodeURIComponent(snapshotID)}&form=${encodeURIComponent(formID)}`)}><ArrowLeft />К заявкам</Button></div>;
+    if (!detail.data) return <div className="page-grid"><EmptyState title="Заявка не найдена" /></div>;
+    const submission = detail.data;
+    return <div className="page-grid">
+      <PageHeader title="Заявка" description={`${selectedForm?.key ?? submission.form_id} · ${dateTime(submission.created_at)}`} backTo={`/submissions?snapshot=${encodeURIComponent(snapshotID)}&form=${encodeURIComponent(formID)}`} backLabel="К списку заявок" actions={<Badge variant="outline">{submission.state}</Badge>} />
+      {canManage && <div className="flex flex-wrap items-end gap-2"><label className="space-y-1 text-sm"><span className="text-muted-foreground">Статус</span><select className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={submission.state} disabled={statusMutation.isPending} onChange={(event) => statusMutation.mutate(event.currentTarget.value)}>{[...new Set([...statusValues, submission.state])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><Button type="button" variant="destructive" className="min-h-11" loading={deleteMutation.isPending} onClick={() => void deleteMutation.mutate(submission)}><Trash2 />Удалить</Button></div>}
+      <section className="overflow-hidden rounded-lg border border-border bg-card"><h2 className="border-b border-border px-4 py-3 text-sm font-semibold">Ответы</h2><dl className="divide-y divide-border">{Object.entries(submission.values).map(([key, value]) => <div key={key} className="grid gap-1 px-4 py-3 sm:grid-cols-[14rem_minmax(0,1fr)] sm:gap-4"><dt className="break-words text-xs font-medium text-muted-foreground">{key}</dt><dd className="min-w-0 whitespace-pre-wrap break-words text-sm">{displayValue(value)}</dd></div>)}</dl></section>
+      <p className="text-xs text-muted-foreground">Ответ неизменяем. Ревизия метаданных: {submission.revision}.</p>
+    </div>;
   }
 
-  const filtersActive = hasActiveSubmissionFilters({ form, branchId, status, field, from, to, sort, archived, q });
-
-  const resetFilters = () => {
-    setSearchInput("");
-    update(RESET_SUBMISSION_FILTERS);
-  };
-
-  return (
-    <div className="page-grid">
-      <PageHeader
-        title="Заявки"
-        description="Отправки публичных форм. Данные показываются по той версии схемы, которая была опубликована на момент отправки."
-        actions={
-          <>
-              <Button
-                variant="outline"
-                loading={exportMutation.isPending}
-                onClick={() => exportMutation.mutate()}
-              >
-                <Download />
-                Экспорт CSV
-              </Button>
-          </>
-        }
-      />
-
-      {branchesQuery.error && <ErrorState error={branchesQuery.error} title="Не удалось загрузить ветки для фильтра" onRetry={() => void branchesQuery.refetch()} />}
-      {formsQuery.error && <ErrorState error={formsQuery.error} title="Не удалось загрузить список форм" onRetry={() => void formsQuery.refetch()} />}
-      <SubmissionFiltersPanel
-        form={form}
-        forms={forms}
-        branchId={branchId}
-        branches={branchesQuery.data?.items ?? []}
-        status={status}
-        field={field}
-        fields={formFields}
-        sort={sort}
-        searchInput={searchInput}
-        onSearchInputChange={setSearchInput}
-        from={from}
-        to={to}
-        loadedCount={loaded.length}
-        hasNextPage={Boolean(submissionsQuery.hasNextPage)}
-        filtersActive={filtersActive}
-        onUpdate={update}
-        onReset={resetFilters}
-      />
-
-      {submissionsQuery.isLoading ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-card p-4">
-          <TableSkeleton rows={6} />
-        </div>
-      ) : submissionsQuery.isError ? (
-        <ErrorState
-          error={submissionsQuery.error}
-          title="Не удалось загрузить заявки"
-          onRetry={() => void submissionsQuery.refetch()}
-        />
-      ) : loaded.length === 0 ? (
-        <EmptyState
-          icon={Inbox}
-          title={filtersActive ? "Заявки не найдены" : "Заявок пока нет"}
-          description={
-            filtersActive
-              ? "По заданным условиям ничего не найдено. Сбросьте фильтры или измените запрос."
-              : "Как только форму заполнят, отправки появятся здесь."
-          }
-        />
-      ) : (
-        <SubmissionResults
-          items={loaded}
-          branchName={branchName}
-          locationSearch={location.search}
-          hasNextPage={Boolean(submissionsQuery.hasNextPage)}
-          isFetchingNextPage={submissionsQuery.isFetchingNextPage}
-          onLoadMore={() => void submissionsQuery.fetchNextPage()}
-        />
-      )}
-    </div>
-  );
+  return <div className="page-grid">
+    <PageHeader title="Заявки" description="Ответы на опубликованные формы. Содержание заявки неизменяемо." actions={<>
+      <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => { const next = new URLSearchParams(params); next.set("form", event.currentTarget.value); setParams(next); }}><option value="" disabled>Выберите форму</option>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>
+      <label className="space-y-1.5 text-sm"><span className="sr-only">Статус</span><select aria-label="Статус" className="h-11 min-w-36 rounded-md border border-input bg-background px-3" value={state} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("state", event.currentTarget.value); else next.delete("state"); setParams(next); }}><option value="">Все статусы</option>{[...new Set([...statusValues, ...submissionItems.map((item) => item.state)])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label className="space-y-1.5 text-sm"><span className="sr-only">Снапшот</span><select aria-label="Снапшот" className="h-11 min-w-56 rounded-md border border-input bg-background px-3" value={snapshotID} onChange={(event) => navigate(`/submissions?snapshot=${encodeURIComponent(event.currentTarget.value)}`)}>{snapshotItems.map((item) => <option key={item.id} value={item.id}>{snapshotLabel(item.id, item.site_id)}</option>)}</select></label>
+    </>} />
+    {schemas.hasNextPage && <div className="-mt-5"><Button type="button" variant="ghost" size="sm" onClick={() => void schemas.fetchNextPage()} loading={schemas.isFetchingNextPage}>Загрузить ещё формы</Button></div>}
+    {submissions.isLoading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">Загружаем заявки…</p> : submissions.error ? <ErrorState error={submissions.error} title="Не удалось загрузить заявки" onRetry={() => void submissions.refetch()} /> : schemaItems.length === 0 ? <EmptyState title="Форм пока нет" description="Создайте и опубликуйте форму через Website." /> : submissionItems.length === 0 ? <EmptyState title="Заявок пока нет" description="Новые ответы появятся после отправки опубликованной формы." /> : <div className="overflow-hidden rounded-lg border border-border bg-card"><ul className="divide-y divide-border">{submissionItems.map((submission) => <li key={submission.id}><button type="button" className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => navigate(`/submissions/${encodeURIComponent(submission.id)}?snapshot=${encodeURIComponent(snapshotID)}&form=${encodeURIComponent(formID)}`)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{summary(submission.values) || selectedForm?.key || submission.form_id}</span><span className="mt-1 block text-xs text-muted-foreground">{dateTime(submission.created_at)} · {selectedForm?.key ?? submission.form_id}</span></span><Badge variant="outline">{submission.state}</Badge></button></li>)}</ul>{submissions.hasNextPage && <div className="border-t border-border p-3 text-center"><Button type="button" variant="outline" onClick={() => void submissions.fetchNextPage()} loading={submissions.isFetchingNextPage}>Загрузить ещё</Button></div>}</div>}
+  </div>;
 }

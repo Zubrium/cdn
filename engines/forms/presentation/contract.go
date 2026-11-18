@@ -4,10 +4,20 @@ package presentation
 
 import (
 	"context"
+	"errors"
 	"time"
 
-	"github.com/Zubrium/cdn/core/access"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
+)
+
+var (
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
+	ErrNotFound     = errors.New("not found")
+	ErrConflict     = errors.New("revision conflict")
+	ErrInvalid      = errors.New("invalid request")
+	ErrTooLarge     = errors.New("request too large")
+	ErrUnavailable  = errors.New("Forms dependency unavailable")
 )
 
 type Contract interface {
@@ -17,6 +27,7 @@ type Contract interface {
 
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
+	AuthenticateSession(context.Context, string) (context.Context, error)
 	ListSchemas(context.Context, string, string, int) (SchemaPage, error)
 	GetSchema(context.Context, string, string) (Schema, error)
 	SaveSchema(context.Context, SaveSchemaRequest) (Schema, error)
@@ -84,15 +95,19 @@ type DeleteSubmissionRequest struct {
 
 type Descriptor struct{}
 
+func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
+	return platform.ComponentDescriptor{ID: "engine.forms", Kind: "engine", Version: 1}
+}
+
 func (Descriptor) Operations() []platform.Operation {
 	return []platform.Operation{
-		{Name: "form-schema.list", Action: access.Read, ResourceType: "form-schema"},
-		{Name: "form-schema.read", Action: access.Read, ResourceType: "form-schema"},
-		{Name: "form-schema.write", Action: access.Write, ResourceType: "form-schema"},
-		{Name: "submission.list", Action: access.Read, ResourceType: "form-submission"},
-		{Name: "submission.read", Action: access.Read, ResourceType: "form-submission"},
-		{Name: "submission.status.write", Action: access.Write, ResourceType: "form-submission"},
-		{Name: "submission.delete", Action: access.Delete, ResourceType: "form-submission"},
+		{Name: "form-schema.list", Action: platform.AccessActionRead, ResourceType: "form-schema"},
+		{Name: "form-schema.read", Action: platform.AccessActionRead, ResourceType: "form-schema"},
+		{Name: "form-schema.write", Action: platform.AccessActionWrite, ResourceType: "form-schema"},
+		{Name: "submission.list", Action: platform.AccessActionRead, ResourceType: "form-submission"},
+		{Name: "submission.read", Action: platform.AccessActionRead, ResourceType: "form-submission"},
+		{Name: "submission.status.write", Action: platform.AccessActionWrite, ResourceType: "form-submission"},
+		{Name: "submission.delete", Action: platform.AccessActionDelete, ResourceType: "form-submission"},
 	}
 }
 

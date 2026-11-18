@@ -18,7 +18,6 @@ function build(key: string, version: string, createdAt = "2026-01-01T00:00:00.00
       name: key,
       version,
       engineApi: "1",
-      runtime: { abi: "static-module-v1", entry: "entry.js" },
       slots: ["main"],
       arguments: { type: "object" },
       dataInputs: [],

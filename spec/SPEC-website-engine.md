@@ -4,9 +4,15 @@
 
 > **Уточнение целевой архитектуры:** [Coordinator и модульная платформа](SPEC-coordinator-platform.md) заменяет прежние утверждения этого документа о FFmpeg и prerender внутри Website, ручной публикации и составе сборки. Воркеры находятся в `workers/`, публикацию координирует Coordinator; детали ниже сохраняются как материал для последующей полной переработки.
 
-Статус: согласованная проектная спецификация независимого Website Engine; реализация приложения и HTTP API не завершена. Для общих правил Core и хранения engine-данных применяются [SPEC-core-v2.md](SPEC-core-v2.md) и [SPEC-module-data.md](SPEC-module-data.md). Нейтральный формат результата статической сборки описан в [SPEC-static-site-artifact.md](SPEC-static-site-artifact.md), публичная маршрутизация — в [SPEC-router-engine.md](SPEC-router-engine.md), границы внешних адаптеров — в [SPEC-engine-apis.md](SPEC-engine-apis.md). Website сохраняет существующие `legacy-react-v1`, `static-module-v1` и `static-html-v1` ABI; новое значение ABI или изменение lifecycle требует отдельной согласованной спецификации. Реальные runtime-контракты приведены в [SPEC-feature-runtime.md](SPEC-feature-runtime.md).
+Статус: согласованная целевая спецификация независимого Website Engine; реализация приложения и HTTP API не завершена. Для общих правил Core и хранения engine-данных применяются [SPEC-core-architecture.md](SPEC-core-architecture.md) и [SPEC-module-data.md](SPEC-module-data.md); исторический [SPEC-core-v2.md](SPEC-core-v2.md) описывает только прежнюю реализацию. Нейтральный формат результата статической сборки описан в [SPEC-static-site-artifact.md](SPEC-static-site-artifact.md), публичная маршрутизация — в [SPEC-router-engine.md](SPEC-router-engine.md), границы внешних адаптеров — в [SPEC-engine-apis.md](SPEC-engine-apis.md). Целевой runtime поддерживает только новый ABI с lifecycle `render / hydrate / update / dispose`; ZIP Vitasil адаптируются до импорта. Старые ABI ниже — историческая справка, а не target-контракт. См. актуальный target раздел в [SPEC-feature-runtime.md](SPEC-feature-runtime.md).
 
 Эта спецификация уточняет ответственность Website и запрещает прямые зависимости Website от Loader, Router и других движков. Старые абзацы общей спецификации, где Router вызывает обработчики движков или Website автоматически назначает маршрут/снапшот, должны трактоваться с учётом этой границы: публикация в Router выполняется отдельным API-вызовом клиента/админки.
+
+### Target Sites API: branches and snapshot assignment
+
+Branch topology is static startup configuration: API clients may list configured branches but cannot create, rename, enable, or change their listener address, CORS origins, or indexing policy. Each configured branch is associated with one site. Website returns stable internal branch IDs, the site association, and the current independent snapshot assignment. Assignment is an authenticated, explicit `PUT` guarded by both the branch's expected revision and the selected snapshot's expected revision; it records a durable branch event and returns the new branch revision. The API exposes a cursor-paginated branch event history. Assignment and history require write/read access to the configured `features` group respectively. A branch assignment does not mutate another branch, the snapshot, Content state, or a Router route.
+
+Snapshot administration is also available through the Sites API. Listing is cursor-paginated and may be filtered to a configured `site_id`; detail includes the complete Website-owned structure, metadata, and design-system payload. `POST /api/v2/admin/sites/snapshots` requires a client idempotency key, a name, a full payload, and both expected parent revisions. Root creation has no `parent_id` and uses zero for both revisions. Child creation names its parent and must match both its current snapshot revision and content revision; stale state returns conflict without a partial child. The API rejects duplicate JSON object keys and oversized or non-object payload sections before calling Website; Website still validates the versioned domain schemas. `DELETE /api/v2/admin/sites/snapshots/{id}` requires the current snapshot revision in `If-Match`; Website enforces branch protections and atomically reparents children where deletion is allowed. These operations require write access to the configured `features` group, while listing/detail require read access. The source of valid site IDs for root snapshots is the static site/branch configuration; the Admin must not invent sites from client input.
 
 ## 1. Назначение и границы
 
@@ -31,7 +37,7 @@ flowchart LR
     Website[Website Engine<br/>Sites API + workers]
     Router[Router Engine<br/>Settings API + Delivery API]
     Core[Core<br/>единый typed API]
-    ModuleData[(core.module_data)]
+    ModuleData[(engine_data.records)]
     S3[(S3 через Core)]
     FF[FFmpeg worker<br/>часть Website]
     Artifact[Static Site Artifact v1]
@@ -73,12 +79,12 @@ flowchart LR
 
 ## 3. Данные Website
 
-Вся долговременная engine-специфичная информация записывается в `core.module_data` через capability модуля `website`. PostgreSQL JSONB — физическое хранилище, но модели, версия JSON-контракта, проверка и upcast принадлежат Website. У записей каталога, снапшотов, импорта, пререндеров и FFmpeg TTL равен `0` (без истечения срока). Временное исполнение worker не является источником истины.
+Вся долговременная engine-специфичная информация записывается в `engine_data.records` через capability модуля `website`. PostgreSQL JSONB — физическое хранилище, но модели, версия JSON-контракта, проверка и upcast принадлежат Website. У записей каталога, снапшотов, импорта, пререндеров и FFmpeg TTL равен `0` (без истечения срока). Временное исполнение worker не является источником истины.
 
 Рекомендуемые типы документов в пространстве Website:
 
 - `feature-version`: идентификатор фичи и точная версия, извлечённый manifest, хеш manifest и пакета, зависимости, карта относительных путей на Core file IDs, состояние готовности и provenance;
-- `feature-import-job`: исходный file ID, созданный Website FileSet ID, ключ идемпотентности, фазы, созданные file IDs, ошибка безопасного класса, попытки и timestamps;
+- `feature-import-job`: исходный file ID, созданный Website FileSet ID, ключ идемпотентности, фазы, созданные file IDs, ошибка безопасного класса, попытки и timestamps. Публичное состояние задания — `queued`, `running`, `succeeded`, `failed` или `cancelled`; внутренние этапы импорта остаются отдельным полем прогресса;
 - `snapshot`: родительский снимок, revision, site structure/settings, набор точных `feature_id@version` и lock разрешённых зависимостей;
 - `render-job`: snapshot revision, render input digest, состояние и artifact manifest file ID;
 - `media-job`: исходный Core file ID, хеш, preset с версией, состояние, производный file ID и ошибки;
@@ -124,7 +130,7 @@ ZIP является статическим пакетом, а не исполн
 
 Манифест потребителя может ссылаться только на публичный контракт провайдера, не на его внутренние пути или внутренние структуры. Tokens namespaced по provider. Override применяется только там, где provider объявил token overridable; неопределённый token или несовместимая версия — ошибка проверки снапшота/сборки до публикации. Значения по умолчанию объявляются в manifest; общие пользовательские изменения остаются snapshot-scoped.
 
-Website валидирует только поддерживаемые версии существующих ABI: `legacy-react-v1`, `static-module-v1` и `static-html-v1`. Для каждого из них сохраняются действующие поля manifest и lifecycle-контракт из [SPEC-feature-runtime.md](SPEC-feature-runtime.md). Нельзя принимать ZIP, объявляющий неизвестный ABI, молча подменять lifecycle или пересобирать runtime под ABI v2 в рамках этой архитектурной работы.
+Website валидирует только новый целевой ABI и его явную версию в manifest. Исторические `legacy-react-v1`, `static-module-v1` и `static-html-v1` не запускаются напрямую: ZIP адаптируется до импорта или отклоняется с контролируемой ошибкой. Нельзя угадывать ABI по содержимому архива, молча менять lifecycle или принимать неизвестные версии.
 
 ## 5. Импорт фичи из файла
 
@@ -149,7 +155,7 @@ sequenceDiagram
     participant C as Core
     participant S as Website Sites API
     participant W as Website import worker
-    participant D as core.module_data
+    participant D as engine_data.records
 
     A->>F: upload ZIP
     F->>L: upload protocol
@@ -195,7 +201,7 @@ queued -> reading -> extracting -> verifying -> source_cleanup_pending -> ready
 
 Повтор с тем же idempotency key и тем же fingerprint возвращает ту же job. Тот же ключ с другим `source_file_id`/fingerprint — конфликт. Одновременно обрабатывает job только один worker lease/revision. Истёкший lease может быть перехвачен; все Core file create/delete операции и обновления module-data обязаны иметь идемпотентный способ сверить уже созданный шаг. При неоднозначном результате операции worker сначала читает её состояние через Core/module data, не создавая копии вслепую.
 
-Регистрация версии и переход job должны использовать atomic batch/CAS внутри `core.module_data`, где это возможно. Core file operations не транзакционны вместе с module data, поэтому job сохраняет шаги и UUID до перехода дальше. Ошибка записи после создания файла приводит к reconciliation/удалению принадлежащего этой job осиротевшего файла, а не к выдаче частичного feature version.
+Регистрация версии и переход job должны использовать atomic batch/CAS внутри `engine_data.records`, где это возможно. Core file operations не транзакционны вместе с module data, поэтому job сохраняет шаги и UUID до перехода дальше. Ошибка записи после создания файла приводит к reconciliation/удалению принадлежащего этой job осиротевшего файла, а не к выдаче частичного feature version.
 
 ### 5.3 Проверка ZIP и отказоустойчивость
 
@@ -242,7 +248,7 @@ FFmpeg входит в Website Engine как отдельная worker capabilit
 sequenceDiagram
     actor A as Admin / Website worker
     participant W as Website Media API / worker
-    participant D as core.module_data
+    participant D as engine_data.records
     participant C as Core
     participant F as FFmpeg
 
@@ -280,7 +286,7 @@ FFmpeg запускается без shell, с фиксированным execut
 До объявления Website готовым потребуются unit/contract/integration проверки как минимум для:
 
 1. повторного import с одинаковым и конфликтующим idempotency key;
-2. ZIP traversal, symlink, duplicate normalized names, bomb, oversized entries, bad manifest и отказ импорта legacy/неизвестного ABI;
+2. ZIP traversal, symlink, duplicate normalized names, bomb, oversized entries, bad manifest и контролируемый отказ legacy/неизвестного ABI;
 3. worker crash после каждой внешней Core operation и возобновления без дублей/утечки частичных версий;
 4. отказа удаления исходного ZIP и идемпотентного cleanup;
 5. Core authorization/revocation до чтения и при создании выходных файлов;
@@ -296,4 +302,4 @@ FFmpeg запускается без shell, с фиксированным execut
 
 ## 9. Открытое проектное решение
 
-Общий UI/design provider задаёт публичные Website фичи через manifest-зависимость и версионированные tokens/assets. Не решено, должен ли Admin UI использовать тот же UI-контракт или иметь отдельную компонентную систему. До ответа этот вопрос не расширяет ABI публичных фич и не создаёт зависимость Admin UI от Website feature packages.
+Общий UI/design provider задаёт публичные Website фичи через manifest-зависимость и версионированные tokens/assets. Admin UI использует тот же provider. Встроенный минимальный Admin fallback обеспечивает вход и восстановление ранее загруженной совместимой версии provider. Выбор версии сначала проверяет совместимость и сразу переключает Admin; затем Coordinator отдельно пересобирает затронутые опубликованные сайты в дочерние снапшоты. Ошибка оставляет сайту прежнюю публикацию и требует ручного повтора. Если публикация сайта изменилась во время сборки, устаревший результат отбрасывается и сборка повторяется от новой публикации. Несколько маршрутов одного сайта переключаются отдельно и могут ссылаться на один созданный дочерний снапшот.

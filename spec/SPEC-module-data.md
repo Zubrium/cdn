@@ -1,23 +1,23 @@
 # Единое JSON-хранилище данных движков
 
-Статус: архитектура согласована, Core module-data и Loader реализованы в рабочем дереве; итоговая приёмка после текущих изменений ещё не выполнена. Эта спецификация заменяет прежнее требование о собственной PostgreSQL-схеме и Atlas-наборе миграций для каждого engine.
+Статус: contract JSON engine records. Целевая физическая таблица — `engine_data.records`; [SPEC-core-architecture.md](SPEC-core-architecture.md) задаёт её схему и границы Core. Go API пока сохраняет имя `ModuleData` из исторического контракта. В документе `module_id` означает scoped capability ID, а физическая колонка новой таблицы называется `engine_id`.
 
 ## Владение и границы
 
-- У продукта одна PostgreSQL-база и одна схема хранения модулей — `core`. Ни у одного engine нет собственной базы, PostgreSQL-схемы, runtime-учётной записи или Atlas-миграций.
-- Core владеет структурированными таблицами своей файловой и идентификационной модели, а также единственной общей таблицей `core.module_data` для всех постоянных данных engines.
+- У продукта одна PostgreSQL-база. Core владеет отдельными схемами `access`, `files`, `uploads`, `file_index`, `engine_data` и `coordination`; долговечные записи движков находятся в общей таблице `engine_data.records`. Ни у одного engine нет собственной базы, PostgreSQL-схемы, runtime-учётной записи или Atlas-миграций.
+- Core владеет структурированными таблицами доступа, файлов, загрузок и поисковых наборов, а также единственной общей таблицей `engine_data.records` для постоянных данных engines. Логическое имя конфигурации `core.module_data.*` не является физическим именем схемы или таблицы.
 - Каждый engine остаётся владельцем смысла своих данных: Go-модели, валидации, инвариантов, сериализации, версий формата JSON и преобразований при обновлении определяет сам engine. Физически данные сохраняет Core.
-- Engines работают с `module_data` только через типизированный Go-контракт Core. Engine не получает `*sql.DB`, общий DSN или возможность выполнить произвольный SQL. Core выдаёт модулю ограниченную capability, привязанную к зарегистрированному `module_id`; клиентский запрос не может выбрать или подменить этот ID.
+- Engines работают с engine records только через типизированный Go-контракт Core. Engine не получает `*sql.DB`, общий DSN или возможность выполнить произвольный SQL. Core выдаёт движку ограниченную capability, привязанную к зарегистрированному engine ID; клиентский запрос не может выбрать или подменить этот ID.
 - Данные одного engine недоступны другому через Core API. Межмодульные связи — только явные идентификаторы и Go-контракты; SQL foreign keys между engine-данными и таблицами Core не создаются.
-- Файловые байты остаются в S3 под управлением Core. `module_data` хранит только JSON и ссылки/идентификаторы объектов, не содержимое файлов и не секреты.
+- Файловые байты остаются в S3 под управлением Core. `engine_data.records` хранит только JSON и ссылки/идентификаторы объектов, не содержимое файлов и не секреты.
 
 ## Физическая модель
 
-`core.module_data` — одна таблица с одной записью на модульный документ/агрегат:
+`engine_data.records` — одна таблица с одной записью на документ/агрегат движка:
 
 | Поле | Назначение |
 | --- | --- |
-| `module_id` | Стабильный ID зарегистрированного engine, подставляемый Core, например `loader`, `website` или `content` |
+| `engine_id` | Стабильный ID зарегистрированного engine, подставляемый Core, например `engine.loader`, `engine.website` или `engine.content` |
 | `namespace` | Пространство имён контракта engine, например `uploads/session`, `site/snapshot` или `content/record`; не более 255 байт |
 | `scope_type`, `scope_id` | Область документа: глобальная, сайт, сессия или другая объявленная engine область |
 | `record_key` | Стабильный ключ документа внутри namespace и scope |
@@ -28,7 +28,7 @@
 | `expires_at` | Необязательный срок действия; TTL используется для временных записей и сессий |
 | `created_at`, `updated_at` | Время создания и последнего изменения |
 
-Уникальность определяется ключом `(module_id, namespace, scope_type, scope_id, record_key)`. Обязательны индекс этого ключа, общий GIN-индекс `index_data` и частичный индекс `expires_at` для очистки TTL. Новые физические индексы и поля добавляются только миграцией Core, а не миграцией отдельного engine. Лимиты размера JSON, суммарного batch, числа selector-полей, страницы и batch должны быть явными operational settings.
+Уникальность определяется ключом `(engine_id, namespace, scope_type, scope_id, record_key)`. Обязательны индекс этого ключа, общий GIN-индекс `index_data` и частичный индекс `expires_at` для очистки TTL. Новые физические индексы и поля добавляются только миграцией Core, а не миграцией отдельного engine. Лимиты размера JSON, суммарного batch, числа selector-полей, страницы и batch должны быть явными operational settings.
 
 `payload` — авторитетные данные. `index_data` — производная проекция, создаваемая и заменяемая атомарно вместе с ним; Core индексирует её, но не интерпретирует предметное содержимое. Нельзя индексировать весь payload автоматически или позволять API выполнять произвольный JSONPath/SQL.
 
@@ -45,14 +45,14 @@ Composition root сначала регистрирует engine descriptor, за
 
 Контракт хранилища предоставляет:
 
-- Composition root один раз привязывает store к зарегистрированным `module_id`, namespace descriptor и selector definitions. Engine получает только capability для выданных namespace; его публичный API не содержит `module_id`. Capability не сериализуется и не восстанавливается из HTTP, YAML данных пользователя или record payload. Composition root не передаёт engine Core Runtime либо PostgreSQL pool.
+- Composition root один раз привязывает store к зарегистрированному engine ID, namespace descriptor и selector definitions. Engine получает только capability для выданных namespace; его публичный API не содержит engine ID. Capability не сериализуется и не восстанавливается из HTTP, YAML данных пользователя или record payload. Composition root не передаёт engine Core Runtime либо PostgreSQL pool.
 - `Get(scope,key)` возвращает payload, index projection, payload version, current revision и timestamps. `Put(scope,key,expectedRevision,value)` принимает typed `time.Duration` TTL: revision `0` создаёт документ только при отсутствии активной строки; положительная revision выполняет CAS update активной строки. Просроченный документ можно заменить с revision `0`, положительная revision не возобновляет его. `Delete(scope,key,expectedRevision)` удаляет только точную revision, включая просроченную запись для завершения очистки. Несовпадение возвращает `ErrModuleDataConflict`, отсутствующая запись — not found. Last-write-wins отсутствует.
 - Revision берётся из sequence, принадлежащей Core migration, и строго увеличивается при каждой успешной записи. Удаление/истечение и повторное создание того же ключа не сбрасывает revision и не допускает ABA-конфликт со старым клиентом. Пропуски sequence после rollback нормальны; consumers используют revision только как opaque CAS token.
 - `List(scope,selectors,cursor,limit)` всегда ограничен module capability, namespace и scope. `limit` обязателен и не превышает настроенный максимум; Core дополнительно уменьшает размер страницы по `max_page_bytes` и максимальным размерам payload/index, оставляя не более одной дополнительной строки для cursor. Core фильтрует истёкшие документы до пагинации, стабильно сортирует только по `record_key ASC` и возвращает opaque keyset cursor без total count. `ListExpired` использует те же границы.
 - Descriptor namespace объявляет поля `string`, finite JSON `number`, `boolean` или `string_array`. Поддерживаются `eq`/`IN` для scalar-полей и `contains` для `string_array`; несколько selectors соединяются через AND. Каждое поле и оператор проверяются по descriptor. SQL использует параметризованное JSONB containment (`@>`) по зарегистрированным проекциям; общее число сериализованных selector fragments ограничено `max_index_bytes`, а `max_selectors` и `max_selector_values` ограничивают весь запрос (число условий и суммарное число значений по всем условиям). Числовые projection и selector значения проверяются теми же пределами нормализации JSONB, что и payload; корректные числа вне диапазона `float64` сохраняются и сравниваются без потери точности. Не поддерживаются range, произвольная сортировка, JSONPath, SQL fragments и неограниченный scan.
 - `TTL=0` означает отсутствие expiry, положительный TTL вычисляется PostgreSQL clock в той же операции записи и сохраняется в `expires_at`. Expired rows логически недоступны для обычных `Get` и `List`. Scoped `GetExpired(key)` и `ListExpired(limit)` доступны только capability-владельцу для восстановления и очистки; `Delete` допускает CAS-удаление полученной expired revision. `Put` с revision `0` может атомарно заменить истёкшую строку, а положительная revision не возобновляет её. Core не удаляет engine records сам до завершения engine-owned cleanup.
 - `Batch(scope,operations)` принимает ограниченный список `Put`/`Delete` только для одной namespace capability и в одной области. Дублирующие ключи в batch отклоняются. Core до открытия транзакции проверяет суммарный нормализованный JSONB размер и максимальное число операций. Все CAS условия и изменения выполняются в одной PostgreSQL-транзакции; любой конфликт или ошибка откатывает весь batch.
-- Публичные ошибки различают validation, not found, revision conflict, limit exceeded и storage unavailable; сообщения не содержат DSN, payload, credentials или SQL. Core не возвращает внутренний `module_id` из HTTP-ответа.
+- Публичные ошибки различают validation, not found, revision conflict, limit exceeded и storage unavailable; сообщения не содержат DSN, payload, credentials или SQL. Core не возвращает внутренний engine ID из HTTP-ответа.
 
 Selector definitions и их type validation принадлежат engine. Engine сериализует одновременно payload и `index_data`; Core атомарно сохраняет оба значения, проверяет типы projection по descriptor и строит только параметризованные containment predicates. Значения полей JSON никогда не становятся SQL-идентификаторами. Планировщик PostgreSQL использует общий GIN-индекс и btree-индекс для keyset-пагинации.
 
@@ -72,7 +72,7 @@ Loader использует module ID `loader`, одну зарегистрир�
 
 Loader не держит необратимое состояние только в памяти. Bounded local cache ограничен одновременно количеством записей, суммарными сериализованными байтами и TTL; это подсказка, а Core record revision сверяется при каждом попадании. После рестарта или на другой реплике сессия возобновляется чтением Core. Expired session не возвращается пользовательскому API; Loader получает её через `ListExpired` и при необходимости exact-key `GetExpired`, создаёт/обновляет durable cleanup job, разрешает неоднозначный Core commit, удаляет только точные staging refs и затем CAS-удаляет part records и job. Перед очисткой Loader сверяет upload ID, principal, число частей и совместимость состояний cleanup job и сессии; несогласованные данные останавливают очистку. Cleaner обходит pending jobs bounded страницами с вращаемым keyset cursor, чтобы незавершённый Core commit не блокировал последующие задания; cursor является локальной подсказкой, а каждый шаг повторно подтверждается durable Core state и CAS. Ошибка чтения статуса Core закрывает cleanup: связанные bytes не удаляются. Удаление job, уже выполненное другой репликой, считается успешным идемпотентным результатом.
 
-`module_data` не заменяет Core staging/final-file API, S3 и авторизацию. Перед commit Core заново проверяет текущие полномочия пользователя и группы; Loader не хранит копию решений о доступе.
+`engine_data.records` не заменяет Core staging/final-file API, S3 и авторизацию. Перед commit Core заново проверяет текущие полномочия пользователя и группы; Loader не хранит копию решений о доступе.
 
 ## Приёмка
 

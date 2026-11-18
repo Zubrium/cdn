@@ -1,6 +1,6 @@
 # Сверка новой архитектуры Coordinator
 
-Статус: исходный рабочий документ сверки от 17 ноября 2026 года. Ответы пользователя и более поздние контракты в [SPEC-coordinator-platform.md](SPEC-coordinator-platform.md) и [SPEC-coordinator-implementation.md](SPEC-coordinator-implementation.md) имеют приоритет над вопросами/формулировками ниже. Центральный Coordinator уже имеет implementation contract и durable Core primitives; это не означает готовность всех engine, worker, Router и admin flows. Исторические заметки ниже не подтверждают выполнение acceptance.
+Статус: журнал архитектурной сверки. Более поздние решения о слоях Core, схемах БД и workflow зафиксированы в [SPEC-core-architecture.md](SPEC-core-architecture.md) и имеют приоритет ниже. Пользователь согласовал одну систему на БД, общий `engine_data.records`, новый пустой Atlas baseline и динамические durable workflows. Исторические вопросы ниже не являются открытыми решениями, если они противоречат этим контрактам; исторические заметки не подтверждают выполнение acceptance.
 
 ## Направление
 

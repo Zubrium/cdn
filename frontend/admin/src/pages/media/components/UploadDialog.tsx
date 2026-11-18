@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, RefreshCw, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, isUploadAccepted, uploadMediaFile } from "@/api";
-import type { FileVisibility } from "@/types";
+import { useAuth } from "@/app/auth";
 import { queryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/common/confirm";
@@ -28,7 +28,7 @@ import { formatBytes } from "@/lib/format";
 type UploadTask = {
   id: string;
   file: File;
-  visibility: FileVisibility;
+  group: string;
   progress: number | null;
   status: "pending" | "uploading" | "success" | "error" | "canceled";
   error?: string;
@@ -46,9 +46,14 @@ export function UploadDialog({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { principal } = useAuth();
   const [tasks, setTasks] = useState<UploadTask[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [visibility, setVisibility] = useState<FileVisibility | "">("");
+  const [group, setGroup] = useState("");
+  const writableGroups = Object.entries(principal?.group_access ?? {})
+    .filter(([, level]) => level === 2)
+    .map(([key]) => key)
+    .sort();
   const confirm = useConfirm();
   const limitsQuery = useQuery({ queryKey: ["file-limits"], queryFn: ({ signal }) => api.media.limits(signal), enabled: open });
   const controllers = useRef(new Map<string, AbortController>());
@@ -61,13 +66,13 @@ export function UploadDialog({
     runningRef.current = false;
     setTasks([]);
     setDragging(false);
-    setVisibility("");
+    setGroup("");
   }, [open]);
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const incoming = Array.from(files);
     if (incoming.length === 0) return;
-    if (!visibility) { toast.error("Выберите доступ к файлам перед загрузкой"); return; }
+    if (!group) { toast.error("Выберите группу, в которую загрузить файлы"); return; }
     if (!limitsQuery.data) { toast.error("Не удалось получить ограничения загрузки"); return; }
     const maxBytes = limitsQuery.data.maxBytes;
     setTasks((current) => {
@@ -80,7 +85,7 @@ export function UploadDialog({
           added.push({
             id,
             file,
-            visibility,
+            group,
             progress: null,
             status: "error",
             error: "Неподдерживаемый тип файла",
@@ -91,18 +96,18 @@ export function UploadDialog({
           added.push({
             id,
             file,
-            visibility,
+            group,
             progress: null,
             status: "error",
             error: `Файл больше ${formatBytes(maxBytes)}`,
           });
           return;
         }
-        added.push({ id, file, visibility, progress: null, status: "pending" });
+        added.push({ id, file, group, progress: null, status: "pending" });
       });
       return [...current, ...added];
     });
-  }, [visibility, limitsQuery.data]);
+  }, [group, limitsQuery.data]);
 
   const uploadOne = useCallback(
     async (task: UploadTask) => {
@@ -118,6 +123,7 @@ export function UploadDialog({
       try {
         await uploadMediaFile(
           task.file,
+          [task.group],
           (progress) => {
             setTasks((current) =>
               current.map((item) =>
@@ -126,7 +132,6 @@ export function UploadDialog({
             );
           },
           controller.signal,
-          task.visibility,
         );
         setTasks((current) =>
           current.map((item) =>
@@ -217,18 +222,19 @@ export function UploadDialog({
         </DialogHeader>
 
         <div className="space-y-1.5">
-          <label htmlFor="upload-visibility" className="text-sm font-medium">Доступ к файлам</label>
-          <Select value={visibility} onValueChange={(value:FileVisibility)=>setVisibility(value)} disabled={active}>
-            <SelectTrigger id="upload-visibility"><SelectValue placeholder="Выберите доступ" /></SelectTrigger>
-            <SelectContent><SelectItem value="public">Публичный — доступен по ссылке</SelectItem><SelectItem value="private">Закрытый — только по временной ссылке</SelectItem></SelectContent>
+          <label htmlFor="upload-group" className="text-sm font-medium">Группа доступа</label>
+          <Select value={group} onValueChange={setGroup} disabled={active || writableGroups.length === 0}>
+            <SelectTrigger id="upload-group"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
+            <SelectContent>{writableGroups.map((key) => <SelectItem key={key} value={key}>{key}</SelectItem>)}</SelectContent>
           </Select>
+          {writableGroups.length === 0 && <p className="text-xs text-muted-foreground">Для загрузки нужна группа с уровнем доступа 2.</p>}
           {limitsQuery.error && <p className="text-sm text-destructive" role="alert">Не удалось загрузить ограничения. <button type="button" className="underline" onClick={()=>void limitsQuery.refetch()}>Повторить</button></p>}
         </div>
         <input
           ref={fileInput}
           type="file"
           multiple
-          disabled={!visibility || !limitsQuery.data}
+          disabled={!group || !limitsQuery.data}
           className="sr-only"
           onChange={(event) => {
             if (event.target.files) addFiles(event.target.files);
@@ -239,7 +245,7 @@ export function UploadDialog({
 
         <button
           type="button"
-          disabled={!visibility || !limitsQuery.data}
+          disabled={!group || !limitsQuery.data}
           onClick={() => fileInput.current?.click()}
           onDragOver={(event) => {
             event.preventDefault();
@@ -280,7 +286,7 @@ export function UploadDialog({
                       {task.file.name}
                     </p>
                     <p className="text-2xs text-muted-foreground">
-                      {formatBytes(task.file.size)} · {task.visibility === "private" ? "Закрытый" : "Публичный"}
+                      {formatBytes(task.file.size)} · группа {task.group}
                       {task.error ? ` · ${task.error}` : ""}
                     </p>
                   </div>

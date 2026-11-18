@@ -37,6 +37,21 @@ jobs:
       TEST_CORE_PLATFORM_ADMIN_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_platform_ci?sslmode=disable
       TEST_CORE_RUNTIME_ROLE_DATABASE_URL: postgres://core_runtime_escalated:runtime-escalated-ci-only@localhost:5432/zubrium_core_qa_runtime_role_ci?sslmode=disable
       TEST_CORE_RUNTIME_ROLE_MIGRATION_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_runtime_role_ci?sslmode=disable
+      TEST_COORDINATOR_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_ci?sslmode=disable
+      TEST_COORDINATOR_WORKFLOW_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_workflow_ci?sslmode=disable
+      TEST_COORDINATOR_WORKFLOW_RACE_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_workflow_race_ci?sslmode=disable
+      TEST_COORDINATOR_CHILDREN_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_children_ci?sslmode=disable
+      TEST_COORDINATOR_CANCEL_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_cancel_ci?sslmode=disable
+      TEST_COORDINATOR_STALE_CAPABILITY_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_stale_capability_ci?sslmode=disable
+      TEST_COORDINATOR_RETRY_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_retry_ci?sslmode=disable
+      TEST_COORDINATOR_DELAYED_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_delayed_ci?sslmode=disable
+      TEST_COORDINATOR_RESTART_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_restart_ci?sslmode=disable
+      TEST_COORDINATOR_RESTART_PENDING_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_restart_pending_ci?sslmode=disable
+      TEST_COORDINATOR_TAKEOVER_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_takeover_ci?sslmode=disable
+      TEST_COORDINATOR_RETENTION_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_retention_ci?sslmode=disable
+      TEST_COORDINATOR_DEPENDENCY_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_dependency_ci?sslmode=disable
+      TEST_COORDINATOR_DEPENDENCY_WAIT_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_dependency_wait_ci?sslmode=disable
+      TEST_COORDINATOR_EXHAUSTED_DATABASE_URL: postgres://qa:disposable-ci-only@localhost:5432/zubrium_core_qa_coordinator_exhausted_ci?sslmode=disable
       TEST_ATLAS_BINARY: ${{ runner.temp }}/atlas
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -47,7 +62,7 @@ jobs:
         run: curl -fsSL https://atlasgo.sh | ATLAS_VERSION=v1.3.0 sh -s -- --community --output "${RUNNER_TEMP}/atlas" --no-install
       - name: Create isolated integration resources
         run: |
-          for database in zubrium_core_qa_bootstrap_ci zubrium_core_qa_manager_race_ci zubrium_core_qa_credential_race_ci zubrium_core_qa_groups_ci zubrium_core_qa_schema_ci zubrium_core_qa_platform_ci zubrium_core_qa_runtime_role_ci; do
+          for database in zubrium_core_qa_bootstrap_ci zubrium_core_qa_manager_race_ci zubrium_core_qa_credential_race_ci zubrium_core_qa_groups_ci zubrium_core_qa_schema_ci zubrium_core_qa_platform_ci zubrium_core_qa_runtime_role_ci zubrium_core_qa_coordinator_ci zubrium_core_qa_coordinator_workflow_ci zubrium_core_qa_coordinator_workflow_race_ci zubrium_core_qa_coordinator_children_ci zubrium_core_qa_coordinator_cancel_ci zubrium_core_qa_coordinator_stale_capability_ci zubrium_core_qa_coordinator_retry_ci zubrium_core_qa_coordinator_delayed_ci zubrium_core_qa_coordinator_restart_ci zubrium_core_qa_coordinator_restart_pending_ci zubrium_core_qa_coordinator_takeover_ci zubrium_core_qa_coordinator_retention_ci zubrium_core_qa_coordinator_dependency_ci zubrium_core_qa_coordinator_dependency_wait_ci zubrium_core_qa_coordinator_exhausted_ci; do
             PGPASSWORD=disposable-ci-only createdb -h 127.0.0.1 -U qa "$database"
           done
           PGPASSWORD=disposable-ci-only psql -h 127.0.0.1 -U qa -d postgres -v ON_ERROR_STOP=1 -c 'CREATE ROLE zubrium_core_runtime NOLOGIN'
@@ -61,3 +76,5 @@ jobs:
       - run: make coverage
       - run: make build
       - run: make build-full
+      - run: make build-dev-fixtures
+      - run: make test-dev-fixtures

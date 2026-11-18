@@ -14,8 +14,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Zubrium/cdn/core/access"
+	core "github.com/Zubrium/cdn/core/presentation"
 	loaderapi "github.com/Zubrium/cdn/engines/loader/presentation"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
 )
 
 const apiPrefix = "/api/v2/files"
@@ -23,6 +24,7 @@ const apiPrefix = "/api/v2/files"
 type Handler struct {
 	loader Loader
 	cfg    Config
+	auth   *adminhttpauth.Transport
 	mux    *http.ServeMux
 }
 
@@ -33,7 +35,15 @@ func NewHandler(loader Loader, cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	h := &Handler{loader: loader, cfg: cfg, mux: http.NewServeMux()}
+	var auth *adminhttpauth.Transport
+	if len(cfg.AllowedOrigins) > 0 {
+		var err error
+		auth, err = adminhttpauth.New(cfg.AllowedOrigins)
+		if err != nil {
+			return nil, err
+		}
+	}
+	h := &Handler{loader: loader, cfg: cfg, auth: auth, mux: http.NewServeMux()}
 	h.routes()
 	return h, nil
 }
@@ -43,6 +53,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) routes() {
+	h.mux.HandleFunc("GET "+apiPrefix+"/limits", h.uploadLimits)
 	h.mux.HandleFunc("POST "+apiPrefix+"/uploads", h.beginUpload)
 	h.mux.HandleFunc("GET "+apiPrefix+"/uploads/{id}", h.uploadStatus)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/uploads/{id}/parts/{number}", h.uploadPart)
@@ -64,6 +75,17 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("HEAD "+apiPrefix+"/objects/{id}/content", h.headFile)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/objects/{id}/groups/{group}", h.addGroup)
 	h.mux.HandleFunc("DELETE "+apiPrefix+"/objects/{id}/groups/{group}", h.removeGroup)
+}
+
+func (h *Handler) uploadLimits(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authenticate(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		MaxBytes       int64 `json:"maxBytes"`
+		PartBytes      int64 `json:"partBytes"`
+		MaxUploadParts int   `json:"maxUploadParts"`
+	}{MaxBytes: h.cfg.MaxFileBytes, PartBytes: h.cfg.MaxPartBytes, MaxUploadParts: h.cfg.MaxUploadParts})
 }
 
 func (h *Handler) listSets(w http.ResponseWriter, r *http.Request) {
@@ -246,12 +268,30 @@ func (h *Handler) changeSetMembership(w http.ResponseWriter, r *http.Request, ad
 }
 
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (context.Context, bool) {
-	credential, ok := bearerCredential(r.Header.Get("Authorization"))
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "Valid Core credentials are required")
+	credential, err := adminhttpauth.Resolve(r)
+	if err != nil {
+		switch {
+		case errors.Is(err, adminhttpauth.ErrAmbiguous):
+			writeError(w, http.StatusBadRequest, "ambiguous_authentication", "Use one authentication method per request")
+		default:
+			writeError(w, http.StatusUnauthorized, "unauthorized", "Valid Core credentials are required")
+		}
 		return nil, false
 	}
-	ctx, err := h.loader.Authenticate(r.Context(), credential)
+	var ctx context.Context
+	if credential.Session {
+		if h.auth == nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "Cookie session transport is not configured")
+			return nil, false
+		}
+		if err := h.auth.ValidateSessionRequest(r); err != nil {
+			writeError(w, http.StatusForbidden, "csrf_forbidden", "The browser request could not be verified")
+			return nil, false
+		}
+		ctx, err = h.loader.AuthenticateSession(r.Context(), credential.Value)
+	} else {
+		ctx, err = h.loader.Authenticate(r.Context(), credential.Value)
+	}
 	if err != nil {
 		writeLoaderError(w, err, false)
 		return nil, false
@@ -261,14 +301,6 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (context.
 		return nil, false
 	}
 	return ctx, true
-}
-
-func bearerCredential(value string) (string, bool) {
-	parts := strings.Fields(value)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
-		return "", false
-	}
-	return parts[1], true
 }
 
 func (h *Handler) beginUpload(w http.ResponseWriter, r *http.Request) {
@@ -866,7 +898,7 @@ func validSHA256(value string) bool {
 }
 
 func validGroupKey(value string) bool {
-	return access.ValidGroupKey(value)
+	return core.ValidAccessGroupKey(value)
 }
 
 func validNamespace(value string) bool {

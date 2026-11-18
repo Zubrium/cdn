@@ -3,7 +3,7 @@ package presentation
 import (
 	"testing"
 
-	"github.com/Zubrium/cdn/core/access"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	routerengine "github.com/Zubrium/cdn/engines/router"
 )
 
@@ -13,7 +13,7 @@ func TestRouterDescriptorDeclaresOnlyExplicitFileOperations(t *testing.T) {
 		t.Fatal("Router descriptor must expose its typed operation inventory")
 	}
 	for _, operation := range operations {
-		if operation.Name == "" || operation.ResourceType == "" || !access.ValidAction(operation.Action) {
+		if operation.Name == "" || operation.ResourceType == "" || !platform.ValidAccessAction(operation.Action) {
 			t.Fatalf("invalid Router operation: %#v", operation)
 		}
 	}

@@ -22,6 +22,7 @@ var (
 
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
+	AuthenticateSession(context.Context, string) (context.Context, error)
 	BeginUpload(context.Context, BeginUploadInput) (UploadSession, error)
 	UploadStatus(context.Context, string) (UploadSession, error)
 	PutUploadPart(context.Context, string, int, int64, string, io.Reader) (UploadSession, error)

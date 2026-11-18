@@ -1,72 +1,54 @@
 import { describe, expect, it } from "vitest";
-import type { Role } from "@/types";
+import type { Principal } from "@/types";
 import {
-  canCreateFeature,
   canManageAccess,
   canManageFeatures,
   canManageMedia,
-  canManageReleases,
-  canManageSchema,
-  canManageSettings,
   canManageSubmissions,
-  canPromoteContent,
   canPublishContent,
   canViewSubmissions,
+  hasAnyGroupAccess,
+  hasGroupAccess,
 } from "../../../../../frontend/admin/src/lib/permissions";
 
-const roleCases: Array<{ role: Role; site: boolean; submissions: boolean; administrator: boolean }> = [
-  { role: "admin", site: true, submissions: true, administrator: true },
-  { role: "moderator", site: true, submissions: true, administrator: false },
-  { role: "staff", site: false, submissions: false, administrator: false },
-  { role: "user", site: false, submissions: false, administrator: false },
-];
+const principal = (patch: Partial<Principal> = {}): Principal => ({
+  id: "principal-1",
+  name: "Editor",
+  active: true,
+  can_manage_administrators: false,
+  group_access: {},
+  ...patch,
+});
 
-describe("role permission matrix", () => {
-  it("keeps site structure and feature management to admin and moderator", () => {
-    for (const testCase of roleCases) {
-      expect(canManageSchema(testCase.role), testCase.role).toBe(testCase.site);
-      expect(canManageFeatures(testCase.role), testCase.role).toBe(testCase.site);
-      expect(canPromoteContent(testCase.role), testCase.role).toBe(testCase.site);
-      expect(canCreateFeature(testCase.role), testCase.role).toBe(testCase.site);
-      expect(canManageReleases(testCase.role), testCase.role).toBe(testCase.site);
-    }
+describe("direct group permissions", () => {
+  it("uses the 0/1/2 group levels without role inheritance", () => {
+    const subject = principal({ group_access: { features: 1, content: 2 } });
+
+    expect(hasGroupAccess(subject, "features", 1)).toBe(true);
+    expect(hasGroupAccess(subject, "features", 2)).toBe(false);
+    expect(hasGroupAccess(subject, "content", 2)).toBe(true);
+    expect(hasGroupAccess(subject, "unknown", 1)).toBe(false);
   });
 
-  it("lets every active role edit and publish content, use media, and read submissions", () => {
-    for (const { role } of roleCases) {
-      expect(canPublishContent(role), role).toBe(true);
-      expect(canManageMedia(role), role).toBe(true);
-      expect(canViewSubmissions(role), role).toBe(true);
-    }
+  it("grants each UI capability from its owning group or management flag", () => {
+    const subject = principal({
+      group_access: { features: 2, content: 1, forms: 2, media: 2 },
+    });
+    expect(canManageFeatures(subject)).toBe(true);
+    expect(canPublishContent(subject)).toBe(false);
+    expect(canViewSubmissions(subject)).toBe(true);
+    expect(canManageSubmissions(subject)).toBe(true);
+    expect(canManageMedia(subject)).toBe(true);
+    expect(canManageAccess(subject)).toBe(false);
+    expect(canManageAccess(principal({ can_manage_administrators: true }))).toBe(true);
   });
 
-  it("restricts submission changes to admin and moderator and settings to admin", () => {
-    for (const testCase of roleCases) {
-      expect(canManageSubmissions(testCase.role), testCase.role).toBe(testCase.submissions);
-      expect(canManageAccess(testCase.role), testCase.role).toBe(testCase.administrator);
-      expect(canManageSettings(testCase.role), testCase.role).toBe(testCase.administrator);
-    }
-  });
-
-  it("fails closed when a role is absent or unknown", () => {
-    const helpers = [
-      canManageSchema,
-      canManageFeatures,
-      canPublishContent,
-      canPromoteContent,
-      canManageMedia,
-      canManageAccess,
-      canManageSettings,
-      canViewSubmissions,
-      canManageSubmissions,
-      canManageReleases,
-      canCreateFeature,
-    ];
-
-    for (const helper of helpers) {
-      expect(helper(undefined)).toBe(false);
-      expect(helper(null)).toBe(false);
-      expect(helper("owner" as Role)).toBe(false);
+  it("fails closed for missing principals and empty grants", () => {
+    for (const subject of [null, undefined, principal()]) {
+      expect(hasAnyGroupAccess(subject)).toBe(false);
+      expect(canManageFeatures(subject)).toBe(false);
+      expect(canPublishContent(subject)).toBe(false);
+      expect(canManageAccess(subject)).toBe(false);
     }
   });
 });

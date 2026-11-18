@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,9 +25,11 @@ type authContextKey struct{}
 
 type fakeLoader struct {
 	validCredential  string
+	validSession     string
 	forbidden        bool
 	loaderErr        error
 	authCalls        int
+	sessionCalls     int
 	beginCalls       int
 	partCalls        int
 	statusCalls      int
@@ -67,6 +70,7 @@ type fakeLoader struct {
 func newFakeLoader() *fakeLoader {
 	return &fakeLoader{
 		validCredential: "test-core-key",
+		validSession:    "ss_" + strings.Repeat("A", 43),
 		file:            File{ID: testFileID, Name: "asset.txt", ContentType: "text/plain", Size: 6, SHA256: "bef57ec7f53d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721", Revision: 1, Groups: []string{"assets"}, Attributes: map[string]string{"purpose": "test"}},
 		set:             FileSet{ID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", Namespace: "features", Name: "catalog assets", ManagementGroup: "features", Revision: 4, CreatedAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)},
 	}
@@ -91,6 +95,14 @@ func (f *fakeLoader) Authenticate(ctx context.Context, credential string) (conte
 	f.authCalls++
 	if credential != f.validCredential {
 		return nil, errors.Join(ErrUnauthorized, errors.New("credential verification failed"))
+	}
+	return context.WithValue(ctx, authContextKey{}, true), nil
+}
+
+func (f *fakeLoader) AuthenticateSession(ctx context.Context, token string) (context.Context, error) {
+	f.sessionCalls++
+	if token != f.validSession {
+		return nil, ErrUnauthorized
 	}
 	return context.WithValue(ctx, authContextKey{}, true), nil
 }
@@ -403,12 +415,63 @@ func testHandler(t *testing.T, loader Loader) *Handler {
 	handler, err := NewHandler(loader, Config{
 		MaxFileBytes: 1024, MaxPartBytes: 8, MaxUploadParts: 128,
 		MaxJSONBytes: 2048, MaxAttributeBytes: 256, MaxGroupsPerFile: 8,
-		DefaultPageSize: 10, MaxPageSize: 100,
+		DefaultPageSize: 10, MaxPageSize: 100, AllowedOrigins: []string{"https://admin.example"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+func TestFileAPIUsesCoreSessionsFromCookiesAndRequiresCSRFForWrites(t *testing.T) {
+	loader := newFakeLoader()
+	handler := testHandler(t, loader)
+	read := httptest.NewRequest(http.MethodGet, apiPrefix, nil)
+	read.AddCookie(&http.Cookie{Name: "zubrium_admin_session", Value: loader.validSession})
+	readResponse := httptest.NewRecorder()
+	handler.ServeHTTP(readResponse, read)
+	if readResponse.Code != http.StatusOK || loader.sessionCalls != 1 || loader.authCalls != 0 {
+		t.Fatalf("cookie session read status=%d session-auth=%d credential-auth=%d", readResponse.Code, loader.sessionCalls, loader.authCalls)
+	}
+
+	write := httptest.NewRequest(http.MethodPost, apiPrefix+"/uploads", strings.NewReader(`{}`))
+	write.Header.Set("Content-Type", "application/json")
+	write.AddCookie(&http.Cookie{Name: "zubrium_admin_session", Value: loader.validSession})
+	write.Header.Set("Origin", "https://admin.example")
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, write)
+	if denied.Code != http.StatusForbidden || loader.sessionCalls != 1 {
+		t.Fatalf("cookie write without CSRF status=%d session-auth=%d", denied.Code, loader.sessionCalls)
+	}
+
+	csrf := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	write = httptest.NewRequest(http.MethodPost, apiPrefix+"/uploads", strings.NewReader(`{}`))
+	write.Header.Set("Content-Type", "application/json")
+	write.AddCookie(&http.Cookie{Name: "zubrium_admin_session", Value: loader.validSession})
+	write.AddCookie(&http.Cookie{Name: "zubrium_admin_csrf", Value: csrf})
+	write.Header.Set("Origin", "https://admin.example")
+	write.Header.Set("X-CSRF-Token", csrf)
+	accepted := httptest.NewRecorder()
+	handler.ServeHTTP(accepted, write)
+	if accepted.Code != http.StatusBadRequest || loader.sessionCalls != 2 {
+		t.Fatalf("valid cookie/CSRF request did not reach input validation: status=%d session-auth=%d body=%s", accepted.Code, loader.sessionCalls, accepted.Body.String())
+	}
+}
+
+func TestFileAPIReturnsConfiguredUploadLimits(t *testing.T) {
+	loader := newFakeLoader()
+	response := request(testHandler(t, loader), http.MethodGet, apiPrefix+"/limits", "", true)
+	var limits struct {
+		MaxBytes       int64 `json:"maxBytes"`
+		PartBytes      int64 `json:"partBytes"`
+		MaxUploadParts int   `json:"maxUploadParts"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &limits) != nil {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if limits.MaxBytes != 1024 || limits.PartBytes != 8 || limits.MaxUploadParts != 128 {
+		t.Fatalf("unexpected configured limits: %+v", limits)
+	}
 }
 
 func request(handler http.Handler, method, path, body string, authenticated bool) *httptest.ResponseRecorder {

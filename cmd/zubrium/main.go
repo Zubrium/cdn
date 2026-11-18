@@ -10,8 +10,7 @@ import (
 	"syscall"
 
 	config "github.com/Zubrium/cdn/cmd/zubrium/config"
-	"github.com/Zubrium/cdn/coordinator"
-	"github.com/Zubrium/cdn/core/platform"
+	platform "github.com/Zubrium/cdn/core/presentation"
 )
 
 func main() {
@@ -87,12 +86,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		componentRegistry, core, _, _, api, err := registerComponents(resolved, buildPlan)
+		componentRegistry, core, _, api, err := registerComponents(resolved, buildPlan)
 		if err != nil {
 			fmt.Fprintln(stderr, "Coordinator registration failed")
 			return 1
 		}
-		application, err := coordinator.Compose(ctx, buildPlan, componentRegistry, resolved.HTTP.ShutdownTimeout)
+		application, err := platform.Compose(ctx, buildPlan, componentRegistry, resolved.HTTP.ShutdownTimeout)
 		if err != nil {
 			fmt.Fprintln(stderr, "application startup failed:", err)
 			return 1

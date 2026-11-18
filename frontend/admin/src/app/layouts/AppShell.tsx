@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import {
   Link,
@@ -25,6 +26,7 @@ import {
   History,
   ShieldCheck,
   ListTodo,
+  Route,
 } from "lucide-react";
 import { useAuth } from "@/app/auth";
 import { ThemeToggle } from "@/components/common/theme-toggle";
@@ -44,6 +46,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { canManageAccess, canManageSchema, canManageMedia, canViewSubmissions, hasGroupAccess } from "@/lib/permissions";
+import { getSyntheticDataMode, subscribeSyntheticDataMode } from "@/api";
 
 const SIDEBAR_KEY = "we_admin_sidebar_collapsed";
 
@@ -57,8 +61,18 @@ interface NavItem {
 
 const homeNav: NavItem[] = [
   { to: "/", label: "Главная", icon: LayoutDashboard, end: true },
+];
+
+const filesNav: NavItem[] = [
   { to: "/media", label: "Файлы", icon: Image, match: (p) => p.startsWith("/media") },
+];
+
+const coordinatorNav: NavItem[] = [
   { to: "/coordinator/jobs", label: "Задания", icon: ListTodo, match: (p) => p.startsWith("/coordinator/jobs") },
+];
+
+const routerNav: NavItem[] = [
+  { to: "/router/routes", label: "Публичные маршруты", icon: Route, match: (p) => p.startsWith("/router/routes") },
 ];
 
 const snapshotManagementNav: NavItem[] = [
@@ -68,13 +82,19 @@ const snapshotManagementNav: NavItem[] = [
   { to: "/snapshots/branches", label: "Ветки", icon: GitBranch, match: (p) => p.startsWith("/snapshots/branches") },
 ];
 
-const administrationNav: NavItem[] = [
-  { to: "/access/tokens", label: "Доступы", icon: ShieldCheck, match: (p) => p.startsWith("/access") },
+const accessNav: NavItem[] = [
+  { to: "/access/users", label: "Доступы", icon: ShieldCheck, match: (p) => p.startsWith("/access") },
+];
+
+const settingsNav: NavItem[] = [
   { to: "/settings", label: "Настройки", icon: Settings, match: (p) => p.startsWith("/settings") },
 ];
 
 const contentNav: NavItem[] = [
   { to: "/content", label: "Редактор", icon: Layers, match: (p) => p === "/content" },
+];
+
+const submissionsNav: NavItem[] = [
   { to: "/submissions", label: "Заявки", icon: Inbox, match: (p) => p.startsWith("/submissions") },
 ];
 
@@ -218,7 +238,13 @@ function SidebarContent({
   onToggleCollapsed?: () => void;
 }) {
   const { principal, logout } = useAuth();
-  const siteManager = principal?.role === "admin" || principal?.role === "moderator";
+  const siteManager = canManageSchema(principal);
+  const siteReader = hasGroupAccess(principal, "features", 1);
+  const contentReader = hasGroupAccess(principal, "content", 1);
+  const submissionReader = canViewSubmissions(principal);
+  const fileReader = canManageMedia(principal);
+  const coordinatorReader = hasGroupAccess(principal, "coordinator_jobs", 1);
+  const accessManager = canManageAccess(principal);
   const logoutButton = (
     <Button
       variant="ghost"
@@ -247,13 +273,16 @@ function SidebarContent({
         aria-label="Основная навигация"
       >
         <NavGroup label="Обзор" collapsed={collapsed} items={homeNav} onNavigate={onNavigate} />
-        <NavGroup label="Контент" collapsed={collapsed} items={contentNav} onNavigate={onNavigate} className="mt-3" />
+        {contentReader && <NavGroup label="Контент" collapsed={collapsed} items={contentNav} onNavigate={onNavigate} className="mt-3" />}
+        {submissionReader && <NavGroup label="Формы" collapsed={collapsed} items={submissionsNav} onNavigate={onNavigate} className="mt-3" />}
+        {fileReader && <NavGroup label="Файлы" collapsed={collapsed} items={filesNav} onNavigate={onNavigate} className="mt-3" />}
+        {coordinatorReader && <NavGroup label="Задания" collapsed={collapsed} items={coordinatorNav} onNavigate={onNavigate} className="mt-3" />}
+        {hasGroupAccess(principal, "router_routes", 1) && <NavGroup label="Маршрутизация" collapsed={collapsed} items={routerNav} onNavigate={onNavigate} className="mt-3" />}
         {siteManager && (
           <NavGroup label="Управление" collapsed={collapsed} items={snapshotManagementNav} onNavigate={onNavigate} className="mt-3" />
         )}
-        {siteManager && (
-          <NavGroup label="Администрирование" collapsed={collapsed} items={administrationNav} onNavigate={onNavigate} className="mt-3" />
-        )}
+        {siteReader && <NavGroup label="Система" collapsed={collapsed} items={settingsNav} onNavigate={onNavigate} className="mt-3" />}
+        {accessManager && <NavGroup label="Администрирование" collapsed={collapsed} items={accessNav} onNavigate={onNavigate} className="mt-3" />}
       </nav>
 
       <div className={cn("shrink-0 border-t border-sidebar-border", collapsed ? "p-2.5" : "p-3")}>
@@ -296,6 +325,11 @@ function SidebarContent({
 
 export function AppShell() {
   const location = useLocation();
+  const isSyntheticData = useSyncExternalStore(
+    subscribeSyntheticDataMode,
+    getSyntheticDataMode,
+    getSyntheticDataMode,
+  );
   const routeCanvas = location.pathname.startsWith("/site/pages") || location.pathname === "/site/router" || location.pathname === "/site/data-model";
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -386,6 +420,11 @@ export function AppShell() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {isSyntheticData && (
+          <div role="status" className="border-b border-border bg-muted px-4 py-2 text-center text-xs text-muted-foreground">
+            Данные сайта, контента и форм демонстрационные; изменения не сохраняются.
+          </div>
+        )}
         <main
           id="main-content"
           tabIndex={-1}

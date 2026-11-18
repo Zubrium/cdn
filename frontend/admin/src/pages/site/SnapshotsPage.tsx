@@ -26,9 +26,10 @@ export default function SnapshotsPage() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [query, setQuery] = useState("");
+  const [selectedSiteID, setSelectedSiteID] = useState("");
   const [busy, setBusy] = useState(false);
   const snapshots = useQuery({ queryKey: ["site", "snapshot-choices"], queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal) });
-  const branches = useQuery({ queryKey: ["branches"], queryFn: ({ signal }) => api.siteBuilder.branches(signal) });
+  const branches = useQuery({ queryKey: ["website", "branches"], queryFn: ({ signal }) => api.website.branches(signal) });
 
   const create = async (parentSnapshotId?: string) => {
     const trimmedName = name.trim();
@@ -36,14 +37,22 @@ export default function SnapshotsPage() {
     setBusy(true);
     try {
       const parent = parentSnapshotId ? await api.siteBuilder.snapshot(parentSnapshotId) : null;
-      if (parentSnapshotId && parent?.snapshot.contentRevision === undefined) {
-        throw new Error("Не удалось проверить ревизию родительского снапшота. Обновите страницу и повторите действие.");
+      if (parentSnapshotId && (parent?.snapshot.contentRevision === undefined || parent.snapshot.revision === undefined)) {
+        throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
       }
+      const configuredSites = [...new Map((branches.data?.items ?? []).map((branch) => [branch.site_id, branch.name])).entries()];
+      const siteID = parent?.snapshot.siteId || selectedSiteID || (configuredSites.length === 1 ? configuredSites[0]?.[0] : undefined);
+      if (!siteID) throw new Error("Выберите сайт из статической конфигурации веток.");
       const created = await api.siteBuilder.createSnapshotFrom({
+        siteID,
         name: trimmedName,
         ...(parentSnapshotId
-          ? { parentSnapshotId, expectedParentContentRevision: parent!.snapshot.contentRevision }
-          : { config: emptySiteConfig() }),
+          ? { parentSnapshotId, expectedParentRevision: parent!.snapshot.revision, expectedParentContentRevision: parent!.snapshot.contentRevision }
+          : {
+              config: emptySiteConfig(),
+              metadata: { formatVersion: 1, siteName: trimmedName, pages: {} },
+              designSystem: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
+            }),
       });
       setName("");
       await queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
@@ -59,7 +68,9 @@ export default function SnapshotsPage() {
     if (!(await confirm({ title: "Удалить снапшот?", description: "Его дочерние снапшоты сохранят содержимое и будут перепривязаны к родителю. Действие необратимо.", confirmLabel: "Удалить", destructive: true }))) return;
     setBusy(true);
     try {
-      await api.siteBuilder.deleteSnapshot(id);
+      const snapshot = snapshots.data?.items.find((item) => item.id === id);
+      if (!snapshot?.revision) throw new Error("Обновите список снапшотов перед удалением.");
+      await api.siteBuilder.deleteSnapshot(id, snapshot.revision);
       await queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
       toast.success("Снапшот удалён");
     } catch (error) {
@@ -73,16 +84,18 @@ export default function SnapshotsPage() {
   if (snapshots.error || branches.error) return <ErrorState error={snapshots.error ?? branches.error} onRetry={() => { void snapshots.refetch(); void branches.refetch(); }} />;
 
   const protectedIds = new Set<string>();
+  const configuredSites = [...new Map((branches.data?.items ?? []).map((branch) => [branch.site_id, branch.name])).entries()];
+  const targetSiteID = selectedSiteID || (configuredSites.length === 1 ? configuredSites[0]![0] : "");
   for (const branch of branches.data?.items ?? []) {
-    if (!branch.snapshotId) continue;
-    protectedIds.add(branch.snapshotId);
-    const parent = snapshots.data?.items.find((item) => item.id === branch.snapshotId)?.parentSnapshotId;
+    if (!branch.snapshot_id) continue;
+    protectedIds.add(branch.snapshot_id);
+    const parent = snapshots.data?.items.find((item) => item.id === branch.snapshot_id)?.parentSnapshotId;
     if (parent) protectedIds.add(parent);
   }
   const needle = query.trim().toLocaleLowerCase("ru");
   const visibleSnapshots = (snapshots.data?.items ?? []).filter((snapshot) => {
     if (!needle) return true;
-    const branchNames = (branches.data?.items ?? []).filter((branch) => branch.snapshotId === snapshot.id).map((branch) => branch.name).join(" ");
+    const branchNames = (branches.data?.items ?? []).filter((branch) => branch.snapshot_id === snapshot.id).map((branch) => branch.name).join(" ");
     return `#${snapshot.sequence} ${snapshot.name} ${snapshot.parentName ?? ""} ${branchNames}`.toLocaleLowerCase("ru").includes(needle);
   });
 
@@ -94,11 +107,18 @@ export default function SnapshotsPage() {
           <span className="text-xs font-medium text-muted-foreground">Название нового сайта или снапшота</span>
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Каталог или Новый стенд" aria-label="Название нового сайта или снапшота" maxLength={160} />
         </label>
-        <Button disabled={!name.trim() || busy} onClick={() => void create()}>
-          {busy ? "Создаём…" : "Создать пустой сайт"}
+        <label className="min-w-0 space-y-1 sm:w-64">
+          <span className="text-xs font-medium text-muted-foreground">Сайт из конфигурации веток</span>
+          <select aria-label="Сайт из конфигурации веток" className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={targetSiteID} onChange={(event) => setSelectedSiteID(event.target.value)}>
+            <option value="">Выберите сайт</option>
+            {configuredSites.map(([siteID]) => <option key={siteID} value={siteID}>Сайт · {siteID}</option>)}
+          </select>
+        </label>
+        <Button disabled={!name.trim() || !targetSiteID || busy} onClick={() => void create()}>
+          {busy ? "Создаём…" : "Создать корневой снапшот"}
         </Button>
       </div>
-      <p className="text-sm text-muted-foreground">Создаст независимый корневой снапшот с пустой главной страницей без фич и контента. Текущий выбор и назначения веток не изменятся.</p>
+      <p className="text-sm text-muted-foreground">Создаст независимый корневой снапшот с пустой главной страницей без фич и контента. Сайт выбирается из статической конфигурации; назначения веток не изменятся.</p>
       <label className="relative block max-w-xl">
         <span className="sr-only">Поиск снапшотов</span>
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -106,7 +126,7 @@ export default function SnapshotsPage() {
       </label>
       <ul aria-label="Дерево снапшотов" className="divide-y divide-border rounded-xl border border-border bg-card">
         {visibleSnapshots.map((snapshot) => {
-          const assigned = branches.data?.items.filter((branch) => branch.snapshotId === snapshot.id).map((branch) => branch.name) ?? [];
+          const assigned = branches.data?.items.filter((branch) => branch.snapshot_id === snapshot.id).map((branch) => branch.name) ?? [];
           const protectedSnapshot = protectedIds.has(snapshot.id);
           return (
             <SnapshotTreeItem

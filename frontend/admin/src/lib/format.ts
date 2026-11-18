@@ -1,11 +1,4 @@
-import type {
-  FeatureStatus,
-  FeatureType,
-  MediaStatus,
-  Role,
-  SubmissionStatus,
-  VersionStatus,
-} from "../types";
+import type { MediaStatus } from "../types";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
@@ -77,59 +70,11 @@ export function truncate(value: string, max = 80): string {
   return `${value.slice(0, max - 1).trimEnd()}…`;
 }
 
-export const roleLabels: Record<Role, string> = {
-  admin: "Администратор",
-  moderator: "Модератор",
-  staff: "Контент-редактор",
-  user: "Пользователь",
-};
-
-export const roleShortLabels: Record<Role, string> = {
-  admin: "Админ",
-  moderator: "Модератор",
-  staff: "Редактор",
-  user: "Пользователь",
-};
-
-export const featureTypeLabels: Record<FeatureType, string> = {
-  feature: "Фича",
-  form: "Форма",
-};
-
-export const featureTypeHints: Record<FeatureType, string> = {
-  feature: "Входные данные связываются с моделью выбранного снапшота",
-  form: "Приём заявок с публичной формы",
-};
-
-export const featureStatusLabels: Record<FeatureStatus, string> = {
-  active: "Активна",
-  archived: "В архиве",
-};
-
-export const versionStatusLabels: Record<VersionStatus, string> = {
-  draft: "Черновик",
-  published: "Опубликовано",
-};
-
 export const mediaStatusLabels: Record<MediaStatus, string> = {
   processing: "Обработка",
   ready: "Готово",
   failed: "Ошибка",
   deleted: "Удалено",
-};
-
-export const submissionStatusLabels: Record<SubmissionStatus, string> = {
-  new: "Новая",
-  in_progress: "В работе",
-  processed: "Обработана",
-  rejected: "Отклонена",
-};
-
-export const tokenRoleHints: Record<Role, string> = {
-  admin: "Полный доступ, включая удаление заявок и управление всеми токенами",
-  moderator: "Настройки сайта, контент, медиа и заявки; создаёт только пользовательские токены",
-  staff: "Контент, файлы и заявки; без управления настройками сайта",
-  user: "Контент, файлы и заявки; без управления настройками сайта",
 };
 
 export function formatPercent(value: number): string {

@@ -1,6 +1,21 @@
-// Package router defines the administrative route configuration boundary.
+// Package router exposes the authenticated Router Settings API independently
+// from the anonymous public delivery listener.
 package router
 
-import engine "github.com/Zubrium/cdn/engines/router/presentation"
+import (
+	"net/http"
 
-type Engine = engine.SettingsAPI
+	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	routerhttp "github.com/Zubrium/cdn/presentation/router"
+)
+
+type Engine = engine.Contract
+type Config = routerhttp.Config
+
+func NewHandler(api Engine, config Config) (http.Handler, error) {
+	handler, err := routerhttp.NewHandler(api, config)
+	if err != nil {
+		return nil, err
+	}
+	return handler.AdminHTTPHandler(), nil
+}

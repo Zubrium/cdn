@@ -1,0 +1,228 @@
+openapi: 3.1.0
+info:
+  title: Zubrium Admin Identity API
+  version: 2.0.0
+  description: >-
+    Cookie transport is owned by Presentation; credentials and revocable
+    credential-bound sessions are owned by Core. Principals have direct group
+    levels and a separate administrator-management permission. There is no role
+    or principal kind field.
+servers: [{ url: / }]
+security:
+  - AdminSession: []
+  - BearerCredential: []
+paths:
+  /api/v2/admin/session:
+    post:
+      operationId: createAdminSession
+      security: []
+      x-origin-required: true
+      description: Exchanges a credential for an HttpOnly session cookie; response never contains the session token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [credential]
+              properties: { credential: { type: string, minLength: 1 } }
+      responses:
+        '201':
+          description: Session cookie issued.
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { type: object, required: [principal], properties: { principal: { $ref: '#/components/schemas/Principal' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: getCurrentAdminSession
+      security: [{ AdminSession: [] }]
+      responses:
+        '200':
+          description: Current principal and current direct group grants.
+          content:
+            application/json:
+              schema: { type: object, required: [principal], properties: { principal: { $ref: '#/components/schemas/Principal' } } }
+        '401': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: revokeCurrentAdminSession
+      security: [{ AdminSession: [] }]
+      x-csrf-required-for-cookie-auth: true
+      x-origin-required: true
+      responses:
+        '204': { description: Cookies cleared and session revoked. }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/principals:
+    get:
+      operationId: listPrincipals
+      responses:
+        '200': { description: Principals; no credential secrets are included., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Principal' } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createPrincipal
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, can_manage_administrators]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 128 }
+                expires_at: { type: [string, 'null'], format: date-time }
+                can_manage_administrators: { type: boolean }
+                group_access: { type: object, additionalProperties: { type: integer, enum: [0, 1, 2] } }
+      responses:
+        '201':
+          description: New principal and its initial credential. The credential secret is returned once.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CreatedPrincipal' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/principals/{id}:
+    delete:
+      operationId: deactivatePrincipal
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Principal deactivated; its sessions and credentials are invalidated. }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/principals/{id}/management:
+    patch:
+      operationId: setAdministratorManagementPermission
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [enabled], properties: { enabled: { type: boolean } } }
+      responses:
+        '204': { description: Permission updated, preserving at least one active manager. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/principals/{id}/credentials:
+    parameters: [{ $ref: '#/components/parameters/ID' }]
+    get:
+      operationId: listPrincipalCredentials
+      responses:
+        '200': { description: Credential metadata; secrets are never returned., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Credential' } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: issuePrincipalCredential
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { expires_at: { type: [string, 'null'], format: date-time } } }
+      responses:
+        '201': { description: Credential secret returned once., content: { application/json: { schema: { $ref: '#/components/schemas/IssuedCredential' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/principals/{id}/groups/{group}:
+    parameters:
+      - { $ref: '#/components/parameters/ID' }
+      - name: group
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[a-z][a-z0-9_.-]{0,62}[a-z0-9]$' }
+    get:
+      operationId: getPrincipalGroupAccess
+      responses:
+        '200': { description: Direct group level., content: { application/json: { schema: { type: object, required: [principal_id, group, level], properties: { principal_id: { type: string }, group: { type: string }, level: { type: integer, enum: [0, 1, 2] } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setPrincipalGroupAccess
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [level], properties: { level: { type: integer, enum: [0, 1, 2] } } } } }
+      responses:
+        '204': { description: Assignment saved. Caller must have administrator-management permission and level 2 in this group. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/credentials/{id}:
+    delete:
+      operationId: revokeCredential
+      x-csrf-required-for-cookie-auth: true
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Credential and associated sessions revoked. }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/admin/access-groups:
+    get:
+      operationId: listAccessGroups
+      responses:
+        '200': { description: Configured static groups., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AccessGroup' } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
+    BearerCredential: { type: http, scheme: bearer }
+  parameters:
+    ID: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+  schemas:
+    Principal:
+      type: object
+      required: [id, name, active, can_manage_administrators, group_access]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        active: { type: boolean }
+        can_manage_administrators: { type: boolean }
+        group_access: { type: object, additionalProperties: { type: integer, enum: [0, 1, 2] } }
+    CreatedPrincipal:
+      type: object
+      required: [id, name, credential]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        credential: { type: string, writeOnly: true }
+    Credential:
+      type: object
+      required: [id, principal_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        principal_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+    IssuedCredential:
+      allOf:
+        - { $ref: '#/components/schemas/Credential' }
+        - type: object
+          required: [credential]
+          properties: { credential: { type: string, writeOnly: true } }
+    AccessGroup:
+      type: object
+      required: [key, active, level]
+      properties:
+        key: { type: string }
+        active: { type: boolean }
+        level: { type: integer, enum: [0, 1, 2] }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+  responses:
+    Error:
+      description: Stable machine-readable error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

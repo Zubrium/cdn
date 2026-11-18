@@ -24,5 +24,3 @@ apis:
     - form-submit
     - form-upload
     - content-runtime
-automation:
-  - site-publication

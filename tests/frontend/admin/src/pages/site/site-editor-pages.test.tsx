@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
       get: vi.fn(),
       list: vi.fn(),
     },
-    siteBuilder: {
+    website: {
       featureBuilds: vi.fn(),
     },
   },
@@ -114,7 +114,7 @@ describe("deep-link pages workflow", () => {
   beforeEach(() => {
     mocks.api.media.get.mockReset().mockResolvedValue(file);
     mocks.api.media.list.mockReset().mockResolvedValue({ items: [file], next_cursor: null });
-    mocks.api.siteBuilder.featureBuilds.mockReset().mockResolvedValue({ items: [build] });
+    mocks.api.website.featureBuilds.mockReset().mockResolvedValue({ items: [build] });
     mocks.useConfirm.mockReturnValue(vi.fn(async () => false));
     mocks.useSiteWorkspace.mockReturnValue({
       config,

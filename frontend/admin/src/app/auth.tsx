@@ -12,12 +12,11 @@ import {
   ApiError,
   UNAUTHORIZED_EVENT,
   api,
-  getStoredToken,
   isAbortError,
-  setStoredToken,
 } from "@/api";
 import type { Principal } from "@/types";
 import { errorMessage } from "@/lib/errors";
+import { classifyAuthProbeFailure } from "./auth-state";
 
 export type AuthStatus =
   | "checking"
@@ -26,12 +25,11 @@ export type AuthStatus =
   | "unavailable";
 
 interface AuthContextValue {
-  token: string | null;
   principal: Principal | null;
   status: AuthStatus;
   error: string | null;
   notice: string | null;
-  login: (token: string) => Promise<Principal>;
+  login: (credential: string) => Promise<Principal>;
   logout: () => void;
   retry: () => Promise<void>;
   clearNotice: () => void;
@@ -41,20 +39,14 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const initial = getStoredToken();
-  const [token, setToken] = useState<string | null>(initial);
   const [principal, setPrincipal] = useState<Principal | null>(null);
-  const [status, setStatus] = useState<AuthStatus>(
-    initial ? "checking" : "anonymous",
-  );
+  const [status, setStatus] = useState<AuthStatus>("checking");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const clearState = useCallback((message?: string) => {
     void queryClient.cancelQueries();
     queryClient.clear();
-    setStoredToken(null);
-    setToken(null);
     setPrincipal(null);
     setStatus("anonymous");
     setError(null);
@@ -62,14 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   useEffect(() => {
-    const stored = getStoredToken();
-    if (!stored) {
-      setStatus("anonymous");
-      return;
-    }
     let cancelled = false;
     const controller = new AbortController();
-    setToken(stored);
     setStatus("checking");
     api.auth
       .me(controller.signal)
@@ -81,12 +67,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch((meError: unknown) => {
         if (cancelled || isAbortError(meError)) return;
-        if (meError instanceof ApiError && meError.status === 401) {
-          clearState("Сессия истекла. Войдите снова.");
+        const failure = classifyAuthProbeFailure(meError);
+        if (failure.status === "anonymous") {
+          clearState();
           return;
         }
-        setError(errorMessage(meError));
-        setStatus("unavailable");
+        setError(failure.message);
+        setStatus(failure.status);
       });
     return () => {
       cancelled = true;
@@ -103,23 +90,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, [clearState]);
 
-  const login = useCallback(async (secret: string) => {
-    const value = secret.trim();
+  const login = useCallback(async (credential: string) => {
+    const value = credential.trim();
     void queryClient.cancelQueries();
     queryClient.clear();
     setNotice(null);
     setError(null);
-    setStoredToken(value);
-    setToken(value);
     try {
-      const me = await api.auth.me();
+      const me = await api.auth.login(value);
       setPrincipal(me);
       setStatus("authenticated");
       return me;
     } catch (loginError) {
       if (loginError instanceof ApiError && loginError.status === 401) {
-        setStoredToken(null);
-        setToken(null);
         setPrincipal(null);
         setStatus("anonymous");
         throw loginError;
@@ -131,34 +114,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const retry = useCallback(async () => {
-    const stored = getStoredToken();
-    if (!stored) {
-      clearState();
-      return;
-    }
     setStatus("checking");
     setError(null);
     try {
       const me = await api.auth.me();
-      setToken(stored);
       setPrincipal(me);
       setStatus("authenticated");
     } catch (retryError) {
-      if (retryError instanceof ApiError && retryError.status === 401) {
-        clearState("Сессия истекла. Войдите снова.");
+      const failure = classifyAuthProbeFailure(retryError);
+      if (failure.status === "anonymous") {
+        clearState();
         return;
       }
-      setError(errorMessage(retryError));
-      setStatus("unavailable");
+      setError(failure.message);
+      setStatus(failure.status);
     }
   }, [clearState]);
 
-  const logout = useCallback(() => clearState(), [clearState]);
+  const logout = useCallback(() => {
+    void api.auth.logout().catch(() => undefined);
+    clearState();
+  }, [clearState]);
   const clearNotice = useCallback(() => setNotice(null), []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      token,
       principal,
       status,
       error,
@@ -168,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       retry,
       clearNotice,
     }),
-    [token, principal, status, error, notice, login, logout, retry, clearNotice],
+    [principal, status, error, notice, login, logout, retry, clearNotice],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
