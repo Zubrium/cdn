@@ -1,8 +1,13 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -93,6 +98,135 @@ func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
+	contracts := []struct {
+		name string
+		src  string
+	}{
+		{name: "admin-identity.yaml", src: "presentation/admin/main/handler.go"},
+		{name: "content.yaml", src: "presentation/admin/content/handler.go"},
+		{name: "coordinator.yaml", src: "presentation/admin/coordinator/handler.go"},
+		{name: "files.yaml", src: "presentation/admin/files/handler.go"},
+		{name: "forms.yaml", src: "presentation/admin/forms/handler.go"},
+		{name: "router.yaml", src: "presentation/router/handler.go"},
+		{name: "sites.yaml", src: "presentation/admin/sites/handler.go"},
+	}
+
+	for _, item := range contracts {
+		t.Run(item.name, func(t *testing.T) {
+			contract := loadOpenAPIContract(t, item.name)
+			registered := registeredHTTPOperations(t, filepath.Join("..", "..", item.src))
+			documented := make(map[string]bool)
+			for path, pathItem := range contract.Paths {
+				// The public Router document describes the registered catch-all
+				// dispatcher. Its matching and operation restrictions are covered
+				// by Router delivery acceptance tests.
+				if path == "/" {
+					continue
+				}
+				for method, operation := range pathItem.operations() {
+					if operation != nil {
+						documented[method+" "+path] = true
+					}
+				}
+			}
+
+			for operation := range documented {
+				if !registered[operation] {
+					method, path, _ := strings.Cut(operation, " ")
+					if method == "HEAD" && registered["GET "+path] {
+						continue // Go ServeMux routes HEAD through a GET pattern.
+					}
+					t.Errorf("OpenAPI declares %s but no matching ServeMux handler is registered", operation)
+				}
+			}
+			for operation := range registered {
+				if !documented[operation] {
+					t.Errorf("ServeMux registers %s but OpenAPI does not document it", operation)
+				}
+			}
+		})
+	}
+}
+
+func registeredHTTPOperations(t *testing.T, source string) map[string]bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), source, nil, 0)
+	if err != nil {
+		t.Fatalf("parse HTTP handler registrations in %s: %v", source, err)
+	}
+	constants := make(map[string]ast.Expr)
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		for _, specification := range group.Specs {
+			values, ok := specification.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, name := range values.Names {
+				if index < len(values.Values) {
+					constants[name.Name] = values.Values[index]
+				}
+			}
+		}
+	}
+
+	registered := make(map[string]bool)
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "HandleFunc" {
+			return true
+		}
+		pattern, ok := evaluateString(call.Args[0], constants, make(map[string]bool))
+		if !ok {
+			return true
+		}
+		parts := strings.SplitN(pattern, " ", 2)
+		if len(parts) != 2 || strings.Contains(parts[1], "{path...}") {
+			return true
+		}
+		registered[parts[0]+" "+parts[1]] = true
+		return true
+	})
+	return registered
+}
+
+func evaluateString(expression ast.Expr, constants map[string]ast.Expr, resolving map[string]bool) (string, bool) {
+	switch value := expression.(type) {
+	case *ast.BasicLit:
+		if value.Kind != token.STRING {
+			return "", false
+		}
+		result, err := strconv.Unquote(value.Value)
+		return result, err == nil
+	case *ast.Ident:
+		constant, exists := constants[value.Name]
+		if !exists || resolving[value.Name] {
+			return "", false
+		}
+		resolving[value.Name] = true
+		result, ok := evaluateString(constant, constants, resolving)
+		delete(resolving, value.Name)
+		return result, ok
+	case *ast.BinaryExpr:
+		if value.Op != token.ADD {
+			return "", false
+		}
+		left, leftOK := evaluateString(value.X, constants, resolving)
+		right, rightOK := evaluateString(value.Y, constants, resolving)
+		return left + right, leftOK && rightOK
+	default:
+		return "", false
 	}
 }
 

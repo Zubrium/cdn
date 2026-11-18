@@ -1285,7 +1285,7 @@ S3 integration used the in-process local protocol mock; no external bucket or ob
 
 ### Presentation API v2 implementation sweep — 18 November 2026
 
-Full-workspace verification remains deferred until the implementation sweep is complete under `AGENTS.md`; the focused checks recorded below were run to validate the Admin regression and standalone Router profile.
+At the start of this implementation-sweep section, full-workspace verification was deferred under `AGENTS.md`; final verification evidence and remaining limits are recorded in the subsection below.
 
 - Updated `AGENTS.md` to keep the new Admin on direct group grants and one user type, with the historical role matrix scoped to `legacy/`.
 - Added v2 Sites, Content, and Forms HTTP adapters and their independent OpenAPI descriptions; Identity remains mounted on the shared File API listener. Sites now includes a cursor-paginated snapshot list used by the new Admin clients and Content/Forms screens. Production Website, Content, and Forms factories remain unavailable. Router delivery and its Loader upload operation are production components, now selectable without those engines through `profiles/router.yaml`.
@@ -1305,6 +1305,7 @@ The public Router rate-limit boundary is a deployment requirement only: Router h
 
 ### Presentation API v2 — final verification, 18 November 2026
 
+- Added `TestOpenAPIOperationsMatchRegisteredHTTPHandlers`: for all seven OpenAPI documents, it compares documented methods and paths with the Go `ServeMux.HandleFunc` registrations, including detection of undocumented handlers. The public Router catch-all remains covered by dedicated delivery acceptance tests. The subsequent `GOFLAGS=-count=1 make test` and `GOFLAGS=-count=1 make vet` runs passed; the boundary checker verified 22 repository-local Go modules.
 - `GOFLAGS=-count=1 make test` passed across the Go overlay workspace. `make test-router`, `make test-dev-fixtures`, `GOFLAGS=-count=1 make vet`, and `make build build-full build-router build-dev-fixtures` passed. The Core boundary checker reported 22 local Go modules. No files under `core/` were changed in this pass.
 - Admin verification passed: `pnpm --filter @website-engine/admin typecheck`, `pnpm test` (48 files, 217 tests), `./frontend/node_modules/.bin/eslint --config frontend/eslint.config.js frontend/admin --max-warnings=0`, and `pnpm --filter @website-engine/admin build`.
 - Workspace-wide `pnpm typecheck` and `pnpm lint` remain blocked by the absent target `pkg/runtime/scripts`: TypeScript reports `TS18003` for `frontend/tsconfig.runtime.json`, and ESLint reports that `pkg/runtime/scripts` has no matching files. These checks were not redirected to `legacy/`.
