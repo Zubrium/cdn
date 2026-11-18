@@ -96,6 +96,52 @@ func TestFormsReadsRequireDirectReadGroupAccess(t *testing.T) {
 	}
 }
 
+func TestFormsReadAccessCannotWriteSchemas(t *testing.T) {
+	engine, data, authorization, _ := newEngine(t, core.AccessLevelRead, nil)
+	_, err := engine.SaveSchema(authenticatedContext(t, engine), formapi.SaveSchemaRequest{
+		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{},
+	})
+	if !errors.Is(err, formapi.ErrForbidden) {
+		t.Fatalf("schema write with read-only Forms access = %v, want forbidden", err)
+	}
+	if len(data.records) != 0 || authorization.checkedLevel != core.AccessLevelWrite {
+		t.Fatalf("read-only write changed data or checked wrong level: records=%d authorization=%#v", len(data.records), authorization)
+	}
+}
+
+func TestListSchemasUsesOpaqueCursorAndRejectsInvalidCursor(t *testing.T) {
+	engine, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	ctx := authenticatedContext(t, engine)
+	for _, key := range []string{"alpha", "beta"} {
+		if _, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{SnapshotID: "snapshot-a", Key: key, Fields: map[string]any{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := engine.ListSchemas(ctx, "snapshot-a", "", 1)
+	if err != nil || len(first.Items) != 1 || first.NextCursor == "" {
+		t.Fatalf("first schema page = %#v, %v", first, err)
+	}
+	second, err := engine.ListSchemas(ctx, "snapshot-a", first.NextCursor, 1)
+	if err != nil || len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID || second.NextCursor != "" {
+		t.Fatalf("second schema page = %#v, %v", second, err)
+	}
+	if _, err := engine.ListSchemas(ctx, "snapshot-a", "!not-a-cursor", 1); !errors.Is(err, formapi.ErrInvalid) {
+		t.Fatalf("invalid cursor = %v, want invalid request", err)
+	}
+}
+
+func TestAuthenticatedContextCannotBeReusedAcrossEngines(t *testing.T) {
+	first, _, _, _ := newEngine(t, core.AccessLevelRead, nil)
+	second, _, secondAuthorization, _ := newEngine(t, core.AccessLevelRead, nil)
+	ctx := authenticatedContext(t, first)
+	if _, err := second.ListSchemas(ctx, "snapshot-a", "", 10); !errors.Is(err, formapi.ErrUnauthorized) {
+		t.Fatalf("cross-engine auth context = %v, want unauthorized", err)
+	}
+	if len(secondAuthorization.checkedGroups) != 0 {
+		t.Fatalf("cross-engine auth context reached group authorization: %#v", secondAuthorization)
+	}
+}
+
 func TestListSubmissionsAppliesFormAndStateSelectors(t *testing.T) {
 	engine, data, _, _ := newEngine(t, core.AccessLevelRead, nil)
 	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
@@ -128,13 +174,33 @@ func TestSubmissionStatusUpdateUsesCAS(t *testing.T) {
 	updated, err := engine.SetSubmissionStatus(authenticatedContext(t, engine), formapi.SetSubmissionStatusRequest{
 		SnapshotID: "snapshot-a", SubmissionID: "entry-a", Status: "reviewed", ExpectedRevision: 1,
 	})
-	if err != nil || updated.State != "reviewed" || updated.Revision != 2 {
+	if err != nil || updated.State != "reviewed" || updated.Revision != 2 || updated.Values["name"] != "Ada" {
 		t.Fatalf("status change = %#v, %v", updated, err)
 	}
 	if _, err := engine.SetSubmissionStatus(authenticatedContext(t, engine), formapi.SetSubmissionStatusRequest{
 		SnapshotID: "snapshot-a", SubmissionID: "entry-a", Status: "archived", ExpectedRevision: 1,
 	}); !errors.Is(err, formapi.ErrConflict) {
 		t.Fatalf("stale status update = %v, want conflict", err)
+	}
+}
+
+func TestDeleteSubmissionStaleRevisionCannotDeleteAttachments(t *testing.T) {
+	files := &fakeFiles{files: map[string]core.File{"file-a": {ID: "file-a", Revision: 1}}, failOnce: map[string]error{}}
+	engine, data, _, _ := newEngine(t, core.AccessLevelWrite, files)
+	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{
+		ID: "entry-a", FormID: "form-a", State: "new", Values: map[string]any{}, AttachmentIDs: []string{"file-a"},
+	})
+	err := engine.DeleteSubmission(authenticatedContext(t, engine), formapi.DeleteSubmissionRequest{
+		SnapshotID: "snapshot-a", SubmissionID: "entry-a", ExpectedRevision: 42,
+	})
+	if !errors.Is(err, formapi.ErrConflict) {
+		t.Fatalf("stale delete = %v, want conflict", err)
+	}
+	if _, ok := files.files["file-a"]; !ok {
+		t.Fatal("stale delete removed an attachment")
+	}
+	if _, err := data.Get(context.Background(), submissionKey("snapshot-a", "entry-a")); err != nil {
+		t.Fatalf("stale delete removed the submission: %v", err)
 	}
 }
 

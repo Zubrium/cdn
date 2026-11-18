@@ -24,7 +24,7 @@ const (
 func TestListBranchesCombinesStaticTopologyWithPersistedAssignment(t *testing.T) {
 	store := newMemoryStore()
 	putRecord(t, store, core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "site", ScopeID: siteA, RecordKey: "branch/" + branchA}, map[string]any{
-		"id": branchA, "snapshot_id": snapshotA,
+		"id": branchA, "snapshot_id": snapshotA, "updated_at": time.Now().UTC(),
 	}, map[string]any{"record_type": "branch", "branch_id": branchA, "snapshot_id": snapshotA})
 	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
@@ -120,6 +120,48 @@ func TestAssignBranchRejectsStaleSnapshotRevisionWithoutAssignmentOrEvent(t *tes
 	}
 	if len(store.records) != 1 {
 		t.Fatalf("stale assignment left %d records; want only the original snapshot", len(store.records))
+	}
+}
+
+func TestListBranchEventsPaginatesWithBranchScopedOpaqueCursor(t *testing.T) {
+	store := newMemoryStore()
+	putSnapshot(t, store, siteA, snapshotA, 1)
+	secondSnapshotID := "55555555-5555-4555-8555-555555555555"
+	putSnapshot(t, store, siteA, secondSnapshotID, 1)
+	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, snapshotID := range []string{snapshotA, secondSnapshotID, snapshotA} {
+		if _, err := service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
+			BranchID: branchA, SnapshotID: snapshotID, ExpectedRevision: int64(i), ExpectedSnapshotRevision: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var ids []string
+	cursor := ""
+	for i := 0; i < 4; i++ {
+		page, err := service.ListBranchEvents(ctx, branchA, cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) == 0 {
+			break
+		}
+		ids = append(ids, page.Items[0].ID)
+		cursor = page.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	if len(ids) != 3 || ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2] {
+		t.Fatalf("event IDs = %v, want three distinct events", ids)
+	}
+	if _, err := service.ListBranchEvents(ctx, "unknown", cursor, 1); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("unknown branch error = %v, want not found", err)
 	}
 }
 
