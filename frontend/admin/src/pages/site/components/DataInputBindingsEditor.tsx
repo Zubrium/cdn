@@ -9,6 +9,7 @@ import type {
   FeatureArgumentBinding,
 } from "@/types";
 import type { SchemaField } from "./page-editor/schema";
+import { siteContextQuery } from "../site-query";
 
 type Props = {
   ports: DataInputPort[];
@@ -116,7 +117,7 @@ export function DataInputBindingsEditor({
     <legend className="px-1 text-sm font-medium">Подключение данных модели</legend>
     <p className="text-xs leading-5 text-muted-foreground">Каждый вход фичи ссылается только на поля выбранной модели.</p>
     {entities.length === 0 && <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
-      Сначала создайте модель и поля в <Link className="underline underline-offset-4" to={`/site/data-model${snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : ""}`}>редакторе моделей</Link>.
+      Сначала создайте модель и поля в <Link className="underline underline-offset-4" to={`/site/data-model${siteContextQuery(snapshotId)}`}>редакторе моделей</Link>.
     </p>}
     {ports.map((port) => {
       const binding = bindingFor(bindings, port.key);

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,6 +28,7 @@ type Repository interface {
 	Get(context.Context, string) (domain.StoredWorkspace, error)
 	Create(context.Context, string, domain.Aggregate) (domain.StoredWorkspace, error)
 	Commit(context.Context, string, int64, domain.Aggregate, *domain.Publication) (domain.StoredWorkspace, error)
+	CommitPageSelections(context.Context, string, string, int64, []domain.Selection, []domain.Selection, *domain.MutationReceipt) (domain.StoredPageSelections, error)
 	GetHistoryByID(context.Context, string, string) (domain.Publication, error)
 	GetHistoryByContentRevision(context.Context, string, int64) (domain.Publication, error)
 	ListHistory(context.Context, string, string, int) ([]domain.Publication, string, error)
@@ -80,14 +82,15 @@ func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Ses
 	if err := service.validateSchema(schema, request.SnapshotID, "ready"); err != nil {
 		return domain.WorkspaceView{}, err
 	}
-	if request.ExpectedRevision < 0 || !domain.ValidID(request.SnapshotID) || request.Records == nil || request.Selections == nil {
+	if request.ExpectedRevision < 0 || request.ExpectedSelectionRevision < 0 || !domain.ValidID(request.SnapshotID) || request.Records == nil || request.Selections == nil {
 		return domain.WorkspaceView{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("save", request.IdempotencyKey, struct {
-		ExpectedRevision int64                    `json:"expected_revision"`
-		Records          []contentapi.RecordInput `json:"records"`
-		Selections       []contentapi.Selection   `json:"selections"`
-	}{request.ExpectedRevision, request.Records, request.Selections}, service.maxPayload)
+		ExpectedRevision          int64                    `json:"expected_revision"`
+		ExpectedSelectionRevision int64                    `json:"expected_selection_revision"`
+		Records                   []contentapi.RecordInput `json:"records"`
+		Selections                []contentapi.Selection   `json:"selections"`
+	}{request.ExpectedRevision, request.ExpectedSelectionRevision, request.Records, request.Selections}, service.maxPayload)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -113,17 +116,41 @@ func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Ses
 	if err := service.validateMediaReferences(ctx, session, schema.Model, data.Records); err != nil {
 		return domain.WorkspaceView{}, err
 	}
+	if pageSelectionRevision(stored.Aggregate, schema.PageSnapshotID) != request.ExpectedSelectionRevision {
+		return domain.WorkspaceView{}, domain.ErrConflict
+	}
+	if reflect.DeepEqual(data.Records, stored.Aggregate.Records) {
+		receipt := &domain.MutationReceipt{Operation: "save", KeyHash: keyHash, Fingerprint: fingerprint, ClientRecordIDs: cloneStringMap(clientRecordIDs)}
+		committedPage, commitErr := service.repository.CommitPageSelections(ctx, schema.SiteID, schema.PageSnapshotID, request.ExpectedSelectionRevision,
+			cloneSelections(data.Selections), cloneSelections(stored.Aggregate.PublishedPageSelections[schema.PageSnapshotID]), receipt)
+		if errors.Is(commitErr, domain.ErrConflict) {
+			return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "save", keyHash, fingerprint)
+		}
+		if commitErr != nil {
+			return domain.WorkspaceView{}, commitErr
+		}
+		stored.Aggregate.PageSelections[schema.PageSnapshotID] = committedPage.Draft
+		stored.Aggregate.PublishedPageSelections[schema.PageSnapshotID] = committedPage.Published
+		stored.Aggregate.PageSelectionRevisions[schema.PageSnapshotID] = committedPage.StoreRevision
+		stored.Aggregate.PageMutationReceipts[schema.PageSnapshotID] = committedPage.LastMutation
+		return view(stored.Aggregate, schema, clientRecordIDs), nil
+	}
 	if stored.Aggregate.Revision == math.MaxInt64 {
 		return domain.WorkspaceView{}, domain.ErrUnavailable
 	}
 	next := cloneAggregate(stored.Aggregate)
 	next.Revision++
 	next.Records = cloneRecords(data.Records)
-	next.Selections = cloneSelections(data.Selections)
-	next.LastMutation = &domain.MutationReceipt{Operation: "save", KeyHash: keyHash, Fingerprint: fingerprint, ClientRecordIDs: cloneStringMap(clientRecordIDs)}
-	committed, err := service.repository.Commit(ctx, request.SnapshotID, stored.StoreRevision, next, nil)
+	next.PageSelections = clonePageSelections(stored.Aggregate.PageSelections)
+	next.PageSelections[schema.PageSnapshotID] = cloneSelections(data.Selections)
+	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
+	next.Selections = []domain.Selection{}
+	receipt := &domain.MutationReceipt{Operation: "save", KeyHash: keyHash, Fingerprint: fingerprint, ClientRecordIDs: cloneStringMap(clientRecordIDs)}
+	next.PageMutationReceipts[schema.PageSnapshotID] = receipt
+	next.LastMutation = receipt
+	committed, err := service.repository.Commit(ctx, schema.SiteID, stored.StoreRevision, next, nil)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.replayAfterConflict(ctx, session, request.SnapshotID, schema, "save", keyHash, fingerprint)
+		return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "save", keyHash, fingerprint)
 	}
 	if err != nil {
 		return domain.WorkspaceView{}, err
@@ -138,12 +165,13 @@ func (service *Service) PublishWorkspace(ctx context.Context, session core.Sessi
 	if err := service.validateSchema(schema, request.SnapshotID, "ready"); err != nil {
 		return domain.WorkspaceView{}, err
 	}
-	if request.ExpectedRevision < 0 || !domain.ValidID(request.SnapshotID) {
+	if request.ExpectedRevision < 0 || request.ExpectedSelectionRevision < 0 || !domain.ValidID(request.SnapshotID) {
 		return domain.WorkspaceView{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("publish", request.IdempotencyKey, struct {
-		ExpectedRevision int64 `json:"expected_revision"`
-	}{request.ExpectedRevision}, service.maxPayload)
+		ExpectedRevision          int64 `json:"expected_revision"`
+		ExpectedSelectionRevision int64 `json:"expected_selection_revision"`
+	}{request.ExpectedRevision, request.ExpectedSelectionRevision}, service.maxPayload)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -153,6 +181,9 @@ func (service *Service) PublishWorkspace(ctx context.Context, session core.Sessi
 	}
 	if result, replayed, replayErr := service.replay(ctx, session, stored, schema, "publish", keyHash, fingerprint); replayed || replayErr != nil {
 		return result, replayErr
+	}
+	if pageSelectionRevision(stored.Aggregate, schema.PageSnapshotID) != request.ExpectedSelectionRevision {
+		return domain.WorkspaceView{}, domain.ErrConflict
 	}
 	if stored.Aggregate.Revision != request.ExpectedRevision {
 		return domain.WorkspaceView{}, domain.ErrConflict
@@ -179,10 +210,17 @@ func (service *Service) PublishWorkspace(ctx context.Context, session core.Sessi
 	next := cloneAggregate(stored.Aggregate)
 	next.Revision++
 	next.PublishedRevision = publication.ContentRevision
-	next.LastMutation = &domain.MutationReceipt{Operation: "publish", KeyHash: keyHash, Fingerprint: fingerprint, HistoryID: historyID}
-	committed, err := service.repository.Commit(ctx, request.SnapshotID, stored.StoreRevision, next, &publication)
+	next.PageSelections = clonePageSelections(stored.Aggregate.PageSelections)
+	next.PublishedPageSelections = clonePageSelections(stored.Aggregate.PublishedPageSelections)
+	next.PublishedPageSelections[schema.PageSnapshotID] = cloneSelections(stored.Aggregate.PageSelections[schema.PageSnapshotID])
+	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
+	next.Selections = []domain.Selection{}
+	receipt := &domain.MutationReceipt{Operation: "publish", KeyHash: keyHash, Fingerprint: fingerprint, HistoryID: historyID}
+	next.PageMutationReceipts[schema.PageSnapshotID] = receipt
+	next.LastMutation = receipt
+	committed, err := service.repository.Commit(ctx, schema.SiteID, stored.StoreRevision, next, &publication)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.replayAfterConflict(ctx, session, request.SnapshotID, schema, "publish", keyHash, fingerprint)
+		return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "publish", keyHash, fingerprint)
 	}
 	if err != nil {
 		return domain.WorkspaceView{}, err
@@ -204,7 +242,7 @@ func (service *Service) ListHistory(ctx context.Context, schema domain.Schema, s
 	if err != nil {
 		return domain.HistoryPage{}, domain.ErrInvalid
 	}
-	items, next, err := service.repository.ListHistory(ctx, snapshotID, after, limit)
+	items, next, err := service.repository.ListHistory(ctx, schema.SiteID, after, limit)
 	if err != nil {
 		return domain.HistoryPage{}, err
 	}
@@ -228,13 +266,14 @@ func (service *Service) RestoreHistory(ctx context.Context, session core.Session
 	if err := service.validateSchema(schema, request.SnapshotID, "ready"); err != nil {
 		return domain.WorkspaceView{}, err
 	}
-	if !domain.ValidID(request.SnapshotID) || !domain.ValidID(request.HistoryID) || request.ExpectedRevision < 0 {
+	if !domain.ValidID(request.SnapshotID) || !domain.ValidID(request.HistoryID) || request.ExpectedRevision < 0 || request.ExpectedSelectionRevision < 0 {
 		return domain.WorkspaceView{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("restore", request.IdempotencyKey, struct {
-		HistoryID        string `json:"history_id"`
-		ExpectedRevision int64  `json:"expected_revision"`
-	}{request.HistoryID, request.ExpectedRevision}, service.maxPayload)
+		HistoryID                 string `json:"history_id"`
+		ExpectedRevision          int64  `json:"expected_revision"`
+		ExpectedSelectionRevision int64  `json:"expected_selection_revision"`
+	}{request.HistoryID, request.ExpectedRevision, request.ExpectedSelectionRevision}, service.maxPayload)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -245,10 +284,13 @@ func (service *Service) RestoreHistory(ctx context.Context, session core.Session
 	if result, replayed, replayErr := service.replay(ctx, session, stored, schema, "restore", keyHash, fingerprint); replayed || replayErr != nil {
 		return result, replayErr
 	}
+	if pageSelectionRevision(stored.Aggregate, schema.PageSnapshotID) != request.ExpectedSelectionRevision {
+		return domain.WorkspaceView{}, domain.ErrConflict
+	}
 	if stored.Aggregate.Revision != request.ExpectedRevision {
 		return domain.WorkspaceView{}, domain.ErrConflict
 	}
-	publication, err := service.repository.GetHistoryByID(ctx, request.SnapshotID, request.HistoryID)
+	publication, err := service.repository.GetHistoryByID(ctx, schema.SiteID, request.HistoryID)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -265,11 +307,16 @@ func (service *Service) RestoreHistory(ctx context.Context, session core.Session
 	next := cloneAggregate(stored.Aggregate)
 	next.Revision++
 	next.Records = data.Records
-	next.Selections = data.Selections
-	next.LastMutation = &domain.MutationReceipt{Operation: "restore", KeyHash: keyHash, Fingerprint: fingerprint, HistoryID: request.HistoryID}
-	committed, err := service.repository.Commit(ctx, request.SnapshotID, stored.StoreRevision, next, nil)
+	next.PageSelections = clonePageSelections(stored.Aggregate.PageSelections)
+	next.PageSelections[schema.PageSnapshotID] = cloneSelections(data.Selections)
+	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
+	next.Selections = []domain.Selection{}
+	receipt := &domain.MutationReceipt{Operation: "restore", KeyHash: keyHash, Fingerprint: fingerprint, HistoryID: request.HistoryID}
+	next.PageMutationReceipts[schema.PageSnapshotID] = receipt
+	next.LastMutation = receipt
+	committed, err := service.repository.Commit(ctx, schema.SiteID, stored.StoreRevision, next, nil)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.replayAfterConflict(ctx, session, request.SnapshotID, schema, "restore", keyHash, fingerprint)
+		return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "restore", keyHash, fingerprint)
 	}
 	if err != nil {
 		return domain.WorkspaceView{}, err
@@ -284,23 +331,23 @@ func (service *Service) ReadPublishedContent(ctx context.Context, schema domain.
 	if err := service.validateSchema(schema, snapshotID, "ready"); err != nil {
 		return domain.PublishedContent{}, err
 	}
-	stored, err := service.repository.Get(ctx, snapshotID)
+	stored, err := service.repository.Get(ctx, schema.SiteID)
 	if errors.Is(err, domain.ErrNotFound) {
-		return domain.PublishedContent{SnapshotID: snapshotID, Records: []domain.Record{}, Selections: []domain.Selection{}}, nil
+		return domain.PublishedContent{SnapshotID: schema.PageSnapshotID, Records: []domain.Record{}, Selections: []domain.Selection{}}, nil
 	}
 	if err != nil {
 		return domain.PublishedContent{}, err
 	}
 	if stored.Aggregate.PublishedRevision == 0 {
-		return domain.PublishedContent{SnapshotID: snapshotID, Records: []domain.Record{}, Selections: []domain.Selection{}}, nil
+		return domain.PublishedContent{SnapshotID: schema.PageSnapshotID, Records: []domain.Record{}, Selections: []domain.Selection{}}, nil
 	}
-	publication, err := service.repository.GetHistoryByContentRevision(ctx, snapshotID, stored.Aggregate.PublishedRevision)
+	publication, err := service.repository.GetHistoryByContentRevision(ctx, schema.SiteID, stored.Aggregate.PublishedRevision)
 	if err != nil || publication.ContentRevision != stored.Aggregate.PublishedRevision {
 		return domain.PublishedContent{}, domain.ErrUnavailable
 	}
 	return domain.PublishedContent{
-		SnapshotID: snapshotID, ContentRevision: publication.ContentRevision,
-		Records: cloneRecords(publication.Records), Selections: cloneSelections(publication.Selections),
+		SnapshotID: schema.PageSnapshotID, ContentRevision: publication.ContentRevision,
+		Records: cloneRecords(publication.Records), Selections: cloneSelections(stored.Aggregate.PublishedPageSelections[schema.PageSnapshotID]),
 	}, nil
 }
 
@@ -308,132 +355,68 @@ func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session,
 	if err := ctx.Err(); err != nil {
 		return domain.CopyReceipt{}, err
 	}
+	if !contentapi.ValidSelectionPolicy(request.SelectionPolicy) {
+		return domain.CopyReceipt{}, domain.ErrInvalid
+	}
 	if err := service.validateSchema(sourceSchema, request.SourceSnapshotID, "ready"); err != nil {
 		return domain.CopyReceipt{}, err
 	}
 	if err := validateCopyTargetSchema(targetSchema, request.TargetSnapshotID); err != nil {
 		return domain.CopyReceipt{}, err
 	}
-	if !domain.ValidID(request.SourceSnapshotID) || !domain.ValidID(request.TargetSnapshotID) || request.SourceSnapshotID == request.TargetSnapshotID || request.ExpectedSourceRevision < 0 {
+	if sourceSchema.SiteID != targetSchema.SiteID || request.SourceSnapshotID == request.TargetSnapshotID || request.ExpectedSourceRevision < 0 || request.ExpectedSourceSelectionRevision < 0 {
 		return domain.CopyReceipt{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("copy", request.IdempotencyKey, struct {
-		SourceSnapshotID       string `json:"source_snapshot_id"`
-		TargetSnapshotID       string `json:"target_snapshot_id"`
-		ExpectedSourceRevision int64  `json:"expected_source_revision"`
-	}{request.SourceSnapshotID, request.TargetSnapshotID, request.ExpectedSourceRevision}, service.maxPayload)
+		SourceSnapshotID                string `json:"source_snapshot_id"`
+		TargetSnapshotID                string `json:"target_snapshot_id"`
+		ExpectedSourceRevision          int64  `json:"expected_source_revision"`
+		ExpectedSourceSelectionRevision int64  `json:"expected_source_selection_revision"`
+		SelectionPolicy                 string `json:"selection_policy"`
+	}{request.SourceSnapshotID, request.TargetSnapshotID, request.ExpectedSourceRevision, request.ExpectedSourceSelectionRevision, request.SelectionPolicy}, service.maxPayload)
 	if err != nil {
 		return domain.CopyReceipt{}, err
-	}
-	marker, err := service.repository.GetCopyMarker(ctx, request.TargetSnapshotID)
-	if errors.Is(err, domain.ErrNotFound) {
-		if targetSchema.State != "provisioning" {
-			return domain.CopyReceipt{}, domain.ErrConflict
-		}
-		if _, workspaceErr := service.repository.Get(ctx, request.TargetSnapshotID); workspaceErr == nil {
-			return domain.CopyReceipt{}, domain.ErrConflict
-		} else if !errors.Is(workspaceErr, domain.ErrNotFound) {
-			return domain.CopyReceipt{}, workspaceErr
-		}
-		marker = domain.StoredCopyMarker{Marker: domain.CopyMarker{
-			SourceSnapshotID: request.SourceSnapshotID, TargetSnapshotID: request.TargetSnapshotID,
-			SourceRevision: request.ExpectedSourceRevision, KeyHash: keyHash, Fingerprint: fingerprint, State: "copying",
-		}}
-		marker, err = service.repository.BeginCopy(ctx, request.TargetSnapshotID, marker.Marker)
-		if errors.Is(err, domain.ErrConflict) {
-			marker, err = service.repository.GetCopyMarker(ctx, request.TargetSnapshotID)
-		}
-	}
-	if err != nil {
-		return domain.CopyReceipt{}, err
-	}
-	if marker.Marker.KeyHash != keyHash || marker.Marker.Fingerprint != fingerprint || marker.Marker.SourceSnapshotID != request.SourceSnapshotID || marker.Marker.SourceRevision != request.ExpectedSourceRevision {
-		return domain.CopyReceipt{}, domain.ErrConflict
-	}
-	if marker.Marker.State == "complete" {
-		if marker.Marker.Result == nil {
-			return domain.CopyReceipt{}, domain.ErrUnavailable
-		}
-		return *marker.Marker.Result, nil
-	}
-	if marker.Marker.State != "copying" || targetSchema.State != "provisioning" {
-		return domain.CopyReceipt{}, domain.ErrConflict
 	}
 	source, err := service.loadOrInitialize(ctx, sourceSchema, request.SourceSnapshotID)
 	if err != nil {
 		return domain.CopyReceipt{}, err
 	}
-	if source.Aggregate.Revision != request.ExpectedSourceRevision {
+	if receipt := source.Aggregate.PageMutationReceipts[request.TargetSnapshotID]; receipt != nil && receipt.Operation == "copy" && receipt.KeyHash == keyHash {
+		if receipt.Fingerprint != fingerprint {
+			return domain.CopyReceipt{}, domain.ErrConflict
+		}
+		return domain.CopyReceipt{TargetSnapshotID: request.TargetSnapshotID, SourceRevision: request.ExpectedSourceRevision}, nil
+	}
+	if source.Aggregate.Revision != request.ExpectedSourceRevision || pageSelectionRevision(source.Aggregate, request.SourceSnapshotID) != request.ExpectedSourceSelectionRevision {
 		return domain.CopyReceipt{}, domain.ErrConflict
 	}
-	targetRecords, err := addTargetSingletons(targetSchema.Model, source.Aggregate.Records)
-	if err != nil {
-		return domain.CopyReceipt{}, err
+	targetRevision := pageSelectionRevision(source.Aggregate, request.TargetSnapshotID)
+	receipt := &domain.MutationReceipt{Operation: "copy", KeyHash: keyHash, Fingerprint: fingerprint}
+	draftSelections := []domain.Selection{}
+	publishedSelections := []domain.Selection{}
+	if request.SelectionPolicy == contentapi.SelectionPolicyCopy {
+		draftSelections = cloneSelections(source.Aggregate.PageSelections[request.SourceSnapshotID])
+		publishedSelections = cloneSelections(source.Aggregate.PublishedPageSelections[request.SourceSnapshotID])
 	}
-	historyCount := 0
-	foundPublished := source.Aggregate.PublishedRevision == 0
-	after := ""
-	for {
-		page, next, listErr := service.repository.ListHistory(ctx, request.SourceSnapshotID, after, service.maxPage)
-		if listErr != nil {
-			return domain.CopyReceipt{}, listErr
-		}
-		for _, item := range page {
-			if item.ContentRevision == source.Aggregate.PublishedRevision {
-				foundPublished = true
-			}
-			if err := service.repository.PutCopiedHistory(ctx, request.TargetSnapshotID, item); err != nil {
-				return domain.CopyReceipt{}, err
-			}
-			historyCount++
-		}
-		if next == "" {
-			break
-		}
-		if next == after {
-			return domain.CopyReceipt{}, domain.ErrUnavailable
-		}
-		after = next
-	}
-	if !foundPublished {
-		return domain.CopyReceipt{}, domain.ErrUnavailable
-	}
-	if err := ctx.Err(); err != nil {
-		return domain.CopyReceipt{}, err
-	}
-	latestSource, err := service.repository.Get(ctx, request.SourceSnapshotID)
-	if err != nil {
-		return domain.CopyReceipt{}, err
-	}
-	if latestSource.Aggregate.Revision != request.ExpectedSourceRevision {
-		return domain.CopyReceipt{}, domain.ErrConflict
-	}
-	receipt := domain.CopyReceipt{
-		TargetSnapshotID: request.TargetSnapshotID, SourceRevision: source.Aggregate.Revision,
-		CopiedRecords: len(targetRecords), CopiedHistory: historyCount,
-	}
-	target := domain.Aggregate{
-		SnapshotID: request.TargetSnapshotID, Revision: source.Aggregate.Revision, PublishedRevision: source.Aggregate.PublishedRevision,
-		Records: targetRecords, Selections: cloneSelections(source.Aggregate.Selections),
-	}
-	complete := marker.Marker
-	complete.State = "complete"
-	complete.Result = &receipt
-	_, err = service.repository.CompleteCopy(ctx, request.TargetSnapshotID, marker.StoreRevision, target, complete)
+	copied, err := service.repository.CommitPageSelections(ctx, sourceSchema.SiteID, request.TargetSnapshotID, targetRevision,
+		draftSelections, publishedSelections, receipt)
 	if errors.Is(err, domain.ErrConflict) {
-		latest, markerErr := service.repository.GetCopyMarker(ctx, request.TargetSnapshotID)
-		if markerErr == nil && latest.Marker.State == "complete" && latest.Marker.KeyHash == keyHash && latest.Marker.Fingerprint == fingerprint && latest.Marker.Result != nil {
-			return *latest.Marker.Result, nil
+		latest, getErr := service.repository.Get(ctx, sourceSchema.SiteID)
+		latestReceipt := latest.Aggregate.PageMutationReceipts[request.TargetSnapshotID]
+		if getErr == nil && latestReceipt != nil && latestReceipt.KeyHash == keyHash && latestReceipt.Fingerprint == fingerprint {
+			return domain.CopyReceipt{TargetSnapshotID: request.TargetSnapshotID, SourceRevision: request.ExpectedSourceRevision}, nil
 		}
 	}
 	if err != nil {
 		return domain.CopyReceipt{}, err
 	}
-	return receipt, nil
+	_ = copied
+	return domain.CopyReceipt{TargetSnapshotID: request.TargetSnapshotID, SourceRevision: request.ExpectedSourceRevision}, nil
 }
 
 func (service *Service) validateSchema(schema domain.Schema, snapshotID string, requiredState string) error {
-	if !domain.ValidID(snapshotID) {
+	if !domain.ValidID(snapshotID) || snapshotID != schema.PageSnapshotID || !domain.ValidID(schema.SiteID) ||
+		schema.ModelRevision < 1 || schema.PageRevision < 1 || schema.ModelDigest == "" || schema.PageDigest == "" {
 		return domain.ErrNotFound
 	}
 	if schema.State != requiredState {
@@ -446,15 +429,28 @@ func (service *Service) validateSchema(schema domain.Schema, snapshotID string, 
 }
 
 func validateCopyTargetSchema(schema domain.Schema, snapshotID string) error {
-	if !domain.ValidID(snapshotID) || (schema.State != "provisioning" && schema.State != "ready") || schema.Model.Validate() != nil {
+	if !domain.ValidID(snapshotID) || snapshotID != schema.PageSnapshotID || !domain.ValidID(schema.SiteID) ||
+		(schema.State != "provisioning" && schema.State != "ready") || schema.ModelRevision < 1 || schema.PageRevision < 1 ||
+		schema.ModelDigest == "" || schema.PageDigest == "" || schema.Model.Validate() != nil {
 		return domain.ErrNotFound
 	}
 	return nil
 }
 
-func (service *Service) loadOrInitialize(ctx context.Context, schema domain.Schema, snapshotID string) (domain.StoredWorkspace, error) {
-	stored, err := service.repository.Get(ctx, snapshotID)
+func (service *Service) loadOrInitialize(ctx context.Context, schema domain.Schema, pageSnapshotID string) (domain.StoredWorkspace, error) {
+	if pageSnapshotID != schema.PageSnapshotID || !domain.ValidID(schema.SiteID) || !domain.ValidID(schema.PageSnapshotID) {
+		return domain.StoredWorkspace{}, domain.ErrInvalid
+	}
+	stored, err := service.repository.Get(ctx, schema.SiteID)
 	if err == nil {
+		if stored.Aggregate.SnapshotID != schema.SiteID {
+			return domain.StoredWorkspace{}, domain.ErrUnavailable
+		}
+		stored, err = service.ensurePageSelections(ctx, stored, schema.SiteID, pageSnapshotID)
+		if err != nil {
+			return domain.StoredWorkspace{}, err
+		}
+		stored.Aggregate.Selections = cloneSelections(stored.Aggregate.PageSelections[pageSnapshotID])
 		return stored, nil
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -464,15 +460,59 @@ func (service *Service) loadOrInitialize(ctx context.Context, schema domain.Sche
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	initial := domain.Aggregate{SnapshotID: snapshotID, Revision: 0, PublishedRevision: 0, Records: records, Selections: []domain.Selection{}}
-	created, err := service.repository.Create(ctx, snapshotID, initial)
+	initial := domain.Aggregate{SnapshotID: schema.SiteID, Revision: 0, PublishedRevision: 0, Records: records,
+		Selections: []domain.Selection{}, PageSelections: map[string][]domain.Selection{pageSnapshotID: {}},
+		PublishedPageSelections: map[string][]domain.Selection{pageSnapshotID: {}}}
+	created, err := service.repository.Create(ctx, schema.SiteID, initial)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.repository.Get(ctx, snapshotID)
+		created, err = service.repository.Get(ctx, schema.SiteID)
 	}
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
+	created, err = service.ensurePageSelections(ctx, created, schema.SiteID, pageSnapshotID)
+	if err != nil {
+		return domain.StoredWorkspace{}, err
+	}
+	created.Aggregate.Selections = cloneSelections(created.Aggregate.PageSelections[pageSnapshotID])
 	return created, nil
+}
+
+func (service *Service) ensurePageSelections(ctx context.Context, stored domain.StoredWorkspace, siteID, pageID string) (domain.StoredWorkspace, error) {
+	if stored.Aggregate.PageSelections == nil {
+		stored.Aggregate.PageSelections = map[string][]domain.Selection{}
+	}
+	if stored.Aggregate.PublishedPageSelections == nil {
+		stored.Aggregate.PublishedPageSelections = map[string][]domain.Selection{}
+	}
+	if stored.Aggregate.PageSelectionRevisions == nil {
+		stored.Aggregate.PageSelectionRevisions = map[string]int64{}
+	}
+	if stored.Aggregate.PageMutationReceipts == nil {
+		stored.Aggregate.PageMutationReceipts = map[string]*domain.MutationReceipt{}
+	}
+	if _, exists := stored.Aggregate.PageSelectionRevisions[pageID]; exists {
+		return stored, nil
+	}
+	created, err := service.repository.CommitPageSelections(ctx, siteID, pageID, 0, []domain.Selection{}, []domain.Selection{}, nil)
+	if errors.Is(err, domain.ErrConflict) {
+		stored, err = service.repository.Get(ctx, siteID)
+		if err != nil {
+			return domain.StoredWorkspace{}, err
+		}
+		if _, exists := stored.Aggregate.PageSelectionRevisions[pageID]; !exists {
+			return domain.StoredWorkspace{}, domain.ErrConflict
+		}
+		return stored, nil
+	}
+	if err != nil {
+		return domain.StoredWorkspace{}, err
+	}
+	stored.Aggregate.PageSelections[pageID] = created.Draft
+	stored.Aggregate.PublishedPageSelections[pageID] = created.Published
+	stored.Aggregate.PageSelectionRevisions[pageID] = created.StoreRevision
+	stored.Aggregate.PageMutationReceipts[pageID] = created.LastMutation
+	return stored, nil
 }
 
 func initialSingletons(model domain.DataModel) ([]domain.Record, error) {
@@ -664,7 +704,10 @@ func (service *Service) validateMediaReferences(ctx context.Context, session cor
 }
 
 func (service *Service) replay(ctx context.Context, session core.Session, stored domain.StoredWorkspace, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, bool, error) {
-	receipt := stored.Aggregate.LastMutation
+	receipt := stored.Aggregate.PageMutationReceipts[schema.PageSnapshotID]
+	if receipt == nil || receipt.KeyHash != keyHash {
+		receipt = stored.Aggregate.LastMutation
+	}
 	if receipt == nil || receipt.KeyHash != keyHash {
 		return domain.WorkspaceView{}, false, nil
 	}
@@ -719,6 +762,13 @@ func decodeCursor(cursor string) (string, error) {
 	return string(decoded), nil
 }
 
+func pageSelectionRevision(aggregate domain.Aggregate, pageID string) int64 {
+	if aggregate.PageSelectionRevisions == nil {
+		return 0
+	}
+	return aggregate.PageSelectionRevisions[pageID]
+}
+
 func view(aggregate domain.Aggregate, schema domain.Schema, clientIDs map[string]string) domain.WorkspaceView {
 	dataModel := append(json.RawMessage(nil), schema.DataModel...)
 	if dataModel == nil {
@@ -729,8 +779,10 @@ func view(aggregate domain.Aggregate, schema domain.Schema, clientIDs map[string
 		placements[index] = clonePlacement(placement)
 	}
 	return domain.WorkspaceView{
-		SnapshotID: aggregate.SnapshotID, DataModel: dataModel, Revision: aggregate.Revision, PublishedRevision: aggregate.PublishedRevision,
-		Records: cloneRecords(aggregate.Records), Selections: cloneSelections(aggregate.Selections), Placements: placements,
+		SnapshotID: schema.PageSnapshotID, SiteID: schema.SiteID, PageSnapshotID: schema.PageSnapshotID,
+		ModelRevision: schema.ModelRevision, ModelDigest: schema.ModelDigest, PageRevision: schema.PageRevision, PageDigest: schema.PageDigest,
+		DataModel: dataModel, Revision: aggregate.Revision, SelectionRevision: pageSelectionRevision(aggregate, schema.PageSnapshotID), PublishedRevision: aggregate.PublishedRevision,
+		Records: cloneRecords(aggregate.Records), Selections: cloneSelections(aggregate.PageSelections[schema.PageSnapshotID]), Placements: placements,
 		ClientRecordIDs: cloneStringMap(clientIDs),
 	}
 }
@@ -750,6 +802,27 @@ func workspaceData(aggregate domain.Aggregate) domain.WorkspaceData {
 func cloneAggregate(aggregate domain.Aggregate) domain.Aggregate {
 	aggregate.Records = cloneRecords(aggregate.Records)
 	aggregate.Selections = cloneSelections(aggregate.Selections)
+	aggregate.PageSelections = clonePageSelections(aggregate.PageSelections)
+	aggregate.PublishedPageSelections = clonePageSelections(aggregate.PublishedPageSelections)
+	if aggregate.PageSelectionRevisions != nil {
+		revisions := make(map[string]int64, len(aggregate.PageSelectionRevisions))
+		for pageID, revision := range aggregate.PageSelectionRevisions {
+			revisions[pageID] = revision
+		}
+		aggregate.PageSelectionRevisions = revisions
+	}
+	if aggregate.PageMutationReceipts != nil {
+		receipts := make(map[string]*domain.MutationReceipt, len(aggregate.PageMutationReceipts))
+		for pageID, receipt := range aggregate.PageMutationReceipts {
+			if receipt == nil {
+				continue
+			}
+			copy := *receipt
+			copy.ClientRecordIDs = cloneStringMap(receipt.ClientRecordIDs)
+			receipts[pageID] = &copy
+		}
+		aggregate.PageMutationReceipts = receipts
+	}
 	if aggregate.LastMutation != nil {
 		receipt := *aggregate.LastMutation
 		receipt.ClientRecordIDs = cloneStringMap(receipt.ClientRecordIDs)
@@ -767,6 +840,17 @@ func cloneRecords(records []domain.Record) []domain.Record {
 		}
 		record.Values = values
 		result[index] = record
+	}
+	return result
+}
+
+func clonePageSelections(source map[string][]domain.Selection) map[string][]domain.Selection {
+	if source == nil {
+		return map[string][]domain.Selection{}
+	}
+	result := make(map[string][]domain.Selection, len(source))
+	for pageID, selections := range source {
+		result[pageID] = cloneSelections(selections)
 	}
 	return result
 }

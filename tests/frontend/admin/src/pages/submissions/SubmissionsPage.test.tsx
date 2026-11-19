@@ -29,7 +29,7 @@ function renderPage(path: string, level: 1 | 2) {
   client.setQueryData(["formsEngine", "schemas", "snapshot-1"], { pages: [{ items: [schema], next_cursor: null }], pageParams: [null] });
   client.setQueryData(["formsEngine", "submissions", "snapshot-1", "form-1", ""], { pages: [{ items: [submission], next_cursor: null }], pageParams: [null] });
   client.setQueryData(["formsEngine", "submission", "snapshot-1", "submission-1"], submission);
-  mocks.useAuth.mockReturnValue({ principal: { group_access: { forms: level } } });
+  mocks.useAuth.mockReturnValue({ principal: { group_access: { forms_submissions: level } } });
   return renderToStaticMarkup(createElement(
     QueryClientProvider,
     { client },

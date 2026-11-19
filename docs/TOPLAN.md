@@ -1,8 +1,8 @@
 # TOPLAN: предложения по SEO и развитию Website Engine
 
-> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](../spec/SPEC-modular-platform.md) и [SPEC-core-v2.md](../spec/SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](../spec/architecture/SPEC-modular-platform.md) и [SPEC-core-v2.md](../spec/core/history/SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
 
-> Это список предложений, а не контракт и не отчёт о готовности. Текущие решения и доказательства реализации находятся в [TODO](TODO-admin-snapshots-content-files.md), [спецификации модели данных](../spec/SPEC-data-model.md), [веток и снапшотов](../spec/SPEC-branches-snapshots.md), [runtime фич](../spec/SPEC-feature-runtime.md), [SEO и пререндеринга](../spec/SPEC-seo.md) и [QA-отчёте](QA_REPORT.md). Манифесты Vitasil описаны в [контракте dataInputs](../../vitasil/docs/SPEC-feature-data-inputs.md). Этот файл не закрывает и не подтверждает пункты реализации.
+> Это список предложений, а не контракт и не отчёт о готовности. Текущие решения и доказательства реализации находятся в [TODO](TODO-admin-snapshots-content-files.md), [спецификации модели данных](../spec/engines/website/SPEC-data-model.md), [веток и снапшотов](../spec/engines/website/SPEC-branches-snapshots.md), [runtime фич](../spec/engines/website/features/SPEC-feature-runtime.md), [SEO и пререндеринга](../spec/engines/website/SPEC-seo.md) и [QA-отчёте](QA_REPORT.md). Манифесты Vitasil описаны в [контракте dataInputs](../../vitasil/docs/SPEC-feature-data-inputs.md). Этот файл не закрывает и не подтверждает пункты реализации.
 
 ## Архитектурные границы, обязательные для новых предложений
 
@@ -17,8 +17,8 @@
 
 Эти направления не нужно повторно предлагать как новую архитектуру. Их фактическое состояние и конкретные проверки следует сверять со спецификациями, TODO и QA-отчётом:
 
-- Snapshot metadata, branch indexing policy, `robots.txt`, sitemap, canonical, detail SEO bindings через стабильные ID полей, HTTP-статусы системных страниц, prerender и cache identity описаны в [SPEC-seo.md](../spec/SPEC-seo.md). Это не доказывает корректность production gateway/CDN, Search Console или показателей Core Web Vitals.
-- Format 2, static-module runtime, модельная проекция в существующий ABI и разделение аргументов, данных и редакционной схемы описаны в [SPEC-data-model.md](../spec/SPEC-data-model.md), [SPEC-feature-runtime.md](../spec/SPEC-feature-runtime.md) и спецификации Vitasil. Покрытие отдельных ZIP/маршрутов см. в [QA_REPORT.md](QA_REPORT.md); оставшиеся критерии указаны в TODO.
+- Snapshot metadata, branch indexing policy, `robots.txt`, sitemap, canonical, detail SEO bindings через стабильные ID полей, HTTP-статусы системных страниц, prerender и cache identity описаны в [SPEC-seo.md](../spec/engines/website/SPEC-seo.md). Это не доказывает корректность production gateway/CDN, Search Console или показателей Core Web Vitals.
+- Format 2, static-module runtime, модельная проекция в существующий ABI и разделение аргументов, данных и редакционной схемы описаны в [SPEC-data-model.md](../spec/engines/website/SPEC-data-model.md), [SPEC-feature-runtime.md](../spec/engines/website/features/SPEC-feature-runtime.md) и спецификации Vitasil. Покрытие отдельных ZIP/маршрутов см. в [QA_REPORT.md](QA_REPORT.md); оставшиеся критерии указаны в TODO.
 - Media registry, публичные производные файлы и media rendition контракты уже имеют отдельные API и критерии. Предложения ниже не должны добавлять загрузку файлов в `/site` или вводить параллельный реестр изображений.
 
 ## Открытые предложения

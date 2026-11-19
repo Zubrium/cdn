@@ -65,6 +65,7 @@ func (r *Registry) ComponentDescriptors() []coordination.ComponentDescriptor {
 		descriptor := provider.ComponentDescriptor()
 		descriptor.Dependencies = append([]string(nil), descriptor.Dependencies...)
 		descriptor.Operations = append([]coordination.ComponentOperation(nil), descriptor.Operations...)
+		descriptor.AccessGroups = append([]string(nil), descriptor.AccessGroups...)
 		items = append(items, descriptor)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })

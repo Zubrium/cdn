@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { Grid2X2, LayoutList, Upload } from "lucide-react";
+import { Grid2X2, LayoutList, Search, Upload, X } from "lucide-react";
 import { api } from "@/api";
 import type { Media } from "@/types";
 import { queryKeys } from "@/lib/query-keys";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import {
-  hasActiveMediaGalleryFilters,
-  mediaGalleryRangeError,
-  mediaGalleryResultsState,
-  megabytesToBytes,
   mergeMediaGalleryParams,
   normalizeMediaGalleryParams,
   parseMediaGalleryFilters,
@@ -18,10 +14,11 @@ import {
 } from "@/domains/media/gallery-filters";
 import { PageHeader, useDocumentTitle } from "@/components/common/page";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { MediaDetailDialog } from "./components/MediaDetailDialog";
 import { UploadDialog } from "./components/UploadDialog";
-import { MediaFilters } from "./components/media-page/MediaFilters";
 import { MediaGalleryResults } from "./components/media-page/MediaGalleryResults";
 
 function useMediaFilterParams() {
@@ -31,6 +28,7 @@ function useMediaFilterParams() {
 
   useEffect(() => {
     const normalized = normalizeMediaGalleryParams(new URLSearchParams(rawSearch));
+    for (const key of ["type", "status", "sort", "from", "to", "min", "max"]) normalized.delete(key);
     if (normalized.toString() !== rawSearch) {
       setSearchParams(normalized, { replace: true });
     }
@@ -45,8 +43,9 @@ function useMediaFilterParams() {
 
 export default function MediaPage() {
   useDocumentTitle("Файлы");
-  const { q, type, status, sort, from, to, min, max, view, update } =
-    useMediaFilterParams();
+  const { q, view, update } = useMediaFilterParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const group = searchParams.get("group") ?? "all";
   const [searchInput, setSearchInput] = useState(q);
   const debouncedSearch = useDebouncedValue(searchInput, 250);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -64,32 +63,12 @@ export default function MediaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch]);
 
-  const minSize = megabytesToBytes(min);
-  const maxSize = megabytesToBytes(max);
-  const rangeError = mediaGalleryRangeError({ from, to, min, max });
-
   const mediaQuery = useInfiniteQuery({
-    queryKey: queryKeys.media.list({
-      q,
-      type,
-      status,
-      sort,
-      from,
-      to,
-      min: minSize,
-      max: maxSize,
-    }),
+    queryKey: queryKeys.media.list({ q }),
     queryFn: ({ pageParam, signal }) =>
       api.media.list(
         {
           q: q || undefined,
-          type: type === "all" ? "" : type,
-          status: status === "all" ? "" : status,
-          sort,
-          created_from: from || undefined,
-          created_to: to || undefined,
-          min_size: minSize,
-          max_size: maxSize,
           limit: 50,
           cursor: pageParam ?? undefined,
         },
@@ -97,35 +76,39 @@ export default function MediaPage() {
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor,
-    enabled: !rangeError,
   });
 
-  const items = useMemo(
+  const allItems = useMemo(
     () => mediaQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [mediaQuery.data],
   );
+  const groups = useMemo(
+    () => [...new Set(allItems.flatMap((media) => media.groups ?? []))].sort(),
+    [allItems],
+  );
+  const items = group === "all" ? allItems : allItems.filter((media) => media.groups?.includes(group));
+  const filtersActive = Boolean(q || group !== "all");
+  const resultsState = mediaQuery.isLoading
+    ? "loading"
+    : mediaQuery.error && items.length === 0
+      ? "error"
+      : items.length === 0
+        ? filtersActive ? "empty-filtered" : "empty"
+        : mediaQuery.error ? "results-with-error" : "results";
 
-  const filtersActive = hasActiveMediaGalleryFilters({ q, type, status, sort, from, to, min, max, view });
-  const resultsState = mediaGalleryResultsState({
-    invalidRange: Boolean(rangeError),
-    loading: mediaQuery.isLoading,
-    error: Boolean(mediaQuery.error),
-    itemCount: items.length,
-    filtersActive,
-  });
+  const selectGroup = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === "all") next.delete("group");
+    else next.set("group", value);
+    setSearchParams(next);
+  };
 
   const resetFilters = () => {
     setSearchInput("");
-    update({
-      q: null,
-      type: null,
-      status: null,
-      sort: null,
-      from: null,
-      to: null,
-      min: null,
-      max: null,
-    });
+    const next = new URLSearchParams(searchParams);
+    next.delete("q");
+    next.delete("group");
+    setSearchParams(next);
   };
 
   const openMedia = (media: Media) => {
@@ -168,23 +151,27 @@ export default function MediaPage() {
         }
       />
 
-      <MediaFilters
-        searchInput={searchInput}
-        onSearchInputChange={setSearchInput}
-        type={type}
-        status={status}
-        sort={sort}
-        from={from}
-        to={to}
-        min={min}
-        max={max}
-        filtersActive={filtersActive}
-        itemCount={items.length}
-        hasNextPage={Boolean(mediaQuery.hasNextPage)}
-        rangeError={rangeError}
-        onUpdate={update}
-        onReset={resetFilters}
-      />
+      <section aria-label="Фильтры файлов" className="mb-4 space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <Input type="search" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Поиск по имени файла" aria-label="Поиск медиа" className="pl-9 pr-9" />
+            {searchInput && <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:bg-accent" onClick={() => setSearchInput("")} aria-label="Очистить поиск"><X className="h-3.5 w-3.5" /></button>}
+          </div>
+          <Select value={group} onValueChange={selectGroup}>
+            <SelectTrigger className="w-full sm:w-56" aria-label="Группа доступа"><SelectValue placeholder="Все группы" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все группы</SelectItem>
+              {groups.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {filtersActive && <Button variant="ghost" size="sm" onClick={resetFilters}><X />Сбросить фильтры</Button>}
+          <span className="text-xs text-muted-foreground" role="status">Загружено: {items.length}{mediaQuery.hasNextPage ? "+" : ""}</span>
+          {group !== "all" && <span className="text-2xs text-muted-foreground">Группа применяется к уже загруженным результатам.</span>}
+        </div>
+      </section>
 
       <MediaGalleryResults
         state={resultsState}
@@ -198,6 +185,11 @@ export default function MediaPage() {
         onLoadMore={() => void mediaQuery.fetchNextPage()}
         onUpload={() => setUploadOpen(true)}
       />
+      {group !== "all" && items.length === 0 && mediaQuery.hasNextPage && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={() => void mediaQuery.fetchNextPage()} loading={mediaQuery.isFetchingNextPage}>Показать ещё</Button>
+        </div>
+      )}
 
       <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       <MediaDetailDialog

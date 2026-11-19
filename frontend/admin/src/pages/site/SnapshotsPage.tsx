@@ -1,99 +1,66 @@
 import { useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Search } from "lucide-react";
 import { api } from "@/api";
 import { ErrorState, LoadingPage, PageHeader, useDocumentTitle } from "@/components/common/page";
 import { useConfirm } from "@/components/common/confirm";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { SiteConfig } from "@/types";
-import { SitepackImportAction } from "./SitepackActions";
+import { Button } from "@/components/ui/button";
 import { SnapshotTreeItem } from "./components/snapshots-page/SnapshotTreeItem";
-
-function emptySiteConfig(): SiteConfig {
-  const pageId = crypto.randomUUID();
-  return {
-    formatVersion: 3,
-    pages: [{ id: pageId, name: "Главная", kind: "page", placements: [] }],
-    routeTree: { id: crypto.randomUUID(), type: "site", children: [{ id: crypto.randomUUID(), type: "path", path: "/", pageId, children: [] }] },
-  };
-}
 
 export default function SnapshotsPage() {
   useDocumentTitle("Дерево снапшотов");
   const confirm = useConfirm();
   const queryClient = useQueryClient();
+  const [params] = useSearchParams();
+  const siteID = params.get("site_id") ?? "";
+  const pageID = params.get("page_id") ?? "";
   const [name, setName] = useState("");
   const [query, setQuery] = useState("");
-  const [selectedSiteID, setSelectedSiteID] = useState("");
   const [busy, setBusy] = useState(false);
   const createAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
-  const rootRequestPayload = useRef<{
-    siteID: string;
-    name: string;
-    config: SiteConfig;
-    metadata: { formatVersion: 1; siteName: string; pages: Record<string, never> };
-    designSystem: { formatVersion: 2; groups: []; baseTokens: []; featureValues: Record<string, never>; breakpoints: []; fonts: [] };
-  } | null>(null);
   const snapshots = useQuery({
-    queryKey: ["site", "snapshot-choices"],
-    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal),
-    refetchInterval: (query) => query.state.data?.items.some((item) => item.state === "provisioning") ? 2000 : false,
+    queryKey: ["site", "snapshot-choices", siteID, pageID],
+    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, pageID || undefined, siteID || undefined),
   });
-  const branches = useQuery({ queryKey: ["website", "branches"], queryFn: ({ signal }) => api.website.branches(signal) });
 
-  const create = async (parentSnapshotId?: string) => {
+  const create = async (parentSnapshotId: string) => {
     const trimmedName = name.trim();
     if (!trimmedName || busy) return;
     setBusy(true);
     try {
-      const [parent, parentContent] = parentSnapshotId
-        ? await Promise.all([api.siteBuilder.snapshot(parentSnapshotId), api.contentEngine.workspace(parentSnapshotId)])
-        : [null, null];
-      if (parentSnapshotId && (parent?.snapshot.state !== "ready" || parent.snapshot.revision === undefined || !parentContent ||
-        !Number.isSafeInteger(parentContent.revision) || parentContent.revision < 0)) {
+      const [parent, parentContent] = await Promise.all([
+        api.siteBuilder.snapshot(parentSnapshotId),
+        api.contentEngine.workspace(parentSnapshotId),
+      ]);
+      if (parent.snapshot.state !== "ready" || parent.snapshot.revision === undefined ||
+        !Number.isSafeInteger(parentContent.revision) || parentContent.revision < 0) {
         throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
       }
-      const configuredSites = [...new Map((branches.data?.items ?? []).map((branch) => [branch.site_id, branch.name])).entries()];
-      const siteID = parent?.snapshot.siteId || selectedSiteID || (configuredSites.length === 1 ? configuredSites[0]?.[0] : undefined);
-      if (!siteID) throw new Error("Выберите сайт из статической конфигурации веток.");
-      let input: {
-        siteID: string;
-        name: string;
-        parentSnapshotId?: string;
-        expectedParentRevision?: number;
-        expectedParentContentRevision?: number;
-        config?: SiteConfig;
-        metadata?: { formatVersion: 1; siteName: string; pages: Record<string, never> };
-        designSystem?: { formatVersion: 2; groups: []; baseTokens: []; featureValues: Record<string, never>; breakpoints: []; fonts: [] };
+      const input = {
+        siteID: parent.snapshot.siteId,
+        pageID: parent.snapshot.pageId,
+        name: trimmedName,
+        parentSnapshotId,
+        expectedParentRevision: parent.snapshot.revision,
+        expectedParentContentRevision: parentContent.revision,
       };
-      if (parentSnapshotId) {
-        input = { siteID, name: trimmedName, parentSnapshotId, expectedParentRevision: parent!.snapshot.revision, expectedParentContentRevision: parentContent!.revision };
-      } else {
-        if (!rootRequestPayload.current || rootRequestPayload.current.siteID !== siteID || rootRequestPayload.current.name !== trimmedName) {
-          rootRequestPayload.current = {
-            siteID,
-            name: trimmedName,
-            config: emptySiteConfig(),
-            metadata: { formatVersion: 1, siteName: trimmedName, pages: {} },
-            designSystem: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
-          };
-        }
-        input = rootRequestPayload.current;
-      }
       const fingerprint = JSON.stringify(input);
       if (!createAttempt.current || createAttempt.current.fingerprint !== fingerprint) {
         createAttempt.current = { fingerprint, key: `snapshot-${crypto.randomUUID()}` };
       }
       const created = await api.siteBuilder.createSnapshotFrom({ ...input, idempotencyKey: createAttempt.current.key });
       createAttempt.current = null;
-      if (!parentSnapshotId) rootRequestPayload.current = null;
       setName("");
-      await queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
+        queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] }),
+      ]);
       toast.success(created.state === "ready"
-        ? `Снапшот #${created.sequence} создан. Назначьте его в разделе «Ветки», если он должен обслуживать сайт.`
-        : `Снапшот #${created.sequence} создан и готовится. Он появится в редакторах после завершения копирования.`);
+        ? `Создан снапшот #${created.sequence}`
+        : `Снапшот #${created.sequence} создан и готовится.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Не удалось создать снапшот");
     } finally {
@@ -102,13 +69,16 @@ export default function SnapshotsPage() {
   };
 
   const remove = async (id: string) => {
-    if (!(await confirm({ title: "Удалить снапшот?", description: "Его дочерние снапшоты сохранят содержимое и будут перепривязаны к родителю. Действие необратимо.", confirmLabel: "Удалить", destructive: true }))) return;
+    if (!(await confirm({ title: "Удалить снапшот?", description: "Дочерние снапшоты сохранят содержимое и будут перепривязаны к родителю. Действие необратимо.", confirmLabel: "Удалить", destructive: true }))) return;
     setBusy(true);
     try {
       const snapshot = snapshots.data?.items.find((item) => item.id === id);
       if (!snapshot?.revision) throw new Error("Обновите список снапшотов перед удалением.");
       await api.siteBuilder.deleteSnapshot(id, snapshot.revision);
-      await queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
+        queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] }),
+      ]);
       toast.success("Снапшот удалён");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Ошибка удаления");
@@ -117,71 +87,45 @@ export default function SnapshotsPage() {
     }
   };
 
-  if (snapshots.isLoading || branches.isLoading) return <LoadingPage />;
-  if (snapshots.error || branches.error) return <ErrorState error={snapshots.error ?? branches.error} onRetry={() => { void snapshots.refetch(); void branches.refetch(); }} />;
+  if (snapshots.isLoading) return <LoadingPage />;
+  if (snapshots.error) return <ErrorState error={snapshots.error} onRetry={() => void snapshots.refetch()} />;
 
-  const protectedIds = new Set<string>();
-  const configuredSites = [...new Map((branches.data?.items ?? []).map((branch) => [branch.site_id, branch.name])).entries()];
-  const targetSiteID = selectedSiteID || (configuredSites.length === 1 ? configuredSites[0]![0] : "");
-  for (const branch of branches.data?.items ?? []) {
-    if (!branch.snapshot_id) continue;
-    protectedIds.add(branch.snapshot_id);
-    const parent = snapshots.data?.items.find((item) => item.id === branch.snapshot_id)?.parentSnapshotId;
-    if (parent) protectedIds.add(parent);
-  }
   const needle = query.trim().toLocaleLowerCase("ru");
-  const visibleSnapshots = (snapshots.data?.items ?? []).filter((snapshot) => {
-    if (!needle) return true;
-    const branchNames = (branches.data?.items ?? []).filter((branch) => branch.snapshot_id === snapshot.id).map((branch) => branch.name).join(" ");
-    return `#${snapshot.sequence} ${snapshot.name} ${snapshot.parentName ?? ""} ${branchNames}`.toLocaleLowerCase("ru").includes(needle);
-  });
+  const visibleSnapshots = (snapshots.data?.items ?? []).filter((snapshot) =>
+    `#${snapshot.sequence} ${snapshot.name} ${snapshot.parentName ?? ""} ${snapshot.pageId}`.toLocaleLowerCase("ru").includes(needle));
 
   return (
     <div className="page-grid">
-      <PageHeader title="Дерево снапшотов" description="Изменения текущего сайта сохраняются потомком. Создайте пустой корневой снапшот для независимого сайта; назначение ветке выполняется отдельно в разделе «Ветки»." />
+      <PageHeader title="Дерево снапшотов" description="Снапшоты изолированы по паре site_id и page_id. Назначения веток здесь не управляются." />
+      <div className="flex justify-end"><Button type="button" variant="outline" onClick={() => void snapshots.refetch()} loading={snapshots.isFetching}>Обновить состояние</Button></div>
+      {siteID && <p className="text-sm text-muted-foreground">Фильтр site_id: <code>{siteID}</code></p>}
+      {pageID && <p className="text-sm text-muted-foreground">Фильтр page_id: <code>{pageID}</code></p>}
       <div className="flex flex-wrap items-end gap-2">
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-sm">
-          <span className="text-xs font-medium text-muted-foreground">Название нового сайта или снапшота</span>
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Каталог или Новый стенд" aria-label="Название нового сайта или снапшота" maxLength={120} />
+          <span className="text-xs font-medium text-muted-foreground">Название дочернего снапшота</span>
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Изменение главной" aria-label="Название дочернего снапшота" maxLength={120} />
         </label>
-        <label className="min-w-0 space-y-1 sm:w-64">
-          <span className="text-xs font-medium text-muted-foreground">Сайт из конфигурации веток</span>
-          <select aria-label="Сайт из конфигурации веток" className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={targetSiteID} onChange={(event) => setSelectedSiteID(event.target.value)}>
-            <option value="">Выберите сайт</option>
-            {configuredSites.map(([siteID]) => <option key={siteID} value={siteID}>Сайт · {siteID}</option>)}
-          </select>
-        </label>
-        <Button disabled={!name.trim() || !targetSiteID || busy} onClick={() => void create()}>
-          {busy ? "Создаём…" : "Создать корневой снапшот"}
-        </Button>
       </div>
-      <p className="text-sm text-muted-foreground">Создаст независимый корневой снапшот с пустой главной страницей без фич и контента. Сайт выбирается из статической конфигурации; назначения веток не изменятся.</p>
+      <p className="text-sm text-muted-foreground">Корневые снапшоты требуют настроенные site_id и page_id. Текущий Admin API не предоставляет их источник, поэтому создание корня здесь отключено; потомка можно создать у выбранного снапшота.</p>
       <label className="relative block max-w-xl">
         <span className="sr-only">Поиск снапшотов</span>
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-        <Input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Номер, название или ветка" className="min-h-11 pl-9" />
+        <Input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Номер, название или page_id" className="min-h-11 pl-9" />
       </label>
       <ul aria-label="Дерево снапшотов" className="divide-y divide-border rounded-xl border border-border bg-card">
-        {visibleSnapshots.map((snapshot) => {
-          const assigned = branches.data?.items.filter((branch) => branch.snapshot_id === snapshot.id).map((branch) => branch.name) ?? [];
-          const protectedSnapshot = protectedIds.has(snapshot.id);
-          return (
-            <SnapshotTreeItem
-              key={snapshot.id}
-              snapshot={snapshot}
-              assignedBranchNames={assigned}
-              protectedSnapshot={protectedSnapshot}
-              canCreate={Boolean(name.trim())}
-              busy={busy}
-              onCreateChild={(snapshotId) => void create(snapshotId)}
-              onDelete={(snapshotId) => void remove(snapshotId)}
-            />
-          );
-        })}
+        {visibleSnapshots.map((snapshot) => (
+          <SnapshotTreeItem
+            key={snapshot.id}
+            snapshot={snapshot}
+            canCreate={Boolean(name.trim())}
+            busy={busy}
+            onCreateChild={(snapshotId) => void create(snapshotId)}
+            onDelete={(snapshotId) => void remove(snapshotId)}
+          />
+        ))}
       </ul>
       {snapshots.data?.items.length !== 0 && visibleSnapshots.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">Снапшоты не найдены.</p>}
-      {snapshots.data?.items.length === 0 && <p className="text-sm text-muted-foreground">Создайте пустой сайт или настройте текущий сайт в редакторе.</p>}
-      <SitepackImportAction />
+      {snapshots.data?.items.length === 0 && <p className="text-sm text-muted-foreground">Снапшотов нет. Добавьте конфигурацию site_id и page_id в доступный API, чтобы создать корневой снапшот.</p>}
     </div>
   );
 }

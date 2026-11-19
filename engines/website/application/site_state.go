@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
@@ -13,11 +14,10 @@ type siteRegistry struct {
 	LastSequence int64 `json:"last_sequence"`
 }
 
-// loadSiteRegistry reads the per-site serialization point used by compound
-// Website writes. Branch assignment, snapshot creation and deletion CAS this
-// record in the same batch as their product records.
-func (s *Service) loadSiteRegistry(ctx context.Context, siteID string) (core.ModuleDataRecord, siteRegistry, error) {
-	record, err := s.store.Get(ctx, siteRegistryKey(siteID))
+// loadSiteRegistry reads the page-tree serialization point used by compound
+// Website snapshot writes. Each page maintains an independent sequence.
+func (s *Service) loadSiteRegistry(ctx context.Context, siteID, pageID string) (core.ModuleDataRecord, siteRegistry, error) {
+	record, err := s.store.Get(ctx, siteRegistryKey(siteID, pageID))
 	if err != nil {
 		if errors.Is(err, core.ErrModuleDataNotFound) {
 			return core.ModuleDataRecord{}, siteRegistry{}, nil
@@ -36,18 +36,18 @@ func (s *Service) loadSiteRegistry(ctx context.Context, siteID string) (core.Mod
 	return record, state, nil
 }
 
-func (s *Service) ensureSiteSequence(ctx context.Context, siteID string, state siteRegistry) (int64, error) {
+func (s *Service) ensureSiteSequence(ctx context.Context, siteID, pageID string, state siteRegistry) (int64, error) {
 	if state.LastSequence > 0 {
 		return state.LastSequence, nil
 	}
-	return s.maxSnapshotSequence(ctx, siteID)
+	return s.maxSnapshotSequence(ctx, siteID, pageID)
 }
 
-func siteRegistryKey(siteID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "registry"}
+func siteRegistryKey(siteID, pageID string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "registry/" + strings.ToLower(pageID)}
 }
 
-func siteRegistryMutation(siteID string, current core.ModuleDataRecord, lastSequence int64) (core.ModuleDataMutation, error) {
+func siteRegistryMutation(siteID, pageID string, current core.ModuleDataRecord, lastSequence int64) (core.ModuleDataMutation, error) {
 	if lastSequence < 0 {
 		return core.ModuleDataMutation{}, websiteapi.ErrUnavailable
 	}
@@ -60,7 +60,7 @@ func siteRegistryMutation(siteID string, current core.ModuleDataRecord, lastSequ
 		return core.ModuleDataMutation{}, websiteapi.ErrUnavailable
 	}
 	return core.ModuleDataMutation{
-		Key: siteRegistryKey(siteID), ExpectedRevision: current.Revision,
+		Key: siteRegistryKey(siteID, pageID), ExpectedRevision: current.Revision,
 		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: 1, IndexData: index},
 	}, nil
 }

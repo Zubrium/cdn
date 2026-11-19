@@ -262,7 +262,7 @@ function FormSchemaEditor({
 export default function FormsPage() {
   useDocumentTitle("Формы");
   const { principal } = useAuth();
-  const canManage = hasGroupAccess(principal, "forms", 2);
+  const canManage = hasGroupAccess(principal, "forms_schemas", 2);
   const [params, setParams] = useSearchParams();
   const snapshots = useQuery({
     queryKey: ["website", "snapshots", "all"],

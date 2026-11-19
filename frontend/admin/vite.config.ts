@@ -25,7 +25,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 900,
     rollupOptions: {
       input: {
-        admin: fileURLToPath(new URL("./admin.html", import.meta.url)),
+        admin: fileURLToPath(new URL("./index.html", import.meta.url)),
       },
     },
   },

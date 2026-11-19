@@ -51,7 +51,7 @@ function fileContentURL(media: Media): string {
 }
 
 function copyFileAddress(media: Media) {
-  copyText(fileContentURL(media), "Адрес файла скопирован");
+  copyText(fileContentURL(media), "Адрес для авторизованного доступа скопирован");
 }
 
 function downloadFile(media: Media) {
@@ -165,10 +165,11 @@ export function MediaDetailDialog({
           <p className="text-2xs text-muted-foreground">Меняется только имя; байты файла остаются неизменными.</p>
         </div>
 
+        <p className="text-xs text-muted-foreground">Этот адрес не является публичной ссылкой: для доступа требуется авторизация. Чтобы выдавать файл публично, настройте отдельный маршрут Router для этого файла.</p>
         <DialogFooter className="flex-wrap items-center justify-between gap-2">
           {canDelete && <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void requestDelete()} disabled={deleteMutation.isPending}><Trash2 />Удалить</Button>}
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => copyFileAddress(media)}><Copy />Скопировать адрес</Button>
+            <Button variant="outline" onClick={() => copyFileAddress(media)}><Copy />Скопировать адрес для авторизованного доступа</Button>
             <Button variant="outline" onClick={() => downloadFile(media)}><Download />Скачать</Button>
             <Button onClick={onClose}>Закрыть</Button>
           </div>
@@ -200,7 +201,7 @@ export function MediaActions({ media, onOpen }: { media: Media; onOpen: () => vo
       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={`Действия с ${media.original_filename}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuItem onSelect={onOpen}><Pencil className="h-4 w-4" />Подробности</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => copyFileAddress(media)}><Copy className="h-4 w-4" />Скопировать адрес</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => copyFileAddress(media)}><Copy className="h-4 w-4" />Скопировать адрес для авторизованного доступа</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => downloadFile(media)}><Download className="h-4 w-4" />Скачать</DropdownMenuItem>
         {canDelete && <><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => void requestDelete()} disabled={deleteMutation.isPending}><Trash2 className="h-4 w-4" />Удалить…</DropdownMenuItem></>}
       </DropdownMenuContent>

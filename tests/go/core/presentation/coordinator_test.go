@@ -36,21 +36,24 @@ func TestRegistryExposesOnlyExplicitGenericComponentDescriptors(t *testing.T) {
 	}
 	if err := registry.Register("module-a", componentDescriptorTestModule{descriptor: corecoord.ComponentDescriptor{
 		ID: "component.a", Kind: "engine", Version: 1,
-		Operations: []corecoord.ComponentOperation{{ID: "prepare", ContractVersion: 1}},
+		Operations:   []corecoord.ComponentOperation{{ID: "prepare", ContractVersion: 1}},
+		AccessGroups: []string{"content"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	got := registry.ComponentDescriptors()
 	want := []corecoord.ComponentDescriptor{
-		{ID: "component.a", Kind: "engine", Version: 1, Operations: []corecoord.ComponentOperation{{ID: "prepare", ContractVersion: 1}}},
+		{ID: "component.a", Kind: "engine", Version: 1, Operations: []corecoord.ComponentOperation{{ID: "prepare", ContractVersion: 1}}, AccessGroups: []string{"content"}},
 		{ID: "component.b", Kind: "worker", Version: 2},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("generic component descriptors = %#v, want %#v", got, want)
 	}
 	got[0].Operations[0].ID = "caller-mutation"
-	if registry.ComponentDescriptors()[0].Operations[0].ID != "prepare" {
-		t.Fatal("caller mutated registered operation descriptors")
+	got[0].AccessGroups[0] = "caller-mutation"
+	registered := registry.ComponentDescriptors()[0]
+	if registered.Operations[0].ID != "prepare" || registered.AccessGroups[0] != "content" {
+		t.Fatal("caller mutated registered component descriptor slices")
 	}
 }
 

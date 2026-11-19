@@ -14,6 +14,7 @@ import { formatBytes } from "@/lib/format";
 import { useSiteWorkspace } from "./SiteWorkspace";
 import { describeRoutes, removeRouteBranch, updateRouteNode } from "./route-tree";
 import { comparableRootPath, parseStaticFilePath } from "./components/routes/route-utils";
+import { siteContextQuery } from "./site-query";
 
 export default function FileRoutePage() {
   const { routeId = "" } = useParams();
@@ -32,7 +33,7 @@ export default function FileRoutePage() {
     enabled: Boolean(route?.node.fileId),
   });
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const listURL = `/site/pages${snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : ""}`;
+  const listURL = `/site/pages${siteContextQuery(snapshotId, searchParams.get("page_id") ?? "")}`;
   useDocumentTitle(route?.node.fileId ? media.data?.original_filename ?? "Файловый маршрут" : "Файловый маршрут");
 
   useEffect(() => {

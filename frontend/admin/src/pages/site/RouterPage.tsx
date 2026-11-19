@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import type { RouteTreeNode, SitePage } from "@/types";
 import { useSiteWorkspace } from "./SiteWorkspace";
 import { SystemPagesDialog } from "./components/SystemPagesDialog";
+import { siteContextQuery } from "./site-query";
 import { RouteEditorDialog } from "./components/routes/RouteDialogs";
 import { FileRouteDialog, type NewFileRoute } from "./components/routes/FileRouteDialog";
 import type { RouteDialogState } from "./components/routes/route-types";
@@ -32,7 +33,8 @@ export default function RouterPage() {
   const [fileDialogOpen, setFileDialogOpen] = useState(false);
   const [systemPagesOpen, setSystemPagesOpen] = useState(false);
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const suffix = snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : "";
+  const pageID = searchParams.get("page_id") ?? "";
+  const suffix = siteContextQuery(snapshotId, pageID);
   const featureBuilds = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.website.featureBuilds(signal) });
   const media = useQuery({ queryKey: ["media", "public-file-routes"], queryFn: ({ signal }) => api.media.list({ status: "ready", limit: 200 }, signal) });
   const groups = useMemo(() => {

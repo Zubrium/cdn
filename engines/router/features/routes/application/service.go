@@ -39,7 +39,7 @@ type GroupAuthorizer interface {
 }
 
 type TargetValidator interface {
-	ValidateRouteTarget(context.Context, model.Target) error
+	ValidateRouteTarget(context.Context, model.Target, string) error
 }
 
 type Config struct {
@@ -171,7 +171,7 @@ func (service *Service) CreateRoute(ctx context.Context, input CreateRouteInput)
 	if err != nil {
 		return model.Route{}, ErrInvalid
 	}
-	if err := service.validator.ValidateRouteTarget(ctx, input.Target); err != nil {
+	if err := service.validator.ValidateRouteTarget(ctx, input.Target, input.Match); err != nil {
 		return model.Route{}, mapTargetError(err)
 	}
 	route, err := model.NewRoute(uuid.NewString(), service.config.BranchID, host, path, input.Match, input.Target, service.now())
@@ -196,9 +196,6 @@ func (service *Service) ReplaceTarget(ctx context.Context, branchID string, inpu
 	if branchID != service.config.BranchID || !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
 		return model.Route{}, ErrInvalid
 	}
-	if err := service.validator.ValidateRouteTarget(ctx, input.Target); err != nil {
-		return model.Route{}, mapTargetError(err)
-	}
 	current, err := service.repository.GetByID(ctx, branchID, input.RouteID)
 	if err != nil {
 		return model.Route{}, mapRepositoryError(err)
@@ -208,6 +205,9 @@ func (service *Service) ReplaceTarget(ctx context.Context, branchID string, inpu
 	}
 	if input.Target.Kind == model.TargetCoreFile && current.Match != model.MatchExact {
 		return model.Route{}, ErrInvalid
+	}
+	if err := service.validator.ValidateRouteTarget(ctx, input.Target, current.Match); err != nil {
+		return model.Route{}, mapTargetError(err)
 	}
 	updated, err := service.repository.ReplaceTarget(ctx, branchID, input.RouteID, input.Target, input.ExpectedRevision, service.now())
 	if err != nil {

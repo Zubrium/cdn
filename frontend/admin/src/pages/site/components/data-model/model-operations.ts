@@ -1,4 +1,4 @@
-import type { DataModel, DataModelEntity, DataModelField, DataModelFieldType, SiteConfig } from "@/types";
+import type { DataModel, DataModelEntity, DataModelField, DataModelFieldType, SiteEditorDraft } from "@/types";
 
 export const fieldTypes: Array<{ value: DataModelFieldType; label: string }> = [
   { value: "text", label: "Короткий текст" },
@@ -37,9 +37,7 @@ export function emptyDataModel(): DataModel {
   return { formatVersion: 1, entities: [], positions: {} };
 }
 
-export function modelFor(config: SiteConfig): DataModel {
-  return config.dataModel ?? emptyDataModel();
-}
+type DataModelBindingConfig = Pick<SiteEditorDraft, "pages">;
 
 export function validModelName(value: string): boolean {
   return value.trim().length > 0 && Array.from(value).length <= 120;
@@ -102,10 +100,6 @@ function defaultPosition(index: number) {
 
 export function positionFor(model: DataModel, entity: DataModelEntity, index: number) {
   return model.positions?.[entity.id] ?? defaultPosition(index);
-}
-
-export function setModel(config: SiteConfig, model: DataModel): SiteConfig {
-  return { ...config, dataModel: model };
 }
 
 export function addDataModelEntity(
@@ -243,8 +237,7 @@ export interface DataModelBindingImpact {
   paths: string[];
 }
 
-export function dataModelEntityBindingImpacts(config: SiteConfig, entityID: string): DataModelBindingImpact[] {
-  const model = config.dataModel ?? emptyDataModel();
+export function dataModelEntityBindingImpacts(config: DataModelBindingConfig, model: DataModel, entityID: string): DataModelBindingImpact[] {
   const entityFieldIDs = new Set(model.entities.find((entity) => entity.id === entityID)?.fields.map((field) => field.id) ?? []);
   return (config.pages ?? []).flatMap((page) => page.placements.flatMap((placement) =>
     (placement.dataBindings ?? []).flatMap((binding) => {
@@ -275,8 +268,8 @@ export function dataModelEntityBindingImpacts(config: SiteConfig, entityID: stri
   ));
 }
 
-export function dataModelFieldBindingImpacts(config: SiteConfig, entityID: string, fieldID: string): DataModelBindingImpact[] {
-  const ownsField = config.dataModel?.entities.some((entity) => entity.id === entityID && entity.fields.some((field) => field.id === fieldID)) ?? false;
+export function dataModelFieldBindingImpacts(config: DataModelBindingConfig, model: DataModel, entityID: string, fieldID: string): DataModelBindingImpact[] {
+  const ownsField = model.entities.some((entity) => entity.id === entityID && entity.fields.some((field) => field.id === fieldID));
   if (!ownsField) return [];
   return (config.pages ?? []).flatMap((page) => page.placements.flatMap((placement) =>
     (placement.dataBindings ?? []).flatMap((binding) => {
@@ -302,7 +295,7 @@ export function describeBindingImpacts(impacts: DataModelBindingImpact[]): strin
   const affected = impacts.map((impact) =>
     `«${impact.pageName}» · ${impact.featureKey}@${impact.version} · ${impact.inputKey} (${impact.paths.join(", ")})`,
   );
-  return `\n\nЗатронуты структурные привязки:\n${affected.join("\n")}\n\nПерепривяжите эти входы в редакторе сайта до сохранения дочернего снапшота.`;
+  return `\n\nЗатронуты структурные привязки:\n${affected.join("\n")}\n\nПроверьте эти привязки перед сохранением модели сайта.`;
 }
 
 export function removeDataModelEntity(model: DataModel, entityID: string): DataModel {

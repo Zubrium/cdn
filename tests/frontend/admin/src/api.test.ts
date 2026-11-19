@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, getSyntheticDataMode, subscribeSyntheticDataMode } from "../../../../frontend/admin/src/api";
-import type { FormFieldDefinition, MediaRenditionContext } from "../../../../frontend/admin/src/types";
+import type { FormFieldDefinition, MediaRenditionContext, SiteConfig } from "../../../../frontend/admin/src/types";
 
 function stubAdminBrowser(fetchMock: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("window", {
@@ -12,114 +12,17 @@ function stubAdminBrowser(fetchMock: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("fetch", fetchMock);
 }
 
-describe("Website branch API", () => {
+describe("Website pagination API", () => {
   afterEach(() => vi.unstubAllGlobals());
-
-  it("uses the v2 Sites endpoints and exact revision fields for branch assignment", async () => {
-    const branchId = "2f3b91b2-cf9c-4d5e-b473-41aec5c15280";
-    const snapshotId = "1dc9135a-b04c-454d-84f4-6ed4797af663";
-    const fetchMock = vi.fn()
-      .mockImplementationOnce(async () => new Response(JSON.stringify({ items: [{
-        id: branchId, name: "preview", site_id: "33333333-3333-4333-8333-333333333333", listen_address: "127.0.0.1:8081",
-        cors_origins: [], indexable: false, snapshot_id: null, revision: 5, enabled: true, updated_at: "2026-11-18T10:00:00Z",
-      }] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockImplementationOnce(async () => new Response(JSON.stringify({
-        id: branchId, name: "preview", site_id: "33333333-3333-4333-8333-333333333333", listen_address: "127.0.0.1:8081",
-        cors_origins: [], indexable: false, snapshot_id: snapshotId, revision: 6, enabled: true, updated_at: "2026-11-18T10:00:00Z",
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockImplementationOnce(async () => new Response(JSON.stringify({ items: [{
-        id: "4de8c0da-957b-4c00-8b9c-5debd6a6d1a6", branch_id: branchId, snapshot_id: snapshotId, snapshot_name: "Homepage",
-        snapshot_sequence: 12, action: "assigned", created_at: "2026-11-18T10:00:00Z",
-      }], next_cursor: "opaque-next" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
-    stubAdminBrowser(fetchMock);
-
-    const branches = await api.website.branches();
-    const assigned = await api.website.assignBranch(branchId, snapshotId, 5, 9);
-    const events = await api.website.branchEvents(branchId, "cursor-id", 8);
-
-    const [branchesInput] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    const [assignInput, assignInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    const [eventsInput] = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
-    const eventsURL = new URL(eventsInput, "http://localhost");
-    expect(branchesInput).toBe("/api/v2/admin/sites/branches");
-    expect(branches.items[0].site_id).toBe("33333333-3333-4333-8333-333333333333");
-    expect(assignInput).toBe(`/api/v2/admin/sites/branches/${branchId}/snapshot`);
-    expect(assignInit.method).toBe("PUT");
-    expect(JSON.parse(String(assignInit.body))).toEqual({
-      snapshot_id: snapshotId, expected_revision: 5, expected_snapshot_revision: 9,
-    });
-    expect(new Headers(assignInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
-    expect(assigned.snapshot_id).toBe(snapshotId);
-    expect(eventsURL.pathname).toBe(`/api/v2/admin/sites/branches/${branchId}/events`);
-    expect(eventsURL.searchParams.get("cursor")).toBe("cursor-id");
-    expect(eventsURL.searchParams.get("limit")).toBe("8");
-    expect(events.next_cursor).toBe("opaque-next");
-  });
-
-  it("rejects malformed branch configuration before UI code consumes it", async () => {
-    const branch = {
-      id: "2f3b91b2-cf9c-4d5e-b473-41aec5c15280",
-      name: "preview",
-      site_id: "33333333-3333-4333-8333-333333333333",
-      listen_address: "127.0.0.1:8081",
-      cors_origins: ["https://preview.example.test"],
-      indexable: false,
-      snapshot_id: null,
-      revision: 1,
-      enabled: true,
-      updated_at: "2026-11-18T10:00:00Z",
-    };
-    const cases = [
-      { name: "listener address", value: { ...branch, listen_address: "not-a-listener" } },
-      { name: "CORS origin", value: { ...branch, cors_origins: ["https://preview.example.test/path"] } },
-      { name: "snapshot ID", value: { ...branch, snapshot_id: "snapshot with spaces" } },
-      { name: "revision", value: { ...branch, revision: 0 } },
-      { name: "timestamp", value: { ...branch, updated_at: "not-a-time" } },
-    ];
-    for (const testCase of cases) {
-      const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [testCase.value] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
-      stubAdminBrowser(fetchMock);
-
-      await expect(api.website.branches(), testCase.name).rejects.toMatchObject({ status: 502, code: "invalid_response" });
-    }
-  });
-
-  it("rejects branch assignment history records with invalid IDs", async () => {
-    const branchID = "2f3b91b2-cf9c-4d5e-b473-41aec5c15280";
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [{
-      id: "event-1",
-      branch_id: branchID,
-      snapshot_id: "1dc9135a-b04c-454d-84f4-6ed4797af663",
-      snapshot_name: "Homepage",
-      snapshot_sequence: 1,
-      action: "assigned",
-      created_at: "2026-11-18T10:00:00Z",
-    }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    stubAdminBrowser(fetchMock);
-
-    await expect(api.website.branchEvents(branchID)).rejects.toMatchObject({ status: 502, code: "invalid_response" });
-  });
 
   it("loads every snapshot page without repeating or guessing cursors", async () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        items: [{ id: "snapshot-1", site_id: "site-1", name: "One", sequence: 1, revision: 1, feature_pins: {}, state: "ready" }],
+        items: [{ id: "snapshot-1", site_id: "site-1", page_id: "home", name: "One", sequence: 1, revision: 1, feature_pins: {}, state: "ready" }],
         next_cursor: "cursor-2",
       }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        items: [{ id: "snapshot-2", site_id: "site-1", name: "Two", sequence: 2, revision: 1, feature_pins: {}, state: "ready" }],
+        items: [{ id: "snapshot-2", site_id: "site-1", page_id: "home", name: "Two", sequence: 2, revision: 1, feature_pins: {}, state: "ready" }],
         next_cursor: null,
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("window", {
@@ -525,6 +428,13 @@ describe("Content workspace API", () => {
     const fieldID = "22222222-2222-4222-8222-222222222222";
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       snapshot_id: snapshotID,
+      site_id: "33333333-3333-4333-8333-333333333333",
+      page_snapshot_id: snapshotID,
+      page_id: "home",
+      model_revision: 1,
+      model_digest: "a".repeat(64),
+      page_revision: 1,
+      page_digest: "b".repeat(64),
       data_model: { formatVersion: 1, entities: [{
         id: "33333333-3333-4333-8333-333333333333", key: "article", name: "Article", cardinality: "many",
         fields: [{ id: fieldID, key: "image", name: "Image", type: "media" }],
@@ -575,17 +485,18 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("lists Website snapshots through the typed, paginated v2 contract", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" }],
+      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", page_id: "home", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" }],
       next_cursor: "next-page",
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubV2(fetchMock);
 
-    const page = await api.website.snapshots("33333333-3333-4333-8333-333333333333", "first-page", 20);
+    const page = await api.website.snapshots("33333333-3333-4333-8333-333333333333", "home", "first-page", 20);
 
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
     expect(url.pathname).toBe("/api/v2/admin/sites/snapshots");
     expect(url.searchParams.get("site_id")).toBe("33333333-3333-4333-8333-333333333333");
+    expect(url.searchParams.get("page_id")).toBe("home");
     expect(url.searchParams.get("cursor")).toBe("first-page");
     expect(url.searchParams.get("limit")).toBe("20");
     expect(page.next_cursor).toBe("next-page");
@@ -594,7 +505,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("preserves lifecycle state in the site editor snapshot choices", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning" }],
+      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", page_id: "home", name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning" }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubV2(fetchMock);
 
@@ -623,7 +534,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const snapshotID = "22222222-2222-4222-8222-222222222222";
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", parent_id: "11111111-1111-4111-8111-111111111111",
+      id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", page_id: "homepage", parent_id: "11111111-1111-4111-8111-111111111111",
         name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning",
       }), { status: 202, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
@@ -631,14 +542,19 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
     await api.website.createSnapshot({
       site_id: "33333333-3333-4333-8333-333333333333",
+      page_id: "homepage",
       parent_id: "11111111-1111-4111-8111-111111111111",
       name: "Child",
       expected_revision: 4,
       expected_content_revision: 8,
       payload: {
-        config: { formatVersion: 3, pages: [], routeTree: { id: "root", type: "site", children: [] } },
+        config: {
+          formatVersion: 3,
+          pages: [{ id: "homepage", name: "Homepage", kind: "page", placements: [] }],
+          routeTree: { id: "root", type: "site", children: [] },
+          dataModel: { formatVersion: 1, entities: [] },
+        } as unknown as SiteConfig,
         metadata: { formatVersion: 1, siteName: "Example", pages: {} },
-        design_system: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
       },
     }, "create-snapshot:request-0001");
     await api.website.deleteSnapshot(snapshotID, 7);
@@ -646,7 +562,16 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const [createInput, createInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(createInput).toBe("/api/v2/admin/sites/snapshots");
     expect(createInit.method).toBe("POST");
-    expect(JSON.parse(String(createInit.body))).toMatchObject({ expected_revision: 4, expected_content_revision: 8 });
+    const createBody = JSON.parse(String(createInit.body));
+    expect(createBody).toMatchObject({
+      page_id: "homepage",
+      expected_revision: 4,
+      expected_content_revision: 8,
+      payload: { config: { format_version: 3, pages: [{ id: "homepage" }] } },
+    });
+    expect(createBody.payload.config).not.toHaveProperty("routeTree");
+    expect(createBody.payload.config).not.toHaveProperty("dataModel");
+    expect(createBody.payload).not.toHaveProperty("design_system");
     expect(new Headers(createInit.headers).get("Idempotency-Key")).toBe("create-snapshot:request-0001");
     expect(new Headers(createInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
     const [deleteInput, deleteInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
@@ -654,22 +579,6 @@ describe("modular Website, Content, Forms and Router clients", () => {
     expect(deleteInit.method).toBe("DELETE");
     expect(new Headers(deleteInit.headers).get("If-Match")).toBe('"7"');
     expect(new Headers(deleteInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
-  });
-
-  it("loads design values and feature declarations through Sites v2", async () => {
-    const snapshotID = "22222222-2222-4222-8222-222222222222";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      snapshot: { id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" },
-      design_system: { formatVersion: 2, groups: [], baseTokens: [], featureValues: {}, breakpoints: [], fonts: [] },
-      feature_tokens: [{ featureKey: "hero", featureName: "Hero", definition: { key: "title-color", label: "Цвет заголовка", group: "Colors", kind: "color", default: { color: { hex: "#000000", opacity: 100 } } } }],
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    stubV2(fetchMock);
-
-    const result = await api.siteBuilder.designSnapshot(snapshotID);
-    const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe(`/api/v2/admin/sites/snapshots/${snapshotID}/design-system`);
-    expect(result.snapshot.revision).toBe(3);
-    expect(result.featureTokens[0]?.definition.key).toBe("title-color");
   });
 
   it("uses the Website build contract with request idempotency and cookie CSRF", async () => {
@@ -694,8 +603,16 @@ describe("modular Website, Content, Forms and Router clients", () => {
   it("uses Content and Forms snapshot contracts with revision guards", async () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        snapshot_id: "snapshot-1", data_model: null, revision: 3, published_revision: 2,
-        records: [], selections: [], placements: [],
+        snapshot_id: "snapshot-1",
+        site_id: "site-1",
+        page_snapshot_id: "snapshot-1",
+        page_id: "home",
+        model_revision: 1,
+        model_digest: "a".repeat(64),
+        page_revision: 1,
+        page_digest: "b".repeat(64),
+        data_model: null,
+        revision: 3, published_revision: 2, records: [], selections: [], placements: [],
       }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
     stubV2(fetchMock);

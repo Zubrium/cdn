@@ -5,8 +5,6 @@ package application
 import (
 	"context"
 	"errors"
-	"net"
-	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -33,30 +31,17 @@ type RecordStore interface {
 type Config struct {
 	AccessGroup string
 	Sites       []string
-	Branches    []BranchConfig
-}
-
-// BranchConfig is immutable startup topology. Only its snapshot assignment is
-// stored as Website engine data and changed through AssignBranch.
-type BranchConfig struct {
-	ID                string
-	Name              string
-	SiteID            string
-	ListenAddress     string
-	CORSOrigins       []string
-	Indexable         bool
-	Enabled           bool
-	InitialSnapshotID *string
+	// PageIDs is retained for source compatibility only. Page identities are
+	// Website-owned records and are never seeded or authorized from static config.
+	PageIDs map[string][]string
 }
 
 type Service struct {
-	config      Config
-	sites       map[string]struct{}
-	branches    map[string]BranchConfig
-	branchOrder []string
-	store       RecordStore
-	authority   core.GroupAuthorizationCapability
-	sessions    core.SessionCapability
+	config    Config
+	sites     map[string]struct{}
+	store     RecordStore
+	authority core.GroupAuthorizationCapability
+	sessions  core.SessionCapability
 }
 
 type actor struct {
@@ -67,7 +52,7 @@ type actorContextKey struct{}
 
 func NewService(config Config, store RecordStore, authority core.GroupAuthorizationCapability, sessions core.SessionCapability) (*Service, error) {
 	if !validInterface(store) || !validInterface(authority) || !validInterface(sessions) ||
-		!core.ValidAccessGroupKey(config.AccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 || len(config.Branches) > 1024 {
+		!core.ValidAccessGroupKey(config.AccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 {
 		return nil, errConfigInvalid
 	}
 	siteSet := make(map[string]struct{}, len(config.Sites))
@@ -80,42 +65,7 @@ func NewService(config Config, store RecordStore, authority core.GroupAuthorizat
 		}
 		siteSet[id] = struct{}{}
 	}
-	branchByID := make(map[string]BranchConfig, len(config.Branches))
-	branchIDs := make([]string, 0, len(config.Branches))
-	for _, branch := range config.Branches {
-		if !identifierPattern.MatchString(branch.ID) || strings.TrimSpace(branch.Name) != branch.Name || len([]rune(branch.Name)) < 1 || len([]rune(branch.Name)) > 100 ||
-			!validListenAddress(branch.ListenAddress) || len(branch.CORSOrigins) > 32 {
-			return nil, errConfigInvalid
-		}
-		if _, exists := siteSet[branch.SiteID]; !exists {
-			return nil, errConfigInvalid
-		}
-		if _, duplicate := branchByID[branch.ID]; duplicate {
-			return nil, errConfigInvalid
-		}
-		if branch.InitialSnapshotID != nil && !snapshotIDPattern.MatchString(*branch.InitialSnapshotID) {
-			return nil, errConfigInvalid
-		}
-		seenOrigins := make(map[string]struct{}, len(branch.CORSOrigins))
-		for _, origin := range branch.CORSOrigins {
-			if !validOrigin(origin) {
-				return nil, errConfigInvalid
-			}
-			if _, duplicate := seenOrigins[origin]; duplicate {
-				return nil, errConfigInvalid
-			}
-			seenOrigins[origin] = struct{}{}
-		}
-		branch.CORSOrigins = append([]string(nil), branch.CORSOrigins...)
-		if branch.InitialSnapshotID != nil {
-			initial := *branch.InitialSnapshotID
-			branch.InitialSnapshotID = &initial
-		}
-		branchByID[branch.ID] = branch
-		branchIDs = append(branchIDs, branch.ID)
-	}
-	// Site and branch ordering is stable across replicas, so paginated API
-	// results do not depend on Go map iteration order.
+	// Site ordering is stable across replicas, so paginated API results do not depend on Go map iteration order.
 	sites := append([]string(nil), config.Sites...)
 	for i := 0; i < len(sites); i++ {
 		for j := i + 1; j < len(sites); j++ {
@@ -124,17 +74,20 @@ func NewService(config Config, store RecordStore, authority core.GroupAuthorizat
 			}
 		}
 	}
-	for i := 0; i < len(branchIDs); i++ {
-		for j := i + 1; j < len(branchIDs); j++ {
-			if branchIDs[j] < branchIDs[i] {
-				branchIDs[i], branchIDs[j] = branchIDs[j], branchIDs[i]
-			}
-		}
-	}
 	config.Sites = sites
-	config.Branches = append([]BranchConfig(nil), config.Branches...)
-	return &Service{config: config, sites: siteSet, branches: branchByID, branchOrder: branchIDs,
+	return &Service{config: config, sites: siteSet,
 		store: store, authority: authority, sessions: sessions}, nil
+}
+
+func (s *Service) ListConfiguredSites(ctx context.Context) (websiteapi.ConfiguredSiteList, error) {
+	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+		return websiteapi.ConfiguredSiteList{}, err
+	}
+	items := make([]websiteapi.ConfiguredSite, len(s.config.Sites))
+	for index, siteID := range s.config.Sites {
+		items[index] = websiteapi.ConfiguredSite{SiteID: siteID}
+	}
+	return websiteapi.ConfiguredSiteList{Items: items}, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, credential string) (context.Context, error) {
@@ -207,35 +160,6 @@ func validInterface(value any) bool {
 	default:
 		return true
 	}
-}
-
-func validListenAddress(value string) bool {
-	if value == "" || len(value) > 255 || strings.ContainsAny(value, "\r\n\t ") {
-		return false
-	}
-	_, portText, err := net.SplitHostPort(value)
-	if err != nil || portText == "" {
-		return false
-	}
-	port := 0
-	for _, char := range portText {
-		if char < '0' || char > '9' {
-			return false
-		}
-		port = port*10 + int(char-'0')
-		if port > 65535 {
-			return false
-		}
-	}
-	return port > 0
-}
-
-func validOrigin(value string) bool {
-	parsed, err := url.Parse(value)
-	return err == nil && value != "" && value == strings.TrimSpace(value) && len(value) <= 512 &&
-		(parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.Host == strings.ToLower(parsed.Host) &&
-		parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Opaque == "" &&
-		value == parsed.Scheme+"://"+parsed.Host
 }
 
 var _ websiteapi.API = (*Service)(nil)

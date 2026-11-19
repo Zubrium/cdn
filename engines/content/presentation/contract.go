@@ -1,12 +1,14 @@
-// Package presentation exposes Content's typed facade to Presentation and to
-// other in-process capabilities. Content reads Website structure through an
-// injected resolver and never accesses Website storage directly.
+// Package presentation exposes Content's typed facade. Content receives
+// Website-owned schema projections from outer Presentation composition.
 package presentation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
@@ -27,30 +29,100 @@ type Contract interface {
 	API
 }
 
-// API is the engine boundary. Website schema is read-only; all writes concern
-// snapshot-scoped Content data. Admin transport is supplied by Presentation.
+// API is the engine boundary. The two Website projections are supplied only
+// by trusted outer Presentation composition and never decoded from a request.
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
-	GetWorkspace(context.Context, string) (Workspace, error)
-	SaveWorkspaceDraft(context.Context, SaveWorkspaceDraftRequest) (Workspace, error)
-	PublishWorkspace(context.Context, PublishWorkspaceRequest) (Workspace, error)
-	ListHistory(context.Context, string, string, int) (HistoryPage, error)
-	RestoreHistory(context.Context, RestoreHistoryRequest) (Workspace, error)
-	ReadPublishedContent(context.Context, string) (PublishedContent, error)
+	GetWorkspace(context.Context, Projections) (Workspace, error)
+	SaveWorkspaceDraft(context.Context, Projections, SaveWorkspaceDraftRequest) (Workspace, error)
+	PublishWorkspace(context.Context, Projections, PublishWorkspaceRequest) (Workspace, error)
+	ListHistory(context.Context, Projections, string, int) (HistoryPage, error)
+	RestoreHistory(context.Context, Projections, RestoreHistoryRequest) (Workspace, error)
+	ReadPublishedContent(context.Context, Projections) (PublishedContent, error)
 	CopySnapshotContent(context.Context, CopySnapshotContentRequest) (CopySnapshotContentResult, error)
 }
 
-// SchemaResolver is provided by the composition root. Its implementation may
-// call Website's in-process typed facade, but must not use HTTP or storage.
-type SchemaResolver interface {
-	ResolveContentSchema(context.Context, string) (SnapshotSchema, error)
+const ProjectionVersion = 1
+
+// SiteContentSchema contains the immutable site-wide model projection.
+type SiteContentSchema struct {
+	Version       int             `json:"version"`
+	SiteID        string          `json:"site_id"`
+	ModelRevision int64           `json:"model_revision"`
+	Digest        string          `json:"digest"`
+	DataModel     json.RawMessage `json:"data_model"`
 }
 
-type SnapshotSchema struct {
-	State      string          `json:"state"`
-	DataModel  json.RawMessage `json:"data_model"`
-	Placements []Placement     `json:"placements"`
+func (schema SiteContentSchema) ComputeDigest() (string, error) {
+	payload := struct {
+		Version       int             `json:"version"`
+		SiteID        string          `json:"site_id"`
+		ModelRevision int64           `json:"model_revision"`
+		DataModel     json.RawMessage `json:"data_model"`
+	}{schema.Version, schema.SiteID, schema.ModelRevision, schema.DataModel}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (schema SiteContentSchema) VerifyDigest() bool {
+	if schema.Version != ProjectionVersion || schema.SiteID == "" || schema.ModelRevision < 1 || schema.DataModel == nil || len(schema.Digest) != sha256.Size*2 {
+		return false
+	}
+	digest, err := schema.ComputeDigest()
+	return err == nil && strings.EqualFold(digest, schema.Digest)
+}
+
+// PagePlacementProjection contains only page-scoped placement bindings.
+type PagePlacementProjection struct {
+	Version        int         `json:"version"`
+	PageSnapshotID string      `json:"page_snapshot_id"`
+	PageID         string      `json:"page_id"`
+	SiteID         string      `json:"site_id"`
+	Revision       int64       `json:"revision"`
+	Digest         string      `json:"digest"`
+	State          string      `json:"state"`
+	Placements     []Placement `json:"placements"`
+}
+
+func (projection PagePlacementProjection) ComputeDigest() (string, error) {
+	payload := struct {
+		Version        int         `json:"version"`
+		PageSnapshotID string      `json:"page_snapshot_id"`
+		PageID         string      `json:"page_id"`
+		SiteID         string      `json:"site_id"`
+		Revision       int64       `json:"revision"`
+		State          string      `json:"state"`
+		Placements     []Placement `json:"placements"`
+	}{projection.Version, projection.PageSnapshotID, projection.PageID, projection.SiteID, projection.Revision, projection.State, projection.Placements}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (projection PagePlacementProjection) VerifyDigest() bool {
+	if projection.Version != ProjectionVersion || projection.PageSnapshotID == "" || projection.PageID == "" || projection.SiteID == "" || projection.Revision < 1 || projection.Placements == nil || len(projection.Digest) != sha256.Size*2 {
+		return false
+	}
+	digest, err := projection.ComputeDigest()
+	return err == nil && strings.EqualFold(digest, projection.Digest)
+}
+
+type Projections struct {
+	Site SiteContentSchema       `json:"site_content_schema"`
+	Page PagePlacementProjection `json:"page_placement_projection"`
+}
+
+func (projections Projections) VerifyScope(pageSnapshotID string) bool {
+	return projections.Site.VerifyDigest() && projections.Page.VerifyDigest() &&
+		projections.Site.SiteID == projections.Page.SiteID && projections.Page.PageSnapshotID == pageSnapshotID
 }
 
 type Placement struct {
@@ -85,8 +157,15 @@ type PlacementInputLookup struct {
 // draft/publication state. SnapshotID identifies the selected Website scope.
 type Workspace struct {
 	SnapshotID        string            `json:"snapshot_id"`
+	SiteID            string            `json:"site_id"`
+	PageSnapshotID    string            `json:"page_snapshot_id"`
+	ModelRevision     int64             `json:"model_revision"`
+	ModelDigest       string            `json:"model_digest"`
+	PageRevision      int64             `json:"page_revision"`
+	PageDigest        string            `json:"page_digest"`
 	DataModel         json.RawMessage   `json:"data_model"`
 	Revision          int64             `json:"revision"`
+	SelectionRevision int64             `json:"selection_revision"`
 	PublishedRevision int64             `json:"published_revision"`
 	Records           []Record          `json:"records"`
 	Selections        []Selection       `json:"selections"`
@@ -119,17 +198,19 @@ type Selection struct {
 }
 
 type SaveWorkspaceDraftRequest struct {
-	SnapshotID       string        `json:"-"`
-	IdempotencyKey   string        `json:"-"`
-	ExpectedRevision int64         `json:"expected_revision"`
-	Records          []RecordInput `json:"records"`
-	Selections       []Selection   `json:"selections"`
+	SnapshotID                string        `json:"-"`
+	IdempotencyKey            string        `json:"-"`
+	ExpectedRevision          int64         `json:"expected_revision"`
+	ExpectedSelectionRevision int64         `json:"expected_selection_revision"`
+	Records                   []RecordInput `json:"records"`
+	Selections                []Selection   `json:"selections"`
 }
 
 type PublishWorkspaceRequest struct {
-	SnapshotID       string `json:"-"`
-	IdempotencyKey   string `json:"-"`
-	ExpectedRevision int64  `json:"expected_revision"`
+	SnapshotID                string `json:"-"`
+	IdempotencyKey            string `json:"-"`
+	ExpectedRevision          int64  `json:"expected_revision"`
+	ExpectedSelectionRevision int64  `json:"expected_selection_revision"`
 }
 
 type HistoryItem struct {
@@ -146,10 +227,11 @@ type HistoryPage struct {
 }
 
 type RestoreHistoryRequest struct {
-	SnapshotID       string `json:"-"`
-	HistoryID        string `json:"-"`
-	IdempotencyKey   string `json:"-"`
-	ExpectedRevision int64  `json:"expected_revision"`
+	SnapshotID                string `json:"-"`
+	HistoryID                 string `json:"-"`
+	IdempotencyKey            string `json:"-"`
+	ExpectedRevision          int64  `json:"expected_revision"`
+	ExpectedSelectionRevision int64  `json:"expected_selection_revision"`
 }
 
 type PublishedContent struct {
@@ -159,13 +241,26 @@ type PublishedContent struct {
 	Selections      []Selection `json:"selections"`
 }
 
-// CopySnapshotContentRequest is a durable workflow task input. The copy is
-// idempotent for the target snapshot and rejects a changed parent revision.
+const (
+	SelectionPolicyCopy  = "copy"
+	SelectionPolicyReset = "reset"
+)
+
+func ValidSelectionPolicy(policy string) bool {
+	return policy == SelectionPolicyCopy || policy == SelectionPolicyReset
+}
+
+// CopySnapshotContentRequest is a durable workflow task input. The selection
+// policy controls only page-scoped draft and published selections.
 type CopySnapshotContentRequest struct {
-	SourceSnapshotID       string `json:"source_snapshot_id"`
-	TargetSnapshotID       string `json:"target_snapshot_id"`
-	ExpectedSourceRevision int64  `json:"expected_source_revision"`
-	IdempotencyKey         string `json:"idempotency_key"`
+	SourceSchema                    Projections `json:"source_schema"`
+	TargetSchema                    Projections `json:"target_schema"`
+	SourceSnapshotID                string      `json:"source_snapshot_id"`
+	TargetSnapshotID                string      `json:"target_snapshot_id"`
+	ExpectedSourceRevision          int64       `json:"expected_source_revision"`
+	ExpectedSourceSelectionRevision int64       `json:"expected_source_selection_revision"`
+	SelectionPolicy                 string      `json:"selection_policy"`
+	IdempotencyKey                  string      `json:"idempotency_key"`
 }
 
 type CopySnapshotContentResult struct {
@@ -178,7 +273,7 @@ type CopySnapshotContentResult struct {
 type Descriptor struct{}
 
 func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.content", Kind: "engine", Version: 1}
+	return platform.ComponentDescriptor{ID: "engine.content", Kind: "engine", Version: 1, AccessGroups: []string{"content"}}
 }
 
 func (Descriptor) Operations() []platform.Operation {

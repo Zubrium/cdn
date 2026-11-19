@@ -55,6 +55,53 @@ func TestCommitStoresPublicationWithWorkspaceRevisionAtomically(t *testing.T) {
 	}
 }
 
+func TestSiteWorkspaceAndPageSelectionsUseDistinctCoreScopes(t *testing.T) {
+	store := newMemoryStore()
+	repo, err := repository.New(store)
+	if err != nil { t.Fatal(err) }
+	siteID := "11111111-1111-4111-8111-111111111111"
+	pageID := "22222222-2222-4222-8222-222222222222"
+	_, err = repo.Create(context.Background(), siteID, domain.Aggregate{
+		SnapshotID: siteID, Records: []domain.Record{}, Selections: []domain.Selection{},
+		PageSelections: map[string][]domain.Selection{pageID: {}},
+		PublishedPageSelections: map[string][]domain.Selection{pageID: {}},
+	})
+	if err != nil { t.Fatalf("Create() error = %v", err) }
+	siteKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "site", ScopeID: siteID, RecordKey: "workspace"}
+	pageKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageID, RecordKey: "page-selections"}
+	if _, ok := store.rows[siteKey]; !ok { t.Fatal("missing site-scoped workspace record") }
+	if _, ok := store.rows[pageKey]; !ok { t.Fatal("missing page-snapshot-scoped selections record") }
+	stored, err := repo.Get(context.Background(), siteID)
+	if err != nil || stored.Aggregate.PageSelections[pageID] == nil || stored.Aggregate.PublishedPageSelections[pageID] == nil {
+		t.Fatalf("Get() did not hydrate page-scoped selections: %#v, err %v", stored, err)
+	}
+}
+
+func TestIndependentPageSelectionCASDoesNotAdvanceSiteWorkspaceRevision(t *testing.T) {
+	store := newMemoryStore()
+	repo, err := repository.New(store)
+	if err != nil { t.Fatal(err) }
+	ctx := context.Background()
+	siteID := "11111111-1111-4111-8111-111111111111"
+	pageA := "22222222-2222-4222-8222-222222222222"
+	pageB := "33333333-3333-4333-8333-333333333333"
+	created, err := repo.Create(ctx, siteID, domain.Aggregate{SnapshotID: siteID, Records: []domain.Record{}, Selections: []domain.Selection{}})
+	if err != nil { t.Fatal(err) }
+	selectionA := []domain.Selection{{PlacementID: "44444444-4444-4444-8444-444444444444", InputKey: "items", Mode: "all"}}
+	if _, err := repo.CommitPageSelections(ctx, siteID, pageA, 0, selectionA, []domain.Selection{}, nil); err != nil { t.Fatalf("write page A: %v", err) }
+	selectionB := []domain.Selection{{PlacementID: "55555555-5555-4555-8555-555555555555", InputKey: "items", Mode: "all"}}
+	if _, err := repo.CommitPageSelections(ctx, siteID, pageB, 0, selectionB, []domain.Selection{}, nil); err != nil { t.Fatalf("unrelated page B write conflicted: %v", err) }
+	latest, err := repo.Get(ctx, siteID)
+	if err != nil { t.Fatal(err) }
+	if latest.StoreRevision != created.StoreRevision { t.Fatalf("page selection writes advanced site workspace revision: %d -> %d", created.StoreRevision, latest.StoreRevision) }
+	if latest.Aggregate.PageSelectionRevisions[pageA] != 1 || latest.Aggregate.PageSelectionRevisions[pageB] != 1 {
+		t.Fatalf("page-scoped revisions = %#v, want both 1", latest.Aggregate.PageSelectionRevisions)
+	}
+	if _, err := repo.CommitPageSelections(ctx, siteID, pageA, 0, []domain.Selection{}, []domain.Selection{}, nil); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale same-page write error = %v, want conflict", err)
+	}
+}
+
 func TestHistoryListUsesBoundedCursorAndReturnsImmutableRecords(t *testing.T) {
 	store := newMemoryStore()
 	repo, err := repository.New(store)

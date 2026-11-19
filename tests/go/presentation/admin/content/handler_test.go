@@ -16,6 +16,7 @@ import (
 
 type fakeContentAPI struct {
 	engine.API
+	schemaErr       error
 	getCalled       bool
 	saveCalled      bool
 	saveRequest     engine.SaveWorkspaceDraftRequest
@@ -48,19 +49,19 @@ func emptyWorkspace(snapshotID string) engine.Workspace {
 		Records: []engine.Record{}, Selections: []engine.Selection{}, Placements: []engine.Placement{}}
 }
 
-func (f *fakeContentAPI) GetWorkspace(_ context.Context, snapshotID string) (engine.Workspace, error) {
+func (f *fakeContentAPI) GetWorkspace(_ context.Context, projection engine.Projections) (engine.Workspace, error) {
 	f.getCalled = true
-	return emptyWorkspace(snapshotID), nil
+	return emptyWorkspace(projection.Page.PageSnapshotID), nil
 }
 
-func (f *fakeContentAPI) SaveWorkspaceDraft(_ context.Context, request engine.SaveWorkspaceDraftRequest) (engine.Workspace, error) {
+func (f *fakeContentAPI) SaveWorkspaceDraft(_ context.Context, _ engine.Projections, request engine.SaveWorkspaceDraftRequest) (engine.Workspace, error) {
 	f.saveCalled, f.saveRequest = true, request
 	workspace := emptyWorkspace(request.SnapshotID)
 	workspace.Revision = request.ExpectedRevision + 1
 	return workspace, nil
 }
 
-func (f *fakeContentAPI) PublishWorkspace(_ context.Context, request engine.PublishWorkspaceRequest) (engine.Workspace, error) {
+func (f *fakeContentAPI) PublishWorkspace(_ context.Context, _ engine.Projections, request engine.PublishWorkspaceRequest) (engine.Workspace, error) {
 	f.publishCalled, f.publishRequest = true, request
 	workspace := emptyWorkspace(request.SnapshotID)
 	workspace.Revision = request.ExpectedRevision
@@ -68,17 +69,17 @@ func (f *fakeContentAPI) PublishWorkspace(_ context.Context, request engine.Publ
 	return workspace, nil
 }
 
-func (f *fakeContentAPI) ListHistory(_ context.Context, snapshotID, cursor string, limit int) (engine.HistoryPage, error) {
-	f.historyCalled, f.historySnapshot, f.historyCursor, f.historyLimit = true, snapshotID, cursor, limit
+func (f *fakeContentAPI) ListHistory(_ context.Context, projection engine.Projections, cursor string, limit int) (engine.HistoryPage, error) {
+	f.historyCalled, f.historySnapshot, f.historyCursor, f.historyLimit = true, projection.Page.PageSnapshotID, cursor, limit
 	return engine.HistoryPage{Items: []engine.HistoryItem{}}, nil
 }
 
-func (f *fakeContentAPI) RestoreHistory(_ context.Context, request engine.RestoreHistoryRequest) (engine.Workspace, error) {
+func (f *fakeContentAPI) RestoreHistory(_ context.Context, _ engine.Projections, request engine.RestoreHistoryRequest) (engine.Workspace, error) {
 	f.restoreCalled, f.restoreRequest = true, request
 	return emptyWorkspace(request.SnapshotID), nil
 }
 
-func (f *fakeContentAPI) ReadPublishedContent(context.Context, string) (engine.PublishedContent, error) {
+func (f *fakeContentAPI) ReadPublishedContent(context.Context, engine.Projections) (engine.PublishedContent, error) {
 	return engine.PublishedContent{}, engine.ErrUnavailable
 }
 
@@ -86,14 +87,49 @@ func (f *fakeContentAPI) CopySnapshotContent(context.Context, engine.CopySnapsho
 	return engine.CopySnapshotContentResult{}, engine.ErrUnavailable
 }
 
+type fakeSchemaSnapshots struct{}
+
+func (fakeSchemaSnapshots) GetContentProjections(_ context.Context, pageSnapshotID string) (engine.Projections, error) {
+	site := engine.SiteContentSchema{Version: engine.ProjectionVersion, SiteID: "site-1", ModelRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
+	site.Digest, _ = site.ComputeDigest()
+	page := engine.PagePlacementProjection{Version: engine.ProjectionVersion, PageSnapshotID: pageSnapshotID, PageID: "page-1", SiteID: site.SiteID, Revision: 1, State: "ready", Placements: []engine.Placement{}}
+	page.Digest, _ = page.ComputeDigest()
+	return engine.Projections{Site: site, Page: page}, nil
+}
+
+func (f *fakeContentAPI) GetContentProjections(ctx context.Context, pageSnapshotID string) (engine.Projections, error) {
+	if f.schemaErr != nil { return engine.Projections{}, f.schemaErr }
+	return (fakeSchemaSnapshots{}).GetContentProjections(ctx, pageSnapshotID)
+}
+
 func newHandler(t *testing.T, api *fakeContentAPI) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(api, Config{MaxJSONBytes: 4096, MaxPageSize: 100, DefaultPageSize: 20,
+	handler, err := NewHandler(api, api, Config{MaxJSONBytes: 4096, MaxPageSize: 100, DefaultPageSize: 20,
 		AllowedOrigins: []string{"https://admin.example"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+func TestContentHandlerFailsClosedWhenTrustedSchemaProjectionIsUnavailable(t *testing.T) {
+	api := &fakeContentAPI{schemaErr: engine.ErrUnavailable}
+	handler := newHandler(t, api)
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/content/snapshots/snap-1/workspace", nil)
+	request.Header.Set("Authorization", "Bearer service-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || api.getCalled {
+		t.Fatalf("workspace without trusted schema projection status=%d content-called=%t body=%s", response.Code, api.getCalled, response.Body.String())
+	}
+}
+
+func TestContentHandlerRequiresExplicitSchemaProvider(t *testing.T) {
+	api := &fakeContentAPI{}
+	if _, err := NewHandler(api, nil, Config{MaxJSONBytes: 4096, MaxPageSize: 100, DefaultPageSize: 20,
+		AllowedOrigins: []string{"https://admin.example"}}); err == nil {
+		t.Fatal("NewHandler() accepted missing trusted schema provider")
+	}
 }
 
 func TestContentHandlerReadsWorkspaceAndSetsNoStoreHeaders(t *testing.T) {

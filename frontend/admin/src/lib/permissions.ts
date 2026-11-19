@@ -47,12 +47,20 @@ export function canManageAccess(principal?: Principal | null): boolean {
   return canManageAdministrators(principal);
 }
 
+export function canReadFormSchemas(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "forms_schemas", 1);
+}
+
+export function canManageFormSchemas(principal?: Principal | null): boolean {
+  return hasGroupAccess(principal, "forms_schemas", 2);
+}
+
 export function canViewSubmissions(principal?: Principal | null): boolean {
-  return hasGroupAccess(principal, "forms", 1);
+  return hasGroupAccess(principal, "forms_submissions", 1);
 }
 
 export function canManageSubmissions(principal?: Principal | null): boolean {
-  return hasGroupAccess(principal, "forms", 2);
+  return hasGroupAccess(principal, "forms_submissions", 2);
 }
 
 export function canManageReleases(principal?: Principal | null): boolean {

@@ -1,7 +1,6 @@
 import type {
   ApiErrorDetail,
   ApiErrorPayload,
-  JsonObject,
   AccessGroup,
   CoordinatorJob,
   CoordinatorJobPermissions,
@@ -30,6 +29,7 @@ import type {
   RouterPublicOperation,
   RouterPublicOperationPage,
   SiteConfig,
+  SiteEditorDraft,
   SiteMetadata,
   SiteSnapshot,
   ModelContentHistoryResponse,
@@ -46,15 +46,17 @@ import type {
   WebsiteFeatureVersionPage,
   WebsiteBuild,
   WebsiteMediaJob,
-  WebsiteBranch,
-  WebsiteBranchEvent,
-  WebsiteBranchEventPage,
   WebsiteSnapshot,
   WebsiteSnapshotPage,
   WebsiteSnapshotPayload,
+  WebsitePage,
+  WebsitePagePage,
+  WebsitePageTemplate,
+  WebsitePageTemplatePage,
+  WebsitePageTemplateConfiguration,
+  SiteContentSchema,
 } from "./types";
 
-import type { SnapshotDesignWorkspace, SnapshotFeatureToken, StructuredDesignSystem } from "@/domains/design-system/types";
 import { hasControlCharacters, isActiveFormContentType } from "@/domains/forms/schema-draft";
 
 export const UNAUTHORIZED_EVENT = "we:unauthorized";
@@ -123,58 +125,6 @@ function invalidFeatureCatalog(): ApiError {
 }
 
 const uuidValuePattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function invalidWebsiteBranch(): ApiError {
-  return new ApiError(502, "invalid_response", "Сервер вернул некорректную конфигурацию ветки");
-}
-
-function validateWebsiteBranch(value: unknown): WebsiteBranch {
-  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
-    typeof value.site_id !== "string" || !uuidValuePattern.test(value.site_id) ||
-    typeof value.name !== "string" || value.name.trim() !== value.name || Array.from(value.name).length < 1 || Array.from(value.name).length > 100 ||
-    hasControlCharacters(value.name) ||
-    typeof value.listen_address !== "string" || !validBranchListenAddress(value.listen_address) ||
-    !Array.isArray(value.cors_origins) || !value.cors_origins.every((origin) => typeof origin === "string" && validBranchOrigin(origin)) ||
-    new Set(value.cors_origins).size !== value.cors_origins.length ||
-    typeof value.indexable !== "boolean" ||
-    (value.snapshot_id !== null && (typeof value.snapshot_id !== "string" || !uuidValuePattern.test(value.snapshot_id))) ||
-    !Number.isSafeInteger(value.revision) || Number(value.revision) < 1 ||
-    typeof value.enabled !== "boolean" || typeof value.updated_at !== "string" || !value.updated_at.includes("T") || !Number.isFinite(Date.parse(value.updated_at))) {
-    throw invalidWebsiteBranch();
-  }
-  return value as unknown as WebsiteBranch;
-}
-
-function validBranchListenAddress(value: string): boolean {
-  if (value.length === 0 || value.length > 255) return false;
-  const match = /^(?:\[[^\]\s]+\]|[^:\s]*):([0-9]{1,5})$/.exec(value);
-  if (!match) return false;
-  const port = Number(match[1]);
-  return Number.isInteger(port) && port >= 1 && port <= 65535;
-}
-
-function validBranchOrigin(value: string): boolean {
-  if (value.length === 0 || value.length > 512) return false;
-  try {
-    const origin = new URL(value);
-    return (origin.protocol === "https:" || origin.protocol === "http:") && origin.origin === value &&
-      !origin.username && !origin.password && !/[*,%]/u.test(origin.host);
-  } catch {
-    return false;
-  }
-}
-
-function validateWebsiteBranchEvent(value: unknown, branchID: string): WebsiteBranchEvent {
-  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
-    value.branch_id !== branchID || typeof value.snapshot_id !== "string" || !uuidValuePattern.test(value.snapshot_id) ||
-    typeof value.snapshot_name !== "string" || value.snapshot_name.trim() !== value.snapshot_name || Array.from(value.snapshot_name).length < 1 ||
-    Array.from(value.snapshot_name).length > 160 || hasControlCharacters(value.snapshot_name) ||
-    !Number.isSafeInteger(value.snapshot_sequence) || Number(value.snapshot_sequence) < 1 || value.action !== "assigned" ||
-    typeof value.created_at !== "string" || !value.created_at.includes("T") || !Number.isFinite(Date.parse(value.created_at))) {
-    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную историю назначений ветки");
-  }
-  return value as unknown as WebsiteBranchEvent;
-}
 
 function invalidRouterRoute(): ApiError {
   return new ApiError(502, "invalid_response", "Сервер вернул некорректный публичный маршрут");
@@ -329,9 +279,9 @@ function validateRouterRoute(value: unknown): RouterRoute {
 
   if (value.target.kind === "core-file" || value.target.kind === "static-site-artifact") {
     if (typeof value.target.file_id !== "string" || !uuidValuePattern.test(value.target.file_id) ||
-      (value.target.kind === "core-file" && (value.match !== "exact" || value.target.fallback_enabled === true)) ||
-      (value.target.kind === "static-site-artifact" && value.target.fallback_enabled !== undefined && typeof value.target.fallback_enabled !== "boolean") ||
-      !hasOnlyKeys(value.target, value.target.kind === "core-file" ? ["kind", "file_id"] : ["kind", "file_id", "fallback_enabled"])) {
+      (value.target.kind === "core-file" && value.match !== "exact") ||
+      (value.match === "prefix" && value.target.kind !== "static-site-artifact") ||
+      !hasOnlyKeys(value.target, ["kind", "file_id"])) {
       throw invalidRouterRoute();
     }
   } else if (value.target.kind === "registered-operation") {
@@ -360,14 +310,15 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean
 
 type SnapshotDetail = {
   snapshot: SiteSnapshot;
-  payload: { config: SiteConfig; metadata?: SiteMetadata; designSystem?: StructuredDesignSystem };
+  payload: { config: SiteConfig; metadata?: SiteMetadata };
 };
 
 function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
-	const valid = validateWebsiteSnapshot(snapshot);
+  const valid = validateWebsiteSnapshot(snapshot);
   return {
     id: valid.id,
     siteId: valid.site_id,
+    pageId: valid.page_id,
     revision: valid.revision,
     parentSnapshotId: valid.parent_id,
     parentSequence: valid.parent_sequence,
@@ -386,6 +337,7 @@ function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
 
 function validateWebsiteSnapshot(value: unknown): WebsiteSnapshot {
   if (!isRecord(value) || typeof value.id !== "string" || !value.id || typeof value.site_id !== "string" || !value.site_id ||
+    typeof value.page_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.page_id) ||
     typeof value.name !== "string" || !value.name || typeof value.sequence !== "number" || !Number.isSafeInteger(value.sequence) || value.sequence < 1 ||
     typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
     (value.state !== "provisioning" && value.state !== "ready" && value.state !== "failed") ||
@@ -404,43 +356,42 @@ function validateWebsiteSnapshot(value: unknown): WebsiteSnapshot {
   return value as unknown as WebsiteSnapshot;
 }
 
-function structuredDesignSystem(value: unknown): StructuredDesignSystem {
-  if (!isRecord(value) || value.formatVersion !== 2 || !Array.isArray(value.groups) || !Array.isArray(value.baseTokens) ||
-    !isRecord(value.featureValues) || !Array.isArray(value.breakpoints) || !Array.isArray(value.fonts)) {
-    throw new ApiError(502, "invalid_response", "Снапшот содержит некорректную дизайн-систему");
+function snapshotPayloadFromWebsite(payload: { config: unknown; metadata: unknown }, expectedPageID?: string, request = false): SnapshotDetail["payload"] {
+  const invalid = (message: string): never => {
+    throw new ApiError(request ? 400 : 502, request ? "invalid_snapshot_payload" : "invalid_response", message);
+  };
+  const config = payload.config;
+  if (!isRecord(config) || !isRecord(payload.metadata) || payload.metadata.formatVersion !== 1) {
+    return invalid("Конфигурация снапшота должна соответствовать page-snapshot контракту");
   }
-  return value as unknown as StructuredDesignSystem;
-}
-
-function snapshotPayloadFromWebsite(payload: WebsiteSnapshotPayload): SnapshotDetail["payload"] {
-  if (!isRecord(payload.config) || ![2, 3].includes(Number(payload.config.formatVersion)) || !Array.isArray(payload.config.pages) ||
-    !isRecord(payload.config.routeTree) || !isRecord(payload.metadata) || payload.metadata.formatVersion !== 1) {
-    throw new ApiError(502, "invalid_response", "Снапшот содержит некорректную конфигурацию сайта");
+  const formatVersion = config.format_version ?? (request ? config.formatVersion : undefined);
+  if (![2, 3].includes(Number(formatVersion)) || (!request && (("dataModel" in config) || ("routeTree" in config)))) {
+    return invalid("Конфигурация снапшота должна соответствовать page-snapshot контракту и не содержать dataModel или маршруты");
   }
+  if (config.page !== undefined && config.pages !== undefined) return invalid("Снапшот должен содержать одну страницу");
+  const pages: Record<string, unknown>[] = isRecord(config.page)
+    ? [config.page]
+    : Array.isArray(config.pages) && config.pages.every(isRecord) ? config.pages : [];
+  const page: Record<string, unknown> | null = expectedPageID === undefined || !request
+    ? pages.length === 1 ? pages[0]! : null
+    : pages.find((candidate) => candidate.id === expectedPageID) ?? null;
+  if (!page || typeof page.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(page.id) ||
+    (expectedPageID !== undefined && page.id !== expectedPageID) || !Array.isArray(page.placements)) {
+    return invalid("Снапшот должен содержать ровно одну страницу, совпадающую с page_id");
+  }
+  const cleanConfig = Object.fromEntries(Object.entries(config).filter(([key]) =>
+    !["formatVersion", "page", "pages", "routeTree", "dataModel", "features", "systemPages"].includes(key),
+  ));
   return {
-    config: payload.config,
-    metadata: payload.metadata,
-    designSystem: structuredDesignSystem(payload.design_system),
+    config: { ...cleanConfig, format_version: Number(formatVersion), pages: [page] } as unknown as SiteConfig,
+    metadata: payload.metadata as unknown as SiteMetadata,
   };
 }
 
-function snapshotFeatureTokens(value: unknown): SnapshotFeatureToken[] {
-  if (!Array.isArray(value)) throw new ApiError(502, "invalid_response", "Сервер вернул некорректные декларации токенов фич");
-  const kinds = new Set(["color", "length", "number", "font", "shadow"]);
-  return value.map((item) => {
-    if (!isRecord(item) || typeof item.featureKey !== "string" || !item.featureKey || typeof item.featureName !== "string" ||
-      !isRecord(item.definition) || typeof item.definition.key !== "string" || !item.definition.key ||
-      typeof item.definition.label !== "string" || typeof item.definition.group !== "string" ||
-      typeof item.definition.kind !== "string" || !kinds.has(item.definition.kind) || !isRecord(item.definition.default)) {
-      throw new ApiError(502, "invalid_response", "Сервер вернул некорректные декларации токенов фич");
-    }
-    return item as unknown as SnapshotFeatureToken;
-  });
-}
 
 function siteSnapshotDetailFromWebsite(snapshot: WebsiteSnapshot): SnapshotDetail {
   if (!snapshot.payload) throw new ApiError(502, "invalid_response", "Сервер не вернул payload снапшота");
-  return { snapshot: siteSnapshotFromWebsite(snapshot), payload: snapshotPayloadFromWebsite(snapshot.payload) };
+  return { snapshot: siteSnapshotFromWebsite(snapshot), payload: snapshotPayloadFromWebsite(snapshot.payload, snapshot.page_id) };
 }
 
 function decodeFeatureManifest(encoded: string): FeatureManifest {
@@ -506,8 +457,26 @@ function parseFeatureImport(value: unknown): WebsiteFeatureImport {
   return value as unknown as WebsiteFeatureImport;
 }
 
+function parseSiteContentSchema(value: unknown, siteID: string): SiteContentSchema {
+  if (!isRecord(value) || value.version !== 1 || value.site_id !== siteID ||
+    !Number.isSafeInteger(value.model_revision) || Number(value.model_revision) < 1 ||
+    typeof value.digest !== "string" || !/^[a-f0-9]{64}$/i.test(value.digest) ||
+    !isRecord(value.data_model) || value.data_model.formatVersion !== 1 || !Array.isArray(value.data_model.entities)) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную модель данных сайта");
+  }
+  return {
+    version: 1,
+    siteId: siteID,    modelRevision: Number(value.model_revision),
+    digest: value.digest,
+    dataModel: value.data_model as unknown as DataModel,
+  };
+}
+
 function parseContentWorkspace(value: unknown, snapshotID: string): ModelContentWorkspace {
-  if (!isRecord(value) || value.snapshot_id !== snapshotID || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0 ||
+  if (!isRecord(value) || value.page_snapshot_id !== snapshotID || typeof value.site_id !== "string" || !value.site_id ||
+    typeof value.page_id !== "string" || !value.page_id || !Number.isSafeInteger(value.model_revision) || Number(value.model_revision) < 1 ||
+    typeof value.model_digest !== "string" || !Number.isSafeInteger(value.page_revision) || Number(value.page_revision) < 1 ||
+    typeof value.page_digest !== "string" || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0 ||
     !Number.isSafeInteger(value.published_revision) || Number(value.published_revision) < 0 ||
     !Array.isArray(value.records) || !Array.isArray(value.selections) || !Array.isArray(value.placements)) {
     throw new ApiError(502, "invalid_response", "Сервер вернул некорректную рабочую область контента");
@@ -577,7 +546,14 @@ function parseContentWorkspace(value: unknown, snapshotID: string): ModelContent
     throw new ApiError(502, "invalid_response", "Сервер вернул некорректные идентификаторы записей");
   }
   return {
-    snapshot: { id: snapshotID },
+    snapshot: { id: snapshotID, site_id: value.site_id, page_id: value.page_id },
+    siteId: value.site_id,
+    pageSnapshotId: snapshotID,
+    pageId: value.page_id,
+    modelRevision: Number(value.model_revision),
+    modelDigest: value.model_digest,
+    pageRevision: Number(value.page_revision),
+    pageDigest: value.page_digest,
     dataModel,
     revision: Number(value.revision),
     publishedRevision: Number(value.published_revision),
@@ -878,17 +854,93 @@ function toMedia(file: CoreFile): Media {
   };
 }
 
+function parseWebsitePage(value: unknown, siteID: string): WebsitePage {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
+    value.site_id !== siteID || typeof value.name !== "string" || typeof value.latest_snapshot_id !== "string" ||
+    !uuidValuePattern.test(value.latest_snapshot_id) || !["provisioning", "ready", "failed"].includes(String(value.latest_snapshot_state)) ||
+    typeof value.created_at !== "string" || !Number.isFinite(Date.parse(value.created_at))) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную страницу сайта");
+  }
+  return value as unknown as WebsitePage;
+}
+
+function parseWebsitePageTemplate(value: unknown, siteID: string): WebsitePageTemplate {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) || value.site_id !== siteID ||
+    typeof value.name !== "string" || typeof value.description !== "string" || !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 1 || typeof value.digest !== "string" || !/^[a-f0-9]{64}$/i.test(value.digest) ||
+    typeof value.updated_at !== "string" || !isRecord(value.configuration) || value.configuration.schema_version !== 1 ||
+    !isRecord(value.configuration.payload) || !isRecord(value.configuration.payload.config) || !isRecord(value.configuration.payload.metadata) ||
+    !isRecord(value.configuration.feature_pins) || (value.configuration.placement_slots !== undefined && !Array.isArray(value.configuration.placement_slots))) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректный шаблон страницы");
+  }
+  return value as unknown as WebsitePageTemplate;
+}
+
 export const api = {
   website: {
-    snapshots(siteID?: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteSnapshotPage> {
-      return requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, cursor, limit } });
+    async siteModel(siteID: string, signal?: AbortSignal): Promise<SiteContentSchema> {
+      return parseSiteContentSchema(
+        await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/model`, { signal }),
+        siteID,
+      );
     },
-    async allSnapshots(signal?: AbortSignal, siteID?: string): Promise<WebsiteSnapshot[]> {
+    async saveSiteModel(siteID: string, expectedRevision: number, dataModel: DataModel): Promise<SiteContentSchema> {
+      return parseSiteContentSchema(
+        await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/model`, {
+          method: "PUT",
+          body: { expected_revision: expectedRevision, data_model: dataModel },
+        }),
+        siteID,
+      );
+    },
+    async pages(siteID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePagePage> {
+      const page = await requestList<WebsitePage>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages`, { signal, query: { cursor, limit } });
+      return { ...page, items: page.items.map((item) => parseWebsitePage(item, siteID)) };
+    },
+    async page(siteID: string, pageID: string, signal?: AbortSignal): Promise<WebsitePage> {
+      return parseWebsitePage(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}`, { signal }), siteID);
+    },
+    async createPage(siteID: string, input: { name: string; template_id?: string; template_revision?: number }, idempotencyKey: string): Promise<WebsitePage> {
+      return parseWebsitePage(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
+      }), siteID);
+    },
+    async pageTemplates(siteID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePageTemplatePage> {
+      const page = await requestList<WebsitePageTemplate>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates`, { signal, query: { cursor, limit } });
+      return { ...page, items: page.items.map((item) => parseWebsitePageTemplate(item, siteID)) };
+    },
+    async pageTemplate(siteID: string, templateID: string, signal?: AbortSignal): Promise<WebsitePageTemplate> {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, { signal }), siteID);
+    },
+    async createPageTemplate(siteID: string, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }, idempotencyKey: string): Promise<WebsitePageTemplate> {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
+      }), siteID);
+    },
+    async updatePageTemplate(siteID: string, templateID: string, revision: number, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }): Promise<WebsitePageTemplate> {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
+        method: "PUT", headers: { "If-Match": `"${revision}"` }, body: input,
+      }), siteID);
+    },
+    deletePageTemplate(siteID: string, templateID: string, revision: number): Promise<void> {
+      return request<void>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
+        method: "DELETE", headers: { "If-Match": `"${revision}"` },
+      });
+    },
+    applyPageTemplate(siteID: string, pageID: string, input: { template_id: string; template_revision: number; expected_snapshot_id: string; expected_snapshot_revision: number; expected_content_revision: number; confirmed: true }, idempotencyKey: string): Promise<WebsiteSnapshot> {
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}/template-applications`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
+      }).then(validateWebsiteSnapshot);
+    },
+    snapshots(siteID?: string, pageID?: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteSnapshotPage> {
+      return requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor, limit } });
+    },
+    async allSnapshots(signal?: AbortSignal, siteID?: string, pageID?: string): Promise<WebsiteSnapshot[]> {
       const items: WebsiteSnapshot[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
       for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
-        const page = await requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, cursor } });
+        const page = await requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor } });
         items.push(...page.items.map(validateWebsiteSnapshot));
         const nextCursor = page.next_cursor || undefined;
         if (!nextCursor) return items;
@@ -897,30 +949,6 @@ export const api = {
         cursor = nextCursor;
       }
       throw new ApiError(502, "snapshot_list_too_large", "Список снапшотов превышает допустимый размер");
-    },
-    branches(signal?: AbortSignal) {
-      return requestList<unknown>(`${ADMIN_V2_ROOT}/sites/branches`, { signal }).then((page) => ({
-        items: page.items.map(validateWebsiteBranch),
-        next_cursor: page.next_cursor,
-      }));
-    },
-    assignBranch(branchID: string, snapshotID: string, expectedRevision: number, expectedSnapshotRevision: number): Promise<WebsiteBranch> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/branches/${encoded(branchID)}/snapshot`, {
-        method: "PUT",
-        body: { snapshot_id: snapshotID, expected_revision: expectedRevision, expected_snapshot_revision: expectedSnapshotRevision },
-      }).then((value) => {
-        const branch = validateWebsiteBranch(value);
-        if (branch.id !== branchID || branch.snapshot_id !== snapshotID || branch.revision <= expectedRevision) throw invalidWebsiteBranch();
-        return branch;
-      });
-    },
-    branchEvents(branchID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteBranchEventPage> {
-      return requestList<unknown>(`${ADMIN_V2_ROOT}/sites/branches/${encoded(branchID)}/events`, {
-        signal, query: { cursor, limit },
-      }).then((page) => {
-        if (page.next_cursor && page.next_cursor.length > 1024) throw new ApiError(502, "invalid_response", "Сервер вернул некорректный указатель истории ветки");
-        return { items: page.items.map((item) => validateWebsiteBranchEvent(item, branchID)), next_cursor: page.next_cursor };
-      });
     },
     featureCatalog(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
       return request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features`, { signal, query: { cursor, limit } });
@@ -938,8 +966,13 @@ export const api = {
         return snapshot;
       });
     },
-    createSnapshot(input: { site_id: string; parent_id?: string; name: string; expected_revision: number; expected_content_revision: number; payload: WebsiteSnapshotPayload }, idempotencyKey: string): Promise<WebsiteSnapshot> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/snapshots`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input }).then(validateWebsiteSnapshot);
+    createSnapshot(input: { site_id: string; page_id: string; parent_id?: string; name: string; expected_revision: number; expected_content_revision: number; payload: WebsiteSnapshotPayload }, idempotencyKey: string): Promise<WebsiteSnapshot> {
+      const payload = snapshotPayloadFromWebsite(input.payload, input.page_id, true);
+      return request<unknown>(`${ADMIN_V2_ROOT}/sites/snapshots`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: { ...input, payload },
+      }).then(validateWebsiteSnapshot);
     },
     deleteSnapshot(id: string, revision: number): Promise<void> {
       if (!Number.isSafeInteger(revision) || revision < 1) throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия снапшота");
@@ -1255,26 +1288,6 @@ export const api = {
         },
       );
     },
-    renditionState(
-      id: string,
-      context: MediaRenditionContext,
-      signal?: AbortSignal,
-    ): Promise<MediaRenditionState> {
-      return request<MediaRenditionState>(
-        `${ADMIN_V2_ROOT}/sites/media/${encoded(id)}/renditions/state`,
-        {
-          signal,
-          query: {
-            snapshotId: context.snapshotId,
-            featureKey: context.featureKey,
-            buildVersion: context.buildVersion,
-            schemaKind: context.schemaKind,
-            fieldPath: context.fieldPath,
-            buildDigest: context.buildDigest,
-          },
-        },
-      );
-    },
     remove(id: string, revision: number): Promise<void> {
       return request<void>(`/api/v2/files/objects/${encoded(id)}`, {
         method: "DELETE",
@@ -1335,13 +1348,13 @@ export const api = {
     async createSnapshotFrom(input: {
       name: string;
       siteID?: string;
+      pageID?: string;
       parentSnapshotId?: string;
       expectedParentRevision?: number;
       expectedParentContentRevision?: number;
       idempotencyKey?: string;
-      config?: SiteConfig;
+      config?: SiteConfig | SiteEditorDraft;
       metadata?: SiteMetadata;
-      designSystem?: StructuredDesignSystem;
     }): Promise<SiteSnapshot> {
       const parent = input.parentSnapshotId ? await api.website.snapshot(input.parentSnapshotId) : undefined;
       if (input.parentSnapshotId && (!parent?.payload || input.expectedParentRevision === undefined || input.expectedParentContentRevision === undefined)) {
@@ -1349,43 +1362,32 @@ export const api = {
       }
       const config = input.config ?? parent?.payload?.config;
       const metadata = input.metadata ?? parent?.payload?.metadata;
-      const designSystem = input.designSystem ?? (parent?.payload ? structuredDesignSystem(parent.payload.design_system) : undefined);
       const siteID = input.siteID ?? parent?.site_id;
-      if (!siteID || !config || !metadata || !designSystem) {
-        throw new ApiError(400, "invalid_snapshot_payload", "Выберите настроенный сайт и задайте полную конфигурацию снапшота");
+      const pageID = input.pageID ?? parent?.page_id;
+      if (!siteID || !pageID || !config || !metadata) {
+        throw new ApiError(400, "invalid_snapshot_scope", "Для корневого снапшота нужны site_id и page_id из конфигурации запуска");
       }
+      const payload = snapshotPayloadFromWebsite({ config, metadata }, pageID, true);
       const snapshotName = input.name.trim();
       const created = await api.website.createSnapshot({
         site_id: siteID,
+        page_id: pageID,
         ...(input.parentSnapshotId ? { parent_id: input.parentSnapshotId } : {}),
         name: snapshotName,
         expected_revision: input.expectedParentRevision ?? 0,
         expected_content_revision: input.expectedParentContentRevision ?? 0,
-        payload: { config, metadata, design_system: designSystem as unknown as JsonObject },
-      }, input.idempotencyKey ?? `snapshot-${crypto.randomUUID()}`);
-      if (created.site_id !== siteID || created.parent_id !== input.parentSnapshotId || created.name !== snapshotName || !created.payload) {
+        payload: { config: payload.config, metadata },      }, input.idempotencyKey ?? `snapshot-${crypto.randomUUID()}`);
+      if (created.site_id !== siteID || created.page_id !== pageID || created.parent_id !== input.parentSnapshotId || created.name !== snapshotName || !created.payload) {
         throw new ApiError(502, "invalid_response", "Сервер создал снапшот с неожиданными данными");
       }
-      snapshotPayloadFromWebsite(created.payload);
+      snapshotPayloadFromWebsite(created.payload, created.page_id);
       return siteSnapshotFromWebsite(created);
     },
     deleteSnapshot(id: string, revision: number): Promise<void> {
       return api.website.deleteSnapshot(id, revision);
     },
-    async contentSnapshots(signal?: AbortSignal): Promise<{ items: SiteSnapshot[] }> {
-      return { items: (await api.website.allSnapshots(signal)).map(siteSnapshotFromWebsite) };
-    },
-
-    designSnapshot(snapshotId: string, signal?: AbortSignal): Promise<SnapshotDesignWorkspace> {
-      return request<{ snapshot: WebsiteSnapshot; design_system: JsonObject; feature_tokens: unknown }>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(snapshotId)}/design-system`, { signal }).then((value) => {
-        const snapshot = validateWebsiteSnapshot(value.snapshot);
-        if (snapshot.id !== snapshotId) throw new ApiError(502, "invalid_response", "Сервер вернул дизайн-систему другого снапшота");
-        return {
-          snapshot: siteSnapshotFromWebsite(snapshot),
-          designSystem: structuredDesignSystem(value.design_system),
-          featureTokens: snapshotFeatureTokens(value.feature_tokens),
-        };
-      });
+    async contentSnapshots(signal?: AbortSignal, pageID?: string, siteID?: string): Promise<{ items: SiteSnapshot[] }> {
+      return { items: (await api.website.allSnapshots(signal, siteID, pageID)).map(siteSnapshotFromWebsite) };
     },
   },
 

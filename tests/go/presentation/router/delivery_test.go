@@ -145,20 +145,24 @@ func TestCoreFileHeadAndConditionalGetAuthorizeBeforeReturningHeaders(t *testing
 	}
 }
 
-func TestStaticArtifactValidatesManifestAndUsesOnlyListedPaths(t *testing.T) {
-	pageBody := "<!doctype html><title>ok</title>"
+func TestStaticPageArtifactDeliversDocumentAndOnlyDeclaredAssets(t *testing.T) {
+	pageBody := "<!doctype html><title>target</title>"
+	assetBody := "export const ready = true;"
 	page := deliveryFile(deliveryPageID, pageBody, "text/html; charset=utf-8")
-	fallback := "/index.html"
-	payload := artifactPayload{Format: "static-site-artifact/v1", Entrypoints: map[string]string{"/": "/index.html"},
-		Files:    map[string]artifactFile{"/index.html": {FileID: page.ID, ContentType: page.ContentType, SHA256: page.SHA256, Size: page.Size, CacheClass: "document"}},
-		Fallback: &fallback}
+	asset := deliveryFile("01938f7a-68af-7c10-a51d-78b6ca125304", assetBody, "text/javascript; charset=utf-8")
+	payload := artifactPayload{
+		Format:   "static-page-artifact/v1",
+		Document: artifactFile{FileID: page.ID, ContentType: page.ContentType, SHA256: page.SHA256, Size: page.Size},
+		Assets: map[string]artifactAsset{
+			"assets/app.js": {artifactFile: artifactFile{FileID: asset.ID, ContentType: asset.ContentType, SHA256: asset.SHA256, Size: asset.Size}, CacheClass: "immutable"},
+		},
+	}
 	canonical, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(canonical)
-	envelope := artifactEnvelope{Format: payload.Format, Digest: "sha256:" + hex.EncodeToString(digest[:]),
-		Entrypoints: payload.Entrypoints, Files: payload.Files, Fallback: payload.Fallback}
+	envelope := artifactEnvelope{Format: payload.Format, Digest: "sha256:" + hex.EncodeToString(digest[:]), Document: payload.Document, Assets: payload.Assets}
 	manifestBody, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +170,7 @@ func TestStaticArtifactValidatesManifestAndUsesOnlyListedPaths(t *testing.T) {
 	manifestFile := deliveryFile(deliveryManifestID, string(manifestBody), "application/json")
 	files := &deliveryFiles{objects: map[string]deliveryObject{
 		page.ID:         {file: page, body: pageBody},
+		asset.ID:        {file: asset, body: assetBody},
 		manifestFile.ID: {file: manifestFile, body: string(manifestBody)},
 	}, forbidden: map[string]bool{}}
 	identity := deliveryIdentity{}
@@ -173,43 +178,109 @@ func TestStaticArtifactValidatesManifestAndUsesOnlyListedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := model.Target{Kind: model.TargetStaticSiteArtifact, FileID: manifestFile.ID, FallbackEnabled: true}
-	if err := validator.ValidateRouteTarget(context.Background(), target); err != nil {
-		t.Fatalf("valid artifact rejected: %v", err)
+	target := model.Target{Kind: model.TargetStaticSiteArtifact, FileID: manifestFile.ID}
+	if err := validator.ValidateRouteTarget(context.Background(), target, model.MatchPrefix); err != nil {
+		t.Fatalf("valid static page artifact rejected: %v", err)
+	}
+	if err := validator.ValidateRouteTarget(context.Background(), target, model.MatchExact); !errors.Is(err, engine.ErrInvalidTarget) {
+		t.Fatalf("exact artifact route with assets returned %v, want invalid target", err)
+	}
+	if err := validator.ValidateRouteTarget(context.Background(), model.Target{Kind: model.TargetStaticSiteArtifact, FileID: manifestFile.ID, FallbackEnabled: true}, model.MatchPrefix); !errors.Is(err, engine.ErrInvalidTarget) {
+		t.Fatalf("artifact fallback setting returned %v, want invalid target", err)
 	}
 	route := newDeliveryRoute(t, target, model.MatchPrefix, "/site")
 	delivery, err := NewCoreDelivery("main", "router-service-key", identity, files, deliveryRoutes{route: route}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site/missing"})
+	response, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site", Query: "ignored=yes"})
 	if err != nil || response.StatusCode != http.StatusOK || response.ContentType != page.ContentType || response.CacheControl != "no-store" {
-		t.Fatalf("fallback delivery = %+v, %v", response, err)
+		t.Fatalf("document delivery = %+v, %v", response, err)
 	}
 	data, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil || string(data) != pageBody {
-		t.Fatalf("fallback bytes = %q, %v", data, err)
+		t.Fatalf("document bytes = %q, %v", data, err)
 	}
-	route.Target.FallbackEnabled = false
-	delivery.routes = deliveryRoutes{route: route}
+	assetResponse, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site/assets/app.js"})
+	if err != nil || assetResponse.StatusCode != http.StatusOK || assetResponse.ContentType != asset.ContentType ||
+			assetResponse.CacheControl != "public, max-age=31536000, immutable" {
+		t.Fatalf("declared asset delivery = %+v, %v", assetResponse, err)
+	}
+	data, err = io.ReadAll(assetResponse.Body)
+	_ = assetResponse.Body.Close()
+	if err != nil || string(data) != assetBody {
+		t.Fatalf("asset bytes = %q, %v", data, err)
+	}
 	if _, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site/missing"}); !errors.Is(err, engine.ErrNotFound) {
-		t.Fatalf("disabled fallback returned %v, want not-found", err)
+		t.Fatalf("unknown asset returned %v, want not-found", err)
 	}
-	if _, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site/../secret"}); err == nil {
-		t.Fatal("artifact path traversal was served")
+	if _, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site/../secret"}); !errors.Is(err, engine.ErrNotFound) {
+		t.Fatalf("artifact path traversal returned %v, want not-found", err)
 	}
 }
 
-func TestArtifactManifestRejectsDuplicateKeysAndBadDigest(t *testing.T) {
+func TestArtifactManifestRejectsLegacyFormatAndMalformedShape(t *testing.T) {
+	for _, body := range []string{
+		`{"format":"static-site-artifact/v1","digest":"sha256:` + strings.Repeat("0", 64) + `","entrypoints":{"/":"/index.html"},"files":{},"fallback":null}`,
+		`{"format":"static-page-artifact/v1","digest":"sha256:` + strings.Repeat("0", 64) + `","document":{},"assets":{},"entrypoints":{}}`,
+	} {
+		file := deliveryFile(deliveryManifestID, body, "application/json")
+		files := &deliveryFiles{objects: map[string]deliveryObject{file.ID: {file: file, body: body}}, forbidden: map[string]bool{}}
+		if _, _, err := readArtifactManifest(context.Background(), files, core.Session{}, file.ID); !errors.Is(err, engine.ErrInvalidTarget) {
+			t.Errorf("invalid manifest %s returned %v, want invalid target", body, err)
+		}
+	}
+}
+
+func TestArtifactManifestRejectsDuplicateJSONKeys(t *testing.T) {
 	for _, raw := range []string{
-		`{"format":"static-site-artifact/v1","format":"static-site-artifact/v1"}`,
-		`{"format":"static-site-artifact/v1","files":{"/a":{"file_id":"x","file_id":"y"}}}`,
-		`{"format":"static-site-artifact/v1"} {}`,
+		`{"format":"static-page-artifact/v1","format":"static-page-artifact/v1"}`,
+		`{"format":"static-page-artifact/v1","document":{"file_id":"x","file_id":"y"}}`,
+		`{"format":"static-page-artifact/v1"} {}`,
 	} {
 		if httpjson.ValidJSON([]byte(raw)) {
 			t.Errorf("invalid or duplicate-key JSON accepted: %s", raw)
 		}
+	}
+}
+
+func TestArtifactMetadataMustMatchCanonicalCoreMetadata(t *testing.T) {
+	body := "asset bytes"
+	file := deliveryFile("01938f7a-68af-7c10-a51d-78b6ca125304", body, "text/javascript; charset=utf-8")
+	entry := artifactFile{FileID: file.ID, ContentType: file.ContentType, SHA256: file.SHA256, Size: file.Size}
+	if !artifactMetadataMatches(entry, file) {
+		t.Fatal("matching Core metadata was rejected")
+	}
+
+	mismatches := []struct {
+		name  string
+		mutate func(*artifactFile, *core.File)
+	}{
+		{name: "size", mutate: func(entry *artifactFile, _ *core.File) { entry.Size++ }},
+		{name: "checksum case", mutate: func(entry *artifactFile, file *core.File) { file.SHA256 = strings.ToUpper(file.SHA256) }},
+		{name: "checksum value", mutate: func(entry *artifactFile, _ *core.File) { entry.SHA256 = strings.Repeat("0", 64) }},
+		{name: "content type", mutate: func(entry *artifactFile, _ *core.File) { entry.ContentType = "text/html; charset=utf-8" }},
+	}
+	for _, test := range mismatches {
+		t.Run(test.name, func(t *testing.T) {
+			candidate, metadata := entry, file
+			test.mutate(&candidate, &metadata)
+			if artifactMetadataMatches(candidate, metadata) {
+				t.Fatal("mismatched Core metadata was accepted")
+			}
+		})
+	}
+}
+
+func TestArtifactRejectsTypesOutsideServerAllowlist(t *testing.T) {
+	for _, contentType := range []string{"image/svg+xml", "text/html", "application/wasm", "text/css; charset=iso-8859-1"} {
+		t.Run(contentType, func(t *testing.T) {
+			entry := artifactFile{FileID: deliveryPageID, ContentType: contentType, SHA256: strings.Repeat("a", 64), Size: 1}
+			if err := validateArtifactFile(entry, deliveryManifestID, false); !errors.Is(err, engine.ErrInvalidTarget) {
+				t.Fatalf("content type %q returned %v, want invalid target", contentType, err)
+			}
+		})
 	}
 }
 

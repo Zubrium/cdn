@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
@@ -17,8 +18,10 @@ import { AppShell } from "../../../../../../frontend/admin/src/app/layouts/AppSh
 
 function renderShell(principal: unknown) {
   mocks.useAuth.mockReturnValue({ principal, logout: vi.fn() });
-  return renderToStaticMarkup(createElement(TooltipProvider, { delayDuration: 250 },
-    createElement(MemoryRouter, null, createElement(AppShell))));
+  const queryClient = new QueryClient();
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client: queryClient },
+    createElement(TooltipProvider, { delayDuration: 250 },
+      createElement(MemoryRouter, null, createElement(AppShell)))));
 }
 
 describe("admin navigation permissions", () => {
@@ -35,12 +38,14 @@ describe("admin navigation permissions", () => {
     expect(rendered).not.toContain("Дерево снапшотов");
   });
 
-  it("shows Forms schema and submission navigation to a reader", () => {
-    const rendered = renderShell({ group_access: { forms: 1 }, can_manage_administrators: false });
+  it("shows only the Forms area granted by each independent group", () => {
+    const schemaReader = renderShell({ group_access: { forms_schemas: 1 }, can_manage_administrators: false });
+    expect(schemaReader).toContain("Схемы");
+    expect(schemaReader).not.toContain("Заявки");
 
-    expect(rendered).toContain("Схемы");
-    expect(rendered).toContain("Заявки");
-    expect(rendered).not.toContain("Доступы");
+    const submissionReader = renderShell({ group_access: { forms_submissions: 1 }, can_manage_administrators: false });
+    expect(submissionReader).not.toContain("Схемы");
+    expect(submissionReader).toContain("Заявки");
   });
 
   it("clearly marks synthetic engine fixtures and their non-persistent writes", () => {

@@ -2,21 +2,21 @@ import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { SiteConfig, SitePage } from "@/types";
+import type { SiteEditorDraft, SitePage } from "@/types";
 import { staticPageRouteIds } from "../route-tree";
 
 interface SystemPagesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  config: SiteConfig;
-  update: (next: (current: SiteConfig) => SiteConfig) => void;
+  config: SiteEditorDraft;
+  update: (next: (current: SiteEditorDraft) => SiteEditorDraft) => void;
 }
 
 export function systemPageCandidates(pages: SitePage[], staticPageIds: ReadonlySet<string>): SitePage[] {
   return pages.filter((page) => staticPageIds.has(page.id));
 }
 
-export function setSystemPageAssignment(config: SiteConfig, status: string, pageId: string): SiteConfig {
+export function setSystemPageAssignment(config: SiteEditorDraft, status: string, pageId: string): SiteEditorDraft {
   const systemPages = { ...config.systemPages };
   if (pageId) systemPages[status] = pageId;
   else delete systemPages[status];

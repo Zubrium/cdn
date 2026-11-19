@@ -21,12 +21,14 @@ use (
 	./presentation/admin/forms
 	./presentation/admin/router
 	./presentation/admin/coordinator
-	./cmd/zubrium
+	./pkg
+	./main
 )
 
 replace (
 	github.com/Zubrium/cdn/core v0.0.0 => ./core
-	github.com/Zubrium/cdn/cmd/zubrium v0.0.0 => ./cmd/zubrium
+	github.com/Zubrium/cdn/main v0.0.0 => ./main
+	github.com/Zubrium/cdn/pkg v0.0.0 => ./pkg
 	github.com/Zubrium/cdn/engines/content v0.0.0 => ./engines/content
 	github.com/Zubrium/cdn/engines/forms v0.0.0 => ./engines/forms
 	github.com/Zubrium/cdn/engines/loader v0.0.0 => ./engines/loader

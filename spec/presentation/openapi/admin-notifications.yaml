@@ -1,0 +1,94 @@
+openapi: 3.1.0
+info:
+  title: Zubrium Admin Notifications API
+  version: 2.0.0
+  description: >-
+    Optional Admin Presentation API selected by apis.admin.notifications. Events are
+    process-local best-effort hints and are visible only to the authenticated user
+    who initiated the operation. Resource APIs remain authoritative.
+servers:
+  - url: /
+security:
+  - AdminSession: []
+  - AdminBearer: []
+x-reject-cookie-and-bearer-together: true
+x-notification-component: admin.notifications
+paths:
+  /api/v2/admin/notifications:
+    head:
+      operationId: probeAdminNotifications
+      summary: Check whether SSE notifications are enabled
+      description: Authenticated one-shot capability probe. The response has no body.
+      responses:
+        '204':
+          description: Notifications are enabled in this build profile.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          $ref: '#/components/responses/AmbiguousAuthentication'
+        '404':
+          description: Notifications are not included in this build profile.
+    get:
+      operationId: streamAdminNotifications
+      summary: Subscribe to Admin status events
+      description: >-
+        Opens a long-lived Server-Sent Events stream. Cookie-authenticated requests
+        require an exact configured Origin match; Bearer requests use the Admin
+        credential. GET is read-only and does not require CSRF proof. The stream is
+        scoped to the initiating principal and is not replayed after reconnect.
+        Clients must refresh active status queries once after each successful
+        connection and use manual refresh when the stream is unavailable.
+      x-origin-required-for-cookie-auth: true
+      x-replay: false
+      x-delivery: best-effort-process-local
+      parameters:
+        - name: Accept
+          in: header
+          required: true
+          schema:
+            type: string
+            const: text/event-stream
+      responses:
+        '200':
+          description: Server-Sent Events stream.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            X-Accel-Buffering:
+              schema:
+                type: string
+                const: 'no'
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              x-event-types:
+                - snapshot.state_changed
+                - feature_import.state_changed
+                - media_rendition.state_changed
+        '400':
+          $ref: '#/components/responses/AmbiguousAuthentication'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Cookie request has a missing or untrusted Origin.
+        '404':
+          description: Notifications are not included in this build profile.
+        '500':
+          description: Streaming is unavailable on this HTTP writer.
+components:
+  securitySchemes:
+    AdminSession:
+      type: apiKey
+      in: cookie
+      name: zubrium_admin_session
+    AdminBearer:
+      type: http
+      scheme: bearer
+  responses:
+    Unauthorized:
+      description: Missing or invalid Admin authentication.
+    AmbiguousAuthentication:
+      description: Cookie and Bearer authentication were both supplied.

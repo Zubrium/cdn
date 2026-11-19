@@ -11,6 +11,11 @@ import (
 	schemapodel "github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 )
 
+const (
+	SchemaAccessGroup     = "forms_schemas"
+	SubmissionAccessGroup = "forms_submissions"
+)
+
 var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrForbidden    = errors.New("forbidden")
@@ -229,7 +234,10 @@ type DeleteSubmissionRequest struct {
 type Descriptor struct{}
 
 func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.forms", Kind: "engine", Version: 1}
+	return platform.ComponentDescriptor{
+		ID: "engine.forms", Kind: "engine", Version: 1,
+		AccessGroups: []string{SchemaAccessGroup, SubmissionAccessGroup},
+	}
 }
 
 func (Descriptor) Operations() []platform.Operation {

@@ -4,8 +4,11 @@ package presentation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
@@ -29,11 +32,38 @@ type Contract interface {
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
+	ListConfiguredSites(context.Context) (ConfiguredSiteList, error)
 	FeatureCatalogAPI
+	PageAPI
 	SnapshotAPI
-	BranchAPI
+	SiteContentProjectionAPI
+	SiteModelWriteAPI
 	BuildAPI
 	MediaAPI
+}
+
+// SiteContentProjectionAPI is Website's typed, Content-independent read facade.
+// Outer Presentation maps these values into Content's projection types.
+type PageAPI interface {
+	ListPages(context.Context, string, string, int) (PagePage, error)
+	GetPage(context.Context, string, string) (Page, error)
+	CreatePage(context.Context, CreatePageRequest) (Page, error)
+	ListPageTemplates(context.Context, string, string, int) (PageTemplatePage, error)
+	GetPageTemplate(context.Context, string, string) (PageTemplate, error)
+	CreatePageTemplate(context.Context, CreatePageTemplateRequest) (PageTemplate, error)
+	UpdatePageTemplate(context.Context, UpdatePageTemplateRequest) (PageTemplate, error)
+	DeletePageTemplate(context.Context, DeletePageTemplateRequest) error
+	ApplyPageTemplate(context.Context, ApplyPageTemplateRequest) (Snapshot, error)
+}
+
+type SiteContentProjectionAPI interface {
+	GetSiteContentSchema(context.Context, string) (SiteContentSchema, error)
+	GetPagePlacementProjection(context.Context, string, string, string) (PagePlacementProjection, error)
+}
+
+// SiteModelWriteAPI persists site-wide model revisions separately from page snapshots.
+type SiteModelWriteAPI interface {
+	SaveSiteModel(context.Context, SaveSiteModelRequest) (SiteContentSchema, error)
 }
 
 type FeatureCatalogAPI interface {
@@ -45,20 +75,11 @@ type FeatureCatalogAPI interface {
 }
 
 type SnapshotAPI interface {
-	ListSnapshots(context.Context, string, string, int) (SnapshotPage, error)
+	ListSnapshots(context.Context, string, string, string, int) (SnapshotPage, error)
 	GetSnapshot(context.Context, string) (Snapshot, error)
-	GetSnapshotDesignSystem(context.Context, string) (SnapshotDesignSystem, error)
 	CreateSnapshot(context.Context, CreateSnapshotRequest) (Snapshot, error)
 	MarkSnapshotReady(context.Context, string, int64) (Snapshot, error)
 	DeleteSnapshot(context.Context, DeleteSnapshotRequest) error
-}
-
-// BranchAPI exposes statically configured branch topology and its mutable
-// snapshot assignment. Topology is never changed by these operations.
-type BranchAPI interface {
-	ListBranches(context.Context) (BranchPage, error)
-	AssignBranch(context.Context, AssignBranchRequest) (Branch, error)
-	ListBranchEvents(context.Context, string, string, int) (BranchEventPage, error)
 }
 
 type BuildAPI interface {
@@ -107,9 +128,12 @@ type FeatureVersionPage struct {
 	NextCursor string           `json:"next_cursor,omitempty"`
 }
 
+// Snapshot is one immutable page version. ParentID, when present, belongs to
+// the same SiteID/PageID tree.
 type Snapshot struct {
 	ID              string            `json:"id"`
 	SiteID          string            `json:"site_id"`
+	PageID          string            `json:"page_id"`
 	ParentID        string            `json:"parent_id,omitempty"`
 	ParentName      string            `json:"parent_name,omitempty"`
 	ParentSequence  int64             `json:"parent_sequence,omitempty"`
@@ -128,15 +152,131 @@ type Snapshot struct {
 // adapter checks that each value is one bounded JSON object; Website validates
 // the versioned domain schemas before it persists or publishes the payload.
 type SnapshotPayload struct {
-	Config       json.RawMessage `json:"config"`
-	Metadata     json.RawMessage `json:"metadata"`
-	DesignSystem json.RawMessage `json:"design_system"`
+	Config   json.RawMessage `json:"config"`
+	Metadata json.RawMessage `json:"metadata"`
 }
 
-type SnapshotDesignSystem struct {
-	Snapshot      Snapshot        `json:"snapshot"`
-	DesignSystem  json.RawMessage `json:"design_system"`
-	FeatureTokens json.RawMessage `json:"feature_tokens"`
+const ContentProjectionVersion = 1
+
+// SiteContentSchema is Website's Content-independent, site-wide model projection.
+type SiteContentSchema struct {
+	Version       int             `json:"version"`
+	SiteID        string          `json:"site_id"`
+	ModelRevision int64           `json:"model_revision"`
+	Digest        string          `json:"digest"`
+	DataModel     json.RawMessage `json:"data_model"`
+}
+
+type SaveSiteModelRequest struct {
+	SiteID           string          `json:"-"`
+	ExpectedRevision int64           `json:"expected_revision"`
+	DataModel        json.RawMessage `json:"data_model"`
+}
+
+// PagePlacementProjection carries the page snapshot identity and raw typed
+// bindings. Outer Presentation joins bindings with the pinned feature manifest
+// to produce Content's input-kind-aware projection without a Website->Content dependency.
+type PagePlacementProjection struct {
+	Version        int             `json:"version"`
+	SiteID         string          `json:"site_id"`
+	PageID         string          `json:"page_id"`
+	PageSnapshotID string          `json:"page_snapshot_id"`
+	Revision       int64           `json:"revision"`
+	Digest         string          `json:"digest"`
+	State          string          `json:"state"`
+	Placements     []PagePlacement `json:"placements"`
+}
+
+type PagePlacement struct {
+	ID          string             `json:"id"`
+	PageID      string             `json:"page_id"`
+	PageName    string             `json:"page_name"`
+	FeatureKey  string             `json:"feature_key"`
+	FeatureName string             `json:"feature_name"`
+	Version     string             `json:"version"`
+	Bindings    []PlacementBinding `json:"bindings"`
+}
+
+type PlacementBinding struct {
+	InputKey  string                `json:"input_key"`
+	EntityID  string                `json:"entity_id"`
+	FieldID   string                `json:"field_id,omitempty"`
+	Fields    []PlacementField      `json:"fields,omitempty"`
+	Lookup    *PlacementInputLookup `json:"lookup,omitempty"`
+	DetailSEO *PlacementDetailSEO   `json:"detail_seo,omitempty"`
+}
+
+type PlacementField struct {
+	InputPath string `json:"input_path"`
+	FieldID   string `json:"field_id"`
+}
+
+type PlacementInputLookup struct {
+	Argument string `json:"argument"`
+	FieldID  string `json:"field_id"`
+}
+
+type PlacementDetailSEO struct {
+	TitleFieldID         string `json:"title_field_id,omitempty"`
+	DescriptionFieldID   string `json:"description_field_id,omitempty"`
+	OGTitleFieldID       string `json:"og_title_field_id,omitempty"`
+	OGDescriptionFieldID string `json:"og_description_field_id,omitempty"`
+	OGImageFieldID       string `json:"og_image_field_id,omitempty"`
+}
+
+func (schema SiteContentSchema) ComputeDigest() (string, error) {
+	payload, err := json.Marshal(struct {
+		Version       int             `json:"version"`
+		SiteID        string          `json:"site_id"`
+		ModelRevision int64           `json:"model_revision"`
+		DataModel     json.RawMessage `json:"data_model"`
+	}{schema.Version, schema.SiteID, schema.ModelRevision, schema.DataModel})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (schema SiteContentSchema) VerifyDigest() bool {
+	if schema.Version != ContentProjectionVersion || schema.SiteID == "" || schema.ModelRevision < 1 || schema.DataModel == nil || len(schema.Digest) != sha256.Size*2 {
+		return false
+	}
+	digest, err := schema.ComputeDigest()
+	return err == nil && strings.EqualFold(digest, schema.Digest)
+}
+
+func (projection PagePlacementProjection) ComputeDigest() (string, error) {
+	payload, err := json.Marshal(struct {
+		Version        int             `json:"version"`
+		SiteID         string          `json:"site_id"`
+		PageID         string          `json:"page_id"`
+		PageSnapshotID string          `json:"page_snapshot_id"`
+		Revision       int64           `json:"revision"`
+		State          string          `json:"state"`
+		Placements     []PagePlacement `json:"placements"`
+	}{projection.Version, projection.SiteID, projection.PageID, projection.PageSnapshotID, projection.Revision, projection.State, projection.Placements})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (projection PagePlacementProjection) VerifyDigest() bool {
+	if projection.Version != ContentProjectionVersion || projection.SiteID == "" || projection.PageID == "" || projection.PageSnapshotID == "" || projection.Revision < 1 || projection.Placements == nil || len(projection.Digest) != sha256.Size*2 {
+		return false
+	}
+	digest, err := projection.ComputeDigest()
+	return err == nil && strings.EqualFold(digest, projection.Digest)
+}
+
+type ConfiguredSite struct {
+	SiteID string `json:"site_id"`
+}
+
+type ConfiguredSiteList struct {
+	Items []ConfiguredSite `json:"items"`
 }
 
 type SnapshotPage struct {
@@ -144,47 +284,95 @@ type SnapshotPage struct {
 	NextCursor string     `json:"next_cursor,omitempty"`
 }
 
-type Branch struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	SiteID        string    `json:"site_id"`
-	ListenAddress string    `json:"listen_address"`
-	CORSOrigins   []string  `json:"cors_origins"`
-	Indexable     bool      `json:"indexable"`
-	SnapshotID    *string   `json:"snapshot_id"`
-	Revision      int64     `json:"revision"`
-	Enabled       bool      `json:"enabled"`
-	UpdatedAt     time.Time `json:"updated_at"`
+type Page struct {
+	ID                  string    `json:"id"`
+	SiteID              string    `json:"site_id"`
+	Name                string    `json:"name"`
+	LatestSnapshotID    string    `json:"latest_snapshot_id"`
+	LatestSnapshotState string    `json:"latest_snapshot_state"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
-type BranchPage struct {
-	Items []Branch `json:"items"`
+type PagePage struct {
+	Items      []Page `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
-type AssignBranchRequest struct {
-	BranchID                 string `json:"-"`
-	SnapshotID               string `json:"snapshot_id"`
-	ExpectedRevision         int64  `json:"expected_revision"`
-	ExpectedSnapshotRevision int64  `json:"expected_snapshot_revision"`
+type CreatePageRequest struct {
+	SiteID           string `json:"-"`
+	Name             string `json:"name"`
+	TemplateID       string `json:"template_id,omitempty"`
+	TemplateRevision int64  `json:"template_revision,omitempty"`
+	IdempotencyKey   string `json:"-"`
 }
 
-type BranchEvent struct {
-	ID               string    `json:"id"`
-	BranchID         string    `json:"branch_id"`
-	SnapshotID       string    `json:"snapshot_id"`
-	SnapshotName     string    `json:"snapshot_name"`
-	SnapshotSequence int64     `json:"snapshot_sequence"`
-	Action           string    `json:"action"`
-	CreatedAt        time.Time `json:"created_at"`
+type PageTemplateConfiguration struct {
+	SchemaVersion int               `json:"schema_version"`
+	Payload       SnapshotPayload   `json:"payload"`
+	FeaturePins   map[string]string `json:"feature_pins"`
+	PlacementSlots []PlacementSlot  `json:"placement_slots,omitempty"`
 }
 
-type BranchEventPage struct {
-	Items      []BranchEvent `json:"items"`
-	NextCursor string        `json:"next_cursor,omitempty"`
+type PlacementSlot struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
+type PageTemplate struct {
+	ID            string                    `json:"id"`
+	SiteID        string                    `json:"site_id"`
+	Name          string                    `json:"name"`
+	Description   string                    `json:"description"`
+	Revision      int64                     `json:"revision"`
+	Digest        string                    `json:"digest"`
+	Configuration PageTemplateConfiguration `json:"configuration"`
+	UpdatedAt     time.Time                 `json:"updated_at"`
+}
+
+type PageTemplatePage struct {
+	Items      []PageTemplate `json:"items"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+type CreatePageTemplateRequest struct {
+	SiteID         string                    `json:"-"`
+	Name           string                    `json:"name"`
+	Description    string                    `json:"description"`
+	Configuration  PageTemplateConfiguration `json:"configuration"`
+	IdempotencyKey string                    `json:"-"`
+}
+
+type UpdatePageTemplateRequest struct {
+	SiteID           string                    `json:"-"`
+	TemplateID       string                    `json:"-"`
+	ExpectedRevision int64                     `json:"-"`
+	Name             string                    `json:"name"`
+	Description      string                    `json:"description"`
+	Configuration    PageTemplateConfiguration `json:"configuration"`
+}
+
+type DeletePageTemplateRequest struct {
+	SiteID           string `json:"-"`
+	TemplateID       string `json:"-"`
+	ExpectedRevision int64  `json:"-"`
+}
+
+type ApplyPageTemplateRequest struct {
+	SiteID                       string `json:"-"`
+	PageID                       string `json:"-"`
+	TemplateID                   string `json:"template_id"`
+	TemplateRevision             int64  `json:"template_revision"`
+	ExpectedSnapshotID           string `json:"expected_snapshot_id"`
+	ExpectedSnapshotRevision     int64  `json:"expected_snapshot_revision"`
+	ExpectedContentRevision      int64  `json:"expected_content_revision"`
+	Confirmed                    bool   `json:"confirmed"`
+	IdempotencyKey               string `json:"-"`
+}
+
+// CreateSnapshotRequest creates a root or child within one configured page tree.
 type CreateSnapshotRequest struct {
 	SiteID                  string          `json:"site_id"`
+	PageID                  string          `json:"page_id"`
 	ParentID                string          `json:"parent_id,omitempty"`
 	Name                    string          `json:"name"`
 	ExpectedRevision        int64           `json:"expected_revision"`
@@ -202,6 +390,7 @@ type SnapshotForkWorkflowPayload struct {
 	ExpectedSourceContentRevision int64  `json:"expected_source_content_revision"`
 	TargetSnapshotRevision        int64  `json:"target_snapshot_revision"`
 	ContentCopyIdempotencyKey     string `json:"content_copy_idempotency_key"`
+	SelectionPolicy              string `json:"selection_policy,omitempty"`
 }
 
 type DeleteSnapshotRequest struct {
@@ -245,7 +434,7 @@ type MediaJob struct {
 type Descriptor struct{}
 
 func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.website", Kind: "engine", Version: 1}
+	return platform.ComponentDescriptor{ID: "engine.website", Kind: "engine", Version: 1, AccessGroups: []string{"features"}}
 }
 
 func (Descriptor) Operations() []platform.Operation {
@@ -257,9 +446,9 @@ func (Descriptor) Operations() []platform.Operation {
 		{Name: "snapshot.list", Action: platform.AccessActionRead, ResourceType: "snapshot"},
 		{Name: "snapshot.write", Action: platform.AccessActionWrite, ResourceType: "snapshot"},
 		{Name: "snapshot.delete", Action: platform.AccessActionDelete, ResourceType: "snapshot"},
-		{Name: "branch.list", Action: platform.AccessActionRead, ResourceType: "branch"},
-		{Name: "branch.assign", Action: platform.AccessActionWrite, ResourceType: "branch"},
-		{Name: "branch.events", Action: platform.AccessActionRead, ResourceType: "branch-event"},
+		{Name: "site-model.read", Action: platform.AccessActionRead, ResourceType: "site-model"},
+		{Name: "site-model.write", Action: platform.AccessActionWrite, ResourceType: "site-model"},
+		{Name: "page-placement-projection.read", Action: platform.AccessActionRead, ResourceType: "page-placement-projection"},
 		{Name: "build.create", Action: platform.AccessActionWrite, ResourceType: "build"},
 		{Name: "build.read", Action: platform.AccessActionRead, ResourceType: "build"},
 		{Name: "media-derivative.create", Action: platform.AccessActionWrite, ResourceType: "media-derivative"},

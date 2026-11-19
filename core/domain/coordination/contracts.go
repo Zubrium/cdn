@@ -48,6 +48,7 @@ type ComponentDescriptor struct {
 	Version      int
 	Dependencies []string
 	Operations   []ComponentOperation
+	AccessGroups []string
 }
 
 // ComponentDescriptorProvider lets an outer module describe itself to the

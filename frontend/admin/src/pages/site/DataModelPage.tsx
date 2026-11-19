@@ -14,10 +14,11 @@ import {
 import { Input } from "@/components/ui/input";
 import type { DataModelEntity } from "@/types";
 import { useSiteWorkspace } from "./SiteWorkspace";
+import { siteContextQuery } from "./site-query";
 import {
   addDataModelEntity,
   dataModelEntityBindingImpacts,
-  modelFor,
+  emptyDataModel,
 } from "./components/data-model/model-operations";
 
 export * from "./components/data-model/model-operations";
@@ -27,7 +28,7 @@ type ModelSort = "name" | "fields";
 
 export default function DataModelPage() {
   useDocumentTitle("Модель данных");
-  const { config, update } = useSiteWorkspace();
+  const { config, dataModel, updateDataModel } = useSiteWorkspace();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState("");
@@ -37,8 +38,8 @@ export default function DataModelPage() {
   const [newName, setNewName] = useState("");
   const [newCardinality, setNewCardinality] = useState<NonNullable<DataModelEntity["cardinality"]>>("many");
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const suffix = snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : "";
-  const model = useMemo(() => modelFor(config), [config]);
+  const suffix = siteContextQuery(snapshotId, searchParams.get("page_id") ?? "");
+  const model = useMemo(() => dataModel ?? emptyDataModel(), [dataModel]);
   const fieldCount = model.entities.reduce((count, entity) => count + entity.fields.length, 0);
 
   const groups = useMemo(() => {
@@ -69,11 +70,10 @@ export default function DataModelPage() {
     if (!name) return;
     const id = crypto.randomUUID();
     let createdKey = "";
-    update((current) => {
-      const currentModel = modelFor(current);
-      const next = addDataModelEntity(currentModel, () => id, name, newCardinality);
+    updateDataModel((current) => {
+      const next = addDataModelEntity(current, () => id, name, newCardinality);
       createdKey = next.entities.find((entity) => entity.id === id)?.key ?? "";
-      return { ...current, dataModel: next };
+      return next;
     });
     setCreateOpen(false);
     if (createdKey) navigate(`/site/data-model/${createdKey}${suffix}`);
@@ -84,7 +84,7 @@ export default function DataModelPage() {
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-5">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Модель данных</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Модели, поля и структура записей выбранного снапшота.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Модели и поля общие для всех страниц сайта.</p>
         </div>
         <Button type="button" className="min-h-11" onClick={openCreate}><Plus />Новая модель</Button>
       </header>
@@ -130,7 +130,7 @@ export default function DataModelPage() {
           </div>
           <div className="divide-y divide-border/70">
             {group.entities.map((entity) => {
-              const impacts = dataModelEntityBindingImpacts(config, entity.id);
+              const impacts = dataModelEntityBindingImpacts(config, model, entity.id);
               return <Link
                 key={entity.id}
                 to={`/site/data-model/${encodeURIComponent(entity.key)}${suffix}`}

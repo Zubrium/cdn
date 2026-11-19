@@ -1,0 +1,498 @@
+openapi: 3.1.0
+info:
+  title: Zubrium File API
+  version: 2.0.0
+  description: >-
+    File API calls Loader; Loader delegates authorization, metadata and bytes to
+    Core. Files are immutable, have no owner or visibility flag, and require at
+    least one static access group. FileSet membership is only a search index.
+servers:
+  - url: /
+security:
+  - AdminSession: []
+  - BearerCredential: []
+x-rejects-cookie-and-bearer-together: true
+paths:
+  /api/v2/files/limits:
+    get:
+      operationId: getUploadLimits
+      responses:
+        '200':
+          description: Configured upload bounds.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadLimits' }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/v2/files:
+    get:
+      operationId: listFiles
+      parameters:
+        - { $ref: '#/components/parameters/Query' }
+        - { $ref: '#/components/parameters/Group' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: Only files readable by the current subject are returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/File' } }
+                  nextCursor: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v2/files/uploads:
+    post:
+      operationId: beginUpload
+      description: >-
+        Starts or resumes an idempotent Loader upload. `groups` is explicit;
+        the subject needs write access to each group. A file is never made
+        anonymous by this operation. Browser cookie requests require the CSRF
+        header and an allowed Origin.
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BeginUpload' }
+      responses:
+        '201':
+          description: Upload session created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+  /api/v2/files/uploads/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/UUID' }
+    get:
+      operationId: getUpload
+      responses:
+        '200':
+          description: Current upload state and already stored parts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: abortUpload
+      x-csrf-required-for-cookie-auth: true
+      responses:
+        '204': { description: Upload aborted. }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/files/uploads/{id}/parts/{number}:
+    put:
+      operationId: putUploadPart
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/UUID' }
+        - name: number
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Part accepted or idempotently confirmed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+  /api/v2/files/uploads/{id}/commit:
+    post:
+      operationId: commitUpload
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/UUID' }
+      responses:
+        '201':
+          description: Immutable file created.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/files/objects/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/UUID' }
+    get:
+      operationId: getFile
+      responses:
+        '200':
+          description: File metadata.
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateFileMetadata
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 255 }
+                contentType: { type: string, maxLength: 255 }
+                attributes: { type: object, additionalProperties: { type: string } }
+      responses:
+        '200':
+          description: Updated metadata; file bytes are unchanged.
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteFile
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+      responses:
+        '204': { description: File and stored bytes permanently deleted. }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /api/v2/files/objects/{id}/content:
+    parameters:
+      - { $ref: '#/components/parameters/UUID' }
+    get:
+      operationId: readFileContent
+      parameters:
+        - name: Range
+          in: header
+          schema: { type: string }
+      responses:
+        '200':
+          description: Authenticated file byte stream.
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '206':
+          description: Authenticated byte range.
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '416': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    head:
+      operationId: headFileContent
+      responses:
+        '200': { description: Authenticated file metadata headers. }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v2/files/objects/{id}/groups/{group}:
+    parameters:
+      - { $ref: '#/components/parameters/UUID' }
+      - name: group
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[a-z][a-z0-9_-]{0,63}$' }
+    put:
+      operationId: addFileGroup
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+      responses:
+        '200':
+          description: File now belongs to the group.
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: removeFileGroup
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+      responses:
+        '200':
+          description: File removed from the group; at least one group must remain.
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v2/files/sets:
+    get:
+      operationId: listFileSets
+      parameters:
+        - name: namespace
+          in: query
+          schema: { type: string, maxLength: 64 }
+        - { $ref: '#/components/parameters/Query' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: Search-index sets visible to the current subject.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileSetPage' }
+    post:
+      operationId: createFileSet
+      x-csrf-required-for-cookie-auth: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [namespace, name, managementGroup]
+              properties:
+                namespace: { type: string, maxLength: 64 }
+                name: { type: string, maxLength: 255 }
+                managementGroup: { type: string, pattern: '^[a-z][a-z0-9_-]{0,63}$' }
+      responses:
+        '201':
+          description: FileSet created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileSet' }
+  /api/v2/files/sets/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/UUID' }
+    get:
+      operationId: getFileSet
+      responses:
+        '200':
+          description: FileSet metadata.
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileSet' }
+    patch:
+      operationId: renameFileSet
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string, maxLength: 255 } }
+      responses:
+        '200':
+          description: FileSet renamed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileSet' }
+    delete:
+      operationId: deleteFileSet
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+      responses:
+        '204': { description: Set metadata and memberships deleted; file objects remain. }
+  /api/v2/files/sets/{id}/files:
+    get:
+      operationId: listFilesInSet
+      parameters:
+        - { $ref: '#/components/parameters/UUID' }
+        - { $ref: '#/components/parameters/Query' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: Only readable files are returned; set membership does not grant byte access.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/File' } }
+                  nextCursor: { type: string }
+  /api/v2/files/sets/{id}/files/{fileId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: fileId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/IfMatch' }
+    put:
+      operationId: addFileToSet
+      x-csrf-required-for-cookie-auth: true
+      responses:
+        '200':
+          description: Membership created. File byte authorization remains group-based.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileSet' }
+    delete:
+      operationId: removeFileFromSet
+      x-csrf-required-for-cookie-auth: true
+      responses:
+        '200':
+          description: Membership removed. File object remains.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileSet' }
+components:
+  securitySchemes:
+    AdminSession:
+      type: apiKey
+      in: cookie
+      name: zubrium_admin_session
+      description: HttpOnly Core session. Mutations also require X-CSRF-Token and an allowed Origin.
+    BearerCredential:
+      type: http
+      scheme: bearer
+  parameters:
+    UUID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Query:
+      name: q
+      in: query
+      schema: { type: string, maxLength: 255 }
+    Group:
+      name: group
+      in: query
+      schema: { type: string, pattern: '^[a-z][a-z0-9_-]{0,63}$' }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, maxLength: 2048 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$' }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string }
+    CSRFTOKEN:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string, minLength: 43, maxLength: 43 }
+  responses:
+    Error:
+      description: Controlled API error.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+  schemas:
+    UploadLimits:
+      type: object
+      required: [maxBytes, partBytes, maxUploadParts]
+      properties:
+        maxBytes: { type: integer, minimum: 1 }
+        partBytes: { type: integer, minimum: 1 }
+        maxUploadParts: { type: integer, minimum: 1 }
+    BeginUpload:
+      type: object
+      required: [name, contentType, size, sha256, groups]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        contentType: { type: string, minLength: 1, maxLength: 255 }
+        size: { type: integer, minimum: 0 }
+        sha256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+        groups:
+          type: array
+          minItems: 1
+          maxItems: 64
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_-]{0,63}$' }
+        attributes: { type: object, additionalProperties: { type: string } }
+    UploadPart:
+      type: object
+      required: [number, size, sha256]
+      properties:
+        number: { type: integer, minimum: 1 }
+        size: { type: integer, minimum: 1 }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    UploadSession:
+      type: object
+      required: [id, state, partSize, parts, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        state: { type: string, enum: [uploading, committing, committed, aborted] }
+        partSize: { type: integer, minimum: 1 }
+        parts: { type: array, items: { $ref: '#/components/schemas/UploadPart' } }
+        expiresAt: { type: string, format: date-time }
+        fileId: { type: string, format: uuid }
+    File:
+      type: object
+      required: [id, name, contentType, size, sha256, revision, groups]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        contentType: { type: string }
+        size: { type: integer, minimum: 0 }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        revision: { type: integer, minimum: 1 }
+        groups: { type: array, items: { type: string } }
+        attributes: { type: object, additionalProperties: { type: string } }
+    FileSet:
+      type: object
+      required: [id, namespace, name, managementGroup, revision, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        namespace: { type: string }
+        name: { type: string }
+        managementGroup: { type: string }
+        revision: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    FileSetPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/FileSet' } }
+        nextCursor: { type: string }

@@ -16,32 +16,27 @@ function state(status: MediaRenditionState["status"], error?: string): MediaRend
 }
 
 describe("prepareMediaRenditions", () => {
-  it("waits until every selected file/profile is ready before applying selection", async () => {
-    const prepareRenditions = vi.fn<MediaRenditionClient["prepareRenditions"]>().mockResolvedValue(state("pending"));
-    const renditionState = vi.fn<MediaRenditionClient["renditionState"]>()
-      .mockResolvedValueOnce(state("processing"))
-      .mockResolvedValue(state("ready"));
-    const wait = vi.fn(async () => {});
+  it("accepts a rendition only when preparation is already ready", async () => {
+    const prepareRenditions = vi.fn<MediaRenditionClient["prepareRenditions"]>().mockResolvedValue(state("ready"));
 
-    await prepareMediaRenditions(["media-1"], [context, { ...context }], { prepareRenditions, renditionState }, wait);
+    await prepareMediaRenditions(["media-1"], [context, { ...context }], { prepareRenditions });
 
     expect(prepareRenditions).toHaveBeenCalledTimes(1);
-    expect(renditionState).toHaveBeenCalledTimes(2);
-    expect(wait).toHaveBeenCalledTimes(2);
   });
 
-  it("reports failed or stalled renditions instead of accepting an unusable file", async () => {
-    const failedClient: MediaRenditionClient = {
-      prepareRenditions: vi.fn().mockResolvedValue(state("failed", "invalid image")),
-      renditionState: vi.fn(),
-    };
-    await expect(prepareMediaRenditions(["media-1"], [context], failedClient, async () => {})).rejects.toThrow("invalid image");
+  it("requires a manual retry while preparation is pending or processing", async () => {
+    const prepareRenditions = vi.fn<MediaRenditionClient["prepareRenditions"]>().mockResolvedValue(state("pending"));
 
-    const pendingClient: MediaRenditionClient = {
-      prepareRenditions: vi.fn().mockResolvedValue(state("pending")),
-      renditionState: vi.fn().mockResolvedValue(state("pending")),
+    await expect(prepareMediaRenditions(["media-1"], [context], { prepareRenditions }))
+      .rejects.toThrow("Повторите выбор файла вручную");
+    expect(prepareRenditions).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports failed renditions", async () => {
+    const client: MediaRenditionClient = {
+      prepareRenditions: vi.fn().mockResolvedValue(state("failed", "invalid image")),
     };
-    await expect(prepareMediaRenditions(["media-1"], [context], pendingClient, async () => {})).rejects.toThrow("дольше ожидаемого");
-    expect(pendingClient.renditionState).toHaveBeenCalledTimes(120);
+
+    await expect(prepareMediaRenditions(["media-1"], [context], client)).rejects.toThrow("invalid image");
   });
 });

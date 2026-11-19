@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DataModel, SiteConfig } from "@/types";
+import type { DataModel, SiteEditorDraft } from "@/types";
 
 const mocks = vi.hoisted(() => ({
   useConfirm: vi.fn(),
@@ -51,11 +51,10 @@ const model: DataModel = {
   positions: { [productID]: { x: 50, y: 60 } },
 };
 
-const config: SiteConfig = {
+const config: SiteEditorDraft = {
   formatVersion: 3,
   pages: [],
   routeTree: { id: "site", type: "site", children: [] },
-  dataModel: model,
 };
 
 function renderWithRoute(element: React.ReactNode, path: string, initialEntry: string) {
@@ -70,7 +69,7 @@ describe("flat data model", () => {
   beforeEach(() => {
     mocks.useConfirm.mockReset();
     mocks.useConfirm.mockResolvedValue(true);
-    mocks.useSiteWorkspace.mockReturnValue({ config, update: vi.fn(), dirty: true, saving: false, snapshot: null });
+    mocks.useSiteWorkspace.mockReturnValue({ config, dataModel: model, updateDataModel: vi.fn(), dirty: true, saving: false, snapshot: null });
   });
 
   it("creates models with a readable key, selected cardinality and retained layout position", () => {
@@ -112,7 +111,7 @@ describe("flat data model", () => {
   });
 
   it("reports only direct model binding impacts", () => {
-    const boundConfig: SiteConfig = {
+    const boundConfig: SiteEditorDraft = {
       ...config,
       pages: [{
         id: "page",
@@ -131,8 +130,8 @@ describe("flat data model", () => {
         }],
       }],
     };
-    expect(dataModelEntityBindingImpacts(boundConfig, productID)[0]?.paths).toEqual(["/title", "/status", "маршрут: slug"]);
-    expect(dataModelFieldBindingImpacts(boundConfig, productID, titleFieldID)[0]?.paths).toEqual(["/title", "маршрут: slug"]);
+    expect(dataModelEntityBindingImpacts(boundConfig, model, productID)[0]?.paths).toEqual(["/title", "/status", "маршрут: slug"]);
+    expect(dataModelFieldBindingImpacts(boundConfig, model, productID, titleFieldID)[0]?.paths).toEqual(["/title", "маршрут: slug"]);
   });
 
   it("renders a compact model list with snapshot deep links and no relation navigation", () => {

@@ -9,7 +9,7 @@ import { EmptyState, ErrorState, LoadingPage, PageHeader, useDocumentTitle } fro
 import { useConfirm } from "@/components/common/confirm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { hasGroupAccess } from "@/lib/permissions";
+import { canManageSubmissions, canReadFormSchemas, canViewSubmissions, hasGroupAccess } from "@/lib/permissions";
 import { errorMessage } from "@/lib/errors";
 import { downloadBlob } from "@/lib/format";
 import type { FormSubmission } from "@/types";
@@ -41,21 +41,25 @@ export default function SubmissionsPage() {
   useDocumentTitle("Заявки");
   const { submissionId = "" } = useParams();
   const { principal } = useAuth();
-  const canManage = hasGroupAccess(principal, "forms", 2);
+  const canView = canViewSubmissions(principal);
+  const canManage = canManageSubmissions(principal);
+  const canReadSchemas = canReadFormSchemas(principal);
+  const canReadSnapshots = hasGroupAccess(principal, "features", 1);
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const requestedSnapshotID = params.get("snapshot") ?? "";
   const snapshots = useInfiniteQuery({
     queryKey: snapshotKey,
-    queryFn: ({ pageParam, signal }) => api.website.snapshots(undefined, pageParam ?? undefined, pageSize, signal),
+    queryFn: ({ pageParam, signal }) => api.website.snapshots(undefined, undefined, pageParam ?? undefined, pageSize, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: canReadSnapshots && !requestedSnapshotID,
   });
   const snapshotItems = useMemo(() => snapshots.data?.pages.flatMap((page) => page.items) ?? [], [snapshots.data]);
-  const requestedSnapshotID = params.get("snapshot") ?? "";
   const selectedSnapshot = snapshotItems.find((item) => item.id === requestedSnapshotID) ?? snapshotItems[0];
-  const snapshotID = selectedSnapshot?.id ?? "";
+  const snapshotID = requestedSnapshotID || selectedSnapshot?.id || "";
   useEffect(() => {
     if (!snapshotID || requestedSnapshotID === snapshotID) return;
     const next = new URLSearchParams(params);
@@ -68,11 +72,13 @@ export default function SubmissionsPage() {
     queryFn: ({ pageParam, signal }) => api.formsEngine.schemas(snapshotID, pageParam ?? undefined, pageSize, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
-    enabled: Boolean(snapshotID),
+    enabled: Boolean(snapshotID && canReadSchemas),
   });
   const schemaItems = useMemo(() => schemas.data?.pages.flatMap((page) => page.items) ?? [], [schemas.data]);
   const requestedFormID = params.get("form") ?? "";
-  const formID = schemaItems.some((schema) => schema.id === requestedFormID) ? requestedFormID : schemaItems[0]?.id ?? "";
+  const formID = canReadSchemas
+    ? (schemaItems.some((schema) => schema.id === requestedFormID) ? requestedFormID : schemaItems[0]?.id ?? "")
+    : requestedFormID;
   const state = params.get("state") ?? "";
   useEffect(() => {
     if (!formID || requestedFormID === formID) return;
@@ -86,7 +92,7 @@ export default function SubmissionsPage() {
     queryFn: ({ pageParam, signal }) => api.formsEngine.submissions(snapshotID, { form_id: formID || undefined, state: state || undefined }, pageParam ?? undefined, pageSize, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
-    enabled: Boolean(snapshotID && formID),
+    enabled: Boolean(snapshotID && canView),
   });
   const submissionItems = useMemo(() => submissions.data?.pages.flatMap((page) => page.items) ?? [], [submissions.data]);
   const selectedForm = schemaItems.find((item) => item.id === formID);
@@ -101,7 +107,7 @@ export default function SubmissionsPage() {
   const detail = useQuery({
     queryKey: ["formsEngine", "submission", snapshotID, submissionId],
     queryFn: ({ signal }) => api.formsEngine.submission(snapshotID, submissionId, signal),
-    enabled: Boolean(snapshotID && submissionId),
+    enabled: Boolean(snapshotID && submissionId && canView),
   });
 
   const statusMutation = useMutation({
@@ -140,11 +146,12 @@ export default function SubmissionsPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
 
-  if (snapshots.isLoading) return <LoadingPage label="Загружаем снапшоты…" />;
-  if (snapshots.error) return <div className="page-grid"><ErrorState error={snapshots.error} title="Не удалось загрузить снапшоты" onRetry={() => void snapshots.refetch()} /></div>;
-  if (!selectedSnapshot) return <div className="page-grid"><PageHeader title="Заявки" description="Ответы на опубликованные формы." /><EmptyState title="Нет доступных снапшотов" description="Заявки появятся после настройки и публикации форм." /></div>;
-  if (schemas.isLoading) return <LoadingPage label="Загружаем формы…" />;
-  if (schemas.error) return <div className="page-grid"><ErrorState error={schemas.error} title="Не удалось загрузить формы" onRetry={() => void schemas.refetch()} /></div>;
+  if (!canView) return <div className="page-grid"><PageHeader title="Заявки" description="Ответы на опубликованные формы." /><EmptyState title="Нет доступа к заявкам" description="Для просмотра заявок требуется доступ к группе forms_submissions." /></div>;
+  if (snapshots.isLoading && canReadSnapshots) return <LoadingPage label="Загружаем снапшоты…" />;
+  if (snapshots.error && canReadSnapshots) return <div className="page-grid"><ErrorState error={snapshots.error} title="Не удалось загрузить снапшоты" onRetry={() => void snapshots.refetch()} /></div>;
+  if (!snapshotID) return <div className="page-grid"><PageHeader title="Заявки" description="Ответы на опубликованные формы." /><EmptyState title="Не выбран снапшот" description={canReadSnapshots ? "Не удалось определить снапшот для просмотра заявок." : "Для просмотра заявок откройте ссылку с идентификатором снапшота."} /></div>;
+  if (canReadSchemas && schemas.isLoading) return <LoadingPage label="Загружаем формы…" />;
+  if (canReadSchemas && schemas.error) return <div className="page-grid"><ErrorState error={schemas.error} title="Не удалось загрузить формы" onRetry={() => void schemas.refetch()} /></div>;
 
   if (submissionId) {
     if (detail.isLoading) return <LoadingPage label="Загружаем заявку…" />;
@@ -161,12 +168,12 @@ export default function SubmissionsPage() {
 
   return <div className="page-grid">
     <PageHeader title="Заявки" description="Ответы на опубликованные формы. Содержание заявки неизменяемо." actions={<>
-      <Button type="button" variant="outline" className="min-h-11" disabled={!snapshotID || !formID} loading={exportMutation.isPending} onClick={() => exportMutation.mutate()}><Download />Экспорт CSV</Button>
-      <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => { const next = new URLSearchParams(params); next.set("form", event.currentTarget.value); setParams(next); }}><option value="" disabled>Выберите форму</option>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>
+      <Button type="button" variant="outline" className="min-h-11" disabled={!snapshotID || !canView} loading={exportMutation.isPending} onClick={() => exportMutation.mutate()}><Download />Экспорт CSV</Button>
+      {canReadSchemas && <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("form", event.currentTarget.value); else next.delete("form"); setParams(next); }}><option value="">Все формы</option>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>}
       <label className="space-y-1.5 text-sm"><span className="sr-only">Статус</span><select aria-label="Статус" className="h-11 min-w-36 rounded-md border border-input bg-background px-3" value={state} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("state", event.currentTarget.value); else next.delete("state"); setParams(next); }}><option value="">Все статусы</option>{[...new Set([...statusValues, ...submissionItems.map((item) => item.state)])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-      <label className="space-y-1.5 text-sm"><span className="sr-only">Снапшот</span><select aria-label="Снапшот" className="h-11 min-w-56 rounded-md border border-input bg-background px-3" value={snapshotID} onChange={(event) => navigate(`/submissions?snapshot=${encodeURIComponent(event.currentTarget.value)}`)}>{snapshotItems.map((item) => <option key={item.id} value={item.id}>{snapshotLabel(item.id, item.site_id)}</option>)}</select></label>
+      {canReadSnapshots && snapshotItems.length > 0 && <label className="space-y-1.5 text-sm"><span className="sr-only">Снапшот</span><select aria-label="Снапшот" className="h-11 min-w-56 rounded-md border border-input bg-background px-3" value={snapshotID} onChange={(event) => navigate(`/submissions?snapshot=${encodeURIComponent(event.currentTarget.value)}`)}>{snapshotItems.map((item) => <option key={item.id} value={item.id}>{snapshotLabel(item.id, item.site_id)}</option>)}</select></label>}
     </>} />
-    {schemas.hasNextPage && <div className="-mt-5"><Button type="button" variant="ghost" size="sm" onClick={() => void schemas.fetchNextPage()} loading={schemas.isFetchingNextPage}>Загрузить ещё формы</Button></div>}
-    {submissions.isLoading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">Загружаем заявки…</p> : submissions.error ? <ErrorState error={submissions.error} title="Не удалось загрузить заявки" onRetry={() => void submissions.refetch()} /> : schemaItems.length === 0 ? <EmptyState title="Форм пока нет" description="Создайте и опубликуйте форму через Website." /> : submissionItems.length === 0 ? <EmptyState title="Заявок пока нет" description="Новые ответы появятся после отправки опубликованной формы." /> : <div className="overflow-hidden rounded-lg border border-border bg-card"><ul className="divide-y divide-border">{submissionItems.map((submission) => <li key={submission.id}><button type="button" className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => navigate(`/submissions/${encodeURIComponent(submission.id)}?snapshot=${encodeURIComponent(snapshotID)}&form=${encodeURIComponent(formID)}`)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{summary(submission.values) || selectedForm?.key || submission.form_id}</span><span className="mt-1 block text-xs text-muted-foreground">{dateTime(submission.created_at)} · {selectedForm?.key ?? submission.form_id}</span></span><Badge variant="outline">{submission.state}</Badge></button></li>)}</ul>{submissions.hasNextPage && <div className="border-t border-border p-3 text-center"><Button type="button" variant="outline" onClick={() => void submissions.fetchNextPage()} loading={submissions.isFetchingNextPage}>Загрузить ещё</Button></div>}</div>}
+    {canReadSchemas && schemas.hasNextPage && <div className="-mt-5"><Button type="button" variant="ghost" size="sm" onClick={() => void schemas.fetchNextPage()} loading={schemas.isFetchingNextPage}>Загрузить ещё формы</Button></div>}
+    {submissions.isLoading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">Загружаем заявки…</p> : submissions.error ? <ErrorState error={submissions.error} title="Не удалось загрузить заявки" onRetry={() => void submissions.refetch()} /> : submissionItems.length === 0 ? <EmptyState title="Заявок пока нет" description="Новые ответы появятся после отправки опубликованной формы." /> : <div className="overflow-hidden rounded-lg border border-border bg-card"><ul className="divide-y divide-border">{submissionItems.map((submission) => <li key={submission.id}><button type="button" className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => navigate(`/submissions/${encodeURIComponent(submission.id)}?snapshot=${encodeURIComponent(snapshotID)}${formID ? `&form=${encodeURIComponent(formID)}` : ""}`)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{summary(submission.values) || selectedForm?.key || submission.form_id}</span><span className="mt-1 block text-xs text-muted-foreground">{dateTime(submission.created_at)} · {selectedForm?.key ?? submission.form_id}</span></span><Badge variant="outline">{submission.state}</Badge></button></li>)}</ul>{submissions.hasNextPage && <div className="border-t border-border p-3 text-center"><Button type="button" variant="outline" onClick={() => void submissions.fetchNextPage()} loading={submissions.isFetchingNextPage}>Загрузить ещё</Button></div>}</div>}
   </div>;
 }

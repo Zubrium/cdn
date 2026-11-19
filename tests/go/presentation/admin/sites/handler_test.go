@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
@@ -17,39 +16,55 @@ import (
 
 type fakeWebsite struct {
 	website.API
-	authenticated         bool
-	snapshotSiteID        string
-	snapshotCursor        string
-	snapshotLimit         int
-	getSnapshotID         string
-	getSnapshotCalls      int
-	createSnapshotCalls   int
-	createSnapshotInput   website.CreateSnapshotRequest
-	deleteSnapshotCalls   int
-	deleteSnapshotInput   website.DeleteSnapshotRequest
-	beginCalls            int
-	input                 website.ImportFeatureRequest
-	job                   website.FeatureImport
-	versionCalls          int
-	versionID             string
-	versionCursor         string
-	versionLimit          int
-	catalogCalls          int
-	catalogCursor         string
-	catalogLimit          int
-	buildCalls            int
-	buildInput            website.BuildSnapshotRequest
-	mediaCalls            int
-	mediaInput            website.CreateDerivativeRequest
-	branchCalls           int
-	branchInput           website.AssignBranchRequest
-	wrongAssignedSnapshot bool
-	eventCalls            int
-	eventBranchID         string
-	eventCursor           string
-	eventLimit            int
-	branchPage            *website.BranchPage
-	eventPage             *website.BranchEventPage
+	authenticated       bool
+	snapshotSiteID      string
+	snapshotPageID      string
+	snapshotCursor      string
+	snapshotLimit       int
+	getSnapshotID       string
+	getSnapshotCalls    int
+	createSnapshotCalls int
+	createSnapshotInput website.CreateSnapshotRequest
+	modelSiteID         string
+	modelSaveRequest    website.SaveSiteModelRequest
+	modelGetCalls       int
+	modelSaveCalls      int
+	projectionSiteID    string
+	projectionPageID    string
+	projectionSnapshotID string
+	projectionCalls     int
+	deleteSnapshotCalls int
+	deleteSnapshotInput website.DeleteSnapshotRequest
+	beginCalls          int
+	input               website.ImportFeatureRequest
+	job                 website.FeatureImport
+	versionCalls        int
+	versionID           string
+	versionCursor       string
+	versionLimit        int
+	catalogCalls        int
+	catalogCursor       string
+	catalogLimit        int
+	configuredSiteCalls int
+	buildCalls          int
+	buildInput          website.BuildSnapshotRequest
+	mediaCalls           int
+	mediaInput           website.CreateDerivativeRequest
+	pageList             website.PagePage
+	pageCursor           string
+	pageLimit            int
+	pageCalls            int
+	pageInput            website.CreatePageRequest
+	page                 website.Page
+	templateList         website.PageTemplatePage
+	templateCursor       string
+	templateLimit        int
+	templateCalls        int
+	templateInput        website.CreatePageTemplateRequest
+	templateUpdateInput  website.UpdatePageTemplateRequest
+	templateDeleteInput  website.DeletePageTemplateRequest
+	applyTemplateInput   website.ApplyPageTemplateRequest
+	applyTemplateCalls   int
 }
 
 type fakeSnapshotForkWorkflow struct {
@@ -64,26 +79,45 @@ func (f *fakeSnapshotForkWorkflow) Start(_ context.Context, request platform.Wor
 	return platform.WorkflowReceipt{State: "queued", Created: true}, f.err
 }
 
-func (f *fakeWebsite) ListSnapshots(_ context.Context, siteID, cursor string, limit int) (website.SnapshotPage, error) {
-	f.snapshotSiteID, f.snapshotCursor, f.snapshotLimit = siteID, cursor, limit
+func (f *fakeWebsite) ListConfiguredSites(context.Context) (website.ConfiguredSiteList, error) {
+	f.configuredSiteCalls++
+	return website.ConfiguredSiteList{Items: []website.ConfiguredSite{{SiteID: "site-live"}}}, nil
+}
+
+func (f *fakeWebsite) ListSnapshots(_ context.Context, siteID, pageID, cursor string, limit int) (website.SnapshotPage, error) {
+	f.snapshotSiteID, f.snapshotPageID, f.snapshotCursor, f.snapshotLimit = siteID, pageID, cursor, limit
 	if siteID == "" {
 		siteID = "33333333-3333-4333-8333-333333333333"
 	}
-	return website.SnapshotPage{Items: []website.Snapshot{{ID: "snapshot-1", SiteID: siteID, Name: "Homepage", Sequence: 1, Revision: 3, FeaturePins: map[string]string{}, State: "ready"}}, NextCursor: "next"}, nil
+	return website.SnapshotPage{Items: []website.Snapshot{{ID: "snapshot-1", SiteID: siteID, PageID: "22222222-2222-4222-8222-222222222222", Name: "Homepage", Sequence: 1, Revision: 3, FeaturePins: map[string]string{}, State: "ready"}}, NextCursor: "next"}, nil
+}
+
+func (f *fakeWebsite) GetSiteContentSchema(_ context.Context, siteID string) (website.SiteContentSchema, error) {
+	f.modelSiteID, f.modelGetCalls = siteID, f.modelGetCalls+1
+	schema := website.SiteContentSchema{Version: website.ContentProjectionVersion, SiteID: siteID, ModelRevision: 2, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
+	schema.Digest, _ = schema.ComputeDigest()
+	return schema, nil
+}
+
+func (f *fakeWebsite) SaveSiteModel(_ context.Context, request website.SaveSiteModelRequest) (website.SiteContentSchema, error) {
+	f.modelSaveRequest, f.modelSaveCalls = request, f.modelSaveCalls+1
+	schema := website.SiteContentSchema{Version: website.ContentProjectionVersion, SiteID: request.SiteID, ModelRevision: request.ExpectedRevision + 1, DataModel: request.DataModel}
+	schema.Digest, _ = schema.ComputeDigest()
+	return schema, nil
+}
+
+func (f *fakeWebsite) GetPagePlacementProjection(_ context.Context, siteID, pageID, snapshotID string) (website.PagePlacementProjection, error) {
+	f.projectionSiteID, f.projectionPageID, f.projectionSnapshotID = siteID, pageID, snapshotID
+	f.projectionCalls++
+	projection := website.PagePlacementProjection{Version: website.ContentProjectionVersion, SiteID: siteID, PageID: pageID, PageSnapshotID: snapshotID, Revision: 3, State: "ready", Placements: []website.PagePlacement{}}
+	projection.Digest, _ = projection.ComputeDigest()
+	return projection, nil
 }
 
 func (f *fakeWebsite) GetSnapshot(_ context.Context, snapshotID string) (website.Snapshot, error) {
 	f.getSnapshotID, f.getSnapshotCalls = snapshotID, f.getSnapshotCalls+1
-	return website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "ready",
-		Payload: &website.SnapshotPayload{Config: json.RawMessage(`{"format_version":3}`), Metadata: json.RawMessage(`{"format_version":1}`), DesignSystem: json.RawMessage(`{"formatVersion":2}`)}}, nil
-}
-
-func (f *fakeWebsite) GetSnapshotDesignSystem(_ context.Context, snapshotID string) (website.SnapshotDesignSystem, error) {
-	return website.SnapshotDesignSystem{
-		Snapshot:      website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "ready"},
-		DesignSystem:  json.RawMessage(`{"formatVersion":2,"groups":[],"baseTokens":[],"featureValues":{},"breakpoints":[],"fonts":[]}`),
-		FeatureTokens: json.RawMessage(`[]`),
-	}, nil
+	return website.Snapshot{ID: snapshotID, SiteID: "33333333-3333-4333-8333-333333333333", PageID: "22222222-2222-4222-8222-222222222222", Name: "Main", Sequence: 1, Revision: 4, FeaturePins: map[string]string{}, State: "ready",
+		Payload: &website.SnapshotPayload{Config: json.RawMessage(`{"format_version":3}`), Metadata: json.RawMessage(`{"format_version":1}`)}}, nil
 }
 
 func (f *fakeWebsite) CreateSnapshot(_ context.Context, input website.CreateSnapshotRequest) (website.Snapshot, error) {
@@ -93,7 +127,7 @@ func (f *fakeWebsite) CreateSnapshot(_ context.Context, input website.CreateSnap
 	if input.ParentID != "" {
 		state = "provisioning"
 	}
-	return website.Snapshot{ID: "22222222-2222-4222-8222-222222222222", SiteID: input.SiteID, ParentID: input.ParentID, Name: input.Name, Sequence: 2, Revision: 1, Payload: &payload, FeaturePins: map[string]string{}, State: state}, nil
+	return website.Snapshot{ID: "22222222-2222-4222-8222-222222222222", SiteID: input.SiteID, PageID: input.PageID, ParentID: input.ParentID, Name: input.Name, Sequence: 2, Revision: 1, Payload: &payload, FeaturePins: map[string]string{}, State: state}, nil
 }
 
 func (f *fakeWebsite) DeleteSnapshot(_ context.Context, input website.DeleteSnapshotRequest) error {
@@ -141,41 +175,169 @@ func (f *fakeWebsite) CreateMediaDerivative(_ context.Context, input website.Cre
 	return website.MediaJob{ID: "media-job-1", SourceFileID: input.SourceFileID, Profile: input.Profile, State: "queued"}, nil
 }
 
-func (f *fakeWebsite) ListBranches(context.Context) (website.BranchPage, error) {
-	if f.branchPage != nil {
-		return *f.branchPage, nil
+func (f *fakeWebsite) ListPages(_ context.Context, siteID, cursor string, limit int) (website.PagePage, error) {
+	f.pageCursor, f.pageLimit, f.pageCalls = cursor, limit, f.pageCalls+1
+	if f.pageList.Items == nil {
+		f.pageList = website.PagePage{Items: []website.Page{{ID: "22222222-2222-4222-8222-222222222222", SiteID: siteID, Name: "Home", LatestSnapshotID: "11111111-1111-4111-8111-111111111111", LatestSnapshotState: "ready"}}}
 	}
-	return website.BranchPage{Items: []website.Branch{{
-		ID: "11111111-1111-4111-8111-111111111111", Name: "preview", SiteID: "33333333-3333-4333-8333-333333333333", ListenAddress: "127.0.0.1:8081",
-		CORSOrigins: []string{"https://preview.example.test"}, Indexable: false, Revision: 4, Enabled: true, UpdatedAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC),
-	}}}, nil
+	return f.pageList, nil
 }
 
-func (f *fakeWebsite) AssignBranch(_ context.Context, input website.AssignBranchRequest) (website.Branch, error) {
-	f.branchCalls++
-	f.branchInput = input
-	snapshotID := input.SnapshotID
-	if f.wrongAssignedSnapshot {
-		snapshotID = "55555555-5555-4555-8555-555555555555"
+func (f *fakeWebsite) GetPage(_ context.Context, siteID, pageID string) (website.Page, error) {
+	if f.page.ID == "" {
+		f.page = website.Page{ID: pageID, SiteID: siteID, Name: "Home", LatestSnapshotID: "11111111-1111-4111-8111-111111111111", LatestSnapshotState: "ready"}
 	}
-	return website.Branch{ID: input.BranchID, Name: "preview", SiteID: "33333333-3333-4333-8333-333333333333", SnapshotID: &snapshotID,
-		Revision: input.ExpectedRevision + 1, Enabled: true, UpdatedAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)}, nil
+	return f.page, nil
 }
 
-func (f *fakeWebsite) ListBranchEvents(_ context.Context, branchID, cursor string, limit int) (website.BranchEventPage, error) {
-	f.eventCalls++
-	f.eventBranchID, f.eventCursor, f.eventLimit = branchID, cursor, limit
-	if f.eventPage != nil {
-		return *f.eventPage, nil
+func (f *fakeWebsite) CreatePage(_ context.Context, input website.CreatePageRequest) (website.Page, error) {
+	f.pageInput, f.pageCalls = input, f.pageCalls+1
+	f.page = website.Page{ID: "22222222-2222-4222-8222-222222222222", SiteID: input.SiteID, Name: input.Name, LatestSnapshotID: "11111111-1111-4111-8111-111111111111", LatestSnapshotState: "ready"}
+	return f.page, nil
+}
+
+func (f *fakeWebsite) ListPageTemplates(_ context.Context, siteID, cursor string, limit int) (website.PageTemplatePage, error) {
+	f.templateCursor, f.templateLimit, f.templateCalls = cursor, limit, f.templateCalls+1
+	if f.templateList.Items == nil {
+		f.templateList = website.PageTemplatePage{Items: []website.PageTemplate{testPageTemplate(siteID)}}
 	}
-	return website.BranchEventPage{Items: []website.BranchEvent{{
-		ID: "44444444-4444-4444-8444-444444444444", BranchID: branchID, SnapshotID: "22222222-2222-4222-8222-222222222222",
-		SnapshotName: "Homepage refresh", SnapshotSequence: 12, Action: "assigned", CreatedAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC),
-	}}}, nil
+	return f.templateList, nil
+}
+
+func (f *fakeWebsite) GetPageTemplate(_ context.Context, siteID, _ string) (website.PageTemplate, error) {
+	return testPageTemplate(siteID), nil
+}
+
+func (f *fakeWebsite) CreatePageTemplate(_ context.Context, input website.CreatePageTemplateRequest) (website.PageTemplate, error) {
+	f.templateInput, f.templateCalls = input, f.templateCalls+1
+	value := testPageTemplate(input.SiteID)
+	value.Name, value.Description, value.Configuration = input.Name, input.Description, input.Configuration
+	return value, nil
+}
+
+func (f *fakeWebsite) UpdatePageTemplate(_ context.Context, input website.UpdatePageTemplateRequest) (website.PageTemplate, error) {
+	f.templateUpdateInput, f.templateCalls = input, f.templateCalls+1
+	value := testPageTemplate(input.SiteID)
+	value.ID, value.Revision, value.Name, value.Description, value.Configuration = input.TemplateID, input.ExpectedRevision+1, input.Name, input.Description, input.Configuration
+	return value, nil
+}
+
+func (f *fakeWebsite) DeletePageTemplate(_ context.Context, input website.DeletePageTemplateRequest) error {
+	f.templateDeleteInput, f.templateCalls = input, f.templateCalls+1
+	return nil
+}
+
+func (f *fakeWebsite) ApplyPageTemplate(_ context.Context, input website.ApplyPageTemplateRequest) (website.Snapshot, error) {
+	f.applyTemplateInput, f.applyTemplateCalls = input, f.applyTemplateCalls+1
+	return website.Snapshot{ID: "44444444-4444-4444-8444-444444444444", SiteID: input.SiteID, PageID: input.PageID, ParentID: input.ExpectedSnapshotID,
+		Name: "Home", Sequence: 2, Revision: 1, FeaturePins: map[string]string{}, State: "provisioning",
+		Payload: &website.SnapshotPayload{Config: json.RawMessage(`{"format_version":1}`), Metadata: json.RawMessage(`{"format_version":1}`)}}, nil
+}
+
+func testPageTemplate(siteID string) website.PageTemplate {
+	return website.PageTemplate{ID: "33333333-3333-4333-8333-333333333333", SiteID: siteID, Name: "Template", Description: "Template description", Revision: 1,
+		Digest: strings.Repeat("a", 64), Configuration: website.PageTemplateConfiguration{SchemaVersion: 1, FeaturePins: map[string]string{},
+			Payload: website.SnapshotPayload{Config: json.RawMessage(`{"format_version":1}`), Metadata: json.RawMessage(`{"format_version":1}`)}}}
 }
 
 func testConfig(maxJSONBytes int64) Config {
 	return Config{MaxJSONBytes: maxJSONBytes, DefaultPageSize: 50, MaxPageSize: 200, AllowedOrigins: []string{"https://admin.example"}}
+}
+
+func TestListConfiguredSitesReturnsStaticSiteIDs(t *testing.T) {
+	api := &fakeWebsite{}
+	handler, err := NewHandler(api, testConfig(4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites", nil)
+	request.Header.Set("Authorization", "Bearer user-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || api.configuredSiteCalls != 1 || response.Body.String() != "{\"items\":[{\"site_id\":\"site-live\"}]}\n" {
+		t.Fatalf("configured sites response=%d calls=%d body=%s", response.Code, api.configuredSiteCalls, response.Body.String())
+	}
+}
+
+func TestPagesAndTemplatesUseSiteScopedContractsAndCAS(t *testing.T) {
+	api := &fakeWebsite{}
+	handler, err := NewHandler(api, testConfig(4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const siteID = "33333333-3333-4333-8333-333333333333"
+	pageRequest := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/"+siteID+"/pages", strings.NewReader(`{"name":"Landing"}`))
+	pageRequest.Header.Set("Authorization", "Bearer user-secret")
+	pageRequest.Header.Set("Content-Type", "application/json")
+	pageRequest.Header.Set("Idempotency-Key", "page-create-request-0001")
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusCreated || api.pageInput.SiteID != siteID || api.pageInput.Name != "Landing" || api.pageInput.IdempotencyKey != "page-create-request-0001" {
+		t.Fatalf("create page response=%d input=%+v body=%s", pageResponse.Code, api.pageInput, pageResponse.Body.String())
+	}
+	if pageResponse.Header().Get("Location") != "/api/v2/admin/sites/"+siteID+"/pages/22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("page Location = %q", pageResponse.Header().Get("Location"))
+	}
+
+	config := `{"schema_version":1,"payload":{"config":{"format_version":1},"metadata":{"format_version":1}},"feature_pins":{},"placement_slots":[]}`
+	templateRequest := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/"+siteID+"/templates", strings.NewReader(`{"name":"Landing template","description":"Reusable","configuration":`+config+`}`))
+	templateRequest.Header.Set("Authorization", "Bearer user-secret")
+	templateRequest.Header.Set("Content-Type", "application/json")
+	templateRequest.Header.Set("Idempotency-Key", "template-create-request-01")
+	templateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(templateResponse, templateRequest)
+	if templateResponse.Code != http.StatusCreated || api.templateInput.SiteID != siteID || api.templateInput.IdempotencyKey != "template-create-request-01" {
+		t.Fatalf("create template response=%d input=%+v body=%s", templateResponse.Code, api.templateInput, templateResponse.Body.String())
+	}
+
+	templateID := "33333333-3333-4333-8333-333333333333"
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/"+siteID+"/templates/"+templateID, strings.NewReader(`{"name":"Updated","description":"","configuration":`+config+`}`))
+	updateRequest.Header.Set("Authorization", "Bearer user-secret")
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRequest.Header.Set("If-Match", `"4"`)
+	updateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(updateResponse, updateRequest)
+	if updateResponse.Code != http.StatusOK || api.templateUpdateInput.ExpectedRevision != 4 || api.templateUpdateInput.TemplateID != templateID {
+		t.Fatalf("update template response=%d input=%+v body=%s", updateResponse.Code, api.templateUpdateInput, updateResponse.Body.String())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v2/admin/sites/"+siteID+"/templates/"+templateID, nil)
+	deleteRequest.Header.Set("Authorization", "Bearer user-secret")
+	deleteRequest.Header.Set("If-Match", `"5"`)
+	deleteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusNoContent || api.templateDeleteInput.ExpectedRevision != 5 || api.templateDeleteInput.SiteID != siteID {
+		t.Fatalf("delete template response=%d input=%+v body=%s", deleteResponse.Code, api.templateDeleteInput, deleteResponse.Body.String())
+	}
+}
+
+func TestApplyPageTemplateStartsSelectionResetWorkflow(t *testing.T) {
+	api := &fakeWebsite{}
+	workflow := &fakeSnapshotForkWorkflow{}
+	cfg := testConfig(4096)
+	cfg.SnapshotForkWorkflow = workflow
+	handler, err := NewHandler(api, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const siteID = "33333333-3333-4333-8333-333333333333"
+	const pageID = "22222222-2222-4222-8222-222222222222"
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/"+siteID+"/pages/"+pageID+"/template-applications", strings.NewReader(`{"template_id":"33333333-3333-4333-8333-333333333333","template_revision":2,"expected_snapshot_id":"11111111-1111-4111-8111-111111111111","expected_snapshot_revision":4,"expected_content_revision":7,"confirmed":true}`))
+	request.Header.Set("Authorization", "Bearer user-secret")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "template-apply-request-0001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || api.applyTemplateCalls != 1 || workflow.calls != 1 || api.applyTemplateInput.ExpectedContentRevision != 7 {
+		t.Fatalf("response=%d apply=%+v workflow=%+v body=%s", response.Code, api.applyTemplateInput, workflow, response.Body.String())
+	}
+	var payload website.SnapshotForkWorkflowPayload
+	if err := json.Unmarshal(workflow.request.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.request.OperationID != "snapshot.fork.start" || payload.SelectionPolicy != "reset" || payload.TargetSnapshotID != "44444444-4444-4444-8444-444444444444" {
+		t.Fatalf("unexpected template workflow: request=%+v payload=%+v", workflow.request, payload)
+	}
 }
 
 func TestCreateFeatureImportUsesAuthenticatedFileIDAndConfiguredFileSet(t *testing.T) {
@@ -382,256 +544,6 @@ func TestSitesAPIRejectsDuplicateContentType(t *testing.T) {
 	}
 }
 
-func TestListBranchesReturnsOnlyConfiguredBranchTopology(t *testing.T) {
-	api := &fakeWebsite{}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches", nil)
-	request.Header.Set("Authorization", "Bearer user-secret")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	var page website.BranchPage
-	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || len(page.Items) != 1 || page.Items[0].Name != "preview" || page.Items[0].ListenAddress != "127.0.0.1:8081" {
-		t.Fatalf("branch page=%s error=%v", response.Body.String(), err)
-	}
-}
-
-func TestListBranchesRejectsInvalidConfiguredTopology(t *testing.T) {
-	valid := website.Branch{
-		ID: "11111111-1111-4111-8111-111111111111", Name: "preview", SiteID: "33333333-3333-4333-8333-333333333333",
-		ListenAddress: "127.0.0.1:8081", CORSOrigins: []string{"https://preview.example.test"},
-		SnapshotID: branchStringPointer("22222222-2222-4222-8222-222222222222"), Revision: 4, Enabled: true,
-		UpdatedAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC),
-	}
-	cases := []struct {
-		name   string
-		mutate func(*website.Branch)
-	}{
-		{name: "invalid branch ID", mutate: func(branch *website.Branch) { branch.ID = "branch id" }},
-		{name: "invalid site ID", mutate: func(branch *website.Branch) { branch.SiteID = "site id" }},
-		{name: "invalid listener address", mutate: func(branch *website.Branch) { branch.ListenAddress = "127.0.0.1:not-a-port" }},
-		{name: "invalid CORS origin", mutate: func(branch *website.Branch) { branch.CORSOrigins = []string{"https://example.test/path"} }},
-		{name: "noncanonical default CORS port", mutate: func(branch *website.Branch) { branch.CORSOrigins = []string{"https://preview.example.test:443"} }},
-		{name: "duplicate CORS origin", mutate: func(branch *website.Branch) {
-			branch.CORSOrigins = []string{"https://preview.example.test", "https://preview.example.test"}
-		}},
-		{name: "invalid assigned snapshot", mutate: func(branch *website.Branch) { branch.SnapshotID = branchStringPointer("snapshot with spaces") }},
-		{name: "control character in name", mutate: func(branch *website.Branch) { branch.Name = "preview\nadmin" }},
-		{name: "zero update time", mutate: func(branch *website.Branch) { branch.UpdatedAt = time.Time{} }},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			branch := valid
-			testCase.mutate(&branch)
-			api := &fakeWebsite{branchPage: &website.BranchPage{Items: []website.Branch{branch}}}
-			handler, err := NewHandler(api, testConfig(1024))
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches", nil)
-			request.Header.Set("Authorization", "Bearer user-secret")
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusBadGateway {
-				t.Fatalf("status=%d, want %d; body=%s", response.Code, http.StatusBadGateway, response.Body.String())
-			}
-		})
-	}
-}
-
-func TestListBranchesReturnsEmptyArraysForUnconfiguredCollections(t *testing.T) {
-	branchAPI := &fakeWebsite{branchPage: &website.BranchPage{}}
-	handler, err := NewHandler(branchAPI, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches", nil)
-	request.Header.Set("Authorization", "Bearer user-secret")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || response.Body.String() != "{\"items\":[]}\n" {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-
-	branchPage, err := (&fakeWebsite{}).ListBranches(context.Background())
-	if err != nil || len(branchPage.Items) == 0 {
-		t.Fatalf("load test branch: page=%+v error=%v", branchPage, err)
-	}
-	branch := branchPage.Items[0]
-	branch.CORSOrigins = nil
-	branchAPI = &fakeWebsite{branchPage: &website.BranchPage{Items: []website.Branch{branch}}}
-	handler, err = NewHandler(branchAPI, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches", nil)
-	request.Header.Set("Authorization", "Bearer user-secret")
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	var page website.BranchPage
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || len(page.Items) != 1 || page.Items[0].CORSOrigins == nil {
-		t.Fatalf("branch list must contain an empty CORS array: body=%s error=%v", response.Body.String(), err)
-	}
-}
-
-func branchStringPointer(value string) *string {
-	return &value
-}
-
-func TestListBranchesRejectsDuplicateConfiguredBranchIDs(t *testing.T) {
-	branchPage, err := (&fakeWebsite{}).ListBranches(context.Background())
-	if err != nil || len(branchPage.Items) == 0 {
-		t.Fatalf("load test branch: page=%+v error=%v", branchPage, err)
-	}
-	branch := branchPage.Items[0]
-	api := &fakeWebsite{branchPage: &website.BranchPage{Items: []website.Branch{branch, branch}}}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches", nil)
-	request.Header.Set("Authorization", "Bearer user-secret")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadGateway {
-		t.Fatalf("status=%d, want %d; body=%s", response.Code, http.StatusBadGateway, response.Body.String())
-	}
-}
-
-func TestAssignBranchUsesExplicitBranchAndSnapshotRevisions(t *testing.T) {
-	api := &fakeWebsite{}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/branches/11111111-1111-4111-8111-111111111111/snapshot", strings.NewReader(`{"snapshot_id":"22222222-2222-4222-8222-222222222222","expected_revision":4,"expected_snapshot_revision":9}`))
-	request.Header.Set("Authorization", "Bearer user-secret")
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || api.branchCalls != 1 || api.branchInput.BranchID != "11111111-1111-4111-8111-111111111111" ||
-		api.branchInput.SnapshotID != "22222222-2222-4222-8222-222222222222" || api.branchInput.ExpectedRevision != 4 || api.branchInput.ExpectedSnapshotRevision != 9 {
-		t.Fatalf("status=%d calls=%d input=%+v body=%s", response.Code, api.branchCalls, api.branchInput, response.Body.String())
-	}
-	if response.Header().Get("ETag") != `"5"` {
-		t.Fatalf("ETag=%q, want revision 5", response.Header().Get("ETag"))
-	}
-}
-
-func TestAssignBranchRejectsMissingOrInvalidRevisionBeforeEngineCall(t *testing.T) {
-	api := &fakeWebsite{}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, body := range []string{
-		`{"snapshot_id":"22222222-2222-4222-8222-222222222222","expected_snapshot_revision":9}`,
-		`{"snapshot_id":"22222222-2222-4222-8222-222222222222","expected_revision":0,"expected_snapshot_revision":9}`,
-		`{"snapshot_id":"22222222-2222-4222-8222-222222222222","expected_revision":4,"expected_snapshot_revision":-1}`,
-	} {
-		request := httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/branches/11111111-1111-4111-8111-111111111111/snapshot", strings.NewReader(body))
-		request.Header.Set("Authorization", "Bearer user-secret")
-		request.Header.Set("Content-Type", "application/json")
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusBadRequest || api.branchCalls != 0 {
-			t.Fatalf("body=%s status=%d calls=%d", body, response.Code, api.branchCalls)
-		}
-	}
-}
-
-func TestCookieBranchAssignmentRequiresOriginAndCSRFBeforeEngineCall(t *testing.T) {
-	api := &fakeWebsite{}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/branches/11111111-1111-4111-8111-111111111111/snapshot", strings.NewReader(`{"snapshot_id":"22222222-2222-4222-8222-222222222222","expected_revision":4,"expected_snapshot_revision":9}`))
-	request.Header.Set("Content-Type", "application/json")
-	request.AddCookie(&http.Cookie{Name: adminhttpauth.SessionCookieName, Value: "ss_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))})
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden || api.branchCalls != 0 || api.authenticated {
-		t.Fatalf("cookie write without Origin/CSRF: status=%d calls=%d authenticated=%v", response.Code, api.branchCalls, api.authenticated)
-	}
-}
-
-func TestAssignBranchFailsClosedIfEngineReturnsAnotherSnapshot(t *testing.T) {
-	api := &fakeWebsite{wrongAssignedSnapshot: true}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/branches/11111111-1111-4111-8111-111111111111/snapshot", strings.NewReader(`{"snapshot_id":"22222222-2222-4222-8222-222222222222","expected_revision":4,"expected_snapshot_revision":9}`))
-	request.Header.Set("Authorization", "Bearer user-secret")
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadGateway || api.branchCalls != 1 {
-		t.Fatalf("status=%d calls=%d body=%s", response.Code, api.branchCalls, response.Body.String())
-	}
-}
-
-func TestListBranchEventsUsesConfiguredPagination(t *testing.T) {
-	api := &fakeWebsite{}
-	config := testConfig(1024)
-	config.DefaultPageSize, config.MaxPageSize = 7, 10
-	handler, err := NewHandler(api, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches/11111111-1111-4111-8111-111111111111/events?cursor=opaque&limit=9", nil)
-	request.Header.Set("Authorization", "Bearer user-secret")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || api.eventCalls != 1 || api.eventBranchID != "11111111-1111-4111-8111-111111111111" || api.eventCursor != "opaque" || api.eventLimit != 9 {
-		t.Fatalf("status=%d calls=%d branch=%q cursor=%q limit=%d", response.Code, api.eventCalls, api.eventBranchID, api.eventCursor, api.eventLimit)
-	}
-}
-
-func TestListBranchEventsRejectsMalformedEventRecords(t *testing.T) {
-	branchID := "11111111-1111-4111-8111-111111111111"
-	valid := website.BranchEvent{
-		ID: "44444444-4444-4444-8444-444444444444", BranchID: branchID, SnapshotID: "22222222-2222-4222-8222-222222222222",
-		SnapshotName: "Homepage", SnapshotSequence: 2, Action: "assigned", CreatedAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC),
-	}
-	cases := []struct {
-		name   string
-		mutate func(*website.BranchEvent)
-	}{
-		{name: "invalid event ID", mutate: func(event *website.BranchEvent) { event.ID = "event id" }},
-		{name: "wrong branch", mutate: func(event *website.BranchEvent) { event.BranchID = "55555555-5555-4555-8555-555555555555" }},
-		{name: "control character in snapshot name", mutate: func(event *website.BranchEvent) { event.SnapshotName = "Homepage\nadmin" }},
-		{name: "missing timestamp", mutate: func(event *website.BranchEvent) { event.CreatedAt = time.Time{} }},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			event := valid
-			testCase.mutate(&event)
-			api := &fakeWebsite{eventPage: &website.BranchEventPage{Items: []website.BranchEvent{event}}}
-			handler, err := NewHandler(api, testConfig(1024))
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/branches/"+branchID+"/events", nil)
-			request.Header.Set("Authorization", "Bearer user-secret")
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusBadGateway {
-				t.Fatalf("status=%d, want %d; body=%s", response.Code, http.StatusBadGateway, response.Body.String())
-			}
-		})
-	}
-}
-
 func TestCookieWriteRequiresExactOriginAndCSRF(t *testing.T) {
 	api := &fakeWebsite{}
 	handler, err := NewHandler(api, testConfig(1024))
@@ -680,19 +592,26 @@ func TestListSnapshotsUsesValidatedSiteFilterAndConfiguredPagination(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?site_id=11111111-1111-4111-8111-111111111111&cursor=next-page", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?site_id=11111111-1111-4111-8111-111111111111&page_id=home&cursor=next-page", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || api.snapshotSiteID != "11111111-1111-4111-8111-111111111111" || api.snapshotCursor != "next-page" || api.snapshotLimit != 17 {
+	if response.Code != http.StatusOK || api.snapshotSiteID != "11111111-1111-4111-8111-111111111111" || api.snapshotPageID != "22222222-2222-4222-8222-222222222222" || api.snapshotCursor != "next-page" || api.snapshotLimit != 17 {
 		t.Fatalf("status=%d site=%q cursor=%q limit=%d body=%s", response.Code, api.snapshotSiteID, api.snapshotCursor, api.snapshotLimit, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?site_id=not-a-uuid", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?site_id=not%20a%20valid%20id", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid site filter status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?page_id=bad%20page", nil)
+	request.Header.Set("Authorization", "Bearer user-secret")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid page filter status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -702,7 +621,7 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := `{"site_id":"33333333-3333-4333-8333-333333333333","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":3,"pages":[],"route_tree":{"id":"root","type":"site","children":[]}},"metadata":{"format_version":1,"site_name":"Example"},"design_system":{"formatVersion":2,"groups":[],"baseTokens":[],"featureValues":{},"breakpoints":[],"fonts":[]}}}`
+	body := `{"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":3,"page":{"placements":[]}},"metadata":{"format_version":1,"site_name":"Example"}}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
@@ -717,9 +636,9 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 	request.Header.Set("Idempotency-Key", "create-snapshot-request-0001")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated || api.createSnapshotCalls != 1 || api.createSnapshotInput.SiteID != "33333333-3333-4333-8333-333333333333" ||
+	if response.Code != http.StatusCreated || api.createSnapshotCalls != 1 || api.createSnapshotInput.SiteID != "33333333-3333-4333-8333-333333333333" || api.createSnapshotInput.PageID != "22222222-2222-4222-8222-222222222222" ||
 		api.createSnapshotInput.Name != "Main" || api.createSnapshotInput.ExpectedRevision != 0 || api.createSnapshotInput.ExpectedContentRevision != 0 || api.createSnapshotInput.IdempotencyKey != "create-snapshot-request-0001" ||
-		len(api.createSnapshotInput.Payload.Config) == 0 || len(api.createSnapshotInput.Payload.Metadata) == 0 || len(api.createSnapshotInput.Payload.DesignSystem) == 0 {
+		len(api.createSnapshotInput.Payload.Config) == 0 || len(api.createSnapshotInput.Payload.Metadata) == 0 || api.createSnapshotInput.PageID != "22222222-2222-4222-8222-222222222222" {
 		t.Fatalf("status=%d calls=%d input=%+v body=%s", response.Code, api.createSnapshotCalls, api.createSnapshotInput, response.Body.String())
 	}
 	if response.Header().Get("Location") != "/api/v2/admin/sites/snapshots/22222222-2222-4222-8222-222222222222" {
@@ -739,7 +658,7 @@ func TestCreateChildSnapshotRequiresBothParentRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := `"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","payload":{"config":{"format_version":3},"metadata":{"format_version":1},"design_system":{"formatVersion":2}}`
+	base := `"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","payload":{"config":{"format_version":3},"metadata":{"format_version":1}}`
 	for _, revisions := range []string{`"expected_revision":0,"expected_content_revision":8`, `"expected_revision":4,"expected_content_revision":-1`} {
 		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader("{"+base+","+revisions+"}"))
 		request.Header.Set("Authorization", "Bearer user-secret")
@@ -778,7 +697,7 @@ func TestCreateChildSnapshotFailsClosedWithoutWorkflowBeforePersisting(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := `{"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","expected_revision":4,"expected_content_revision":8,"payload":{"config":{},"metadata":{},"design_system":{}}}`
+	body := `{"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","expected_revision":4,"expected_content_revision":8,"payload":{"config":{},"metadata":{}}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
@@ -787,6 +706,65 @@ func TestCreateChildSnapshotFailsClosedWithoutWorkflowBeforePersisting(t *testin
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || api.createSnapshotCalls != 0 {
 		t.Fatalf("status=%d created=%d body=%s; expected fail-closed before persistence", response.Code, api.createSnapshotCalls, response.Body.String())
+	}
+}
+
+func TestSiteModelRoutesUseTypedSiteScopedContract(t *testing.T) {
+	api := &fakeWebsite{}
+	handler, err := NewHandler(api, testConfig(4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteID := "33333333-3333-4333-8333-333333333333"
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/"+siteID+"/model", nil)
+	request.Header.Set("Authorization", "Bearer user-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || api.modelGetCalls != 1 || api.modelSiteID != siteID || response.Header().Get("ETag") != `"2"` {
+		t.Fatalf("GET status=%d calls=%d site=%q ETag=%q body=%s", response.Code, api.modelGetCalls, api.modelSiteID, response.Header().Get("ETag"), response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/"+siteID+"/model", strings.NewReader(`{"expected_revision":2,"data_model":{"formatVersion":1,"entities":[]}}`))
+	request.Header.Set("Authorization", "Bearer user-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || api.modelSaveCalls != 1 || api.modelSaveRequest.SiteID != siteID || api.modelSaveRequest.ExpectedRevision != 2 || string(api.modelSaveRequest.DataModel) != `{"formatVersion":1,"entities":[]}` || response.Header().Get("ETag") != `"3"` {
+		t.Fatalf("PUT status=%d calls=%d input=%+v ETag=%q body=%s", response.Code, api.modelSaveCalls, api.modelSaveRequest, response.Header().Get("ETag"), response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/"+siteID+"/model", strings.NewReader(`{"site_id":"44444444-4444-4444-8444-444444444444","expected_revision":2,"data_model":{"formatVersion":1,"entities":[]}}`))
+	request.Header.Set("Authorization", "Bearer user-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || api.modelSaveCalls != 1 {
+		t.Fatalf("client-selected site ID status=%d calls=%d body=%s", response.Code, api.modelSaveCalls, response.Body.String())
+	}
+}
+
+func TestPagePlacementProjectionIsReadOnlyAndBoundToPathScope(t *testing.T) {
+	api := &fakeWebsite{}
+	handler, err := NewHandler(api, testConfig(4096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteID := "33333333-3333-4333-8333-333333333333"
+	snapshotID := "22222222-2222-4222-8222-222222222222"
+	path := "/api/v2/admin/sites/" + siteID + "/pages/home/snapshots/" + snapshotID + "/content-projection"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer user-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || api.projectionCalls != 1 || api.projectionSiteID != siteID || api.projectionPageID != "22222222-2222-4222-8222-222222222222" || api.projectionSnapshotID != snapshotID {
+		t.Fatalf("GET status=%d calls=%d scope=(%q,%q,%q) body=%s", response.Code, api.projectionCalls, api.projectionSiteID, api.projectionPageID, api.projectionSnapshotID, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"data_model":{"formatVersion":1,"entities":[]},"placements":[]}`))
+	request.Header.Set("Authorization", "Bearer user-secret")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed || api.projectionCalls != 1 {
+		t.Fatalf("client-submitted projection status=%d calls=%d body=%s", response.Code, api.projectionCalls, response.Body.String())
 	}
 }
 
@@ -809,21 +787,6 @@ func TestGetSnapshotReturnsRevisionAndPayload(t *testing.T) {
 	}
 }
 
-func TestGetSnapshotDesignSystemUsesWebsiteContract(t *testing.T) {
-	api := &fakeWebsite{}
-	handler, err := NewHandler(api, testConfig(1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots/22222222-2222-4222-8222-222222222222/design-system", nil)
-	request.Header.Set("Authorization", "Bearer user-secret")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"4"` || !strings.Contains(response.Body.String(), `"feature_tokens":[]`) {
-		t.Fatalf("status=%d etag=%q body=%s", response.Code, response.Header().Get("ETag"), response.Body.String())
-	}
-}
-
 func TestCreateSnapshotRejectsDuplicateJSONKeysAtEveryDepth(t *testing.T) {
 	api := &fakeWebsite{}
 	handler, err := NewHandler(api, testConfig(4096))
@@ -831,8 +794,8 @@ func TestCreateSnapshotRejectsDuplicateJSONKeysAtEveryDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, body := range []string{
-		`{"site_id":"33333333-3333-4333-8333-333333333333","site_id":"44444444-4444-4444-8444-444444444444","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":3},"metadata":{},"design_system":{}}}`,
-		`{"site_id":"33333333-3333-4333-8333-333333333333","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":2,"format_version":3},"metadata":{},"design_system":{}}}`,
+		`{"site_id":"33333333-3333-4333-8333-333333333333","site_id":"44444444-4444-4444-8444-444444444444","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":3},"metadata":{}}}`,
+		`{"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":2,"format_version":3},"metadata":{}}}`,
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer user-secret")

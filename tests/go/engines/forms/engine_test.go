@@ -94,8 +94,35 @@ func TestFormsReadsRequireDirectReadGroupAccess(t *testing.T) {
 	if _, err := engine.ListSchemas(ctx, "snapshot-a", "", 10); !errors.Is(err, formapi.ErrForbidden) {
 		t.Fatalf("read without Forms group access = %v, want forbidden", err)
 	}
-	if len(authorization.checkedGroups) != 1 || authorization.checkedGroups[0] != "forms" || authorization.checkedLevel != core.AccessLevelRead {
+	if len(authorization.checkedGroups) != 1 || authorization.checkedGroups[0] != formapi.SchemaAccessGroup || authorization.checkedLevel != core.AccessLevelRead {
 		t.Fatalf("Forms read authorization did not require direct forms-group level 1: %#v", authorization)
+	}
+}
+
+func TestSchemaAndSubmissionPermissionsAreIndependent(t *testing.T) {
+	engine, data, authorization, _ := newEngine(t, core.AccessLevelNone, nil)
+	authorization.levels = map[string]core.AccessLevel{
+		formapi.SchemaAccessGroup:     core.AccessLevelWrite,
+		formapi.SubmissionAccessGroup: core.AccessLevelNone,
+	}
+	ctx := authenticatedContext(t, engine)
+	if _, err := engine.SaveSchema(ctx, formapi.SaveSchemaRequest{
+		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}},
+	}); err != nil {
+		t.Fatalf("schema operator could not save a schema: %v", err)
+	}
+	seedSubmission(t, data, "snapshot-a", "entry-a", submissionpkg.PayloadV1{ID: "entry-a", FormID: "form-a", SchemaVersion: 1, State: "new"})
+	if _, err := engine.ListSubmissions(ctx, formapi.ListSubmissionsRequest{SnapshotID: "snapshot-a", Limit: 10}); !errors.Is(err, formapi.ErrForbidden) {
+		t.Fatalf("schema operator could read submissions: %v", err)
+	}
+
+	authorization.levels[formapi.SchemaAccessGroup] = core.AccessLevelNone
+	authorization.levels[formapi.SubmissionAccessGroup] = core.AccessLevelRead
+	if _, err := engine.ListSchemas(ctx, "snapshot-a", "", 10); !errors.Is(err, formapi.ErrForbidden) {
+		t.Fatalf("submission operator could read schemas: %v", err)
+	}
+	if _, err := engine.GetSubmission(ctx, "snapshot-a", "entry-a"); err != nil {
+		t.Fatalf("submission operator could not read a response: %v", err)
 	}
 }
 
@@ -331,6 +358,7 @@ func (fakeSessions) RevokeSession(context.Context, string) error { return nil }
 
 type fakeAuthorization struct {
 	level         core.AccessLevel
+	levels        map[string]core.AccessLevel
 	checkedGroups []string
 	checkedLevel  core.AccessLevel
 }
@@ -341,7 +369,11 @@ func (authorization *fakeAuthorization) Authenticate(context.Context, string) (c
 func (authorization *fakeAuthorization) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, required core.AccessLevel) error {
 	authorization.checkedGroups = append([]string(nil), groups...)
 	authorization.checkedLevel = required
-	if authorization.level < required {
+	level := authorization.level
+	if len(groups) == 1 && authorization.levels != nil {
+		level = authorization.levels[groups[0]]
+	}
+	if level < required {
 		return core.ErrForbidden
 	}
 	return nil

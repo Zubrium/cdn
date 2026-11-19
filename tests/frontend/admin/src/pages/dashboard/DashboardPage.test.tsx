@@ -19,7 +19,7 @@ describe("modular admin dashboard", () => {
 
   it("shows modules from direct group access without requesting a legacy overview", () => {
     const rendered = renderPage({
-      group_access: { content: 1, files: 1, features: 2, forms: 0 },
+      group_access: { content: 1, files: 1, features: 2, forms_schemas: 0, forms_submissions: 0 },
       can_manage_administrators: false,
     });
 

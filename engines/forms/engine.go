@@ -133,7 +133,7 @@ func (engine *Engine) authenticatedContext(ctx context.Context, session core.Ses
 	return context.WithValue(ctx, authenticatedContextKey{}, authenticatedState{owner: engine, session: session, principal: principal}), nil
 }
 
-func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) (authenticatedState, error) {
+func (engine *Engine) authorize(ctx context.Context, group string, required core.AccessLevel) (authenticatedState, error) {
 	if engine == nil || ctx == nil || nilCapability(engine.authorization) {
 		return authenticatedState{}, formapi.ErrUnauthorized
 	}
@@ -141,14 +141,14 @@ func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) 
 	if !ok || state.owner != engine || state.principal.ID == "" || !state.principal.Active {
 		return authenticatedState{}, formapi.ErrUnauthorized
 	}
-	if err := engine.authorization.RequireGroupLevel(ctx, state.session, []string{"forms"}, required); err != nil {
+	if err := engine.authorization.RequireGroupLevel(ctx, state.session, []string{group}, required); err != nil {
 		return authenticatedState{}, mapCoreError(err)
 	}
 	return state, nil
 }
 
 func (engine *Engine) ListSchemas(ctx context.Context, snapshotID, cursor string, limit int) (formapi.SchemaPage, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.SchemaPage{}, err
 	}
 	after, err := decodeCursor(cursor)
@@ -168,7 +168,7 @@ func (engine *Engine) ListSchemas(ctx context.Context, snapshotID, cursor string
 }
 
 func (engine *Engine) GetSchema(ctx context.Context, snapshotID, schemaID string) (formapi.Schema, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.Schema{}, err
 	}
 	schema, revision, err := engine.schemas.Get(ctx, snapshotID, schemaID)
@@ -179,7 +179,7 @@ func (engine *Engine) GetSchema(ctx context.Context, snapshotID, schemaID string
 }
 
 func (engine *Engine) SaveSchema(ctx context.Context, request formapi.SaveSchemaRequest) (formapi.Schema, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelWrite); err != nil {
 		return formapi.Schema{}, err
 	}
 	schema, revision, err := engine.schemas.Save(ctx, request.SnapshotID, request.SchemaID, request.Key, request.Fields, request.ExpectedRevision)
@@ -289,7 +289,7 @@ func (engine *Engine) RunVisitorSessionCleanup(ctx context.Context, interval tim
 }
 
 func (engine *Engine) ListSubmissions(ctx context.Context, request formapi.ListSubmissionsRequest) (formapi.SubmissionPage, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.SubmissionPage{}, err
 	}
 	after, err := decodeCursor(request.Cursor)
@@ -312,7 +312,7 @@ func (engine *Engine) ListSubmissions(ctx context.Context, request formapi.ListS
 }
 
 func (engine *Engine) GetSubmission(ctx context.Context, snapshotID, id string) (formapi.Submission, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.Submission{}, err
 	}
 	submission, revision, err := engine.submissions.Get(ctx, snapshotID, id)
@@ -326,7 +326,7 @@ func (engine *Engine) GetSubmission(ctx context.Context, snapshotID, id string) 
 }
 
 func (engine *Engine) SetSubmissionStatus(ctx context.Context, request formapi.SetSubmissionStatusRequest) (formapi.Submission, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelWrite); err != nil {
 		return formapi.Submission{}, err
 	}
 	submission, revision, err := engine.submissions.SetState(ctx, request.SnapshotID, request.SubmissionID, request.Status, request.ExpectedRevision)
@@ -340,7 +340,7 @@ func (engine *Engine) SetSubmissionStatus(ctx context.Context, request formapi.S
 }
 
 func (engine *Engine) DeleteSubmission(ctx context.Context, request formapi.DeleteSubmissionRequest) error {
-	if _, err := engine.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelWrite); err != nil {
 		return err
 	}
 	if err := engine.submissions.Delete(ctx, engine.fileSession, request.SnapshotID, request.SubmissionID, request.ExpectedRevision); err != nil {

@@ -1,8 +1,8 @@
 # Приёмочный набор Core v2
 
-> **Исторический QA документ.** Пункты и результаты ниже относятся к single-schema Core до переноса в DDD и до Core-owned Coordinator. Они не подтверждают новую схему, новые пакеты или текущую реализацию. Актуальные критерии — [SPEC-core-architecture.md](../spec/SPEC-core-architecture.md), [SPEC-coordinator-platform.md](../spec/SPEC-coordinator-platform.md) и [ACCEPTANCE-MATRIX.md](../tests/ACCEPTANCE-MATRIX.md). Цель текущего прохода — покрыть тестами не менее 60% согласованных наборов входных данных для каждого модуля; текущий статус фиксируется только в acceptance matrix после проверки.
+> **Исторический QA документ.** Пункты и результаты ниже относятся к single-schema Core до переноса в DDD и до Core-owned Coordinator. Они не подтверждают новую схему, новые пакеты или текущую реализацию. Актуальные критерии — [SPEC-core-architecture.md](../spec/core/SPEC-core-architecture.md), [SPEC-coordinator-platform.md](../spec/architecture/SPEC-coordinator-platform.md) и [ACCEPTANCE-MATRIX.md](../tests/ACCEPTANCE-MATRIX.md). Цель текущего прохода — покрыть тестами не менее 60% согласованных наборов входных данных для каждого модуля; текущий статус фиксируется только в acceptance matrix после проверки.
 
-Нормативные требования старого Core описаны в [SPEC-core-v2.md](../spec/SPEC-core-v2.md) и прежней версии [SPEC-module-data.md](../spec/SPEC-module-data.md). Нижеследующие команды, цифры и результаты сохраняются только как исторические свидетельства; их нельзя переносить на новую baseline без повторного прогона.
+Нормативные требования старого Core описаны в [SPEC-core-v2.md](../spec/core/history/SPEC-core-v2.md) и прежней версии [SPEC-module-data.md](../spec/core/SPEC-module-data.md). Нижеследующие команды, цифры и результаты сохраняются только как исторические свидетельства; их нельзя переносить на новую baseline без повторного прогона.
 
 ## Покрываемые сценарии
 

@@ -79,6 +79,7 @@ export type WebsiteSnapshotState = "provisioning" | "ready" | "failed";
 export interface WebsiteSnapshot {
   id: string;
   site_id: string;
+  page_id: string;
   parent_id?: string;
   parent_name?: string;
   parent_sequence?: number;
@@ -99,7 +100,6 @@ export interface WebsiteSnapshot {
 export interface WebsiteSnapshotPayload {
   config: SiteConfig;
   metadata: SiteMetadata;
-  design_system: JsonObject;
 }
 
 export interface WebsiteSnapshotPage {
@@ -107,32 +107,41 @@ export interface WebsiteSnapshotPage {
   next_cursor: string | null;
 }
 
-export interface WebsiteBranch {
+export interface WebsitePage {
   id: string;
-  name: string;
   site_id: string;
-  listen_address: string;
-  cors_origins: string[];
-  indexable: boolean;
-  snapshot_id: string | null;
-  revision: number;
-  enabled: boolean;
-  updated_at: string;
-}
-
-export interface WebsiteBranchEvent {
-  id: string;
-  branch_id: string;
-  snapshot_id: string;
-  snapshot_name: string;
-  snapshot_sequence: number;
-  action: "assigned";
+  name: string;
+  latest_snapshot_id: string;
+  latest_snapshot_state: WebsiteSnapshotState;
   created_at: string;
 }
 
-export interface WebsiteBranchEventPage {
-  items: WebsiteBranchEvent[];
-  next_cursor: string | null;
+export interface WebsitePagePage {
+  items: WebsitePage[];
+  next_cursor?: string | null;
+}
+
+export interface WebsitePageTemplateConfiguration {
+  schema_version: 1;
+  payload: WebsiteSnapshotPayload;
+  feature_pins: Record<string, string>;
+  placement_slots?: Array<{ id: string; label: string }>;
+}
+
+export interface WebsitePageTemplate {
+  id: string;
+  site_id: string;
+  name: string;
+  description: string;
+  revision: number;
+  digest: string;
+  configuration: WebsitePageTemplateConfiguration;
+  updated_at: string;
+}
+
+export interface WebsitePageTemplatePage {
+  items: WebsitePageTemplate[];
+  next_cursor?: string | null;
 }
 
 export interface WebsiteBuild {
@@ -189,7 +198,6 @@ export interface RouterCoreFileRouteTarget {
 export interface RouterStaticSiteArtifactRouteTarget {
   kind: "static-site-artifact";
   file_id: string;
-  fallback_enabled?: boolean;
 }
 
 export type RouterRouteTargetFile = RouterCoreFileRouteTarget | RouterStaticSiteArtifactRouteTarget;
@@ -368,7 +376,6 @@ export interface FeatureManifest {
   slots: string[];
   arguments: JsonObject;
   dataInputs: DataInputPort[];
-  requests?: FeatureRequestSlot[];
 }
 
 export type DataModelFieldType = "text" | "longText" | "integer" | "number" | "boolean" | "date" | "dateTime" | "url" | "email" | "enum" | "media";
@@ -439,52 +446,12 @@ export interface DataModel {
   positions?: Record<string, { x: number; y: number }>;
 }
 
-export type BackendRequestValueType = "string" | "integer" | "number" | "boolean" | "array";
-export type BackendRequestSourceKind = "route" | "query" | "argument" | "constant";
-export type BackendRequestDestinationKind = "path" | "query" | "body" | "header";
-
-export interface FeatureRequestDestination {
-  kind: BackendRequestDestinationKind;
-  key: string;
-  label: string;
-  type: BackendRequestValueType;
-  itemsType?: "string" | "integer" | "number" | "boolean";
-  sources: BackendRequestSourceKind[];
-  required?: boolean;
-}
-
-export interface FeatureRequestSlot {
-  key: string;
-  label: string;
-  argument: string;
-  pathLabel?: string;
-  defaultPath: string;
-  destinations: FeatureRequestDestination[];
-}
-
-export interface PublicBackend {
-  id: string;
-  name: string;
-  baseUrl: string;
-}
-
-export type PublicConstantType = "string" | "integer" | "number" | "boolean" | "string-array";
-export interface PublicSnapshotConstant {
-  key: string;
-  label: string;
-  type: PublicConstantType;
-  value: JsonValue;
-}
-
-export interface BackendValueBinding {
-  destination: { kind: BackendRequestDestinationKind; key: string };
-  source: { kind: BackendRequestSourceKind; key: string };
-}
-
-export interface PlacementBackendRequest {
-  backendId?: string;
-  path: string;
-  bindings?: BackendValueBinding[];
+export interface SiteContentSchema {
+  version: 1;
+  siteId: string;
+  modelRevision: number;
+  digest: string;
+  dataModel: DataModel;
 }
 
 export interface FeatureBuild {
@@ -514,7 +481,6 @@ export interface SitePlacement {
   arguments?: Record<string, FeatureArgumentBinding>;
   detailLink?: { routeId: string; field: string; pathTemplate: string };
   dataBindings?: DataInputBinding[];
-  backendRequests?: Record<string, PlacementBackendRequest>;
 }
 
 export interface SitePage {
@@ -537,12 +503,16 @@ export interface RouteTreeNode {
   children?: RouteTreeNode[];
 }
 
+/** Wire contract for one immutable Website page snapshot. */
 export interface SiteConfig {
- features?: {featureKey: string; version: string}[];
- systemPages?: Record<string,string>;
- backends?: PublicBackend[];
- publicConstants?: PublicSnapshotConstant[];
-  dataModel?: DataModel;
+  format_version: 2 | 3;
+  pages: [SitePage];
+}
+
+/** Local editor draft; Router topology and Content data models are not serialized here. */
+export interface SiteEditorDraft {
+  features?: { featureKey: string; version: string }[];
+  systemPages?: Record<string, string>;
   formatVersion: 2 | 3;
   pages: SitePage[];
   routeTree: RouteTreeNode;
@@ -552,7 +522,8 @@ export interface SiteSnapshot {
   state: WebsiteSnapshotState;
   contentRevision?: number;
   id: string;
-  siteId?: string;
+  siteId: string;
+  pageId: string;
   revision?: number;
   parentSnapshotId?: string;
   parentSequence?: number;
@@ -644,7 +615,14 @@ export interface ModelContentSelection {
 }
 
 export interface ModelContentWorkspace {
-  snapshot: Pick<WebsiteSnapshot, "id">;
+  snapshot: Pick<WebsiteSnapshot, "id" | "site_id" | "page_id">;
+  siteId: string;
+  pageSnapshotId: string;
+  pageId: string;
+  modelRevision: number;
+  modelDigest: string;
+  pageRevision: number;
+  pageDigest: string;
   dataModel: DataModel | null;
   revision: number;
   publishedRevision: number;

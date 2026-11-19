@@ -52,6 +52,61 @@ func TestInspectReturnsDigestOfUncompressedBytes(t *testing.T) {
 	}
 }
 
+func TestInspectRejectsPortablePathCollisions(t *testing.T) {
+	for _, entries := range [][]string{
+		{"assets", "assets/app.js"},
+		{"assets/app.js", "assets"},
+		{"assets/App.js", "assets/app.js"},
+		{"A/file.js", "a/other.js"},
+	} {
+		t.Run(entries[0]+"_and_"+entries[1], func(t *testing.T) {
+			data := zipFixture(t, entries...)
+			limits := Limits{MaxArchiveBytes: 4096, MaxEntries: 10, MaxEntryBytes: 100, MaxExpandedBytes: 1000, MaxCompressionRatio: 100}
+			if files, err := Inspect(context.Background(), bytes.NewReader(data), int64(len(data)), limits); err == nil {
+				t.Fatalf("ambiguous archive paths returned files: %+v", files)
+			}
+		})
+	}
+}
+
+func TestRatioExceededUsesExactRatio(t *testing.T) {
+	for _, tc := range []struct {
+		uncompressed uint64
+		compressed   uint64
+		maximum      uint64
+		want         bool
+	}{
+		{0, 0, 1, false},
+		{2, 2, 1, false},
+		{3, 2, 1, true},
+		{2, 1, 2, false},
+		{3, 1, 2, true},
+		{1, 0, 100, true},
+	} {
+		if got := ratioExceeded(tc.uncompressed, tc.compressed, tc.maximum); got != tc.want {
+			t.Errorf("ratioExceeded(%d, %d, %d)=%v, want %v", tc.uncompressed, tc.compressed, tc.maximum, got, tc.want)
+		}
+	}
+}
+
+func TestInspectRejectsDirectoryOnlyArchive(t *testing.T) {
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	header := &zip.FileHeader{Name: "assets/"}
+	header.SetMode(fs.ModeDir | 0o755)
+	if _, err := writer.CreateHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+	limits := Limits{MaxArchiveBytes: 4096, MaxEntries: 10, MaxEntryBytes: 100, MaxExpandedBytes: 1000, MaxCompressionRatio: 100}
+	if files, err := Inspect(context.Background(), bytes.NewReader(data), int64(len(data)), limits); err == nil {
+		t.Fatalf("directory-only archive accepted: %+v", files)
+	}
+}
+
 func TestInspectRejectsExcessiveCompressionRatio(t *testing.T) {
 	var buf bytes.Buffer
 	writer := zip.NewWriter(&buf)

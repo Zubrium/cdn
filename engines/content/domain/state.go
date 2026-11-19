@@ -8,17 +8,30 @@ import (
 const PayloadVersion = 1
 
 type Aggregate struct {
-	SnapshotID        string           `json:"snapshot_id"`
-	Revision          int64            `json:"revision"`
-	PublishedRevision int64            `json:"published_revision"`
-	Records           []Record         `json:"records"`
-	Selections        []Selection      `json:"selections"`
-	LastMutation      *MutationReceipt `json:"last_mutation,omitempty"`
+	SnapshotID        string                    `json:"snapshot_id"`
+	Revision          int64                     `json:"revision"`
+	PublishedRevision int64                     `json:"published_revision"`
+	Records           []Record                  `json:"records"`
+	Selections        []Selection               `json:"selections,omitempty"`
+	PageSelections          map[string][]Selection `json:"page_selections,omitempty"`
+	PublishedPageSelections map[string][]Selection `json:"published_page_selections,omitempty"`
+	PageSelectionIDs        []string               `json:"page_selection_ids,omitempty"`
+	PageSelectionRevisions map[string]int64        `json:"-"`
+	PageMutationReceipts    map[string]*MutationReceipt `json:"-"`
+	ChangedPageSelectionIDs []string               `json:"-"`
+	LastMutation       *MutationReceipt        `json:"last_mutation,omitempty"`
 }
 
 type StoredWorkspace struct {
 	Aggregate     Aggregate
 	StoreRevision int64
+}
+
+type StoredPageSelections struct {
+	Draft        []Selection
+	Published    []Selection
+	StoreRevision int64
+	LastMutation *MutationReceipt
 }
 
 type MutationReceipt struct {
@@ -62,8 +75,15 @@ type CopyReceipt struct {
 
 type WorkspaceView struct {
 	SnapshotID        string            `json:"snapshot_id"`
+	SiteID            string            `json:"site_id"`
+	PageSnapshotID    string            `json:"page_snapshot_id"`
+	ModelRevision     int64             `json:"model_revision"`
+	ModelDigest       string            `json:"model_digest"`
+	PageRevision      int64             `json:"page_revision"`
+	PageDigest        string            `json:"page_digest"`
 	DataModel         json.RawMessage   `json:"data_model"`
 	Revision          int64             `json:"revision"`
+	SelectionRevision int64             `json:"selection_revision"`
 	PublishedRevision int64             `json:"published_revision"`
 	Records           []Record          `json:"records"`
 	Selections        []Selection       `json:"selections"`
@@ -82,10 +102,16 @@ type PlacementView struct {
 }
 
 type Schema struct {
-	State      string
-	DataModel  json.RawMessage
-	Model      DataModel
-	Placements []PlacementView
+	State          string
+	SiteID         string
+	PageSnapshotID string
+	ModelRevision  int64
+	ModelDigest    string
+	PageRevision   int64
+	PageDigest     string
+	DataModel      json.RawMessage
+	Model          DataModel
+	Placements     []PlacementView
 }
 
 type HistorySummary struct {

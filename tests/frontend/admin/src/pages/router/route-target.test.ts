@@ -87,13 +87,8 @@ describe("Router target builder", () => {
     expect(buildRouterTarget({ ...formDraft, formID: formDraft.formID.toUpperCase() }, [operation])).toBeNull();
   });
 
-  it("enables a manifest fallback only for an explicitly configured static artifact", () => {
-    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, fallbackEnabled: true }, [uploadOperation])).toEqual({
-      kind: "static-site-artifact",
-      file_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
-      fallback_enabled: true,
-    });
-    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, fallbackEnabled: false }, [uploadOperation])).toEqual({
+  it("binds a static artifact without a fallback policy", () => {
+    expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" } }, [uploadOperation])).toEqual({
       kind: "static-site-artifact",
       file_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
     });

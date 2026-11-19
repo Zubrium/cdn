@@ -74,7 +74,7 @@ type RoutePage struct {
 }
 
 type CreateRouteRequest struct {
-	BranchID       string      `json:"branch_id"`
+	BranchID       string      `json:"-"`
 	Host           string      `json:"host"`
 	Path           string      `json:"path"`
 	Match          string      `json:"match"`
@@ -94,19 +94,19 @@ type DeleteRouteRequest struct {
 }
 
 type DeliveryRequest struct {
-	BranchID        string
-	Host            string
-	Method          string
-	EscapedPath     string
-	Query           string
-	ContentType     string
-	ContentLength   int64
-	IdempotencyKey  string
-	Body            io.Reader
-	IfNoneMatch     string
-	IfModifiedSince string
-	Range           string
-	IfRange         string
+	BranchID          string
+	Host              string
+	Method            string
+	EscapedPath       string
+	Query             string
+	ContentType       string
+	ContentLength     int64
+	IdempotencyKey    string
+	Body              io.Reader
+	IfNoneMatch       string
+	IfModifiedSince   string
+	Range             string
+	IfRange           string
 	FormSessionTokens map[string]string
 }
 
@@ -123,14 +123,14 @@ type PublicOperationDescriptor struct {
 // PublicOperationRequest contains a normalized request and the server-side
 // route configuration. Cookies and arbitrary HTTP headers are never forwarded.
 type PublicOperationRequest struct {
-	Method         string
-	Host           string
-	EscapedPath    string
-	Query          string
-	ContentType    string
-	ContentLength  int64
-	IdempotencyKey string
-	Body           io.Reader
+	Method            string
+	Host              string
+	EscapedPath       string
+	Query             string
+	ContentType       string
+	ContentLength     int64
+	IdempotencyKey    string
+	Body              io.Reader
 	FormSessionTokens map[string]string
 }
 
@@ -173,7 +173,7 @@ type FormSessionCookieChange struct {
 type Descriptor struct{}
 
 func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.router", Kind: "engine", Version: 1}
+	return platform.ComponentDescriptor{ID: "engine.router", Kind: "engine", Version: 1, AccessGroups: []string{"router_routes"}}
 }
 
 func (Descriptor) Operations() []platform.Operation {

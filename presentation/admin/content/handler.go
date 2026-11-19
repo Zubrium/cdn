@@ -27,13 +27,17 @@ type Config struct {
 
 type Handler struct {
 	api       engine.API
+	schemas   SchemaSnapshots
 	cfg       Config
 	transport *adminhttpauth.Transport
 	mux       *http.ServeMux
 }
 
-func NewHandler(api engine.API, config Config) (*Handler, error) {
-	if nilInterface(api) || config.MaxJSONBytes < 1 || config.MaxJSONBytes > 16<<20 ||
+func NewHandler(api engine.API, schemas SchemaSnapshots, config Config) (*Handler, error) {
+	if nilInterface(api) || nilInterface(schemas) {
+		return nil, errors.New("Content API and schema projection provider are required")
+	}
+	if config.MaxJSONBytes < 1 || config.MaxJSONBytes > 16<<20 ||
 		config.MaxPageSize < 1 || config.MaxPageSize > 500 || config.DefaultPageSize < 1 || config.DefaultPageSize > config.MaxPageSize {
 		return nil, errors.New("invalid Content API configuration")
 	}
@@ -41,7 +45,7 @@ func NewHandler(api engine.API, config Config) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Handler{api: api, cfg: config, transport: transport, mux: http.NewServeMux()}
+	h := &Handler{api: api, schemas: schemas, cfg: config, transport: transport, mux: http.NewServeMux()}
 	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.getWorkspace)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.saveWorkspaceDraft)
 	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots/{snapshotID}/workspace/publish", h.publishWorkspace)
@@ -56,6 +60,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
+func (h *Handler) projections(ctx context.Context, pageSnapshotID string) (engine.Projections, error) {
+	if nilInterface(h.schemas) {
+		return engine.Projections{}, engine.ErrUnavailable
+	}
+	projections, err := h.schemas.GetContentProjections(ctx, pageSnapshotID)
+	if err != nil {
+		return engine.Projections{}, engine.ErrUnavailable
+	}
+	if !projections.VerifyScope(pageSnapshotID) {
+		return engine.Projections{}, engine.ErrUnavailable
+	}
+	return projections, nil
+}
+
 func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
@@ -66,7 +84,12 @@ func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	workspace, err := h.api.GetWorkspace(ctx, snapshotID)
+	projection, err := h.projections(ctx, snapshotID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	workspace, err := h.api.GetWorkspace(ctx, projection)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -99,7 +122,12 @@ func (h *Handler) saveWorkspaceDraft(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	workspace, err := h.api.SaveWorkspaceDraft(ctx, request)
+	projection, err := h.projections(ctx, request.SnapshotID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	workspace, err := h.api.SaveWorkspaceDraft(ctx, projection, request)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -129,7 +157,12 @@ func (h *Handler) publishWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	workspace, err := h.api.PublishWorkspace(ctx, engine.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
+	projection, err := h.projections(ctx, snapshotID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	workspace, err := h.api.PublishWorkspace(ctx, projection, engine.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -156,7 +189,13 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.api.ListHistory(ctx, r.PathValue("snapshotID"), query["cursor"], limit)
+	snapshotID := r.PathValue("snapshotID")
+	projection, err := h.projections(ctx, snapshotID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	page, err := h.api.ListHistory(ctx, projection, query["cursor"], limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -185,7 +224,12 @@ func (h *Handler) restoreHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	workspace, err := h.api.RestoreHistory(ctx, engine.RestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
+	projection, err := h.projections(ctx, snapshotID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	workspace, err := h.api.RestoreHistory(ctx, projection, engine.RestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return

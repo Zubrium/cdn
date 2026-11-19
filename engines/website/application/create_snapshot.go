@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,18 +14,17 @@ import (
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
 
 var snapshotIdempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{16,128}$`)
 
-const (
-	maxSnapshotConfigBytes       = 8 << 20
-	maxSnapshotMetadataBytes     = 1 << 20
-	maxSnapshotDesignSystemBytes = 4 << 20
-)
+const maxSnapshotConfigBytes = 8 << 20
+const maxSnapshotMetadataBytes = 1 << 20
 
 type snapshotCreateFingerprintInput struct {
 	SiteID                  string                     `json:"site_id"`
+	PageID                  string                     `json:"page_id"`
 	ParentID                string                     `json:"parent_id,omitempty"`
 	Name                    string                     `json:"name"`
 	ExpectedRevision        int64                      `json:"expected_revision"`
@@ -44,23 +44,31 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 	if _, exists := s.sites[request.SiteID]; !exists {
 		return websiteapi.Snapshot{}, websiteapi.ErrNotFound
 	}
+	if !identifierPattern.MatchString(request.PageID) {
+		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
+	}
+	pageRecordValue, pageRecord, err := s.loadPage(ctx, request.SiteID, request.PageID)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	request.PageID = pageRecordValue.ID
 	if !validSnapshotName(request.Name) || !snapshotIdempotencyKeyPattern.MatchString(request.IdempotencyKey) ||
-		!validJSONObjectWithin(request.Payload.Config, maxSnapshotConfigBytes) || !validJSONObjectWithin(request.Payload.Metadata, maxSnapshotMetadataBytes) ||
-		!validJSONObjectWithin(request.Payload.DesignSystem, maxSnapshotDesignSystemBytes) {
+		!validJSONObjectWithin(request.Payload.Config, maxSnapshotConfigBytes) || !validJSONObjectWithin(request.Payload.Metadata, maxSnapshotMetadataBytes) {
 		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
 	}
 	if request.ParentID == "" {
-		if request.ExpectedRevision != 0 || request.ExpectedContentRevision != 0 {
-			return websiteapi.Snapshot{}, websiteapi.ErrInvalid
-		}
-	} else {
-		if !snapshotIDPattern.MatchString(request.ParentID) || request.ExpectedRevision < 1 || request.ExpectedContentRevision < 0 {
-			return websiteapi.Snapshot{}, websiteapi.ErrInvalid
-		}
-		request.ParentID = strings.ToLower(request.ParentID)
+		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
 	}
+	if !snapshotIDPattern.MatchString(request.ParentID) || request.ExpectedRevision < 1 || request.ExpectedContentRevision < 0 {
+		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
+	}
+	request.ParentID = strings.ToLower(request.ParentID)
 	featurePins, err := featurePinsFromConfig(request.Payload.Config)
 	if err != nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
+	}
+	page, err := snapshotPageFromConfig(request.Payload.Config)
+	if err != nil || (page.ID != "" && page.ID != request.PageID) {
 		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
 	}
 	fingerprint, err := snapshotCreateFingerprint(request)
@@ -68,19 +76,22 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
 
-	if existing, found, err := s.readSnapshotCreateReceipt(ctx, request.SiteID, request.IdempotencyKey, fingerprint); err != nil {
+	if existing, found, err := s.readSnapshotCreateReceipt(ctx, request.SiteID, request.PageID, request.IdempotencyKey, fingerprint); err != nil {
 		return websiteapi.Snapshot{}, err
 	} else if found {
 		return existing, nil
 	}
-	if s.store.MaxBatchSize() < 3 {
+	if s.store.MaxBatchSize() < 4 {
 		return websiteapi.Snapshot{}, websiteapi.ErrTooLarge
 	}
-	registryRecord, registryState, err := s.loadSiteRegistry(ctx, request.SiteID)
+	if pageRecord.Revision == math.MaxInt64 {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	registryRecord, registryState, err := s.loadSiteRegistry(ctx, request.SiteID, request.PageID)
 	if err != nil {
 		return websiteapi.Snapshot{}, err
 	}
-	registryState.LastSequence, err = s.ensureSiteSequence(ctx, request.SiteID, registryState)
+	registryState.LastSequence, err = s.ensureSiteSequence(ctx, request.SiteID, request.PageID, registryState)
 	if err != nil {
 		return websiteapi.Snapshot{}, err
 	}
@@ -90,7 +101,7 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 
 	var parent *websiteapi.Snapshot
 	if request.ParentID != "" {
-		value, record, err := s.snapshotInSite(ctx, request.SiteID, request.ParentID)
+		value, record, err := s.snapshotInPage(ctx, request.SiteID, request.PageID, request.ParentID)
 		if err != nil {
 			return websiteapi.Snapshot{}, err
 		}
@@ -112,7 +123,7 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		state = "provisioning"
 	}
 	snapshot := websiteapi.Snapshot{
-		ID: snapshotID, SiteID: request.SiteID, ParentID: request.ParentID, Name: request.Name,
+		ID: snapshotID, SiteID: request.SiteID, PageID: request.PageID, ParentID: request.ParentID, Name: request.Name,
 		Sequence: registryState.LastSequence + 1, Revision: 1, FeaturePins: featurePins, State: state, CreatedAt: now,
 		Payload: cloneSnapshotPayload(request.Payload),
 	}
@@ -128,7 +139,7 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		return websiteapi.Snapshot{}, websiteapi.ErrTooLarge
 	}
 	snapshotIndex, err := json.Marshal(map[string]any{
-		"record_type": "snapshot", "state": state, "revision": int64(1), "parent_id": request.ParentID,
+		"record_type": "snapshot", "snapshot_id": snapshot.ID, "page_id": snapshot.PageID, "state": state, "revision": int64(1), "parent_id": request.ParentID,
 	})
 	if err != nil {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
@@ -144,21 +155,29 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 	if err != nil {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
-	registryMutation, err := siteRegistryMutation(request.SiteID, registryRecord, snapshot.Sequence)
+	registryMutation, err := siteRegistryMutation(request.SiteID, request.PageID, registryRecord, snapshot.Sequence)
 	if err != nil {
 		return websiteapi.Snapshot{}, err
 	}
-	snapshotKey := snapshotKey(request.SiteID, snapshot.ID)
-	receiptKey := snapshotCreateReceiptKey(request.SiteID, request.IdempotencyKey)
+	pageRecordValue.Name = snapshot.Name
+	pageRecordValue.LatestSnapshotID = snapshot.ID
+	pageRecordValue.LatestSnapshotState = snapshot.State
+	pageValue, err := pageModuleDataValue(pageRecordValue, pageRecord.Revision+1)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	snapshotKey := snapshotKey(request.SiteID, request.PageID, snapshot.ID)
+	receiptKey := snapshotCreateReceiptKey(request.SiteID, request.PageID, request.IdempotencyKey)
 	mutations := []core.ModuleDataMutation{
 		{Key: snapshotKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: snapshotPayload, PayloadVersion: 1, IndexData: snapshotIndex}},
 		{Key: receiptKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
 		registryMutation,
+		{Key: websiterepo.PageKey(request.SiteID, request.PageID), ExpectedRevision: pageRecord.Revision, Value: pageValue},
 	}
 	if err := s.store.Batch(ctx, mutations); err != nil {
 		mapped := mapCoreError(err)
 		if errors.Is(mapped, websiteapi.ErrConflict) {
-			if existing, found, readErr := s.readSnapshotCreateReceipt(ctx, request.SiteID, request.IdempotencyKey, fingerprint); readErr != nil {
+			if existing, found, readErr := s.readSnapshotCreateReceipt(ctx, request.SiteID, request.PageID, request.IdempotencyKey, fingerprint); readErr != nil {
 				return websiteapi.Snapshot{}, readErr
 			} else if found {
 				return existing, nil
@@ -169,8 +188,8 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 	return snapshot, nil
 }
 
-func (s *Service) readSnapshotCreateReceipt(ctx context.Context, siteID, idempotencyKey, fingerprint string) (websiteapi.Snapshot, bool, error) {
-	key := snapshotCreateReceiptKey(siteID, idempotencyKey)
+func (s *Service) readSnapshotCreateReceipt(ctx context.Context, siteID, pageID, idempotencyKey, fingerprint string) (websiteapi.Snapshot, bool, error) {
+	key := snapshotCreateReceiptKey(siteID, pageID, idempotencyKey)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, core.ErrModuleDataNotFound) {
@@ -193,7 +212,7 @@ func (s *Service) readSnapshotCreateReceipt(ctx context.Context, siteID, idempot
 	if receipt.Fingerprint != fingerprint {
 		return websiteapi.Snapshot{}, false, websiteapi.ErrConflict
 	}
-	snapshot, _, err := s.snapshotInSite(ctx, siteID, receipt.SnapshotID)
+	snapshot, _, err := s.snapshotInPage(ctx, siteID, pageID, receipt.SnapshotID)
 	if err != nil {
 		if errors.Is(err, websiteapi.ErrNotFound) {
 			return websiteapi.Snapshot{}, false, websiteapi.ErrConflict
@@ -203,8 +222,11 @@ func (s *Service) readSnapshotCreateReceipt(ctx context.Context, siteID, idempot
 	return snapshot, true, nil
 }
 
-func (s *Service) maxSnapshotSequence(ctx context.Context, siteID string) (int64, error) {
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}}}
+func (s *Service) maxSnapshotSequence(ctx context.Context, siteID, pageID string) (int64, error) {
+	selectors := []core.ModuleDataSelector{
+		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
+		{Field: "page_id", Operator: core.SelectorEqual, Values: []any{pageID}},
+	}
 	after := ""
 	var maximum int64
 	for {
@@ -246,11 +268,8 @@ func snapshotCreateFingerprint(request websiteapi.CreateSnapshotRequest) (string
 	if canonicalPayload.Metadata, err = canonicalJSONObject(request.Payload.Metadata); err != nil {
 		return "", err
 	}
-	if canonicalPayload.DesignSystem, err = canonicalJSONObject(request.Payload.DesignSystem); err != nil {
-		return "", err
-	}
 	data, err := json.Marshal(snapshotCreateFingerprintInput{
-		SiteID: request.SiteID, ParentID: request.ParentID, Name: request.Name,
+		SiteID: request.SiteID, PageID: request.PageID, ParentID: request.ParentID, Name: request.Name,
 		ExpectedRevision: request.ExpectedRevision, ExpectedContentRevision: request.ExpectedContentRevision, Payload: canonicalPayload,
 	})
 	if err != nil {
@@ -280,13 +299,33 @@ func validJSONObjectWithin(raw json.RawMessage, maximum int) bool {
 func cloneSnapshotPayload(payload websiteapi.SnapshotPayload) *websiteapi.SnapshotPayload {
 	return &websiteapi.SnapshotPayload{
 		Config: append(json.RawMessage(nil), payload.Config...), Metadata: append(json.RawMessage(nil), payload.Metadata...),
-		DesignSystem: append(json.RawMessage(nil), payload.DesignSystem...),
 	}
 }
 
-func snapshotCreateReceiptKey(siteID, idempotencyKey string) core.ModuleDataKey {
+func snapshotCreateReceiptKey(siteID, pageID, idempotencyKey string) core.ModuleDataKey {
 	digest := sha256.Sum256([]byte(idempotencyKey))
-	return core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "idempotency/" + hex.EncodeToString(digest[:])}
+	return core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "site", ScopeID: siteID,
+		RecordKey: "idempotency/" + pageID + "/" + hex.EncodeToString(digest[:])}
+}
+
+func randomUUID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	var text [36]byte
+	hex.Encode(text[0:8], value[0:4])
+	text[8] = '-'
+	hex.Encode(text[9:13], value[4:6])
+	text[13] = '-'
+	hex.Encode(text[14:18], value[6:8])
+	text[18] = '-'
+	hex.Encode(text[19:23], value[8:10])
+	text[23] = '-'
+	hex.Encode(text[24:36], value[10:16])
+	return string(text[:]), nil
 }
 
 var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)

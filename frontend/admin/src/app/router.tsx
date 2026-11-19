@@ -21,12 +21,11 @@ const MediaPage = lazy(() => import("@/pages/media/MediaPage"));
 const AccessLayout = lazy(() => import("@/pages/access/AccessLayout"));
 const UsersPage = lazy(() => import("@/pages/access/UsersPage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
-const RouterPage = lazy(() => import("@/pages/site/RouterPage"));
+const PagesPage = lazy(() => import("@/pages/site/PagesPage"));
+const PageTemplatesPage = lazy(() => import("@/pages/site/PageTemplatesPage"));
 const PageDetailPage = lazy(() => import("@/pages/site/PageDetailPage"));
 const FeatureEditorPage = lazy(() => import("@/pages/site/FeatureEditorPage"));
-const FileRoutePage = lazy(() => import("@/pages/site/FileRoutePage"));
 const FeatureRegistryPage = lazy(() => import("@/pages/site/FeatureRegistryPage"));
-const DesignSystemPage = lazy(() => import("@/pages/site/DesignSystemPage"));
 const DataModelPage = lazy(() => import("@/pages/site/DataModelPage"));
 const DataModelEntityPage = lazy(() => import("@/pages/site/DataModelEntityPage"));
 const SnapshotManagementLayout = lazy(() => import("@/pages/site/SnapshotManagementLayout"));
@@ -35,7 +34,6 @@ const SnapshotsPage = lazy(() => import("@/pages/site/SnapshotsPage"));
 const BranchesPage = lazy(() => import("@/pages/site/BranchesPage"));
 const SiteWorkspace = lazy(() => import("@/pages/site/SiteWorkspace").then((module) => ({ default: module.SiteWorkspace })));
 const SiteMetadataPage = lazy(() => import("@/pages/content/SiteMetadataPage"));
-const BackendPage = lazy(() => import("@/pages/site/BackendPage"));
 const CoordinatorJobsPage = lazy(() => import("@/pages/coordinator/CoordinatorJobsPage"));
 const RouterRoutesPage = lazy(() => import("@/pages/router/RouterRoutesPage"));
 
@@ -155,30 +153,28 @@ export const router = createBrowserRouter(
             { path: "site/snapshots", element: <RedirectWithSearch to="/snapshots/tree" /> },
             { path: "features", element: <Navigate to="/content" replace /> },
             { path: "features/:featureId/*", element: <Navigate to="/content" replace /> },
-            { path: "submissions", element: <RequireGroup group="forms"><SubmissionsPage /></RequireGroup> },
-            { path: "submissions/:submissionId", element: <RequireGroup group="forms"><SubmissionsPage /></RequireGroup> },
-            { path: "forms", element: <RequireGroup group="forms"><FormsPage /></RequireGroup> },
+            { path: "submissions", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
+            { path: "submissions/:submissionId", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
+            { path: "forms", element: <RequireGroup group="forms_schemas"><FormsPage /></RequireGroup> },
             { path: "media", element: <RequireAnyGroup><MediaPage /></RequireAnyGroup> },
             { path: "coordinator/jobs", element: <RequireGroup group="coordinator_jobs"><CoordinatorJobsPage /></RequireGroup> },
             { path: "router/routes", element: <RequireGroup group="router_routes"><RouterRoutesPage /></RequireGroup> },
             {
-              element: <RequireSiteManager />,
+              element: <RequireGroup group="features" level={1} />,
               children: [{
                 path: "site",
                 element: <SiteWorkspace />,
                 children: [
                   { index: true, element: <Navigate to="pages" replace /> },
                   { path: "router", element: <Navigate to="../pages" replace /> },
-                  { path: "features", element: <FeatureRegistryPage /> },
-                  { path: "backend", element: <BackendPage /> },
-                  { path: "pages", element: <RouterPage /> },
-                  { path: "pages/files/:routeId", element: <FileRoutePage /> },
-                  { path: "pages/:pageId", element: <PageDetailPage /> },
-                  { path: "pages/:pageId/features/:placementId", element: <FeatureEditorPage /> },
-                  { path: "settings", element: <SiteMetadataPage /> },
-                  { path: "design-system", element: <DesignSystemPage /> },
-                  { path: "data-model", element: <DataModelPage /> },
-                  { path: "data-model/:model", element: <DataModelEntityPage /> },
+                  { path: "pages", element: <PagesPage /> },
+                  { path: "templates", element: <PageTemplatesPage /> },
+                  { path: "features", element: <RequireSiteManager><FeatureRegistryPage /></RequireSiteManager> },
+                  { path: "pages/:pageId", element: <RequireSiteManager><PageDetailPage /></RequireSiteManager> },
+                  { path: "pages/:pageId/features/:placementId", element: <RequireSiteManager><FeatureEditorPage /></RequireSiteManager> },
+                  { path: "settings", element: <RequireSiteManager><SiteMetadataPage /></RequireSiteManager> },
+                  { path: "data-model", element: <RequireSiteManager><DataModelPage /></RequireSiteManager> },
+                  { path: "data-model/:model", element: <RequireSiteManager><DataModelEntityPage /></RequireSiteManager> },
                 ],
               }],
             },

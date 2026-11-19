@@ -1,0 +1,86 @@
+openapi: 3.1.0
+info:
+  title: Zubrium Coordinator Admin API
+  version: 2.0.0
+  description: >-
+    Read and manually retry durable workflow jobs. Authorization is rechecked
+    against the configured static Coordinator group on every request.
+servers: [{ url: / }]
+security:
+  - AdminSession: []
+  - BearerCredential: []
+x-rejects-cookie-and-bearer-together: true
+paths:
+  /api/v2/coordinator/jobs:
+    get:
+      operationId: listCoordinatorJobs
+      parameters:
+        - { name: type, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: state, in: query, schema: { type: string, enum: [queued, running, succeeded, failed, cancelled] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: before, in: query, schema: { type: string, maxLength: 256 } }
+      responses:
+        '200':
+          description: Job summaries; internal task payloads and sensitive results are omitted.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobPage' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v2/coordinator/jobs/permissions:
+    get:
+      operationId: getCoordinatorJobPermissions
+      responses:
+        '200': { description: Current group-derived controls., content: { application/json: { schema: { type: object, required: [can_retry], properties: { can_retry: { type: boolean } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v2/coordinator/jobs/{jobID}/retry:
+    post:
+      operationId: retryCoordinatorJob
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - name: jobID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Job was placed in the retry queue. Caller needs level 2 in the configured Coordinator group. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
+    BearerCredential: { type: http, scheme: bearer }
+  schemas:
+    JobPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Job' } }
+        next_cursor: { type: string }
+    Job:
+      type: object
+      required: [id, type, state, attempts, max_attempts, available_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        state: { type: string }
+        attempts: { type: integer, minimum: 0 }
+        max_attempts: { type: integer, minimum: 1 }
+        available_at: { type: string, format: date-time }
+        lease_until: { type: [string, 'null'], format: date-time }
+        error_code: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
+  responses:
+    Error:
+      description: Stable machine-readable error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

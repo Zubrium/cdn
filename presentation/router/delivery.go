@@ -23,8 +23,7 @@ import (
 
 const (
 	maxArtifactManifestBytes = 1 << 20
-	maxArtifactFiles         = 4096
-	maxArtifactEntrypoints   = 1024
+	maxArtifactAssets        = 4096
 )
 
 var artifactSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -58,8 +57,11 @@ func NewCoreTargetValidator(identity CoreIdentity, files CoreFiles, credential s
 	return &CoreTargetValidator{identity: identity, files: files, credential: credential, operations: operations}, nil
 }
 
-func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, target model.Target) error {
+func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, target model.Target, match string) error {
 	if validator == nil || ctx == nil || target.Validate() != nil {
+		return engine.ErrInvalidTarget
+	}
+	if target.Kind == model.TargetStaticSiteArtifact && target.FallbackEnabled {
 		return engine.ErrInvalidTarget
 	}
 	if target.Kind == model.TargetRegisteredOperation {
@@ -79,6 +81,9 @@ func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, t
 	manifest, _, err := readArtifactManifest(ctx, validator.files, session, target.FileID)
 	if err != nil {
 		return mapTargetCoreError(err)
+	}
+	if len(manifest.assets) > 0 && match != model.MatchPrefix {
+		return engine.ErrInvalidTarget
 	}
 	if target.FallbackEnabled && manifest.fallback == nil {
 		return engine.ErrInvalidTarget
@@ -244,6 +249,9 @@ func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string
 }
 
 func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.Route, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
+	if route.Target.FallbackEnabled {
+		return engine.DeliveryResponse{}, engine.ErrNotFound
+	}
 	session, err := delivery.authenticate(ctx)
 	if err != nil {
 		return engine.DeliveryResponse{}, mapDeliveryAuthError(err)
@@ -252,27 +260,26 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 	if err != nil {
 		return engine.DeliveryResponse{}, mapDeliveryFileError(err)
 	}
-	if route.Target.FallbackEnabled && manifest.fallback == nil {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
-	}
-	localPath, ok := artifactRelativePath(route, request.EscapedPath)
-	if !ok {
+	path, pathErr := model.NormalizePath(request.EscapedPath)
+	if pathErr != nil {
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
-	filePath, found := manifest.entrypoints[localPath]
-	if !found {
-		_, found = manifest.files[localPath]
-		if found {
-			filePath = localPath
+	var entry artifactFile
+	cacheControl := "no-store"
+	if path == route.Path {
+		entry = manifest.document
+	} else {
+		localPath, ok := artifactRelativePath(route, path)
+		if !ok {
+			return engine.DeliveryResponse{}, engine.ErrNotFound
 		}
+		asset, found := manifest.assets[localPath]
+		if !found {
+			return engine.DeliveryResponse{}, engine.ErrNotFound
+		}
+		entry = asset.artifactFile
+		cacheControl = artifactCacheControl(asset)
 	}
-	if !found && route.Target.FallbackEnabled && manifest.fallback != nil {
-		filePath, found = *manifest.fallback, true
-	}
-	if !found {
-		return engine.DeliveryResponse{}, engine.ErrNotFound
-	}
-	entry := manifest.files[filePath]
 	if request.Method == http.MethodHead || request.IfNoneMatch != "" {
 		file, statErr := delivery.files.StatFile(ctx, session, entry.FileID)
 		if statErr != nil {
@@ -283,12 +290,12 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 		}
 		etag, _ := fileETag(entry.SHA256)
 		if request.IfNoneMatch != "" && matchesIfNoneMatch(request.IfNoneMatch, etag) {
-			return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: "no-store"}, nil
+			return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: cacheControl}, nil
 		}
 		contentType, _ := normalizedContentType(entry.ContentType)
 		if request.Method == http.MethodHead {
 			return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: contentType, ContentLength: entry.Size,
-				ETag: etag, CacheControl: "no-store"}, nil
+				ETag: etag, CacheControl: cacheControl}, nil
 		}
 	}
 	body, file, err := delivery.files.ReadFile(ctx, session, entry.FileID)
@@ -305,7 +312,7 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 	etag, _ := fileETag(entry.SHA256)
 	contentType, _ := normalizedContentType(entry.ContentType)
 	return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: contentType, ContentLength: entry.Size,
-		ETag: etag, CacheControl: "no-store", Body: body}, nil
+		ETag: etag, CacheControl: cacheControl, Body: body}, nil
 }
 
 func (delivery *CoreDelivery) authenticate(ctx context.Context) (core.Session, error) {
@@ -318,28 +325,29 @@ type artifactFile struct {
 	ContentType string `json:"content_type"`
 	SHA256      string `json:"sha256"`
 	Size        int64  `json:"size"`
-	CacheClass  string `json:"cache_class"`
+}
+
+type artifactAsset struct {
+	artifactFile
+	CacheClass string `json:"cache_class"`
 }
 
 type artifactPayload struct {
-	Format      string                  `json:"format"`
-	Entrypoints map[string]string       `json:"entrypoints"`
-	Files       map[string]artifactFile `json:"files"`
-	Fallback    *string                 `json:"fallback"`
+	Format   string                   `json:"format"`
+	Document artifactFile             `json:"document"`
+	Assets   map[string]artifactAsset `json:"assets"`
 }
 
 type artifactEnvelope struct {
-	Format      string                  `json:"format"`
-	Digest      string                  `json:"digest"`
-	Entrypoints map[string]string       `json:"entrypoints"`
-	Files       map[string]artifactFile `json:"files"`
-	Fallback    *string                 `json:"fallback"`
+	Format   string                   `json:"format"`
+	Digest   string                   `json:"digest"`
+	Document artifactFile             `json:"document"`
+	Assets   map[string]artifactAsset `json:"assets"`
 }
 
 type parsedArtifact struct {
-	entrypoints map[string]string
-	files       map[string]artifactFile
-	fallback    *string
+	document artifactFile
+	assets   map[string]artifactAsset
 }
 
 func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Session, fileID string) (parsedArtifact, core.File, error) {
@@ -359,7 +367,10 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Ses
 		return parsedArtifact{}, core.File{}, core.ErrUnavailable
 	}
 	defer body.Close()
-	if actualFile.ID != manifestFile.ID || actualFile.Revision != manifestFile.Revision || actualFile.Size != manifestFile.Size || actualFile.SHA256 != manifestFile.SHA256 {
+	actualContentType, actualTypeErr := normalizedContentType(actualFile.ContentType)
+	manifestContentType, manifestTypeErr := normalizedContentType(manifestFile.ContentType)
+	if actualFile.ID != manifestFile.ID || actualFile.Revision != manifestFile.Revision || actualFile.Size != manifestFile.Size ||
+		actualFile.SHA256 != manifestFile.SHA256 || actualTypeErr != nil || manifestTypeErr != nil || actualContentType != manifestContentType {
 		return parsedArtifact{}, core.File{}, engine.ErrUnavailable
 	}
 	data, err := io.ReadAll(io.LimitReader(body, maxArtifactManifestBytes+1))
@@ -374,25 +385,30 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Ses
 		return parsedArtifact{}, core.File{}, core.ErrUnavailable
 	}
 	var envelope artifactEnvelope
-	if err := httpjson.DecodeBytes(data, &envelope); err != nil || envelope.Format != "static-site-artifact/v1" || envelope.Entrypoints == nil || envelope.Files == nil ||
-		len(envelope.Files) == 0 || len(envelope.Files) > maxArtifactFiles || len(envelope.Entrypoints) == 0 || len(envelope.Entrypoints) > maxArtifactEntrypoints {
+	if err := httpjson.DecodeBytes(data, &envelope); err != nil || envelope.Format != "static-page-artifact/v1" || envelope.Assets == nil || len(envelope.Assets) > maxArtifactAssets {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
-	rootFields := make(map[string]json.RawMessage)
-	if json.Unmarshal(data, &rootFields) != nil || rootFields["format"] == nil || rootFields["digest"] == nil ||
-		rootFields["entrypoints"] == nil || rootFields["files"] == nil || rootFields["fallback"] == nil {
+	var rootFields map[string]json.RawMessage
+	if json.Unmarshal(data, &rootFields) != nil || len(rootFields) != 4 || rootFields["format"] == nil || rootFields["digest"] == nil ||
+		rootFields["document"] == nil || rootFields["assets"] == nil {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
-	var rawFiles map[string]map[string]json.RawMessage
-	if json.Unmarshal(rootFields["files"], &rawFiles) != nil || len(rawFiles) != len(envelope.Files) {
+	var documentFields map[string]json.RawMessage
+	if json.Unmarshal(rootFields["document"], &documentFields) != nil || len(documentFields) != 4 || documentFields["file_id"] == nil ||
+		documentFields["content_type"] == nil || documentFields["sha256"] == nil || documentFields["size"] == nil {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
-	for _, fields := range rawFiles {
-		if len(fields) != 5 || fields["file_id"] == nil || fields["content_type"] == nil || fields["sha256"] == nil || fields["size"] == nil || fields["cache_class"] == nil {
+	var rawAssets map[string]map[string]json.RawMessage
+	if json.Unmarshal(rootFields["assets"], &rawAssets) != nil || len(rawAssets) != len(envelope.Assets) {
+		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
+	}
+	for _, fields := range rawAssets {
+		if len(fields) != 5 || fields["file_id"] == nil || fields["content_type"] == nil || fields["sha256"] == nil ||
+			fields["size"] == nil || fields["cache_class"] == nil {
 			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 		}
 	}
-	payload := artifactPayload{Format: envelope.Format, Entrypoints: envelope.Entrypoints, Files: envelope.Files, Fallback: envelope.Fallback}
+	payload := artifactPayload{Format: envelope.Format, Document: envelope.Document, Assets: envelope.Assets}
 	canonical, err := json.Marshal(payload)
 	if err != nil || !strings.HasPrefix(envelope.Digest, "sha256:") || !artifactSHA256Pattern.MatchString(strings.TrimPrefix(envelope.Digest, "sha256:")) {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
@@ -401,48 +417,91 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Ses
 	if hex.EncodeToString(digest[:]) != strings.TrimPrefix(envelope.Digest, "sha256:") {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
-	manifest := parsedArtifact{entrypoints: make(map[string]string, len(envelope.Entrypoints)), files: make(map[string]artifactFile, len(envelope.Files)), fallback: envelope.Fallback}
-	fileIDs := make(map[string]struct{}, len(envelope.Files))
-	for path, entry := range envelope.Files {
-		canonicalPath, pathErr := model.NormalizePath(path)
-		if pathErr != nil || canonicalPath != path || entry.FileID == fileID || !canonicalUUID(entry.FileID) ||
-			entry.Size < 0 || !artifactSHA256Pattern.MatchString(entry.SHA256) ||
-			(entry.CacheClass != "document" && entry.CacheClass != "immutable") {
+	manifest := parsedArtifact{document: envelope.Document, assets: make(map[string]artifactAsset, len(envelope.Assets))}
+	fileIDs := make(map[string]struct{}, len(envelope.Assets)+1)
+	if err := validateArtifactFile(manifest.document, fileID, true); err != nil {
+		return parsedArtifact{}, core.File{}, err
+	}
+	fileIDs[manifest.document.FileID] = struct{}{}
+	for path, entry := range envelope.Assets {
+		if err := validateArtifactAssetPath(path); err != nil {
+			return parsedArtifact{}, core.File{}, err
+		}
+		if (entry.CacheClass != "document" && entry.CacheClass != "immutable") || validateArtifactFile(entry.artifactFile, fileID, false) != nil {
 			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 		}
 		if _, duplicate := fileIDs[entry.FileID]; duplicate {
 			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 		}
 		fileIDs[entry.FileID] = struct{}{}
-		entry.ContentType, err = normalizedContentType(entry.ContentType)
-		if err != nil {
-			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
-		}
-		manifest.files[path] = entry
-	}
-	for path, destination := range envelope.Entrypoints {
-		canonicalPath, pathErr := model.NormalizePath(path)
-		canonicalDestination, destinationErr := model.NormalizePath(destination)
-		entry, exists := manifest.files[destination]
-		mediaType, _, typeErr := mime.ParseMediaType(entry.ContentType)
-		if pathErr != nil || destinationErr != nil || canonicalPath != path || canonicalDestination != destination || !exists || typeErr != nil || mediaType != "text/html" {
-			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
-		}
-		manifest.entrypoints[path] = destination
-	}
-	if envelope.Fallback != nil {
-		canonicalFallback, pathErr := model.NormalizePath(*envelope.Fallback)
-		entry, exists := manifest.files[*envelope.Fallback]
-		mediaType, _, typeErr := mime.ParseMediaType(entry.ContentType)
-		if pathErr != nil || canonicalFallback != *envelope.Fallback || !exists || typeErr != nil || mediaType != "text/html" {
-			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
-		}
+		manifest.assets[path] = entry
 	}
 	return manifest, manifestFile, nil
 }
 
+func validateArtifactFile(entry artifactFile, manifestID string, document bool) error {
+	if entry.FileID == manifestID || !canonicalUUID(entry.FileID) || entry.Size < 0 || !artifactSHA256Pattern.MatchString(entry.SHA256) {
+		return engine.ErrInvalidTarget
+	}
+	contentType, err := normalizedContentType(entry.ContentType)
+	if err != nil || contentType != entry.ContentType || !validArtifactContentType(contentType) {
+		return engine.ErrInvalidTarget
+	}
+	if document {
+		mediaType, parameters, parseErr := mime.ParseMediaType(contentType)
+		if parseErr != nil || mediaType != "text/html" || len(parameters) > 1 ||
+			len(parameters) == 1 && parameters["charset"] != "utf-8" {
+			return engine.ErrInvalidTarget
+		}
+	}
+	entry.ContentType = contentType
+	return nil
+}
+
+func validArtifactContentType(value string) bool {
+	mediaType, parameters, err := mime.ParseMediaType(value)
+	if err != nil {
+		return false
+	}
+	switch mediaType {
+	case "text/html", "text/css", "text/javascript", "application/javascript", "application/json",
+		"image/jpeg", "image/png", "image/webp", "image/avif", "image/gif",
+		"font/woff", "font/woff2", "application/font-woff":
+	default:
+		return false
+	}
+	if len(parameters) == 0 {
+		return true
+	}
+	return len(parameters) == 1 && parameters["charset"] == "utf-8" &&
+		(mediaType == "text/html" || mediaType == "text/css" || mediaType == "text/javascript" || mediaType == "application/javascript")
+}
+
+func artifactCacheControl(asset artifactAsset) string {
+	if asset.CacheClass == "immutable" {
+		return "public, max-age=31536000, immutable"
+	}
+	return "no-store"
+}
+
+func validateArtifactAssetPath(path string) error {
+	if path == "" || strings.HasPrefix(path, "/") || strings.HasSuffix(path, "/") || strings.ContainsRune(path, '\\') {
+		return engine.ErrInvalidTarget
+	}
+	canonical, err := model.NormalizePath("/" + path)
+	if err != nil || canonical != "/"+path {
+		return engine.ErrInvalidTarget
+	}
+	return nil
+}
+
 func validateArtifactFiles(ctx context.Context, files CoreFiles, session core.Session, manifestID string, manifest parsedArtifact) error {
-	for _, entry := range manifest.files {
+	entries := make([]artifactFile, 0, len(manifest.assets)+1)
+	entries = append(entries, manifest.document)
+	for _, asset := range manifest.assets {
+		entries = append(entries, asset.artifactFile)
+	}
+	for _, entry := range entries {
 		file, err := files.StatFile(ctx, session, entry.FileID)
 		if err != nil {
 			return mapTargetCoreError(err)
@@ -457,26 +516,28 @@ func validateArtifactFiles(ctx context.Context, files CoreFiles, session core.Se
 func artifactMetadataMatches(entry artifactFile, file core.File) bool {
 	contentType, err := normalizedContentType(file.ContentType)
 	return err == nil && entry.FileID == file.ID && entry.Size == file.Size &&
-		strings.EqualFold(entry.SHA256, file.SHA256) && contentType == entry.ContentType
+		entry.SHA256 == file.SHA256 && contentType == entry.ContentType
 }
 
 func artifactRelativePath(route model.Route, requestPath string) (string, bool) {
 	path, err := model.NormalizePath(requestPath)
-	if err != nil || !model.PathMatches(route.Path, path, route.Match) {
+	if err != nil || !model.PathMatches(route.Path, path, model.MatchPrefix) || path == route.Path {
 		return "", false
 	}
-	if route.Path == "/" {
-		return path, true
+	base := strings.TrimSuffix(route.Path, "/")
+	if base == "" {
+		base = "/"
 	}
-	local := strings.TrimPrefix(path, route.Path)
-	if local == "" || local == "/" {
-		return "/", true
+	var relative string
+	if base == "/" {
+		relative = strings.TrimPrefix(path, "/")
+	} else {
+		relative = strings.TrimPrefix(path, base+"/")
 	}
-	if local[0] != '/' {
-		local = "/" + local
+	if validateArtifactAssetPath(relative) != nil {
+		return "", false
 	}
-	canonical, err := model.NormalizePath(local)
-	return canonical, err == nil
+	return relative, true
 }
 
 func canonicalUUID(value string) bool {
@@ -572,5 +633,5 @@ func mapRouteError(err error) error {
 
 var _ engine.DeliveryAPI = (*CoreDelivery)(nil)
 var _ interface {
-	ValidateRouteTarget(context.Context, model.Target) error
+	ValidateRouteTarget(context.Context, model.Target, string) error
 } = (*CoreTargetValidator)(nil)

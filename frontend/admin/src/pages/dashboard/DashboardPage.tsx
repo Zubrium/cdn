@@ -1,4 +1,4 @@
-import { ArrowRight, Database, FileText, Files, Layers, LockKeyhole, Settings, Workflow } from "lucide-react";
+import { ArrowRight, Database, FilePlus2, FileText, Files, Layers, LockKeyhole, Settings, Workflow } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { PageHeader, useDocumentTitle } from "@/components/common/page";
@@ -12,7 +12,8 @@ export default function DashboardPage() {
   const { principal } = useAuth();
   const areas: AdminArea[] = [
     ...(hasGroupAccess(principal, "content") ? [{ title: "Контент", description: "Модели и записи", href: "/content", icon: Database }] : []),
-    ...(hasGroupAccess(principal, "forms") ? [{ title: "Заявки", description: "Ответы на формы", href: "/submissions", icon: FileText }] : []),
+    ...(hasGroupAccess(principal, "forms_schemas") ? [{ title: "Формы", description: "Схемы и поля форм", href: "/forms", icon: FilePlus2 }] : []),
+    ...(hasGroupAccess(principal, "forms_submissions") ? [{ title: "Заявки", description: "Ответы на формы", href: "/submissions", icon: FileText }] : []),
     ...(hasAnyGroupAccess(principal) ? [{ title: "Файлы", description: "Файловая библиотека", href: "/media", icon: Files }] : []),
     ...(hasGroupAccess(principal, "features") ? [{ title: "Конфигурация запуска", description: "Статические ветки и их параметры", href: "/settings", icon: Settings }] : []),
     ...(canManageSchema(principal) ? [{ title: "Сайт", description: "Снапшоты и фичи", href: "/site/pages", icon: Layers }] : []),

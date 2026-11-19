@@ -30,6 +30,7 @@ import {
   Route,
 } from "lucide-react";
 import { useAuth } from "@/app/auth";
+import { useQueryClient } from "@tanstack/react-query";
 import { ThemeToggle } from "@/components/common/theme-toggle";
 import { BrandSymbol } from "@/components/common/brand-symbol";
 import { LoadingPage } from "@/components/common/page";
@@ -47,7 +48,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { canManageAccess, canManageSchema, canManageMedia, canViewSubmissions, hasGroupAccess } from "@/lib/permissions";
+import { canManageAccess, canManageSchema, canManageMedia, canReadFormSchemas, canViewSubmissions, hasGroupAccess } from "@/lib/permissions";
 import { getSyntheticDataMode, subscribeSyntheticDataMode } from "@/api";
 
 const SIDEBAR_KEY = "we_admin_sidebar_collapsed";
@@ -80,7 +81,11 @@ const snapshotManagementNav: NavItem[] = [
   { to: "/site/pages", label: "Редактор сайтов", icon: Layers, match: (p) => p.startsWith("/site/") || p.startsWith("/site-metadata") },
   { to: "/snapshots/registry", label: "Реестр фичей", icon: Blocks, match: (p) => p.startsWith("/snapshots/registry") },
   { to: "/snapshots/tree", label: "Дерево снапшотов", icon: History, match: (p) => p.startsWith("/snapshots/tree") },
-  { to: "/snapshots/branches", label: "Ветки", icon: GitBranch, match: (p) => p.startsWith("/snapshots/branches") },
+  { to: "/snapshots/branches", label: "Назначения веток", icon: GitBranch, match: (p) => p.startsWith("/snapshots/branches") },
+];
+
+const siteReadNav: NavItem[] = [
+  { to: "/site/pages", label: "Страницы сайта", icon: Layers, match: (p) => p.startsWith("/site/") },
 ];
 
 const accessNav: NavItem[] = [
@@ -95,8 +100,11 @@ const contentNav: NavItem[] = [
   { to: "/content", label: "Редактор", icon: Layers, match: (p) => p === "/content" },
 ];
 
-const formsNav: NavItem[] = [
+const formSchemaNav: NavItem[] = [
   { to: "/forms", label: "Схемы", icon: ClipboardList, match: (p) => p.startsWith("/forms") },
+];
+
+const submissionsNav: NavItem[] = [
   { to: "/submissions", label: "Заявки", icon: Inbox, match: (p) => p.startsWith("/submissions") },
 ];
 
@@ -139,9 +147,22 @@ function NavList({
           : item.end
             ? location.pathname === item.to
             : location.pathname.startsWith(item.to);
+        const currentParams = new URLSearchParams(location.search);
+        const snapshotContext = currentParams.has("snapshot")
+          ? new URLSearchParams({
+            snapshot: currentParams.get("snapshot")!,
+            ...(currentParams.get("site_id") ? { site_id: currentParams.get("site_id")! } : {}),
+            ...(currentParams.get("page_id") ? { page_id: currentParams.get("page_id")! } : {}),
+          })
+          : null;
+        const target = item.to.startsWith("/site/") && snapshotContext
+          ? `${item.to}?${snapshotContext}`
+          : item.to === "/content" && snapshotContext
+            ? `${item.to}?${location.pathname.startsWith("/content") ? currentParams : snapshotContext}`
+            : item.to;
         const link = (
           <NavLink
-            to={item.to.startsWith("/site/") && new URLSearchParams(location.search).has("snapshot") ? `${item.to}?snapshot=${encodeURIComponent(new URLSearchParams(location.search).get("snapshot")!)}` : item.to}
+            to={target}
             end={item.end}
             onClick={onNavigate}
             data-active={active}
@@ -243,6 +264,7 @@ function SidebarContent({
   const siteManager = canManageSchema(principal);
   const siteReader = hasGroupAccess(principal, "features", 1);
   const contentReader = hasGroupAccess(principal, "content", 1);
+  const schemaReader = canReadFormSchemas(principal);
   const submissionReader = canViewSubmissions(principal);
   const fileReader = canManageMedia(principal);
   const coordinatorReader = hasGroupAccess(principal, "coordinator_jobs", 1);
@@ -276,13 +298,22 @@ function SidebarContent({
       >
         <NavGroup label="Обзор" collapsed={collapsed} items={homeNav} onNavigate={onNavigate} />
         {contentReader && <NavGroup label="Контент" collapsed={collapsed} items={contentNav} onNavigate={onNavigate} className="mt-3" />}
-        {submissionReader && <NavGroup label="Формы" collapsed={collapsed} items={formsNav} onNavigate={onNavigate} className="mt-3" />}
+        {(schemaReader || submissionReader) && (
+          <NavGroup
+            label="Формы"
+            collapsed={collapsed}
+            items={[...(schemaReader ? formSchemaNav : []), ...(submissionReader ? submissionsNav : [])]}
+            onNavigate={onNavigate}
+            className="mt-3"
+          />
+        )}
         {fileReader && <NavGroup label="Файлы" collapsed={collapsed} items={filesNav} onNavigate={onNavigate} className="mt-3" />}
         {coordinatorReader && <NavGroup label="Задания" collapsed={collapsed} items={coordinatorNav} onNavigate={onNavigate} className="mt-3" />}
         {hasGroupAccess(principal, "router_routes", 1) && <NavGroup label="Маршрутизация" collapsed={collapsed} items={routerNav} onNavigate={onNavigate} className="mt-3" />}
         {siteManager && (
           <NavGroup label="Управление" collapsed={collapsed} items={snapshotManagementNav} onNavigate={onNavigate} className="mt-3" />
         )}
+        {siteReader && !siteManager && <NavGroup label="Сайты" collapsed={collapsed} items={siteReadNav} onNavigate={onNavigate} className="mt-3" />}
         {siteReader && <NavGroup label="Система" collapsed={collapsed} items={settingsNav} onNavigate={onNavigate} className="mt-3" />}
         {accessManager && <NavGroup label="Администрирование" collapsed={collapsed} items={accessNav} onNavigate={onNavigate} className="mt-3" />}
       </nav>
@@ -327,12 +358,14 @@ function SidebarContent({
 
 export function AppShell() {
   const location = useLocation();
+  const { status } = useAuth();
+  const queryClient = useQueryClient();
   const isSyntheticData = useSyncExternalStore(
     subscribeSyntheticDataMode,
     getSyntheticDataMode,
     getSyntheticDataMode,
   );
-  const routeCanvas = location.pathname.startsWith("/site/pages") || location.pathname === "/site/router" || location.pathname === "/site/data-model";
+  const routeCanvas = location.pathname.startsWith("/site/pages") || location.pathname.startsWith("/site/templates") || location.pathname === "/site/data-model";
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(SIDEBAR_KEY) === "true";
@@ -342,6 +375,37 @@ export function AppShell() {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const mobileMenuButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    const controller = new AbortController();
+    let source: EventSource | null = null;
+    const refreshOperationQueries = () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] }),
+        queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
+        queryClient.invalidateQueries({ queryKey: ["site", "feature-import"] }),
+        queryClient.invalidateQueries({ queryKey: ["media"] }),
+      ]);
+    };
+    void fetch("/api/v2/admin/notifications", {
+      method: "HEAD",
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+    }).then((response) => {
+      if (!response.ok || controller.signal.aborted) return;
+      source = new EventSource("/api/v2/admin/notifications", { withCredentials: true });
+      source.onopen = refreshOperationQueries;
+      source.addEventListener("snapshot.state_changed", refreshOperationQueries);
+      source.addEventListener("feature_import.state_changed", refreshOperationQueries);
+      source.addEventListener("media_rendition.state_changed", refreshOperationQueries);
+    }).catch(() => undefined);
+    return () => {
+      controller.abort();
+      source?.close();
+    };
+  }, [queryClient, status]);
 
   useEffect(() => {
     setMobileOpen(false);

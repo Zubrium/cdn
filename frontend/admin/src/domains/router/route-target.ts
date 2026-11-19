@@ -4,7 +4,6 @@ export interface RouterTargetDraft {
   match: RouterRouteMatch;
   targetKind: "core-file" | "static-site-artifact" | "public.form-upload" | "public.form-session" | "public.form-submit";
   file: { id: string } | null;
-  fallbackEnabled?: boolean;
   accessGroup: string;
   fileSetID: string;
   maxBytes: string;
@@ -23,14 +22,13 @@ function formBinding(draft: RouterTargetDraft): Record<string, unknown> | null {
 }
 
 export function buildRouterTarget(draft: RouterTargetDraft, operations: RouterPublicOperation[] = []): RouterRouteTarget | null {
-  if (draft.targetKind === "core-file" || draft.targetKind === "static-site-artifact") {
-    if (draft.targetKind === "core-file" && draft.match !== "exact") return null;
+  if (draft.targetKind === "core-file") {
+    if (draft.match !== "exact" || !draft.file) return null;
+    return { kind: "core-file", file_id: draft.file.id };
+  }
+  if (draft.targetKind === "static-site-artifact") {
     if (!draft.file) return null;
-    return {
-      kind: draft.targetKind,
-      file_id: draft.file.id,
-      ...(draft.targetKind === "static-site-artifact" && draft.fallbackEnabled ? { fallback_enabled: true } : {}),
-    };
+    return { kind: "static-site-artifact", file_id: draft.file.id };
   }
 
   if (draft.match !== "exact") return null;

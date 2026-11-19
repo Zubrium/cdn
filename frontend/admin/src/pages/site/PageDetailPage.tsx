@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, ChevronRight, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronRight, GripVertical, Plus } from "lucide-react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/api";
-import { useConfirm } from "@/components/common/confirm";
 import { useDocumentTitle } from "@/components/common/page";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -14,26 +13,21 @@ import type { SiteMetadataOverride, SitePage, SitePlacement } from "@/types";
 import { groupFeatureBuilds } from "./feature-builds";
 import { selectedFeatures } from "./feature-selection";
 import { useSiteWorkspace } from "./SiteWorkspace";
-import { addRouteNode, describeRoutes, removePageReferences, routeCapturesForPage, updateRouteNode } from "./route-tree";
-import { RouteEditorDialog } from "./components/routes/RouteDialogs";
-import type { RouteDialogState } from "./components/routes/route-types";
+import { siteContextQuery } from "./site-query";
 
-type PageTab = "features" | "general" | "seo";
+type PageTab = "features" | "seo";
 
 export default function PageDetailPage() {
   const { pageId = "" } = useParams();
   const { config, metadata, updateMetadata, update } = useSiteWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const confirm = useConfirm();
   const page = config.pages.find((item) => item.id === pageId);
   useDocumentTitle(page?.name ?? "Страница");
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const listPath = `/site/pages${snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : ""}`;
+  const listPath = `/site/pages${siteContextQuery(snapshotId, searchParams.get("page_id") ?? "")}`;
   const requestedTab = searchParams.get("tab");
-  const tab: PageTab = requestedTab === "general" || requestedTab === "seo" ? requestedTab : "features";
-  const pageRoutes = useMemo(() => routeCapturesForPage(config.routeTree, pageId), [config.routeTree, pageId]);
-  const [routeDialog, setRouteDialog] = useState<RouteDialogState | null>(null);
+  const tab: PageTab = requestedTab === "seo" ? "seo" : "features";
   const [seoImagePicker, setSeoImagePicker] = useState(false);
   const [newBuildId, setNewBuildId] = useState("");
   const buildsQuery = useQuery({ queryKey: ["site", "feature-builds"], queryFn: ({ signal }) => api.website.featureBuilds(signal) });
@@ -107,30 +101,6 @@ export default function PageDetailPage() {
     });
     if (placements.length === page.placements.length) changePage({ placements });
   };
-  const deletePage = async () => {
-    if (config.pages.length <= 1) {
-      toast.error("В конфигурации должна остаться хотя бы одна страница.");
-      return;
-    }
-    if (Object.values(config.systemPages ?? {}).includes(page.id)) {
-      toast.error("Сначала снимите назначение системной страницы.");
-      return;
-    }
-    const routeIds = new Set(pageRoutes.map((route) => route.id));
-    const linked = config.pages.some((item) => item.id !== page.id && item.placements.some((placement) => placement.detailLink && routeIds.has(placement.detailLink.routeId)));
-    if (linked) {
-      toast.error("Сначала уберите ссылки коллекций на маршруты этой страницы.");
-      return;
-    }
-    const nextTree = removePageReferences(config.routeTree, page.id);
-    if (!describeRoutes(nextTree).some((route) => route.node.pageId)) {
-      toast.error("Нельзя удалить последнюю страницу, на которую ведёт маршрут.");
-      return;
-    }
-    if (!(await confirm({ title: "Удалить страницу?", description: `«${page.name}» будет удалена из рабочей копии. Маршруты останутся без страницы.`, confirmLabel: "Удалить страницу", destructive: true }))) return;
-    update((current) => ({ ...current, pages: current.pages.filter((item) => item.id !== page.id), routeTree: nextTree }));
-    navigate(listPath);
-  };
 
   return <div className="h-full overflow-y-auto bg-background">
     <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-7 sm:py-7">
@@ -147,16 +117,11 @@ export default function PageDetailPage() {
               onChange={(event) => changePage({ name: event.currentTarget.value })}
             />
           </div>
-          <Button type="button" variant="ghost" className="min-h-11 text-destructive" onClick={() => void deletePage()}><Trash2 />Удалить страницу</Button>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          {pageRoutes.map((route) => <button key={route.id} type="button" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border px-3 font-mono text-xs hover:bg-accent" onClick={() => setRouteDialog({ mode: "edit", routeId: route.id })}><Pencil className="size-3.5" />{route.path}</button>)}
-          <Button type="button" variant="outline" className="min-h-11" onClick={() => setRouteDialog({ mode: "root", existingPageId: page.id })}><Plus />Добавить маршрут</Button>
         </div>
       </header>
 
       <nav aria-label="Настройки страницы" className="flex gap-1 border-b border-border py-3">
-        {([["features", "Фичи"], ["general", "Параметры"], ["seo", "SEO"]] as const).map(([value, label]) => <button key={value} type="button" aria-current={tab === value ? "page" : undefined} className={`min-h-11 rounded-md px-3 text-sm font-medium ${tab === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`} onClick={() => changeTab(value)}>{label}</button>)}
+        {([["features", "Фичи"], ["seo", "SEO"]] as const).map(([value, label]) => <button key={value} type="button" aria-current={tab === value ? "page" : undefined} className={`min-h-11 rounded-md px-3 text-sm font-medium ${tab === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`} onClick={() => changeTab(value)}>{label}</button>)}
       </nav>
 
       {tab === "features" && <section aria-labelledby="page-features-title" className="py-6">
@@ -205,14 +170,6 @@ export default function PageDetailPage() {
         </SortableList>}
       </section>}
 
-      {tab === "general" && <section className="space-y-5 py-6">
-        <div><h2 className="text-lg font-semibold">Параметры страницы</h2><p className="mt-1 text-sm text-muted-foreground">Название видно редакторам. Тип используется при настройке связей и detail-маршрутов.</p></div>
-        <div className="grid max-w-2xl gap-4 sm:grid-cols-[minmax(0,1fr)_14rem]">
-          <div className="space-y-1.5"><Label htmlFor="detail-page-name">Название</Label><Input id="detail-page-name" className="min-h-11" value={page.name} onChange={(event) => changePage({ name: event.currentTarget.value })} /></div>
-          <label className="space-y-1.5 text-sm"><span className="font-medium">Тип страницы</span><select className="h-11 w-full rounded-md border border-input bg-background px-3" value={page.kind} onChange={(event) => changePage({ kind: event.currentTarget.value as SitePage["kind"] })}><option value="page">Обычная страница</option><option value="collection-list">Список коллекции</option><option value="detail">Запись по маршруту</option></select></label>
-        </div>
-      </section>}
-
       {tab === "seo" && <section className="space-y-5 py-6">
         <div><h2 className="text-lg font-semibold">Поисковое представление</h2><p className="mt-1 text-sm text-muted-foreground">Пустые поля наследуют общие настройки сайта.</p></div>
         <div className="grid max-w-2xl gap-4">
@@ -224,17 +181,6 @@ export default function PageDetailPage() {
       </section>}
     </div>
 
-    <RouteEditorDialog key={`${routeDialog?.mode ?? "closed"}-${routeDialog?.routeId ?? routeDialog?.existingPageId ?? "root"}`} state={routeDialog} pages={config.pages} tree={config.routeTree} onClose={() => setRouteDialog(null)} onApply={(node, _parentId, newPage) => {
-      update((current) => ({
-        ...current,
-        pages: newPage ? [...current.pages, newPage] : current.pages,
-        routeTree: routeDialog?.mode === "edit"
-          ? updateRouteNode(current.routeTree, node.id, () => node)
-          : addRouteNode(current.routeTree, null, node),
-        formatVersion: 3,
-      }));
-      setRouteDialog(null);
-    }} />
     <MediaPickerDialog open={seoImagePicker} onClose={() => setSeoImagePicker(false)} accept="image" title="Изображение страницы для ссылки" initialSelected={pageMetadata.ogImageMediaId ? [pageMetadata.ogImageMediaId] : []} onSelect={(items) => {
       if (items[0]) changeMetadata("ogImageMediaId", items[0].id);
       setSeoImagePicker(false);

@@ -1,4 +1,4 @@
-import type { DataInputBinding, DataModelEntity, DetailSEOFieldBindings, FeatureManifest, SiteConfig, SitePage, SitePlacement } from "@/types";
+import type { DataInputBinding, DataModel, DataModelEntity, DetailSEOFieldBindings, FeatureManifest, SitePage, SitePlacement } from "@/types";
 import { DataInputBindingsEditor } from "../../components/DataInputBindingsEditor";
 import type { RouteDescriptor } from "../../route-tree";
 import { Input } from "@/components/ui/input";
@@ -62,11 +62,11 @@ export function DetailSEOFieldsEditor({ binding, entity, disabled = false, onCha
 
 
 
-export function StructuralBindingsEditor({ page, placement, manifest, config, captures, snapshotId, argumentFields = {}, onChange }: {
+export function StructuralBindingsEditor({ page, placement, manifest, dataModel, captures, snapshotId, argumentFields = {}, onChange }: {
   page: SitePage;
   placement: SitePlacement;
   manifest: FeatureManifest;
-  config: SiteConfig;
+  dataModel: DataModel | null;
   captures: string[];
   snapshotId: string;
   argumentFields?: Record<string, SchemaField>;
@@ -74,10 +74,10 @@ export function StructuralBindingsEditor({ page, placement, manifest, config, ca
 }) {
   const ports = manifest.dataInputs ?? [];
   return <>
-    {ports.length > 0 && <DataInputBindingsEditor ports={ports} dataModel={config.dataModel} bindings={placement.dataBindings ?? []} arguments={placement.arguments} argumentFields={argumentFields} routeCaptures={captures} snapshotId={snapshotId} onChange={(dataBindings) => onChange({ ...placement, dataBindings })} />}
+    {ports.length > 0 && <DataInputBindingsEditor ports={ports} dataModel={dataModel ?? undefined} bindings={placement.dataBindings ?? []} arguments={placement.arguments} argumentFields={argumentFields} routeCaptures={captures} snapshotId={snapshotId} onChange={(dataBindings) => onChange({ ...placement, dataBindings })} />}
     {page.kind === "detail" && ports.filter((input) => input.kind === "record").map((input) => {
       const binding = (placement.dataBindings ?? []).find((item) => item.inputKey === input.key && item.lookup);
-      const entity = binding && config.dataModel?.entities.find((item) => item.id === binding.entityId);
+      const entity = binding && dataModel?.entities.find((item) => item.id === binding.entityId);
       if (!binding || !entity) return null;
       const configuredElsewhere = page.placements.some((candidate) => candidate.dataBindings?.some((item) =>
         Object.values(item.detailSEO ?? {}).some(Boolean) && !(candidate.id === placement.id && item.inputKey === input.key),

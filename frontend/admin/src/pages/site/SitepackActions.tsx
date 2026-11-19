@@ -14,7 +14,7 @@ export function emptySitepackFileError(file: Pick<File, "size"> | null): string 
     : "";
 }
 
-/** Import creates an unassigned snapshot; assignments always require a separate action. */
+/** Import creates an isolated snapshot from the archive scope. */
 export function SitepackImportAction() {
   const pickerId = useId();
   const abort = useRef<AbortController | null>(null);
@@ -46,7 +46,7 @@ export function SitepackImportAction() {
       const imported = await api.siteBuilder.importSitepack(file, controller.signal);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
-        queryClient.invalidateQueries({ queryKey: ["content", "snapshots"] }),
+        queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] }),
         queryClient.invalidateQueries({ queryKey: ["site", "feature-builds"] }),
       ]);
       setReport(imported);
@@ -57,6 +57,7 @@ export function SitepackImportAction() {
       if (isAbortError(reason)) {
         setError("Загрузка прервана. Проверьте список снапшотов: сервер мог завершить импорт.");
         void queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
+        void queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] });
       } else {
         setError(errorMessage(reason));
         if (isApiError(reason)) setErrorDetails(reason.details);
@@ -72,7 +73,7 @@ export function SitepackImportAction() {
       <div>
         <h2 id="sitepack-title" className="text-sm font-semibold">Перенос снапшота</h2>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Импорт создаст отдельный снапшот. Пользователи, заявки и назначения веток в архив не входят.
+          Импорт создаст отдельный снапшот из содержимого архива. Runtime-настройки и назначения вне архива не меняются.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -116,8 +117,8 @@ export function SitepackImportSuccessReport({ report }: { report: SitepackImport
       <p className="font-medium">Импортирован снапшот #{report.snapshot.sequence} · {report.snapshot.name}</p>
       <p className="text-muted-foreground">Новых сборок: {report.newBuilds}, повторно использовано: {report.reusedBuilds}. Новых файлов: {report.newFiles}, повторно использовано: {report.reusedFiles}.</p>
       <p className="text-muted-foreground">Записей модели: {report.modelPublishedRecords} опубликовано, {report.modelDraftRecords} в черновике. История: {report.modelHistoryRevisions} публикаций; ID модели и записей переназначены.</p>
-      <p className="text-muted-foreground">Снапшот пока не назначен ветке.</p>
-      <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" asChild><Link to={`/site/pages?snapshot=${report.snapshot.id}`}>Открыть структуру</Link></Button><Button size="sm" variant="outline" asChild><Link to={`/snapshots/branches?snapshot=${report.snapshot.id}`}>Перейти к управлению ветками</Link></Button></div>
+      <p className="text-muted-foreground">Снапшот импортирован; назначения веток этим экраном не управляются.</p>
+      <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" asChild><Link to={`/site/pages?${new URLSearchParams({ snapshot: report.snapshot.id, site_id: report.snapshot.siteId, page_id: report.snapshot.pageId })}`}>Открыть структуру</Link></Button></div>
     </div>
     <SitepackImportItems items={report.items ?? []} truncated={report.itemsTruncated ?? report.fileIdsTruncated ?? false} />
   </div>;

@@ -11,142 +11,42 @@ import (
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
 
 const (
 	siteA     = "site-a"
 	siteB     = "site-b"
-	branchA   = "production"
+	pageA     = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	pageB     = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	snapshotA = "33333333-3333-4333-8333-333333333333"
 	snapshotB = "44444444-4444-4444-8444-444444444444"
 )
 
-func TestListBranchesCombinesStaticTopologyWithPersistedAssignment(t *testing.T) {
-	store := newMemoryStore()
-	putRecord(t, store, core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "site", ScopeID: siteA, RecordKey: "branch/" + branchA}, map[string]any{
-		"id": branchA, "snapshot_id": snapshotA, "updated_at": time.Now().UTC(),
-	}, map[string]any{"record_type": "branch", "branch_id": branchA, "snapshot_id": snapshotA, "revision": float64(1)})
-	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
+func TestListConfiguredSitesRequiresReadAccessAndReturnsStableIDs(t *testing.T) {
+	service := newService(t, newMemoryStore(), core.AccessLevelRead, websiteapp.Config{AccessGroup: "features", Sites: []string{siteB, siteA}})
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	page, err := service.ListBranches(ctx)
+	result, err := service.ListConfiguredSites(ctx)
+	if err != nil || len(result.Items) != 2 || result.Items[0].SiteID != siteA || result.Items[1].SiteID != siteB {
+		t.Fatalf("configured sites = %+v, %v", result, err)
+	}
+	readOnly := newService(t, newMemoryStore(), core.AccessLevelNone, websiteConfig())
+	unauthenticated, err := readOnly.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 1 {
-		t.Fatalf("branch count = %d, want 1", len(page.Items))
-	}
-	got := page.Items[0]
-	if got.ID != branchA || got.SiteID != siteA || got.ListenAddress != "127.0.0.1:8081" || got.SnapshotID == nil || *got.SnapshotID != snapshotA || got.Revision != 1 {
-		t.Fatalf("branch = %#v", got)
-	}
-	if !got.Indexable || !got.Enabled || got.Name != "Production" {
-		t.Fatalf("static branch policy was not preserved: %#v", got)
-	}
-}
-
-func TestAssignBranchUsesRevisionCASAndPersistsEventAtomically(t *testing.T) {
-	store := newMemoryStore()
-	putSnapshot(t, store, siteA, snapshotA, 3)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
-	ctx, err := service.Authenticate(context.Background(), "credential")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assigned, err := service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
-		BranchID: branchA, SnapshotID: snapshotA, ExpectedRevision: 0, ExpectedSnapshotRevision: 3,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if assigned.SnapshotID == nil || *assigned.SnapshotID != snapshotA || assigned.Revision != 1 {
-		t.Fatalf("assignment = %#v", assigned)
-	}
-
-	events, err := service.ListBranchEvents(ctx, branchA, "", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events.Items) != 1 {
-		t.Fatalf("event count = %d, want 1", len(events.Items))
-	}
-	event := events.Items[0]
-	if event.BranchID != branchA || event.SnapshotID != snapshotA || event.SnapshotName != "Home" || event.SnapshotSequence != 7 || event.Action != "assigned" {
-		t.Fatalf("event = %#v", event)
-	}
-	if event.CreatedAt.IsZero() {
-		t.Fatal("assignment event must have a timestamp")
-	}
-}
-
-func TestAssignBranchRejectsCrossSiteSnapshotWithoutPartialWrites(t *testing.T) {
-	store := newMemoryStore()
-	putSnapshot(t, store, siteB, snapshotB, 2)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
-	ctx, err := service.Authenticate(context.Background(), "credential")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
-		BranchID: branchA, SnapshotID: snapshotB, ExpectedRevision: 0, ExpectedSnapshotRevision: 2,
-	})
-	if !errors.Is(err, websiteapi.ErrNotFound) {
-		t.Fatalf("cross-site snapshot assignment error = %v, want not found", err)
-	}
-	if len(store.records) != 1 {
-		t.Fatalf("cross-site rejection left %d records; want only the original snapshot", len(store.records))
-	}
-}
-
-func TestAssignBranchRejectsStaleSnapshotRevisionWithoutAssignmentOrEvent(t *testing.T) {
-	store := newMemoryStore()
-	putSnapshot(t, store, siteA, snapshotA, 3)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
-	ctx, err := service.Authenticate(context.Background(), "credential")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
-		BranchID: branchA, SnapshotID: snapshotA, ExpectedRevision: 0, ExpectedSnapshotRevision: 2,
-	})
-	if !errors.Is(err, websiteapi.ErrConflict) {
-		t.Fatalf("stale snapshot revision error = %v, want conflict", err)
-	}
-	if len(store.records) != 1 {
-		t.Fatalf("stale assignment left %d records; want only the original snapshot", len(store.records))
-	}
-}
-
-func TestAssignBranchRejectsProvisioningSnapshotWithoutPartialWrites(t *testing.T) {
-	store := newMemoryStore()
-	putSnapshotWithState(t, store, siteA, snapshotA, 3, "provisioning")
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
-	ctx, err := service.Authenticate(context.Background(), "credential")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
-		BranchID: branchA, SnapshotID: snapshotA, ExpectedRevision: 0, ExpectedSnapshotRevision: 3,
-	})
-	if !errors.Is(err, websiteapi.ErrConflict) {
-		t.Fatalf("provisioning snapshot assignment error = %v, want conflict", err)
-	}
-	if len(store.records) != 1 {
-		t.Fatalf("rejected assignment left %d records; want only the provisioning snapshot", len(store.records))
+	if _, err := readOnly.ListConfiguredSites(unauthenticated); !errors.Is(err, websiteapi.ErrForbidden) {
+		t.Fatalf("list without read access = %v, want forbidden", err)
 	}
 }
 
 func TestBuildRejectsProvisioningSnapshot(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshotWithState(t, store, siteA, snapshotA, 3, "provisioning")
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -158,34 +58,32 @@ func TestBuildRejectsProvisioningSnapshot(t *testing.T) {
 	}
 }
 
-func TestMarkSnapshotReadyUsesRevisionCASAndIsIdempotent(t *testing.T) {
+func TestMarkSnapshotReadyFailsClosedWithoutForkWorkflow(t *testing.T) {
 	store := newMemoryStore()
 	rootID := "66666666-6666-4666-8666-666666666666"
 	putSnapshot(t, store, siteA, rootID, 1)
 	putSnapshotWithState(t, store, siteA, snapshotA, 3, "provisioning")
 	setSnapshotParent(t, store, siteA, snapshotA, rootID, "Home", 7)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ready, err := service.MarkSnapshotReady(ctx, snapshotA, 3)
+	_, err = service.MarkSnapshotReady(ctx, snapshotA, 3)
+	if !errors.Is(err, websiteapi.ErrUnavailable) {
+		t.Fatalf("finalization without a durable fork workflow = %v, want unavailable", err)
+	}
+	stored := store.records[snapshotRecordKey(siteA, snapshotA)]
+	if stored.Revision != 3 {
+		t.Fatalf("fail-closed finalization changed revision to %d, want 3", stored.Revision)
+	}
+	snapshot, err := service.GetSnapshot(ctx, snapshotA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ready.State != "ready" || ready.Revision != 4 {
-		t.Fatalf("finalized snapshot = %#v, want ready revision 4", ready)
-	}
-	retried, err := service.MarkSnapshotReady(ctx, snapshotA, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if retried.State != "ready" || retried.Revision != 4 {
-		t.Fatalf("idempotent retry changed snapshot: %#v", retried)
-	}
-	if store.records[snapshotRecordKey(siteA, snapshotA)].Revision != 4 {
-		t.Fatalf("stored revision = %d, want 4", store.records[snapshotRecordKey(siteA, snapshotA)].Revision)
+	if snapshot.State != "provisioning" {
+		t.Fatalf("snapshot state = %q, want provisioning until fork completion", snapshot.State)
 	}
 }
 
@@ -195,7 +93,7 @@ func TestMarkSnapshotReadyRejectsStaleRevisionWithoutMutation(t *testing.T) {
 	putSnapshot(t, store, siteA, rootID, 1)
 	putSnapshotWithState(t, store, siteA, snapshotA, 3, "provisioning")
 	setSnapshotParent(t, store, siteA, snapshotA, rootID, "Home", 7)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -220,12 +118,9 @@ func TestDeleteSnapshotReparentsChildrenInOneAtomicRevisionBatch(t *testing.T) {
 	putSnapshot(t, store, siteA, childID, 1)
 	setSnapshotParent(t, store, siteA, targetID, rootID, "Home", 7)
 	setSnapshotParent(t, store, siteA, childID, targetID, "Home", 7)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.AssignBranch(ctx, websiteapi.AssignBranchRequest{BranchID: branchA, SnapshotID: rootID, ExpectedRevision: 0, ExpectedSnapshotRevision: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,43 +146,10 @@ func TestDeleteSnapshotReparentsChildrenInOneAtomicRevisionBatch(t *testing.T) {
 	}
 }
 
-func TestDeleteSnapshotProtectsBranchAssignmentAndItsImmediateParent(t *testing.T) {
-	for _, assignedID := range []string{"77777777-7777-4777-8777-777777777777", "88888888-8888-4888-8888-888888888888"} {
-		t.Run("assigned-"+assignedID[:8], func(t *testing.T) {
-			store := newMemoryStore()
-			rootID := "66666666-6666-4666-8666-666666666666"
-			targetID := "77777777-7777-4777-8777-777777777777"
-			childID := "88888888-8888-4888-8888-888888888888"
-			putSnapshot(t, store, siteA, rootID, 1)
-			putSnapshot(t, store, siteA, targetID, 1)
-			putSnapshot(t, store, siteA, childID, 1)
-			setSnapshotParent(t, store, siteA, targetID, rootID, "Home", 7)
-			setSnapshotParent(t, store, siteA, childID, targetID, "Home", 7)
-			service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
-			ctx, err := service.Authenticate(context.Background(), "credential")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := service.AssignBranch(ctx, websiteapi.AssignBranchRequest{BranchID: branchA, SnapshotID: assignedID, ExpectedRevision: 0, ExpectedSnapshotRevision: 1}); err != nil {
-				t.Fatal(err)
-			}
-			before := len(store.records)
-
-			err = service.DeleteSnapshot(ctx, websiteapi.DeleteSnapshotRequest{SnapshotID: targetID, ExpectedRevision: 1})
-			if !errors.Is(err, websiteapi.ErrConflict) {
-				t.Fatalf("protected deletion error = %v, want conflict", err)
-			}
-			if len(store.records) != before || store.records[snapshotRecordKey(siteA, childID)].Revision != 1 {
-				t.Fatal("protected deletion partially changed snapshot records")
-			}
-		})
-	}
-}
-
 func TestDeleteSnapshotRejectsStaleRevisionWithoutMutation(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, siteA, snapshotA, 3)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -300,64 +162,19 @@ func TestDeleteSnapshotRejectsStaleRevisionWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestListBranchEventsPaginatesWithBranchScopedOpaqueCursor(t *testing.T) {
+func TestDeleteSnapshotRejectsCurrentLatestPageSnapshot(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, siteA, snapshotA, 1)
-	secondSnapshotID := "55555555-5555-4555-8555-555555555555"
-	putSnapshot(t, store, siteA, secondSnapshotID, 1)
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, snapshotID := range []string{snapshotA, secondSnapshotID, snapshotA} {
-		if _, err := service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
-			BranchID: branchA, SnapshotID: snapshotID, ExpectedRevision: int64(i), ExpectedSnapshotRevision: 1,
-		}); err != nil {
-			t.Fatal(err)
-		}
+	if err := service.DeleteSnapshot(ctx, websiteapi.DeleteSnapshotRequest{SnapshotID: snapshotA, ExpectedRevision: 1}); !errors.Is(err, websiteapi.ErrConflict) {
+		t.Fatalf("deleting the page's latest snapshot = %v, want conflict", err)
 	}
-
-	var ids []string
-	cursor := ""
-	for i := 0; i < 4; i++ {
-		page, err := service.ListBranchEvents(ctx, branchA, cursor, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(page.Items) == 0 {
-			break
-		}
-		ids = append(ids, page.Items[0].ID)
-		cursor = page.NextCursor
-		if cursor == "" {
-			break
-		}
-	}
-	if len(ids) != 3 || ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2] {
-		t.Fatalf("event IDs = %v, want three distinct events", ids)
-	}
-	if _, err := service.ListBranchEvents(ctx, "unknown", cursor, 1); !errors.Is(err, websiteapi.ErrNotFound) {
-		t.Fatalf("unknown branch error = %v, want not found", err)
-	}
-}
-
-func TestAssignBranchRequiresWriteLevelBeforeLookingUpTarget(t *testing.T) {
-	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
-	ctx, err := service.Authenticate(context.Background(), "credential")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = service.AssignBranch(ctx, websiteapi.AssignBranchRequest{
-		BranchID: branchA, SnapshotID: "missing", ExpectedRevision: 0, ExpectedSnapshotRevision: 0,
-	})
-	if !errors.Is(err, websiteapi.ErrForbidden) {
-		t.Fatalf("write without level 2 error = %v, want forbidden", err)
-	}
-	if len(store.records) != 0 {
-		t.Fatalf("denied assignment wrote %d records", len(store.records))
+	if page, err := service.GetPage(ctx, siteA, pageA); err != nil || page.LatestSnapshotID != snapshotA {
+		t.Fatalf("page registry after rejected deletion = %#v, %v", page, err)
 	}
 }
 
@@ -366,7 +183,7 @@ func TestListSnapshotsPaginatesDeterministicallyAcrossConfiguredSites(t *testing
 	putSnapshot(t, store, siteA, snapshotA, 2)
 	putSnapshot(t, store, siteA, "55555555-5555-4555-8555-555555555555", 1)
 	putSnapshot(t, store, siteB, snapshotB, 4)
-	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +192,7 @@ func TestListSnapshotsPaginatesDeterministicallyAcrossConfiguredSites(t *testing
 	var got []string
 	cursor := ""
 	for pages := 0; pages < 4; pages++ {
-		page, err := service.ListSnapshots(ctx, "", cursor, 1)
+		page, err := service.ListSnapshots(ctx, "", pageA, cursor, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -402,20 +219,93 @@ func TestListSnapshotsPaginatesDeterministicallyAcrossConfiguredSites(t *testing
 func TestListSnapshotsFailsClosedForUnknownLifecycleState(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshotWithState(t, store, siteA, snapshotA, 3, "draft")
-	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ListSnapshots(ctx, siteA, "", 10); !errors.Is(err, websiteapi.ErrUnavailable) {
+	if _, err := service.ListSnapshots(ctx, siteA, pageA, "", 10); !errors.Is(err, websiteapi.ErrUnavailable) {
 		t.Fatalf("unknown lifecycle state error = %v, want unavailable", err)
 	}
 }
 
-func TestGetSnapshotPreservesSnapshotScopedDataModel(t *testing.T) {
+func TestSiteModelUsesIndependentSiteRevisionAndDigest(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.SaveSiteModel(ctx, websiteapi.SaveSiteModelRequest{SiteID: siteA, ExpectedRevision: 0, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ModelRevision != 1 || first.SiteID != siteA || !first.VerifyDigest() {
+		t.Fatalf("site model projection = %#v", first)
+	}
+	readCtx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := service.GetSiteContentSchema(readCtx, siteA)
+	if err != nil || read.SiteID != first.SiteID || read.ModelRevision != first.ModelRevision || read.Digest != first.Digest || string(read.DataModel) != string(first.DataModel) {
+		t.Fatalf("read site model = %#v, %v", read, err)
+	}
+	second, err := service.SaveSiteModel(ctx, websiteapi.SaveSiteModelRequest{SiteID: siteA, ExpectedRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[],"positions":{}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ModelRevision != 2 || second.Digest == first.Digest {
+		t.Fatalf("site model revision/digest did not advance independently: first=%#v second=%#v", first, second)
+	}
+	if _, err := service.SaveSiteModel(ctx, websiteapi.SaveSiteModelRequest{SiteID: siteA, ExpectedRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}); !errors.Is(err, websiteapi.ErrConflict) {
+		t.Fatalf("stale site model revision error = %v, want conflict", err)
+	}
+}
+
+func TestPagePlacementProjectionIsScopedToExactSiteAndPage(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := json.RawMessage(`{"formatVersion":1,"entities":[{"id":"66666666-6666-4666-8666-666666666666","key":"product","name":"Product","cardinality":"many","fields":[{"id":"77777777-7777-4777-8777-777777777777","key":"title","name":"Title","type":"text"}]}]}`)
+	if _, err := service.SaveSiteModel(ctx, websiteapi.SaveSiteModelRequest{SiteID: siteA, DataModel: model}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := websiteapi.Snapshot{ID: snapshotA, SiteID: siteA, PageID: pageA, Name: "Home", Sequence: 1, FeaturePins: map[string]string{"hero": "1.2.0"}, State: "ready",
+		Payload: &websiteapi.SnapshotPayload{Config: json.RawMessage(`{"format_version":3,"page":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"Home","placements":[{"id":"placement-1","build":{"featureKey":"hero","version":"1.2.0"},"dataBindings":[{"inputKey":"items","entityId":"66666666-6666-4666-8666-666666666666","fields":[{"inputPath":"title","fieldId":"77777777-7777-4777-8777-777777777777"}]}]}]}}`), Metadata: json.RawMessage(`{}`)}}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := snapshotRecordKey(siteA, snapshotA)
+	store.records[key] = core.ModuleDataRecord{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "snapshot_id": snapshotA, "page_id": pageA, "state": "ready", "revision": float64(1), "parent_id": ""}), Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	putPageRecord(t, store, websiteapi.Page{ID: pageA, SiteID: siteA, Name: "Home", LatestSnapshotID: snapshotA, LatestSnapshotState: "ready", CreatedAt: snapshot.CreatedAt})
+	readCtx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := service.GetPagePlacementProjection(readCtx, siteA, pageA, snapshotA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !projection.VerifyDigest() || projection.Revision != 1 || len(projection.Placements) != 1 || projection.Placements[0].Bindings[0].Fields[0].FieldID != "77777777-7777-4777-8777-777777777777" {
+		t.Fatalf("page placement projection = %#v", projection)
+	}
+	if _, err := service.GetPagePlacementProjection(readCtx, siteA, pageB, snapshotA); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("cross-page projection error = %v, want not found", err)
+	}
+	if _, err := service.GetPagePlacementProjection(readCtx, siteB, pageA, snapshotA); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("cross-site projection error = %v, want not found", err)
+	}
+}
+
+func TestGetSnapshotConfigDoesNotContainSiteModel(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, siteA, snapshotA, 3)
-	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -432,14 +322,14 @@ func TestGetSnapshotPreservesSnapshotScopedDataModel(t *testing.T) {
 	if err := json.Unmarshal(snapshot.Payload.Config, &config); err != nil {
 		t.Fatal(err)
 	}
-	if string(config["dataModel"]) != `{"formatVersion":1,"entities":[]}` {
-		t.Fatalf("snapshot config lost its dataModel: %s", snapshot.Payload.Config)
+	if _, exists := config["dataModel"]; exists {
+		t.Fatalf("page snapshot contains site-wide dataModel: %s", snapshot.Payload.Config)
 	}
 }
 
 func TestSnapshotReadRequiresReadAccessBeforeLookingUpTarget(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelNone, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelNone, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -453,72 +343,158 @@ func TestSnapshotReadRequiresReadAccessBeforeLookingUpTarget(t *testing.T) {
 
 func TestSnapshotListRejectsUnknownSiteAndMalformedCursor(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelRead, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ListSnapshots(ctx, "unknown", "", 10); !errors.Is(err, websiteapi.ErrNotFound) {
+	if _, err := service.ListSnapshots(ctx, "unknown", pageA, "", 10); !errors.Is(err, websiteapi.ErrNotFound) {
 		t.Fatalf("unknown site error = %v, want not found", err)
 	}
-	if _, err := service.ListSnapshots(ctx, siteA, "not-a-cursor", 10); !errors.Is(err, websiteapi.ErrInvalid) {
+	if _, err := service.ListSnapshots(ctx, siteA, pageA, "not-a-cursor", 10); !errors.Is(err, websiteapi.ErrInvalid) {
 		t.Fatalf("malformed cursor error = %v, want invalid", err)
 	}
 }
 
-func TestCreateSnapshotRootAndChildUseSequenceAndLifecycle(t *testing.T) {
+func TestCreateSnapshotTreesAreIndependentBySiteAndPage(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	homeRoot := "99999999-9999-4999-8999-999999999999"
+	contactRoot := "aaaaaaaa-1111-4111-8111-111111111111"
+	putSnapshotForPageWithState(t, store, siteA, pageA, homeRoot, 1, "ready")
+	putSnapshotForPageWithState(t, store, siteA, pageB, contactRoot, 1, "ready")
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rootRequest := createSnapshotRequest("Root", "idempotency-root-001")
-	root, err := service.CreateSnapshot(ctx, rootRequest)
+	homeRequest := createSnapshotRequest("Home child", "idempotency-page-tree-home-001")
+	homeRequest.ParentID, homeRequest.ExpectedRevision = homeRoot, 1
+	home, err := service.CreateSnapshot(ctx, homeRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root.State != "ready" || root.Sequence != 1 || root.Revision != 1 || root.ParentID != "" {
-		t.Fatalf("root snapshot = %#v", root)
+	contactRequest := createSnapshotRequest("Contact child", "idempotency-page-tree-contact-01")
+	contactRequest.PageID, contactRequest.ParentID, contactRequest.ExpectedRevision = pageB, contactRoot, 1
+	contact, err := service.CreateSnapshot(ctx, contactRequest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if root.FeaturePins["hero"] != "1.2.0" || len(root.FeaturePins) != 1 {
-		t.Fatalf("feature pins were not derived only from placements: %#v", root.FeaturePins)
+	if home.Sequence != 8 || contact.Sequence != 8 || home.PageID != pageA || contact.PageID != pageB {
+		t.Fatalf("page snapshots were not independent: home=%#v contact=%#v", home, contact)
+	}
+	crossPageChild := createSnapshotRequest("Invalid cross-page child", "idempotency-cross-page-child-001")
+	crossPageChild.PageID = pageB
+	crossPageChild.ParentID = home.ID
+	crossPageChild.ExpectedRevision = home.Revision
+	if _, err := service.CreateSnapshot(ctx, crossPageChild); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("cross-page parent error = %v, want not found", err)
+	}
+	if _, exists := store.records[snapshotRecordKeyForPage(siteA, pageA, home.ID)]; !exists {
+		t.Fatal("home snapshot was not stored in its page-specific key")
+	}
+	contactKey := snapshotRecordKeyForPage(siteA, pageB, contact.ID)
+	if _, exists := store.records[contactKey]; !exists {
+		t.Fatal("contact snapshot was not stored in its page-specific key")
+	}
+
+	readCtx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	homePage, err := service.ListSnapshots(readCtx, siteA, pageA, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contactPage, err := service.ListSnapshots(readCtx, siteA, pageB, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(homePage.Items) != 2 || len(contactPage.Items) != 2 || !snapshotPageContains(homePage.Items, home.ID) || !snapshotPageContains(contactPage.Items, contact.ID) {
+		t.Fatalf("page-scoped snapshot lists leaked across trees: home=%#v contact=%#v", homePage.Items, contactPage.Items)
+	}
+}
+
+func snapshotPageContains(items []websiteapi.Snapshot, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCreatePageRootAndSnapshotChildUseSequenceAndLifecycle(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{SiteID: siteA, Name: "Root", IdempotencyKey: "idempotency-root-page-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootSnapshot, err := service.GetSnapshot(ctx, root.LatestSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.LatestSnapshotState != "ready" || rootSnapshot.Sequence != 1 || rootSnapshot.Revision != 1 || rootSnapshot.ParentID != "" {
+		t.Fatalf("root snapshot = %#v", rootSnapshot)
+	}
+	if rootSnapshot.Name != root.Name || len(rootSnapshot.FeaturePins) != 0 {
+		t.Fatalf("root snapshot identity/pins = %#v", rootSnapshot)
 	}
 
 	childRequest := createSnapshotRequest("Child", "idempotency-child-001")
-	childRequest.ParentID = root.ID
-	childRequest.ExpectedRevision = root.Revision
+	childRequest.PageID = root.ID
+	childRequest.ParentID = root.LatestSnapshotID
+	childRequest.ExpectedRevision = rootSnapshot.Revision
 	childRequest.ExpectedContentRevision = 99 // Content owns this precondition.
 	child, err := service.CreateSnapshot(ctx, childRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if child.State != "provisioning" || child.Sequence != 2 || child.ParentID != root.ID || child.ParentName != root.Name || child.ParentSequence != root.Sequence {
+	if child.State != "provisioning" || child.Sequence != 2 || child.ParentID != root.LatestSnapshotID || child.ParentName != root.Name || child.ParentSequence != rootSnapshot.Sequence {
 		t.Fatalf("child snapshot = %#v", child)
 	}
 	var config map[string]json.RawMessage
-	if err := json.Unmarshal(child.Payload.Config, &config); err != nil || len(config["dataModel"]) == 0 {
-		t.Fatalf("child snapshot lost snapshot-scoped dataModel: %s", child.Payload.Config)
+	if err := json.Unmarshal(child.Payload.Config, &config); err != nil {
+		t.Fatal(err)
 	}
-	ready, err := service.MarkSnapshotReady(ctx, child.ID, child.Revision)
-	if err != nil || ready.State != "ready" || ready.Revision != child.Revision+1 {
-		t.Fatalf("child finalization = %#v, error = %v", ready, err)
+	if _, exists := config["dataModel"]; exists {
+		t.Fatalf("child page snapshot contains site-wide dataModel: %s", child.Payload.Config)
+	}
+	if _, err := service.MarkSnapshotReady(ctx, child.ID, child.Revision); !errors.Is(err, websiteapi.ErrUnavailable) {
+		t.Fatalf("child finalization without a durable fork workflow = %v, want unavailable", err)
+	}
+	stored, err := service.GetSnapshot(ctx, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != "provisioning" || stored.Revision != child.Revision {
+		t.Fatalf("child snapshot changed without fork completion: %#v", stored)
 	}
 }
 
 func TestCreateChildSnapshotAcceptsUntouchedContentRevisionZero(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := service.CreateSnapshot(ctx, createSnapshotRequest("Root", "idempotency-zero-root-001"))
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{SiteID: siteA, Name: "Root", IdempotencyKey: "idempotency-zero-root-page-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := createSnapshotRequest("Child", "idempotency-zero-child-001")
+	request.PageID = page.ID
 	request.ParentID = root.ID
 	request.ExpectedRevision = root.Revision
 	request.ExpectedContentRevision = 0
@@ -531,66 +507,70 @@ func TestCreateChildSnapshotAcceptsUntouchedContentRevisionZero(t *testing.T) {
 	}
 }
 
-func TestCreateSnapshotReplaysIdempotencyAndConflictsOnDifferentInput(t *testing.T) {
+func TestCreatePageReplaysIdempotencyAndConflictsOnDifferentInput(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := createSnapshotRequest("Root", "idempotency-replay-001")
-	first, err := service.CreateSnapshot(ctx, request)
+	request := websiteapi.CreatePageRequest{SiteID: siteA, Name: "Root", IdempotencyKey: "idempotency-page-replay-001"}
+	first, err := service.CreatePage(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.CreateSnapshot(ctx, request)
+	second, err := service.CreatePage(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.ID != second.ID || len(store.records) != 3 {
-		t.Fatalf("replay created another snapshot: first=%s second=%s record_count=%d", first.ID, second.ID, len(store.records))
+	if first.ID != second.ID || first.LatestSnapshotID != second.LatestSnapshotID || len(store.records) != 4 {
+		t.Fatalf("replay created another page: first=%#v second=%#v record_count=%d", first, second, len(store.records))
 	}
 
 	request.Name = "Different root"
-	if _, err := service.CreateSnapshot(ctx, request); !errors.Is(err, websiteapi.ErrConflict) {
+	if _, err := service.CreatePage(ctx, request); !errors.Is(err, websiteapi.ErrConflict) {
 		t.Fatalf("reused idempotency key error = %v, want conflict", err)
 	}
-	if len(store.records) != 3 {
+	if len(store.records) != 4 {
 		t.Fatalf("conflicting idempotency input wrote records: %d", len(store.records))
 	}
 }
 
 func TestCreateSnapshotRejectsConflictingPlacementVersionsWithoutWrites(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	putSnapshot(t, store, siteA, snapshotA, 1)
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := createSnapshotRequest("Invalid root", "idempotency-conflict-001")
-	request.Payload.Config = json.RawMessage(`{"pages":[{"placements":[{"build":{"featureKey":"hero","version":"1.0.0"}},{"build":{"featureKey":"hero","version":"2.0.0"}}]}]}`)
+	request.ParentID, request.ExpectedRevision = snapshotA, 1
+	request.Payload.Config = json.RawMessage(`{"format_version":3,"page":{"placements":[{"id":"p1","build":{"featureKey":"hero","version":"1.0.0"}},{"id":"p2","build":{"featureKey":"hero","version":"2.0.0"}}]}}`)
 	if _, err := service.CreateSnapshot(ctx, request); !errors.Is(err, websiteapi.ErrInvalid) {
 		t.Fatalf("conflicting placement versions error = %v, want invalid", err)
 	}
-	if len(store.records) != 0 {
-		t.Fatalf("invalid config wrote %d records", len(store.records))
+	if len(store.records) != 2 {
+		t.Fatalf("invalid config wrote records beyond its page fixture: %d", len(store.records))
 	}
 }
 
-func TestCreateSnapshotRejectsDataModelPositionForFieldID(t *testing.T) {
+func TestCreateSnapshotRejectsSiteModelInsidePageConfig(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	putSnapshot(t, store, siteA, snapshotA, 1)
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := createSnapshotRequest("Invalid position", "idempotency-invalid-position-01")
-	request.Payload.Config = json.RawMessage(`{"dataModel":{"formatVersion":1,"entities":[{"id":"66666666-6666-4666-8666-666666666666","key":"model_product","name":"Product","cardinality":"many","fields":[{"id":"77777777-7777-4777-8777-777777777777","key":"field_name","name":"Name","type":"text"}]}],"positions":{"77777777-7777-4777-8777-777777777777":{"x":1,"y":2}}}}`)
+	request := createSnapshotRequest("Invalid model placement", "idempotency-invalid-model-page-01")
+	request.ParentID, request.ExpectedRevision = snapshotA, 1
+	request.Payload.Config = json.RawMessage(`{"format_version":3,"dataModel":{"formatVersion":1,"entities":[]},"page":{"placements":[]}}`)
 	if _, err := service.CreateSnapshot(ctx, request); !errors.Is(err, websiteapi.ErrInvalid) {
-		t.Fatalf("field keyed position error = %v, want invalid", err)
+		t.Fatalf("page config with site model error = %v, want invalid", err)
 	}
-	if len(store.records) != 0 {
-		t.Fatalf("invalid data model wrote %d records", len(store.records))
+	if len(store.records) != 2 {
+		t.Fatalf("invalid config wrote records beyond its page fixture: %d", len(store.records))
 	}
 }
 
@@ -599,7 +579,7 @@ func TestCreateSnapshotRejectsStaleOrProvisioningParent(t *testing.T) {
 	putSnapshot(t, store, siteA, snapshotA, 2)
 	provisioningID := "55555555-5555-4555-8555-555555555555"
 	putSnapshotWithState(t, store, siteA, provisioningID, 1, "provisioning")
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -621,12 +601,16 @@ func TestCreateSnapshotRejectsStaleOrProvisioningParent(t *testing.T) {
 
 func TestCreateSnapshotRequiresZeroContentRevisionForRootsAndNonnegativeForChildren(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, oneBranchConfig())
+	putSnapshot(t, store, siteA, snapshotA, 1)
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
 	}
 	root := createSnapshotRequest("Root", "idempotency-root-content-revision")
+	if _, err := service.CreateSnapshot(ctx, root); !errors.Is(err, websiteapi.ErrInvalid) {
+		t.Fatalf("direct root creation error = %v, want invalid", err)
+	}
 	root.ExpectedContentRevision = 1
 	if _, err := service.CreateSnapshot(ctx, root); !errors.Is(err, websiteapi.ErrInvalid) {
 		t.Fatalf("root with a content revision error = %v, want invalid", err)
@@ -636,17 +620,181 @@ func TestCreateSnapshotRequiresZeroContentRevisionForRootsAndNonnegativeForChild
 	if _, err := service.CreateSnapshot(ctx, child); !errors.Is(err, websiteapi.ErrInvalid) {
 		t.Fatalf("child with a negative content revision error = %v, want invalid", err)
 	}
+	if len(store.records) != 2 {
+		t.Fatalf("invalid revisions wrote records beyond their page fixture: %d", len(store.records))
+	}
+}
+
+func TestSnapshotOperationsRequireConfiguredSitePagePair(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := createSnapshotRequest("Unconfigured page", "idempotency-unconfigured-page-001")
+	request.PageID = "unknown-page"
+	if _, err := service.CreateSnapshot(ctx, request); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("unconfigured page create error = %v, want not found", err)
+	}
+	if _, err := service.ListSnapshots(ctx, siteA, "unknown-page", "", 10); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("unconfigured page list error = %v, want not found", err)
+	}
 	if len(store.records) != 0 {
-		t.Fatalf("invalid revisions wrote %d records", len(store.records))
+		t.Fatalf("unconfigured page operations wrote %d records", len(store.records))
+	}
+}
+
+func TestCreatePageRegistersReadyRootAndSupportsIdempotentReplay(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := websiteapi.CreatePageRequest{SiteID: siteA, Name: "Landing", IdempotencyKey: "idempotency-create-page-001"}
+	created, err := service.CreatePage(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := service.GetSnapshot(ctx, created.LatestSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Name != "Landing" || root.PageID != created.ID || root.State != "ready" || root.Sequence != 1 || root.ParentID != "" {
+		t.Fatalf("created page/root = %#v / %#v", created, root)
+	}
+	if page, err := service.GetPage(ctx, siteA, created.ID); err != nil || page.ID != created.ID {
+		t.Fatalf("GetPage = %#v, %v", page, err)
+	}
+	listed, err := service.ListPages(ctx, siteA, "", 1)
+	if err != nil || len(listed.Items) != 1 || listed.Items[0].ID != created.ID {
+		t.Fatalf("ListPages = %#v, %v", listed, err)
+	}
+	replayed, err := service.CreatePage(ctx, request)
+	if err != nil || replayed.ID != created.ID || replayed.LatestSnapshotID != created.LatestSnapshotID {
+		t.Fatalf("CreatePage replay = %#v, %v", replayed, err)
+	}
+	if len(store.records) != 4 {
+		t.Fatalf("page create/replay stored %d records, want atomic root/page/tree/receipt set", len(store.records))
+	}
+	if _, err := service.GetPage(ctx, siteB, created.ID); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("cross-site GetPage = %v, want not found", err)
+	}
+}
+
+func TestPageTemplatesCRUDAndApplyMaterializesExactRevision(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := websiteapi.PageTemplateConfiguration{SchemaVersion: 1, FeaturePins: map[string]string{}, PlacementSlots: []websiteapi.PlacementSlot{},
+		Payload: websiteapi.SnapshotPayload{Config: json.RawMessage(`{"format_version":3,"page":{"name":"Starter","placements":[]}}`), Metadata: json.RawMessage(`{}`)}}
+	createdTemplate, err := service.CreatePageTemplate(ctx, websiteapi.CreatePageTemplateRequest{SiteID: siteA, Name: "Starter template", Description: "Reusable layout", Configuration: configuration, IdempotencyKey: "idempotency-template-create-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdTemplate.Revision != 1 || len(createdTemplate.Digest) != 64 {
+		t.Fatalf("created template = %#v", createdTemplate)
+	}
+	listed, err := service.ListPageTemplates(ctx, siteA, "", 10)
+	if err != nil || len(listed.Items) != 1 || listed.Items[0].ID != createdTemplate.ID {
+		t.Fatalf("ListPageTemplates = %#v, %v", listed, err)
+	}
+	loaded, err := service.GetPageTemplate(ctx, siteA, createdTemplate.ID)
+	if err != nil || loaded.Digest != createdTemplate.Digest {
+		t.Fatalf("GetPageTemplate = %#v, %v", loaded, err)
+	}
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{SiteID: siteA, Name: "Custom landing", TemplateID: createdTemplate.ID, TemplateRevision: 1, IdempotencyKey: "idempotency-page-from-template-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootConfig struct {
+		Page struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"page"`
+	}
+	if json.Unmarshal(root.Payload.Config, &rootConfig) != nil || rootConfig.Page.ID != page.ID || rootConfig.Page.Name != "Custom landing" {
+		t.Fatalf("template root did not preserve generated page identity/name override: %s", root.Payload.Config)
+	}
+	var provenance map[string]map[string]any
+	if json.Unmarshal(root.Payload.Metadata, &provenance) != nil || provenance["template_source"]["template_id"] != createdTemplate.ID || provenance["template_source"]["template_revision"] != float64(1) {
+		t.Fatalf("template source provenance = %#v", provenance)
+	}
+	if _, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{SiteID: siteA, Name: "Stale template", TemplateID: createdTemplate.ID, TemplateRevision: 2, IdempotencyKey: "idempotency-stale-template-page-01"}); !errors.Is(err, websiteapi.ErrConflict) {
+		t.Fatalf("non-current template revision create error = %v, want conflict", err)
+	}
+
+	configuration.Payload.Config = json.RawMessage(`{"format_version":3,"page":{"name":"Updated starter","placements":[]}}`)
+	updated, err := service.UpdatePageTemplate(ctx, websiteapi.UpdatePageTemplateRequest{SiteID: siteA, TemplateID: createdTemplate.ID, ExpectedRevision: 1, Name: "Updated template", Description: "Updated layout", Configuration: configuration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Revision != 2 || updated.Digest == createdTemplate.Digest || len(updated.Digest) != 64 {
+		t.Fatalf("updated template revision/digest = %#v", updated)
+	}
+	if _, err := service.UpdatePageTemplate(ctx, websiteapi.UpdatePageTemplateRequest{SiteID: siteA, TemplateID: createdTemplate.ID, ExpectedRevision: 1, Name: "Stale", Configuration: configuration}); !errors.Is(err, websiteapi.ErrConflict) {
+		t.Fatalf("stale template update = %v, want conflict", err)
+	}
+
+	apply := websiteapi.ApplyPageTemplateRequest{SiteID: siteA, PageID: page.ID, TemplateID: updated.ID, TemplateRevision: updated.Revision,
+		ExpectedSnapshotID: root.ID, ExpectedSnapshotRevision: root.Revision, ExpectedContentRevision: 0, Confirmed: true,
+		IdempotencyKey: "idempotency-template-apply-001"}
+	if _, err := service.ApplyPageTemplate(ctx, websiteapi.ApplyPageTemplateRequest{SiteID: siteA, PageID: page.ID, TemplateID: updated.ID, TemplateRevision: updated.Revision,
+		ExpectedSnapshotID: root.ID, ExpectedSnapshotRevision: root.Revision, Confirmed: false, IdempotencyKey: "idempotency-unconfirmed-template-01"}); !errors.Is(err, websiteapi.ErrInvalid) {
+		t.Fatalf("unconfirmed template application = %v, want invalid", err)
+	}
+	child, err := service.ApplyPageTemplate(ctx, apply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.State != "provisioning" || child.ParentID != root.ID || child.Sequence != 2 {
+		t.Fatalf("template child snapshot = %#v", child)
+	}
+	var childPage struct {
+		Page struct {
+			Name string `json:"name"`
+		} `json:"page"`
+	}
+	if json.Unmarshal(child.Payload.Config, &childPage) != nil || childPage.Page.Name != "Updated starter" {
+		t.Fatalf("applied template config = %s", child.Payload.Config)
+	}
+	var childMetadata map[string]map[string]any
+	if json.Unmarshal(child.Payload.Metadata, &childMetadata) != nil || childMetadata["template_application"]["selection_policy"] != "reset" || childMetadata["template_application"]["template_revision"] != float64(2) {
+		t.Fatalf("template application provenance = %#v", childMetadata)
+	}
+	parentAfter, err := service.GetSnapshot(ctx, root.ID)
+	if err != nil || parentAfter.State != root.State || string(parentAfter.Payload.Config) != string(root.Payload.Config) {
+		t.Fatalf("template application mutated parent: %#v, %v", parentAfter, err)
+	}
+	replayed, err := service.ApplyPageTemplate(ctx, apply)
+	if err != nil || replayed.ID != child.ID {
+		t.Fatalf("template application replay = %#v, %v", replayed, err)
+	}
+	if err := service.DeletePageTemplate(ctx, websiteapi.DeletePageTemplateRequest{SiteID: siteA, TemplateID: updated.ID, ExpectedRevision: 1}); !errors.Is(err, websiteapi.ErrConflict) {
+		t.Fatalf("stale template deletion = %v, want conflict", err)
+	}
+	if err := service.DeletePageTemplate(ctx, websiteapi.DeletePageTemplateRequest{SiteID: siteA, TemplateID: updated.ID, ExpectedRevision: updated.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetPageTemplate(ctx, siteA, updated.ID); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("deleted template lookup = %v, want not found", err)
 	}
 }
 
 func createSnapshotRequest(name, idempotencyKey string) websiteapi.CreateSnapshotRequest {
 	return websiteapi.CreateSnapshotRequest{
-		SiteID: siteA, Name: name, IdempotencyKey: idempotencyKey,
+		SiteID: siteA, PageID: pageA, Name: name, IdempotencyKey: idempotencyKey,
 		Payload: websiteapi.SnapshotPayload{
-			Config:   json.RawMessage(`{"dataModel":{"formatVersion":1,"entities":[]},"features":[{"featureKey":"stale","version":"9.9.9"}],"pages":[{"placements":[{"build":{"featureKey":"hero","version":"1.2.0"}},{"build":{"featureKey":"hero","version":"1.2.0"}}]}]}`),
-			Metadata: json.RawMessage(`{}`), DesignSystem: json.RawMessage(`{}`),
+			Config:   json.RawMessage(`{"format_version":3,"features":[{"featureKey":"stale","version":"9.9.9"}],"page":{"placements":[{"id":"placement-1","build":{"featureKey":"hero","version":"1.2.0"}},{"id":"placement-2","build":{"featureKey":"hero","version":"1.2.0"}}]}}`),
+			Metadata: json.RawMessage(`{}`),
 		},
 	}
 }
@@ -661,15 +809,8 @@ func newService(t *testing.T, store *memoryStore, level core.AccessLevel, config
 	return service
 }
 
-func oneBranchConfig() websiteapp.Config {
-	return websiteapp.Config{
-		AccessGroup: "features",
-		Sites:       []string{siteA, siteB},
-		Branches: []websiteapp.BranchConfig{{
-			ID: branchA, Name: "Production", SiteID: siteA, ListenAddress: "127.0.0.1:8081",
-			CORSOrigins: []string{"https://www.example.test"}, Indexable: true, Enabled: true,
-		}},
-	}
+func websiteConfig() websiteapp.Config {
+	return websiteapp.Config{AccessGroup: "features", Sites: []string{siteA, siteB}}
 }
 
 func putSnapshot(t *testing.T, store *memoryStore, siteID, id string, revision int64) {
@@ -677,17 +818,43 @@ func putSnapshot(t *testing.T, store *memoryStore, siteID, id string, revision i
 }
 
 func putSnapshotWithState(t *testing.T, store *memoryStore, siteID, id string, revision int64, state string) {
+	putSnapshotForPageWithState(t, store, siteID, pageA, id, revision, state)
+}
+
+func putSnapshotForPageWithState(t *testing.T, store *memoryStore, siteID, pageID, id string, revision int64, state string) {
 	t.Helper()
+	now := time.Now().UTC()
 	snapshot := websiteapi.Snapshot{
-		ID: id, SiteID: siteID, Name: "Home", Sequence: 7, FeaturePins: map[string]string{}, State: state,
-		Payload: &websiteapi.SnapshotPayload{Config: json.RawMessage(`{"dataModel":{"formatVersion":1,"entities":[]}}`), Metadata: json.RawMessage(`{}`), DesignSystem: json.RawMessage(`{}`)},
+		ID: id, SiteID: siteID, PageID: pageID, Name: "Home", Sequence: 7, FeaturePins: map[string]string{}, State: state, CreatedAt: now,
+		Payload: &websiteapi.SnapshotPayload{Config: mustJSON(map[string]any{"format_version": 3, "page": map[string]any{"id": pageID, "name": "Home", "placements": []any{}}}), Metadata: json.RawMessage(`{}`)},
 	}
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := snapshotRecordKey(siteID, id)
-	store.records[key] = core.ModuleDataRecord{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "state": state, "revision": float64(revision)}), Revision: revision, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	key := snapshotRecordKeyForPage(siteID, pageID, id)
+	store.records[key] = core.ModuleDataRecord{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "snapshot_id": id, "page_id": pageID, "state": state, "revision": revision, "parent_id": ""}), Revision: revision, CreatedAt: now, UpdatedAt: now}
+	putPageRecord(t, store, websiteapi.Page{ID: pageID, SiteID: siteID, Name: snapshot.Name, LatestSnapshotID: id, LatestSnapshotState: state, CreatedAt: now})
+}
+
+func putPageRecord(t *testing.T, store *memoryStore, page websiteapi.Page) {
+	t.Helper()
+	key := websiterepo.PageKey(page.SiteID, page.ID)
+	revision := store.records[key].Revision + 1
+	if revision == 1 && page.CreatedAt.IsZero() {
+		page.CreatedAt = time.Now().UTC()
+	}
+	store.records[key] = core.ModuleDataRecord{Payload: mustJSON(map[string]any{"page": page}), PayloadVersion: 1,
+		IndexData: mustJSON(map[string]any{"record_type": "page", "page_id": page.ID, "snapshot_id": page.LatestSnapshotID, "state": page.LatestSnapshotState, "revision": revision}),
+		Revision:  revision, CreatedAt: page.CreatedAt, UpdatedAt: time.Now().UTC()}
+}
+
+func snapshotRecordKey(siteID, id string) core.ModuleDataKey {
+	return snapshotRecordKeyForPage(siteID, pageA, id)
+}
+
+func snapshotRecordKeyForPage(siteID, pageID, id string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "site", ScopeID: siteID, RecordKey: "snapshot/" + pageID + "/" + id}
 }
 
 func setSnapshotParent(t *testing.T, store *memoryStore, siteID, id, parentID, parentName string, parentSequence int64) {
@@ -709,10 +876,6 @@ func setSnapshotParent(t *testing.T, store *memoryStore, siteID, id, parentID, p
 	index["parent_id"] = parentID
 	record.IndexData = mustJSON(index)
 	store.records[key] = record
-}
-
-func snapshotRecordKey(siteID, id string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "site", ScopeID: siteID, RecordKey: "snapshot/" + id}
 }
 
 func putRecord(t *testing.T, store *memoryStore, key core.ModuleDataKey, payload, index map[string]any) {

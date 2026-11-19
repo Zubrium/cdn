@@ -1,5 +1,12 @@
 export function contentHref(path: string, snapshotId: string): string {
-  return snapshotId ? `${path}?snapshot=${encodeURIComponent(snapshotId)}` : path;
+  if (!snapshotId) return path;
+  const current = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+  const siteId = current.get("site_id");
+  const pageId = current.get("page_id");
+  const query = new URLSearchParams({ snapshot: snapshotId });
+  if (siteId) query.set("site_id", siteId);
+  if (pageId) query.set("page_id", pageId);
+  return `${path}?${query}`;
 }
 
 export function entityPath(entityKey: string): string {

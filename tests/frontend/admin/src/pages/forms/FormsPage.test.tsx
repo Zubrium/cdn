@@ -48,7 +48,7 @@ function renderPage(path: string, level: 1 | 2) {
     pages: [{ items: [schema], next_cursor: null }],
     pageParams: [null],
   });
-  mocks.useAuth.mockReturnValue({ principal: { group_access: { forms: level } } });
+  mocks.useAuth.mockReturnValue({ principal: { group_access: { forms_schemas: level } } });
   const router = createMemoryRouter([{ path: "/forms", element: createElement(FormsPage) }], { initialEntries: [path] });
   return renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(RouterProvider, { router })));
 }

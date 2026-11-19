@@ -17,12 +17,13 @@ const engineSnapshotID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testing.T) {
 	access := &testAuthorization{level: core.AccessLevelRead}
 	store := newEngineStore()
-	engine := newTestEngine(t, "ready", access, store)
+	engine := newTestEngine(t, access, store)
 	ctx, err := engine.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	workspace, err := engine.GetWorkspace(ctx, engineSnapshotID)
+	projection := schemaSnapshot("ready")
+	workspace, err := engine.GetWorkspace(ctx, projection)
 	if err != nil || workspace.Revision != 0 || string(workspace.DataModel) != `{"formatVersion":1,"entities":[]}` {
 		t.Fatalf("GetWorkspace() = %#v, err %v", workspace, err)
 	}
@@ -30,7 +31,7 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 		t.Fatalf("read authorization = level %v groups %v", access.required, access.groups)
 	}
 	putsBeforeDeniedWrite := store.putCount
-	_, err = engine.SaveWorkspaceDraft(ctx, contentapi.SaveWorkspaceDraftRequest{
+	_, err = engine.SaveWorkspaceDraft(ctx, projection, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: engineSnapshotID, IdempotencyKey: "save-key", ExpectedRevision: 0,
 		Records: []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
 	})
@@ -38,7 +39,7 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 		t.Fatalf("read-only principal write error = %v, Put count %d", err, store.putCount)
 	}
 	access.level = core.AccessLevelWrite
-	saved, err := engine.SaveWorkspaceDraft(ctx, contentapi.SaveWorkspaceDraftRequest{
+	saved, err := engine.SaveWorkspaceDraft(ctx, projection, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: engineSnapshotID, IdempotencyKey: "save-key", ExpectedRevision: 0,
 		Records: []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
 	})
@@ -47,34 +48,47 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 	}
 }
 
+func TestEngineRejectsMalformedSelectionPolicyBeforeAuthorizationOrMutation(t *testing.T) {
+	access := &testAuthorization{level: core.AccessLevelWrite}
+	store := newEngineStore()
+	engine := newTestEngine(t, access, store)
+	_, err := engine.CopySnapshotContent(context.Background(), contentapi.CopySnapshotContentRequest{SelectionPolicy: "merge"})
+	if !errors.Is(err, contentapi.ErrInvalid) {
+		t.Fatalf("malformed policy error = %v, want invalid", err)
+	}
+	if store.putCount != 0 || access.required != 0 {
+		t.Fatalf("malformed policy reached authorization or persistence: puts=%d required=%v", store.putCount, access.required)
+	}
+}
+
 func TestEngineRejectsUnreadySnapshotAndForeignAuthenticationContext(t *testing.T) {
 	access := &testAuthorization{level: core.AccessLevelRead}
 	store := newEngineStore()
-	first := newTestEngine(t, "provisioning", access, store)
+	first := newTestEngine(t, access, store)
 	ctx, err := first.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if _, err := first.GetWorkspace(ctx, engineSnapshotID); !errors.Is(err, contentapi.ErrNotFound) {
+	if _, err := first.GetWorkspace(ctx, schemaSnapshot("provisioning")); !errors.Is(err, contentapi.ErrNotFound) {
 		t.Fatalf("GetWorkspace() before Website readiness error = %v, want not found", err)
 	}
 	if store.putCount != 0 {
 		t.Fatalf("unready snapshot initialized persisted Content state; Put count = %d", store.putCount)
 	}
-	second := newTestEngine(t, "ready", access, newEngineStore())
-	if _, err := second.GetWorkspace(ctx, engineSnapshotID); !errors.Is(err, contentapi.ErrUnauthorized) {
+	second := newTestEngine(t, access, newEngineStore())
+	if _, err := second.GetWorkspace(ctx, schemaSnapshot("ready")); !errors.Is(err, contentapi.ErrUnauthorized) {
 		t.Fatalf("foreign engine context error = %v, want unauthorized", err)
 	}
 }
 
-func newTestEngine(t *testing.T, state string, authorization *testAuthorization, store *testDataStore) *content.Engine {
+func newTestEngine(t *testing.T, authorization *testAuthorization, store *testDataStore) *content.Engine {
 	t.Helper()
 	principal := core.Principal{ID: "user-1", Name: "User", Active: true}
 	identity := testIdentity{principal: principal}
 	sessions := testSessions{principal: principal}
 	engine, err := content.New(content.Dependencies{
 		Identity: identity, Sessions: sessions, Authorization: authorization,
-		Files: testFiles{}, Data: store, Schema: testSchemaResolver{state: state},
+		Files: testFiles{}, Data: store,
 	})
 	if err != nil {
 		t.Fatalf("content.New() error = %v", err)
@@ -122,10 +136,52 @@ func (testFiles) StatFile(context.Context, core.Session, string) (core.File, err
 	return core.File{}, core.ErrFileNotFound
 }
 
-type testSchemaResolver struct{ state string }
+func schemaSnapshot(state string) contentapi.Projections {
+	site := contentapi.SiteContentSchema{Version: contentapi.ProjectionVersion, SiteID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", ModelRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
+	site.Digest, _ = site.ComputeDigest()
+	page := contentapi.PagePlacementProjection{Version: contentapi.ProjectionVersion, PageSnapshotID: engineSnapshotID, PageID: "page-1", SiteID: site.SiteID, Revision: 1, State: state, Placements: []contentapi.Placement{}}
+	page.Digest, _ = page.ComputeDigest()
+	return contentapi.Projections{Site: site, Page: page}
+}
 
-func (resolver testSchemaResolver) ResolveContentSchema(context.Context, string) (contentapi.SnapshotSchema, error) {
-	return contentapi.SnapshotSchema{State: resolver.state}, nil
+func TestEngineRejectsInvalidSchemaSnapshotVersionDigestStateAndBinding(t *testing.T) {
+	access := &testAuthorization{level: core.AccessLevelWrite}
+	store := newEngineStore()
+	engine := newTestEngine(t, access, store)
+	ctx, err := engine.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unsupported := schemaSnapshot("ready")
+	unsupported.Site.Version++
+	unsupported.Site.Digest, _ = unsupported.Site.ComputeDigest()
+	if _, err := engine.GetWorkspace(ctx, unsupported); !errors.Is(err, contentapi.ErrInvalid) {
+		t.Errorf("unsupported version with valid digest error = %v", err)
+	}
+
+	staleDigest := schemaSnapshot("ready")
+	staleDigest.Page.Placements = []contentapi.Placement{{ID: "placement-changed"}}
+	if _, err := engine.GetWorkspace(ctx, staleDigest); !errors.Is(err, contentapi.ErrInvalid) {
+		t.Errorf("changed projection with stale digest error = %v", err)
+	}
+
+	unready := schemaSnapshot("provisioning")
+	if _, err := engine.GetWorkspace(ctx, unready); !errors.Is(err, contentapi.ErrNotFound) {
+		t.Errorf("unready snapshot error = %v", err)
+	}
+
+	mismatched := schemaSnapshot("ready")
+	_, err = engine.SaveWorkspaceDraft(ctx, mismatched, contentapi.SaveWorkspaceDraftRequest{
+		SnapshotID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", IdempotencyKey: "save-key",
+		ExpectedRevision: 0, Records: []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
+	})
+	if !errors.Is(err, contentapi.ErrInvalid) {
+		t.Errorf("request/projection snapshot mismatch error = %v", err)
+	}
+	if store.putCount != 0 {
+		t.Fatalf("invalid schema projection persisted state: Put count = %d", store.putCount)
+	}
 }
 
 type testDataStore struct {

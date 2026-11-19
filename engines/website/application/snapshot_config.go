@@ -15,15 +15,71 @@ import (
 )
 
 type snapshotConfigProjection struct {
-	DataModel json.RawMessage `json:"dataModel"`
-	Pages     []struct {
-		Placements []struct {
-			Build *struct {
-				FeatureKey string `json:"featureKey"`
-				Version    string `json:"version"`
-			} `json:"build"`
-		} `json:"placements"`
-	} `json:"pages"`
+	FormatVersion int `json:"format_version"`
+	Page          *snapshotPageProjection `json:"page"`
+	Pages         []snapshotPageProjection `json:"pages"`
+}
+
+type snapshotPageProjection struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Placements []struct {
+		ID          string `json:"id"`
+		Slot        string `json:"slot"`
+		Build       *struct {
+			FeatureKey string `json:"featureKey"`
+			Version    string `json:"version"`
+		} `json:"build"`
+		DataBindings []snapshotDataBinding `json:"dataBindings"`
+	} `json:"placements"`
+}
+
+type snapshotDataBinding struct {
+	InputKey  string `json:"inputKey"`
+	EntityID  string `json:"entityId"`
+	FieldID   string `json:"fieldId"`
+	Fields    []struct {
+		InputPath string `json:"inputPath"`
+		FieldID   string `json:"fieldId"`
+	} `json:"fields"`
+	Lookup *struct {
+		Argument string `json:"argument"`
+		FieldID  string `json:"fieldId"`
+	} `json:"lookup"`
+	DetailSEO *struct {
+		TitleFieldID       string `json:"titleFieldId"`
+		DescriptionFieldID string `json:"descriptionFieldId"`
+		OGTitleFieldID     string `json:"ogTitleFieldId"`
+		OGDescriptionFieldID string `json:"ogDescriptionFieldId"`
+		OGImageFieldID     string `json:"ogImageFieldId"`
+	} `json:"detailSEO"`
+}
+
+func snapshotPageFromConfig(raw json.RawMessage) (snapshotPageProjection, error) {
+	if !validJSONObject(raw) {
+		return snapshotPageProjection{}, websiteapi.ErrInvalid
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return snapshotPageProjection{}, websiteapi.ErrInvalid
+	}
+	if _, hasModel := fields["dataModel"]; hasModel {
+		return snapshotPageProjection{}, websiteapi.ErrInvalid
+	}
+	var config snapshotConfigProjection
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return snapshotPageProjection{}, websiteapi.ErrInvalid
+	}
+	if config.Page != nil {
+		if len(config.Pages) != 0 {
+			return snapshotPageProjection{}, websiteapi.ErrInvalid
+		}
+		return *config.Page, nil
+	}
+	if len(config.Pages) != 1 {
+		return snapshotPageProjection{}, websiteapi.ErrInvalid
+	}
+	return config.Pages[0], nil
 }
 
 var dataModelKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -61,26 +117,21 @@ func featurePinsFromConfig(raw json.RawMessage) (map[string]string, error) {
 	if !validJSONObject(raw) {
 		return nil, websiteapi.ErrInvalid
 	}
-	var config snapshotConfigProjection
-	if err := json.Unmarshal(raw, &config); err != nil {
-		return nil, websiteapi.ErrInvalid
-	}
-	if err := validateDataModel(config.DataModel); err != nil {
+	page, err := snapshotPageFromConfig(raw)
+	if err != nil {
 		return nil, err
 	}
 	pins := make(map[string]string)
-	for _, page := range config.Pages {
-		for _, placement := range page.Placements {
-			if placement.Build == nil || strings.TrimSpace(placement.Build.FeatureKey) != placement.Build.FeatureKey ||
-				!identifierPattern.MatchString(placement.Build.FeatureKey) || strings.TrimSpace(placement.Build.Version) != placement.Build.Version ||
-				!featureVersionPattern.MatchString(placement.Build.Version) {
-				return nil, websiteapi.ErrInvalid
-			}
-			if current, exists := pins[placement.Build.FeatureKey]; exists && current != placement.Build.Version {
-				return nil, websiteapi.ErrInvalid
-			}
-			pins[placement.Build.FeatureKey] = placement.Build.Version
+	for _, placement := range page.Placements {
+		if placement.Build == nil || strings.TrimSpace(placement.Build.FeatureKey) != placement.Build.FeatureKey ||
+			!identifierPattern.MatchString(placement.Build.FeatureKey) || strings.TrimSpace(placement.Build.Version) != placement.Build.Version ||
+			!featureVersionPattern.MatchString(placement.Build.Version) {
+			return nil, websiteapi.ErrInvalid
 		}
+		if current, exists := pins[placement.Build.FeatureKey]; exists && current != placement.Build.Version {
+			return nil, websiteapi.ErrInvalid
+		}
+		pins[placement.Build.FeatureKey] = placement.Build.Version
 	}
 	return pins, nil
 }

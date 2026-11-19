@@ -6,9 +6,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   api: { website: { branches: vi.fn(), allSnapshots: vi.fn(), branchEvents: vi.fn(), snapshot: vi.fn(), assignBranch: vi.fn() } },
+  getSyntheticDataMode: vi.fn(() => true),
+  subscribeSyntheticDataMode: vi.fn(() => () => undefined),
 }));
 
-vi.mock("@/api", () => ({ api: mocks.api }));
+vi.mock("@/api", () => ({
+  api: mocks.api,
+  getSyntheticDataMode: mocks.getSyntheticDataMode,
+  subscribeSyntheticDataMode: mocks.subscribeSyntheticDataMode,
+}));
 vi.mock("@/components/common/confirm", () => ({ useConfirm: () => vi.fn() }));
 
 import BranchesPage from "../../../../../../frontend/admin/src/pages/site/BranchesPage";
@@ -35,18 +41,17 @@ function renderPage() {
   ));
 }
 
-describe("Website branch assignments", () => {
+describe("branch assignment preview", () => {
   beforeEach(() => {
     mocks.api.website.branches.mockResolvedValue({ items: [branch], next_cursor: null });
     mocks.api.website.allSnapshots.mockResolvedValue([snapshot]);
     mocks.api.website.branchEvents.mockResolvedValue({ items: [], next_cursor: null });
   });
 
-  it("renders configured topology and only snapshots belonging to the branch site", () => {
+  it("does not imply branch assignments are loaded or provide live writes", () => {
     const rendered = renderPage();
-    expect(rendered).toContain("preview");
-    expect(rendered).toContain("127.0.0.1:8081");
-    expect(rendered).toContain("#12 · Homepage");
-    expect(rendered).toContain("Назначить");
+    expect(rendered).toContain("Назначения недоступны через Admin API");
+    expect(rendered).toContain("нет endpoint для чтения или изменения назначений");
+    expect(rendered).not.toContain("Назначить");
   });
 });

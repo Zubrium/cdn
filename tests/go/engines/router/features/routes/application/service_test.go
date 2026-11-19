@@ -36,7 +36,7 @@ func (authorizer *fakeAuthorizer) RequireGroupLevel(_ context.Context, _ core.Se
 
 type fakeTargetValidator struct{ err error }
 
-func (validator fakeTargetValidator) ValidateRouteTarget(_ context.Context, target model.Target) error {
+func (validator fakeTargetValidator) ValidateRouteTarget(_ context.Context, target model.Target, _ string) error {
 	if validator.err != nil {
 		return validator.err
 	}

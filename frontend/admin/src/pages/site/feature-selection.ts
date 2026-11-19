@@ -1,4 +1,4 @@
-import type { SiteConfig } from "@/types";
+import type { SiteEditorDraft } from "@/types";
 
 export interface FeatureReference {
   featureKey: string;
@@ -10,7 +10,7 @@ function validReference(reference: FeatureReference | undefined): reference is F
 }
 
 /** The snapshot composition is the unique set of builds used by page placements. */
-export function deriveFeatureComposition(config: SiteConfig): FeatureReference[] {
+export function deriveFeatureComposition(config: SiteEditorDraft): FeatureReference[] {
   const references = new Map<string, string>();
   for (const page of config.pages) {
     for (const placement of page.placements) {
@@ -23,19 +23,19 @@ export function deriveFeatureComposition(config: SiteConfig): FeatureReference[]
 }
 
 /** Replaces legacy/manual selections with the placement-derived composition. */
-export function normalizeFeatureComposition(config: SiteConfig): SiteConfig {
+export function normalizeFeatureComposition(config: SiteEditorDraft): SiteEditorDraft {
   const features = deriveFeatureComposition(config);
   if (JSON.stringify(config.features ?? []) === JSON.stringify(features)) return config;
   return { ...config, features };
 }
 
 /** Uses only placement-derived references; legacy config.features is not authoritative. */
-export function selectedFeatures(config: SiteConfig): Map<string, string> {
+export function selectedFeatures(config: SiteEditorDraft): Map<string, string> {
   return new Map(deriveFeatureComposition(config).map(({ featureKey, version }) => [featureKey, version]));
 }
 
 /** Selecting a pinned version updates each placement that uses the build. */
-export function selectFeature(config: SiteConfig, key: string, version: string): SiteConfig {
+export function selectFeature(config: SiteEditorDraft, key: string, version: string): SiteEditorDraft {
   if (!selectedFeatures(config).has(key)) return config;
   return normalizeFeatureComposition({
     ...config,
@@ -49,7 +49,7 @@ export function selectFeature(config: SiteConfig, key: string, version: string):
   });
 }
 
-export function featureVersionChanges(previous: SiteConfig, next: SiteConfig): Array<{ featureKey: string; fromVersion: string; toVersion: string }> {
+export function featureVersionChanges(previous: SiteEditorDraft, next: SiteEditorDraft): Array<{ featureKey: string; fromVersion: string; toVersion: string }> {
   const before = selectedFeatures(previous);
   const after = selectedFeatures(next);
   return [...after].flatMap(([featureKey, toVersion]) => {
@@ -58,7 +58,7 @@ export function featureVersionChanges(previous: SiteConfig, next: SiteConfig): A
   });
 }
 
-export function removePlacement(config: SiteConfig, pageId: string, placementId: string): SiteConfig {
+export function removePlacement(config: SiteEditorDraft, pageId: string, placementId: string): SiteEditorDraft {
   const page = config.pages.find((item) => item.id === pageId);
   if (!page || !page.placements.some((placement) => placement.id === placementId)) return config;
   return normalizeFeatureComposition({
@@ -69,6 +69,6 @@ export function removePlacement(config: SiteConfig, pageId: string, placementId:
   });
 }
 
-export function featureIsPlaced(config: SiteConfig, key: string): boolean {
+export function featureIsPlaced(config: SiteEditorDraft, key: string): boolean {
   return selectedFeatures(config).has(key);
 }

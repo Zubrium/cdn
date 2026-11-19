@@ -1,7 +1,6 @@
 package content
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -37,7 +36,6 @@ type Dependencies struct {
 	Authorization core.GroupAuthorizationCapability
 	Files         FileOperations
 	Data          DataStore
-	Schema        contentapi.SchemaResolver
 }
 
 type Engine struct {
@@ -45,7 +43,6 @@ type Engine struct {
 	identity      core.EngineIdentityCapability
 	sessions      core.SessionCapability
 	authorization core.GroupAuthorizationCapability
-	resolver      contentapi.SchemaResolver
 	service       *contentapp.Service
 }
 
@@ -59,7 +56,7 @@ type authenticatedState struct {
 
 func New(dependencies Dependencies) (*Engine, error) {
 	if nilCapability(dependencies.Identity) || nilCapability(dependencies.Sessions) || nilCapability(dependencies.Authorization) ||
-		nilCapability(dependencies.Files) || nilCapability(dependencies.Data) || nilCapability(dependencies.Schema) {
+		nilCapability(dependencies.Files) || nilCapability(dependencies.Data) {
 		return nil, contentapi.ErrUnavailable
 	}
 	repo, err := repository.New(dependencies.Data)
@@ -72,7 +69,7 @@ func New(dependencies Dependencies) (*Engine, error) {
 	}
 	return &Engine{
 		identity: dependencies.Identity, sessions: dependencies.Sessions, authorization: dependencies.Authorization,
-		resolver: dependencies.Schema, service: service,
+		service: service,
 	}, nil
 }
 
@@ -120,28 +117,28 @@ func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) 
 	return state, nil
 }
 
-func (engine *Engine) GetWorkspace(ctx context.Context, snapshotID string) (contentapi.Workspace, error) {
+func (engine *Engine) GetWorkspace(ctx context.Context, projection contentapi.Projections) (contentapi.Workspace, error) {
 	state, err := engine.authorize(ctx, core.AccessLevelRead)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(ctx, snapshotID)
+	schema, err := engine.resolveSchema(projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	workspace, err := engine.service.GetWorkspace(ctx, state.session, schema, snapshotID)
+	workspace, err := engine.service.GetWorkspace(ctx, state.session, schema, projection.Page.PageSnapshotID)
 	if err != nil {
 		return contentapi.Workspace{}, mapError(err)
 	}
 	return toAPIWorkspace(workspace), nil
 }
 
-func (engine *Engine) SaveWorkspaceDraft(ctx context.Context, request contentapi.SaveWorkspaceDraftRequest) (contentapi.Workspace, error) {
+func (engine *Engine) SaveWorkspaceDraft(ctx context.Context, projection contentapi.Projections, request contentapi.SaveWorkspaceDraftRequest) (contentapi.Workspace, error) {
 	state, err := engine.authorize(ctx, core.AccessLevelWrite)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(ctx, request.SnapshotID)
+	schema, err := engine.resolveSchema(projection, request.SnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -152,12 +149,12 @@ func (engine *Engine) SaveWorkspaceDraft(ctx context.Context, request contentapi
 	return toAPIWorkspace(workspace), nil
 }
 
-func (engine *Engine) PublishWorkspace(ctx context.Context, request contentapi.PublishWorkspaceRequest) (contentapi.Workspace, error) {
+func (engine *Engine) PublishWorkspace(ctx context.Context, projection contentapi.Projections, request contentapi.PublishWorkspaceRequest) (contentapi.Workspace, error) {
 	state, err := engine.authorize(ctx, core.AccessLevelWrite)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(ctx, request.SnapshotID)
+	schema, err := engine.resolveSchema(projection, request.SnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -168,15 +165,15 @@ func (engine *Engine) PublishWorkspace(ctx context.Context, request contentapi.P
 	return toAPIWorkspace(workspace), nil
 }
 
-func (engine *Engine) ListHistory(ctx context.Context, snapshotID, cursor string, limit int) (contentapi.HistoryPage, error) {
+func (engine *Engine) ListHistory(ctx context.Context, projection contentapi.Projections, cursor string, limit int) (contentapi.HistoryPage, error) {
 	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
 		return contentapi.HistoryPage{}, err
 	}
-	schema, err := engine.resolveSchema(ctx, snapshotID)
+	schema, err := engine.resolveSchema(projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
 		return contentapi.HistoryPage{}, err
 	}
-	page, err := engine.service.ListHistory(ctx, schema, snapshotID, cursor, limit)
+	page, err := engine.service.ListHistory(ctx, schema, projection.Page.PageSnapshotID, cursor, limit)
 	if err != nil {
 		return contentapi.HistoryPage{}, mapError(err)
 	}
@@ -190,12 +187,12 @@ func (engine *Engine) ListHistory(ctx context.Context, snapshotID, cursor string
 	return result, nil
 }
 
-func (engine *Engine) RestoreHistory(ctx context.Context, request contentapi.RestoreHistoryRequest) (contentapi.Workspace, error) {
+func (engine *Engine) RestoreHistory(ctx context.Context, projection contentapi.Projections, request contentapi.RestoreHistoryRequest) (contentapi.Workspace, error) {
 	state, err := engine.authorize(ctx, core.AccessLevelWrite)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(ctx, request.SnapshotID)
+	schema, err := engine.resolveSchema(projection, request.SnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -208,12 +205,12 @@ func (engine *Engine) RestoreHistory(ctx context.Context, request contentapi.Res
 
 // ReadPublishedContent is an in-process projection for trusted runtime
 // composition. Anonymous HTTP delivery is owned by Router and its route table.
-func (engine *Engine) ReadPublishedContent(ctx context.Context, snapshotID string) (contentapi.PublishedContent, error) {
-	schema, err := engine.resolveSchema(ctx, snapshotID)
+func (engine *Engine) ReadPublishedContent(ctx context.Context, projection contentapi.Projections) (contentapi.PublishedContent, error) {
+	schema, err := engine.resolveSchema(projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
 		return contentapi.PublishedContent{}, err
 	}
-	content, err := engine.service.ReadPublishedContent(ctx, schema, snapshotID)
+	content, err := engine.service.ReadPublishedContent(ctx, schema, projection.Page.PageSnapshotID)
 	if err != nil {
 		return contentapi.PublishedContent{}, mapError(err)
 	}
@@ -224,15 +221,22 @@ func (engine *Engine) ReadPublishedContent(ctx context.Context, snapshotID strin
 }
 
 func (engine *Engine) CopySnapshotContent(ctx context.Context, request contentapi.CopySnapshotContentRequest) (contentapi.CopySnapshotContentResult, error) {
+	if !contentapi.ValidSelectionPolicy(request.SelectionPolicy) {
+		return contentapi.CopySnapshotContentResult{}, contentapi.ErrInvalid
+	}
 	state, err := engine.authorize(ctx, core.AccessLevelWrite)
 	if err != nil {
 		return contentapi.CopySnapshotContentResult{}, err
 	}
-	source, err := engine.resolveSchema(ctx, request.SourceSnapshotID)
+	if request.SourceSnapshotID == "" || request.TargetSnapshotID == "" || request.SourceSnapshotID == request.TargetSnapshotID || request.ExpectedSourceRevision < 0 ||
+		request.SourceSchema.Page.PageSnapshotID != request.SourceSnapshotID || request.TargetSchema.Page.PageSnapshotID != request.TargetSnapshotID {
+		return contentapi.CopySnapshotContentResult{}, contentapi.ErrInvalid
+	}
+	source, err := engine.resolveSchema(request.SourceSchema, request.SourceSnapshotID, false)
 	if err != nil {
 		return contentapi.CopySnapshotContentResult{}, err
 	}
-	target, err := engine.resolveSchema(ctx, request.TargetSnapshotID)
+	target, err := engine.resolveSchema(request.TargetSchema, request.TargetSnapshotID, true)
 	if err != nil {
 		return contentapi.CopySnapshotContentResult{}, err
 	}
@@ -246,27 +250,21 @@ func (engine *Engine) CopySnapshotContent(ctx context.Context, request contentap
 	}, nil
 }
 
-func (engine *Engine) resolveSchema(ctx context.Context, snapshotID string) (domain.Schema, error) {
-	if engine == nil || ctx == nil || !domain.ValidID(snapshotID) || nilCapability(engine.resolver) {
+func (engine *Engine) resolveSchema(projections contentapi.Projections, pageSnapshotID string, allowProvisioning bool) (domain.Schema, error) {
+	page := projections.Page
+	if engine == nil || !domain.ValidID(pageSnapshotID) || !projections.VerifyScope(pageSnapshotID) {
+		return domain.Schema{}, contentapi.ErrInvalid
+	}
+	if page.State != "ready" && !(allowProvisioning && page.State == "provisioning") {
 		return domain.Schema{}, contentapi.ErrNotFound
 	}
-	resolved, err := engine.resolver.ResolveContentSchema(ctx, snapshotID)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return domain.Schema{}, err
-		}
-		return domain.Schema{}, mapError(err)
-	}
-	dataModel := append([]byte(nil), resolved.DataModel...)
-	if len(bytes.TrimSpace(dataModel)) == 0 {
-		dataModel = []byte(`{"formatVersion":1,"entities":[]}`)
-	}
+	dataModel := append([]byte(nil), projections.Site.DataModel...)
 	model, err := domain.ParseDataModel(dataModel)
 	if err != nil {
-		return domain.Schema{}, contentapi.ErrUnavailable
+		return domain.Schema{}, contentapi.ErrInvalid
 	}
-	placements := make([]domain.PlacementView, len(resolved.Placements))
-	for index, placement := range resolved.Placements {
+	placements := make([]domain.PlacementView, len(page.Placements))
+	for index, placement := range page.Placements {
 		inputs := make([]domain.PlacementInput, len(placement.Inputs))
 		for inputIndex, input := range placement.Inputs {
 			fields := make([]domain.PlacementField, len(input.Fields))
@@ -279,13 +277,11 @@ func (engine *Engine) resolveSchema(ctx context.Context, snapshotID string) (dom
 			}
 			inputs[inputIndex] = domain.PlacementInput{InputKey: input.InputKey, Kind: input.Kind, EntityID: input.EntityID, Fields: fields, Lookup: lookup}
 		}
-		placements[index] = domain.PlacementView{
-			ID: placement.ID, PageID: placement.PageID, PageName: placement.PageName,
-			FeatureKey: placement.FeatureKey, FeatureName: placement.FeatureName, Version: placement.Version,
-			Inputs: inputs,
-		}
+		placements[index] = domain.PlacementView{ID: placement.ID, PageID: placement.PageID, FeatureKey: placement.FeatureKey, FeatureName: placement.FeatureName, Version: placement.Version, Inputs: inputs}
 	}
-	return domain.Schema{State: resolved.State, DataModel: dataModel, Model: model, Placements: placements}, nil
+	return domain.Schema{State: page.State, SiteID: projections.Site.SiteID, PageSnapshotID: pageSnapshotID,
+		ModelRevision: projections.Site.ModelRevision, ModelDigest: projections.Site.Digest,
+		PageRevision: page.Revision, PageDigest: page.Digest, DataModel: dataModel, Model: model, Placements: placements}, nil
 }
 
 func toAPIWorkspace(workspace domain.WorkspaceView) contentapi.Workspace {
@@ -309,8 +305,10 @@ func toAPIWorkspace(workspace domain.WorkspaceView) contentapi.Workspace {
 		}
 	}
 	return contentapi.Workspace{
-		SnapshotID: workspace.SnapshotID, DataModel: append([]byte(nil), workspace.DataModel...),
-		Revision: workspace.Revision, PublishedRevision: workspace.PublishedRevision,
+		SnapshotID: workspace.SnapshotID, SiteID: workspace.SiteID, PageSnapshotID: workspace.PageSnapshotID,
+		ModelRevision: workspace.ModelRevision, ModelDigest: workspace.ModelDigest, PageRevision: workspace.PageRevision, PageDigest: workspace.PageDigest,
+		DataModel: append([]byte(nil), workspace.DataModel...),
+		Revision:  workspace.Revision, SelectionRevision: workspace.SelectionRevision, PublishedRevision: workspace.PublishedRevision,
 		Records: toAPIRecords(workspace.Records), Selections: toAPISelections(workspace.Selections),
 		Placements: placements, ClientRecordIDs: cloneStringMap(workspace.ClientRecordIDs),
 	}

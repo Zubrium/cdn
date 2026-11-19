@@ -373,6 +373,15 @@ func TestCreateRouteAcceptsExplicitCoreTargets(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control=%q", response.Header().Get("Cache-Control"))
 	}
+	request = httptest.NewRequest(http.MethodPost, routesPath, strings.NewReader(`{"branch_id":"storefront","host":"site.example","path":"/","match":"exact","target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301"}}`))
+	request.Header.Set("Authorization", "Bearer admin-secret")
+	request.Header.Set("Idempotency-Key", "router-route-create-0002")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("client-supplied branch_id was accepted: status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestCreateRouteAcceptsRegisteredOperationTarget(t *testing.T) {

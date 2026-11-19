@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import type { DataModel, DataModelEntity, DataModelField, DataModelFieldType } from "@/types";
 import { useSiteWorkspace } from "./SiteWorkspace";
+import { siteContextQuery } from "./site-query";
 import {
   addDataModelField,
   changeDataModelFieldType,
@@ -19,7 +20,7 @@ import {
   describeBindingImpacts,
   fieldTypes,
   focusDataModelControl,
-  modelFor,
+  emptyDataModel,
   moveDataModelField,
   parseDataModelEnumOptions,
   removeDataModelEntity,
@@ -35,12 +36,12 @@ export default function DataModelEntityPage() {
   const { model: entityKey = "" } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { config, update } = useSiteWorkspace();
+  const { config, dataModel, updateDataModel } = useSiteWorkspace();
   const confirm = useConfirm();
-  const model = useMemo(() => modelFor(config), [config]);
+  const model = useMemo(() => dataModel ?? emptyDataModel(), [dataModel]);
   const entity = model.entities.find((item) => item.key === entityKey);
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const suffix = snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : "";
+  const suffix = siteContextQuery(snapshotId, searchParams.get("page_id") ?? "");
   const pendingFocusID = useRef<string | null>(null);
   useDocumentTitle(entity?.name ?? "Модель");
 
@@ -49,7 +50,7 @@ export default function DataModelEntityPage() {
     if (!controlID) return;
     pendingFocusID.current = null;
     focusDataModelControl(controlID, (id) => document.getElementById(id));
-  }, [config]);
+  }, [dataModel]);
 
   if (!entity) {
     return <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-6 text-center">
@@ -62,7 +63,7 @@ export default function DataModelEntityPage() {
   }
 
   const changeModel = (mutate: (current: DataModel) => DataModel) =>
-    update((current) => ({ ...current, dataModel: mutate(modelFor(current)) }));
+    updateDataModel(mutate);
 
   const addField = () => {
     const id = crypto.randomUUID();
@@ -70,10 +71,10 @@ export default function DataModelEntityPage() {
     changeModel((current) => addDataModelField(current, entity.id, () => id));
   };
   const removeField = async (field: DataModelField) => {
-    const impacts = dataModelFieldBindingImpacts(config, entity.id, field.id);
+    const impacts = dataModelFieldBindingImpacts(config, model, entity.id, field.id);
     if (!(await confirm({
       title: "Удалить поле?",
-      description: `Поле «${field.name}» будет удалено из дочернего снапшота. Унаследованные значения потребуют явной очистки.${describeBindingImpacts(impacts)}`,
+      description: `Поле «${field.name}» будет удалено из общей модели сайта. Проверьте связанные привязки перед сохранением.${describeBindingImpacts(impacts)}`,
       confirmLabel: "Удалить поле",
       destructive: true,
     }))) return;
@@ -82,7 +83,7 @@ export default function DataModelEntityPage() {
   };
   const changeFieldType = async (field: DataModelField, type: DataModelFieldType) => {
     if (field.type === type) return;
-    const impacts = dataModelFieldBindingImpacts(config, entity.id, field.id);
+    const impacts = dataModelFieldBindingImpacts(config, model, entity.id, field.id);
     if (!(await confirm({
       title: "Изменить тип поля?",
       description: `«${field.name}» изменится с «${fieldTypes.find((item) => item.value === field.type)?.label}» на «${fieldTypes.find((item) => item.value === type)?.label}».${describeBindingImpacts(impacts)}`,
@@ -105,10 +106,10 @@ export default function DataModelEntityPage() {
     changeModel((current) => updateDataModelEntityCardinality(current, entity.id, cardinality));
   };
   const deleteEntity = async () => {
-    const impacts = dataModelEntityBindingImpacts(config, entity.id);
+    const impacts = dataModelEntityBindingImpacts(config, model, entity.id);
     if (!(await confirm({
       title: "Удалить модель?",
-      description: `Модель «${entity.name}» и её поля будут удалены в дочернем снапшоте. Записи останутся в «Контенте» до явной очистки.${describeBindingImpacts(impacts)}`,
+      description: `Модель «${entity.name}» и её поля будут удалены из общей модели сайта. Проверьте связанные привязки и записи перед сохранением.${describeBindingImpacts(impacts)}`,
       confirmLabel: "Удалить модель",
       destructive: true,
     }))) return;

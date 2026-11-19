@@ -1,0 +1,15 @@
+version: 1
+engines:
+  - loader
+  - router
+workers: []
+apis:
+  admin:
+    - files
+    - coordinator
+    - identity
+    - notifications
+    - router
+  public:
+    - router
+    - form-upload

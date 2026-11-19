@@ -9,10 +9,11 @@ import { useSiteWorkspace } from "./SiteWorkspace";
 import { removePlacement } from "./feature-selection";
 import { PlacementEditor } from "./components/page-editor/PlacementEditor";
 import { buildFor } from "./components/page-editor/schema";
+import { siteContextQuery } from "./site-query";
 
 export default function FeatureEditorPage() {
   const { pageId = "", placementId = "" } = useParams();
-  const { config, update } = useSiteWorkspace();
+  const { config, dataModel, update } = useSiteWorkspace();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const confirm = useConfirm();
@@ -22,7 +23,7 @@ export default function FeatureEditorPage() {
   const build = buildsQuery.data && placement ? buildFor(buildsQuery.data.items, placement) : undefined;
   useDocumentTitle(build?.name ?? "Настройки фичи");
   const snapshotId = searchParams.get("snapshot") ?? "";
-  const query = snapshotId ? `?snapshot=${encodeURIComponent(snapshotId)}` : "";
+  const query = siteContextQuery(snapshotId, searchParams.get("page_id") ?? "");
   const pageURL = `/site/pages/${pageId}${query}`;
 
   if (buildsQuery.isError) return <ErrorState error={buildsQuery.error} title="Не удалось загрузить сборки фич" onRetry={() => void buildsQuery.refetch()} />;
@@ -46,6 +47,7 @@ export default function FeatureEditorPage() {
           placement={placement}
           builds={buildsQuery.data?.items ?? []}
           config={config}
+          dataModel={dataModel}
           snapshotId={snapshotId}
           buildsLoading={buildsQuery.isLoading}
           onChange={(next) => update((current) => ({

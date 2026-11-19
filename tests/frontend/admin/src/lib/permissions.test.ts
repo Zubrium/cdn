@@ -3,9 +3,11 @@ import type { Principal } from "@/types";
 import {
   canManageAccess,
   canManageFeatures,
+  canManageFormSchemas,
   canManageMedia,
   canManageSubmissions,
   canPublishContent,
+  canReadFormSchemas,
   canViewSubmissions,
   hasAnyGroupAccess,
   hasGroupAccess,
@@ -32,10 +34,12 @@ describe("direct group permissions", () => {
 
   it("grants each UI capability from its owning group or management flag", () => {
     const subject = principal({
-      group_access: { features: 2, content: 1, forms: 2, media: 2 },
+      group_access: { features: 2, content: 1, forms_schemas: 2, forms_submissions: 2, media: 2 },
     });
     expect(canManageFeatures(subject)).toBe(true);
     expect(canPublishContent(subject)).toBe(false);
+    expect(canReadFormSchemas(subject)).toBe(true);
+    expect(canManageFormSchemas(subject)).toBe(true);
     expect(canViewSubmissions(subject)).toBe(true);
     expect(canManageSubmissions(subject)).toBe(true);
     expect(canManageMedia(subject)).toBe(true);

@@ -53,7 +53,7 @@ const workspace = {
 
 function renderPage(contentLevel: 1 | 2, selectedSnapshot = snapshot) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(["website", "snapshots", "content"], [selectedSnapshot]);
+  client.setQueryData(["website", "snapshots", "content", "", ""], [selectedSnapshot]);
   client.setQueryData(["content", "model-workspace", snapshotID], workspace);
   mocks.useAuth.mockReturnValue({ principal: { group_access: { content: contentLevel } } });
   const router = createMemoryRouter([{ path: "*", element: createElement(ContentHomePage) }], { initialEntries: [`/content?snapshot=${snapshotID}`] });

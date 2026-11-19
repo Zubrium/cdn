@@ -117,7 +117,6 @@ export default function FeatureBuildRegistryPage() {
     queryFn: ({ signal }) => api.website.featureImport(activeImportID!, signal),
     enabled: Boolean(activeImportID),
     retry: 1,
-    refetchInterval: (query) => isTerminal(query.state.data?.state) ? false : 1500,
   });
   const beginImport = useMutation({
     mutationFn: (media: Media) => {
@@ -188,7 +187,7 @@ export default function FeatureBuildRegistryPage() {
             {job && <p className="text-xs text-muted-foreground">Создано {formatDate(job.created_at)}</p>}
           </div>
           <div className="flex gap-2">
-            {importJob.error && <Button type="button" variant="outline" size="sm" onClick={() => void importJob.refetch()}>Повторить запрос</Button>}
+            <Button type="button" variant="outline" size="sm" onClick={() => void importJob.refetch()} loading={importJob.isFetching}>Обновить статус</Button>
             {(job && isTerminal(job.state) || importJob.error) && <Button type="button" variant="ghost" size="sm" onClick={() => setActiveJob(null)}>Скрыть</Button>}
           </div>
         </section>

@@ -1,6 +1,6 @@
 # План приведения Core к файловой архитектуре
 
-Статус: исторический план; его заменяют целевые [SPEC-core-architecture.md](../spec/SPEC-core-architecture.md), [SPEC-coordinator-platform.md](../spec/SPEC-coordinator-platform.md) и [SPEC-module-data.md](../spec/SPEC-module-data.md). Использовать этот документ как актуальный план реализации или критерий приёмки нельзя. Старые решения и результаты сохранены только для истории.
+Статус: исторический план; его заменяют целевые [SPEC-core-architecture.md](../spec/core/SPEC-core-architecture.md), [SPEC-coordinator-platform.md](../spec/architecture/SPEC-coordinator-platform.md) и [SPEC-module-data.md](../spec/core/SPEC-module-data.md). Использовать этот документ как актуальный план реализации или критерий приёмки нельзя. Старые решения и результаты сохранены только для истории.
 
 Существует один тип пользователя без поля `kind`: сервис получает отдельный ключ и прямые права как обычный пользователь. Управление учётными записями — отдельное разрешение, не тип пользователя и не обход групповых проверок.
 

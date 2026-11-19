@@ -23,7 +23,6 @@ type RouteDraft = {
   match: RouterRouteMatch;
   targetKind: "core-file" | "static-site-artifact" | "public.form-upload" | "public.form-session" | "public.form-submit";
   file: { id: string; original_filename?: string } | null;
-  fallbackEnabled: boolean;
   accessGroup: string;
   fileSetID: string;
   maxBytes: string;
@@ -40,7 +39,6 @@ const emptyDraft = (): RouteDraft => ({
   match: "exact",
   targetKind: "core-file",
   file: null,
-  fallbackEnabled: false,
   accessGroup: "",
   fileSetID: "",
   maxBytes: "",
@@ -54,7 +52,7 @@ const emptyDraft = (): RouteDraft => ({
 const publicFormOperations = new Set(["public.form-session", "public.form-upload", "public.form-submit"]);
 
 function canEditTarget(route: RouterRoute): boolean {
-	return route.target.kind !== "registered-operation" || (route.match === "exact" && publicFormOperations.has(route.target.operation_id));
+  return route.target.kind === "core-file" || route.target.kind === "static-site-artifact" || (route.target.kind === "registered-operation" && route.match === "exact" && publicFormOperations.has(route.target.operation_id));
 }
 
 function targetLabel(target: RouterRouteTarget): string {
@@ -65,7 +63,7 @@ function targetLabel(target: RouterRouteTarget): string {
     return `Операция · ${target.operation_id}`;
   }
   if (target.kind === "core-file") return `Файл Core · GET/HEAD · ${target.file_id}`;
-  return `Артефакт сайта · GET/HEAD · ${target.file_id}`;
+  return `Артефакт статической страницы · ${target.file_id}`;
 }
 
 function targetDetails(target: RouterRouteTarget): string | null {
@@ -114,10 +112,8 @@ function RouteDialog({
 }) {
   const [draft, setDraft] = useState<RouteDraft>(() => emptyDraft());
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerTarget, setPickerTarget] = useState<"core-file" | "static-site-artifact">("core-file");
   const openFilePicker = () => {
     if (draft.targetKind !== "core-file" && draft.targetKind !== "static-site-artifact") return;
-    setPickerTarget(draft.targetKind);
     setPickerOpen(true);
   };
   const writableGroups = useMemo(() => groups.filter((group) => group.active && group.level >= 2), [groups]);
@@ -170,7 +166,6 @@ function RouteDialog({
       if (route.target.kind === "core-file" || route.target.kind === "static-site-artifact") {
         base.targetKind = route.target.kind;
         base.file = { id: route.target.file_id };
-        base.fallbackEnabled = route.target.kind === "static-site-artifact" && route.target.fallback_enabled === true;
       } else if (route.target.kind === "registered-operation" && publicFormOperations.has(route.target.operation_id)) {
         const config = route.target.operation_config;
         base.targetKind = route.target.operation_id as RouteDraft["targetKind"];
@@ -210,8 +205,8 @@ function RouteDialog({
           {!route && <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">Сопоставление пути</span><select className="h-11 w-full rounded-md border border-input bg-background px-3" value={draft.match} onChange={(event) => setDraft((current) => ({ ...current, match: event.currentTarget.value as RouteDraft["match"] }))}><option value="exact">Точное совпадение</option><option value="prefix" disabled={draft.targetKind !== "static-site-artifact"}>Префикс пути</option></select></label>}
           <fieldset className="space-y-2"><legend className="text-sm font-medium">Цель</legend>
             <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" disabled={Boolean(route && route.match === "prefix")} title={route?.match === "prefix" ? "Для публичного файла нужен exact-маршрут" : undefined} className={`min-h-11 rounded-md border px-3 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${draft.targetKind === "core-file" ? "border-primary bg-accent" : "border-border"}`} onClick={() => setDraft((current) => ({ ...current, targetKind: "core-file", match: "exact" }))}>Файл Core</button>
-              <button type="button" className={`min-h-11 rounded-md border px-3 text-left text-sm ${draft.targetKind === "static-site-artifact" ? "border-primary bg-accent" : "border-border"}`} onClick={() => setDraft((current) => ({ ...current, targetKind: "static-site-artifact" }))}>Артефакт сайта</button>
+              <button type="button" disabled={Boolean(route && route.match === "prefix")} title={route?.match === "prefix" ? "Для публичного файла нужен exact-маршрут" : undefined} className={`min-h-11 rounded-md border px-3 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${draft.targetKind === "core-file" ? "border-primary bg-accent" : "border-border"}`} onClick={() => setDraft((current) => ({ ...current, targetKind: "core-file", match: "exact", file: current.targetKind === "core-file" ? current.file : null }))}>Файл Core</button>
+              <button type="button" className={`min-h-11 rounded-md border px-3 text-left text-sm ${draft.targetKind === "static-site-artifact" ? "border-primary bg-accent" : "border-border"}`} onClick={() => setDraft((current) => ({ ...current, targetKind: "static-site-artifact", file: current.targetKind === "static-site-artifact" ? current.file : null }))}>Артефакт статической страницы</button>
               {!route && <>
                 <button type="button" disabled={!uploadOperation?.methods.includes("POST")} title={!uploadOperation?.methods.includes("POST") ? "Операция загрузки недоступна в этой сборке" : undefined} className={`min-h-11 rounded-md border px-3 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${draft.targetKind === "public.form-upload" ? "border-primary bg-accent" : "border-border"}`} onClick={() => { if (!uploadOperation?.methods.includes("POST")) return; setDraft((current) => ({ ...current, targetKind: "public.form-upload", match: "exact", maxBytes: current.maxBytes || String(Math.min(uploadOperation.max_request_bytes, 10 * 1024 * 1024)) })); }}>Загрузка файла</button>
                 <button type="button" disabled={!sessionOperation} title={!sessionOperation ? "Операция сессии недоступна в этой сборке" : undefined} className={`min-h-11 rounded-md border px-3 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${draft.targetKind === "public.form-session" ? "border-primary bg-accent" : "border-border"}`} onClick={() => sessionOperation && setDraft((current) => ({ ...current, targetKind: "public.form-session", match: "exact" }))}>Сессия формы</button>
@@ -233,15 +228,14 @@ function RouteDialog({
             {draft.bindForm && !draft.fileSetID && <p role="status" className="text-xs text-muted-foreground">Для вложения формы выберите набор файлов.</p>}
             {(!uploadOperation || !uploadOperation.methods.includes("POST") || !draft.accessGroup || !Number.isSafeInteger(Number(draft.maxBytes)) || Number(draft.maxBytes) < 1 || Number(draft.maxBytes) > uploadOperation.max_request_bytes || draft.allowedContentTypes.length === 0 || draft.allowedContentTypes.some((type) => !uploadOperation.allowed_content_types.includes(type))) && <p role="status" className="text-xs text-muted-foreground">Выберите группу, допустимый лимит и хотя бы один тип из списка операции.</p>}
           </div> : requiresFormBinding ? formBindingEditor : <div className="space-y-2">
-            {draft.targetKind === "core-file" ? <p className="text-xs leading-5 text-muted-foreground">Exact GET-маршрут открывает один выбранный файл посетителям. ID файла задаётся здесь и не выбирается посетителем; проверка права чтения Router выполняется сервером.</p> : <p className="text-xs leading-5 text-muted-foreground">Артефакт раздаёт только файлы из проверенного manifest. Префиксный маршрут разрешает URL-пути внутри него; отсутствие пути даёт 404.</p>}
-            {draft.targetKind === "static-site-artifact" && <label className="flex min-h-10 items-center gap-2 text-sm"><input type="checkbox" checked={draft.fallbackEnabled} onChange={(event) => setDraft((current) => ({ ...current, fallbackEnabled: event.currentTarget.checked }))} /><span>Использовать fallback из manifest</span></label>}
-            {draft.file ? <div className="flex items-center gap-3 rounded-md border border-border p-3"><span className="min-w-0 flex-1 truncate text-sm">{draft.file.original_filename || draft.file.id}</span><Button type="button" variant="outline" onClick={openFilePicker}>Выбрать файл</Button></div> : <Button type="button" variant="outline" className="min-h-11" onClick={openFilePicker}>Выбрать файл из Core</Button>}
+            {draft.targetKind === "static-site-artifact" ? <p role="status" className="text-xs leading-5 text-muted-foreground">Выберите файл manifest артефакта статической страницы. Router проверяет manifest и обслуживает только объявленный документ и его assets; это не делает остальные файлы или FileSet публичными.</p> : <p className="text-xs leading-5 text-muted-foreground">Exact GET-маршрут открывает один выбранный файл посетителям. ID файла задаётся здесь и не выбирается посетителем; проверка права чтения Router выполняется сервером.</p>}
+            {draft.targetKind === "core-file" || draft.targetKind === "static-site-artifact" ? (draft.file ? <div className="flex items-center gap-3 rounded-md border border-border p-3"><span className="min-w-0 flex-1 truncate text-sm">{draft.file.original_filename || draft.file.id}</span><Button type="button" variant="outline" onClick={openFilePicker}>Выбрать файл</Button></div> : <Button type="button" variant="outline" className="min-h-11" onClick={openFilePicker}>{draft.targetKind === "static-site-artifact" ? "Выбрать manifest артефакта" : "Выбрать файл из Core"}</Button>) : null}
           </div>}
         </div>
         <DialogFooter><Button type="button" variant="outline" onClick={onClose} disabled={saving}>Отмена</Button><Button type="button" disabled={!canSave} loading={saving} onClick={() => void onSave(draft)}>{route ? "Сохранить цель" : "Создать маршрут"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
-    <MediaPickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={(items) => setDraft((current) => ({ ...current, file: items[0] ?? null, targetKind: pickerTarget }))} title={pickerTarget === "static-site-artifact" ? "Выбрать манифест артефакта" : "Выбрать файл для маршрута"} />
+    <MediaPickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={(items) => setDraft((current) => ({ ...current, file: items[0] ?? null }))} title={draft.targetKind === "static-site-artifact" ? "Выбрать manifest артефакта" : "Выбрать файл для маршрута"} />
   </>;
 }
 
@@ -273,7 +267,10 @@ export default function RouterRoutesPage() {
           ? "Посетители смогут загружать файлы через Loader в выбранную приватную группу; для формы также фиксируются сессия, схема и FileSet."
           : "Посетители смогут создавать или отправлять ответы только для закреплённой формы и версии схемы.";
         if (!(await confirm({ title: "Включить публичную операцию?", description: message, confirmLabel: "Включить маршрут" }))) return null;
-      } else if (!(await confirm({ title: "Опубликовать файл по маршруту?", description: "Любой посетитель, который знает адрес, сможет получить выбранный файл через этот маршрут.", confirmLabel: "Сделать доступным" }))) return null;
+      } else {
+        const artifact = target.kind === "static-site-artifact";
+        if (!(await confirm({ title: artifact ? "Опубликовать артефакт статической страницы?" : "Опубликовать файл по маршруту?", description: artifact ? "Посетители смогут получить документ и только assets, объявленные в выбранном static-page-artifact/v1 manifest. Других файлов маршрут не открывает." : "Любой посетитель, который знает адрес, сможет получить выбранный файл через этот маршрут.", confirmLabel: "Сделать доступным" }))) return null;
+      }
       if (dialogRoute) return api.router.routes.replaceTarget(dialogRoute.id, target, dialogRoute.revision);
       return api.router.routes.create({ host: draft.host.trim(), path: draft.path.trim(), match: draft.match, target }, `router:${crypto.randomUUID()}`);
     },

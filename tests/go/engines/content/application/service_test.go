@@ -27,7 +27,7 @@ func TestSaveReplaysGeneratedIDsAndRejectsSameKeyWithDifferentPayload(t *testing
 		t.Fatalf("GetWorkspace() = revision %d, err %v", initial.Revision, err)
 	}
 	request := contentapi.SaveWorkspaceDraftRequest{
-		SnapshotID: snapshotID, IdempotencyKey: "save-key-1", ExpectedRevision: 0,
+		SnapshotID: snapshotID, IdempotencyKey: "save-key-1", ExpectedRevision: 0, ExpectedSelectionRevision: initial.SelectionRevision,
 		Records:    []contentapi.RecordInput{{ClientKey: "row-new", EntityID: entityID, SortOrder: 0, Values: map[string]any{"title": "One"}}},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{"row-new"}}},
 	}
@@ -57,6 +57,82 @@ func TestSaveReplaysGeneratedIDsAndRejectsSameKeyWithDifferentPayload(t *testing
 	}
 	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, request); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("old idempotency key after a later mutation error = %v, want conflict", err)
+	}
+}
+
+func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T) {
+	repo := newMemoryRepository()
+	service, err := application.New(repo, inertFiles{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ctx := context.Background()
+	schemaA := readySchema(false)
+	schemaB := schemaA
+	schemaB.PageSnapshotID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+	initialA, err := service.GetWorkspace(ctx, core.Session{}, schemaA, schemaA.PageSnapshotID)
+	if err != nil {
+		t.Fatalf("initialize page A: %v", err)
+	}
+	initialB, err := service.GetWorkspace(ctx, core.Session{}, schemaB, schemaB.PageSnapshotID)
+	if err != nil {
+		t.Fatalf("initialize page B: %v", err)
+	}
+	if initialA.Revision != initialB.Revision || initialA.Revision != 0 {
+		t.Fatalf("site revision changed during page initialization: A=%d B=%d", initialA.Revision, initialB.Revision)
+	}
+
+	requestA := contentapi.SaveWorkspaceDraftRequest{
+		SnapshotID: schemaA.PageSnapshotID, IdempotencyKey: "page-a-selection", ExpectedRevision: initialA.Revision,
+		ExpectedSelectionRevision: initialA.SelectionRevision, Records: []contentapi.RecordInput{},
+		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "all"}},
+	}
+	firstA, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, requestA)
+	if err != nil {
+		t.Fatalf("save page A selection: %v", err)
+	}
+	requestB := contentapi.SaveWorkspaceDraftRequest{
+		SnapshotID: schemaB.PageSnapshotID, IdempotencyKey: "page-b-selection", ExpectedRevision: initialB.Revision,
+		ExpectedSelectionRevision: initialB.SelectionRevision, Records: []contentapi.RecordInput{},
+		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{}}},
+	}
+	firstB, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaB, requestB)
+	if err != nil {
+		t.Fatalf("parallel-scope page B selection save conflicted: %v", err)
+	}
+	if firstA.Revision != initialA.Revision || firstB.Revision != initialB.Revision {
+		t.Fatalf("page-only writes changed site revision: A=%d B=%d initial=%d", firstA.Revision, firstB.Revision, initialA.Revision)
+	}
+	if firstA.SelectionRevision != initialA.SelectionRevision+1 || firstB.SelectionRevision != initialB.SelectionRevision+1 {
+		t.Fatalf("page revisions did not advance independently: A=%d B=%d", firstA.SelectionRevision, firstB.SelectionRevision)
+	}
+
+	replayedA, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, requestA)
+	if err != nil || replayedA.SelectionRevision != firstA.SelectionRevision || len(replayedA.Selections) != 1 || replayedA.Selections[0].Mode != "all" {
+		t.Fatalf("page A idempotent replay after page B write = %#v, err %v", replayedA, err)
+	}
+	changedA := requestA
+	changedA.Selections = []contentapi.Selection{}
+	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, changedA); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("page A reused idempotency key with changed payload: %v, want conflict", err)
+	}
+	staleA := requestA
+	staleA.IdempotencyKey = "page-a-stale-selection"
+	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, staleA); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale same-page selection write: %v, want conflict", err)
+	}
+
+	latestA, err := service.GetWorkspace(ctx, core.Session{}, schemaA, schemaA.PageSnapshotID)
+	if err != nil {
+		t.Fatalf("read page A after writes: %v", err)
+	}
+	latestB, err := service.GetWorkspace(ctx, core.Session{}, schemaB, schemaB.PageSnapshotID)
+	if err != nil {
+		t.Fatalf("read page B after writes: %v", err)
+	}
+	if latestA.Selections[0].Mode != "all" || latestB.Selections[0].Mode != "ids" || latestA.Revision != latestB.Revision {
+		t.Fatalf("page selection writes were not isolated: A=%#v B=%#v", latestA, latestB)
 	}
 }
 
@@ -165,12 +241,13 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 	targetID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	targetSchema := readySchema(false)
 	targetSchema.State = "provisioning"
+	targetSchema.PageSnapshotID = targetID
 	request := contentapi.CopySnapshotContentRequest{
 		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: currentDraft.Revision,
-		IdempotencyKey: "copy-target-key",
+		ExpectedSourceSelectionRevision: currentDraft.SelectionRevision, IdempotencyKey: "copy-target-key", SelectionPolicy: contentapi.SelectionPolicyCopy,
 	}
 	first, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, request)
-	if err != nil || first.TargetSnapshotID != targetID || first.SourceRevision != currentDraft.Revision || first.CopiedRecords != 1 || first.CopiedHistory != 1 {
+	if err != nil || first.TargetSnapshotID != targetID || first.SourceRevision != currentDraft.Revision || first.CopiedRecords != 0 || first.CopiedHistory != 0 {
 		t.Fatalf("CopySnapshotContent() = %#v, err %v", first, err)
 	}
 	targetSchema.State = "ready"
@@ -185,6 +262,51 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 	replayed, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, request)
 	if err != nil || replayed != first {
 		t.Fatalf("idempotent copy = %#v, err %v", replayed, err)
+	}
+	resetWithSameKey := request
+	resetWithSameKey.SelectionPolicy = contentapi.SelectionPolicyReset
+	if _, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, resetWithSameKey); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("same idempotency key with different policy error = %v, want conflict", err)
+	}
+	reset := request
+	reset.IdempotencyKey = "reset-target-key"
+	reset.SelectionPolicy = contentapi.SelectionPolicyReset
+	if _, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, reset); err != nil {
+		t.Fatalf("reset selections: %v", err)
+	}
+	resetWorkspace, err := service.GetWorkspace(ctx, core.Session{}, targetSchema, targetID)
+	if err != nil || resetWorkspace.Records[0].Values["title"] != "Draft only" || len(resetWorkspace.Selections) != 0 {
+		t.Fatalf("reset target draft/workspace = %#v, err %v", resetWorkspace, err)
+	}
+	resetPublic, err := service.ReadPublishedContent(ctx, targetSchema, targetID)
+	if err != nil || resetPublic.ContentRevision != public.ContentRevision || resetPublic.Records[0].Values["title"] != "Published" || len(resetPublic.Selections) != 0 {
+		t.Fatalf("reset target publication = %#v, err %v", resetPublic, err)
+	}
+	history, _, err := repo.ListHistory(ctx, sourceSchema.SiteID, "", 100)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("shared publication history changed after reset: %d, err %v", len(history), err)
+	}
+}
+
+func TestCopySnapshotContentRejectsMalformedSelectionPolicyBeforeMutation(t *testing.T) {
+	repo := newMemoryRepository()
+	service, err := application.New(repo, inertFiles{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	sourceSchema := readySchema(false)
+	targetID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	targetSchema := readySchema(false)
+	targetSchema.State = "provisioning"
+	targetSchema.PageSnapshotID = targetID
+	_, err = service.CopySnapshotContent(context.Background(), core.Session{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
+		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, IdempotencyKey: "invalid-policy-key", SelectionPolicy: "merge",
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("malformed selection policy error = %v, want invalid", err)
+	}
+	if len(repo.workspaces) != 0 {
+		t.Fatalf("malformed policy mutated workspace: %#v", repo.workspaces)
 	}
 }
 
@@ -209,9 +331,10 @@ func TestCopySnapshotContentRejectsStaleSourceBeforePublishingTargetWorkspace(t 
 	targetID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	targetSchema := readySchema(false)
 	targetSchema.State = "provisioning"
+	targetSchema.PageSnapshotID = targetID
 	_, err = service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
 		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: initial.Revision,
-		IdempotencyKey: "stale-copy-key",
+		ExpectedSourceSelectionRevision: initial.SelectionRevision, IdempotencyKey: "stale-copy-key", SelectionPolicy: contentapi.SelectionPolicyCopy,
 	})
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale source copy error = %v, want conflict", err)
@@ -236,8 +359,10 @@ func TestCopySnapshotContentSupportsUntouchedSourceRevisionZero(t *testing.T) {
 	targetID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	targetSchema := readySchema(false)
 	targetSchema.State = "provisioning"
+	targetSchema.PageSnapshotID = targetID
 	result, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
-		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: 0, IdempotencyKey: "copy-empty-source-0001",
+		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: 0,
+		ExpectedSourceSelectionRevision: source.SelectionRevision, IdempotencyKey: "copy-empty-source-0001", SelectionPolicy: contentapi.SelectionPolicyCopy,
 	})
 	if err != nil || result.SourceRevision != 0 || result.TargetSnapshotID != targetID {
 		t.Fatalf("copy empty revision-zero workspace = %#v, err = %v", result, err)
@@ -261,7 +386,9 @@ func readySchema(singleton bool) domain.Schema {
 		panic(err)
 	}
 	return domain.Schema{
-		State: "ready", DataModel: raw, Model: model,
+		State: "ready", SiteID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", PageSnapshotID: snapshotID,
+		ModelRevision: 1, ModelDigest: "model-digest", PageRevision: 1, PageDigest: "page-digest",
+		DataModel: raw, Model: model,
 		Placements: []domain.PlacementView{{ID: "placement-one", Inputs: []domain.PlacementInput{{InputKey: "articles", Kind: "collection", EntityID: entityID}}}},
 	}
 }
@@ -294,6 +421,18 @@ func (repo *memoryRepository) Create(_ context.Context, snapshot string, aggrega
 	if _, exists := repo.workspaces[snapshot]; exists {
 		return domain.StoredWorkspace{}, domain.ErrConflict
 	}
+	if aggregate.PageSelectionRevisions == nil {
+		aggregate.PageSelectionRevisions = map[string]int64{}
+	}
+	if aggregate.PageMutationReceipts == nil {
+		aggregate.PageMutationReceipts = map[string]*domain.MutationReceipt{}
+	}
+	for pageID := range aggregate.PageSelections {
+		aggregate.PageSelectionRevisions[pageID] = 1
+	}
+	for pageID := range aggregate.PublishedPageSelections {
+		aggregate.PageSelectionRevisions[pageID] = 1
+	}
 	value := domain.StoredWorkspace{Aggregate: cloneAggregate(aggregate), StoreRevision: 1}
 	repo.workspaces[snapshot] = value
 	return cloneStored(value), nil
@@ -312,9 +451,36 @@ func (repo *memoryRepository) Commit(_ context.Context, snapshot string, expecte
 		}
 		repo.histories[snapshot][publication.ID] = clonePublication(*publication)
 	}
+	for _, pageID := range aggregate.ChangedPageSelectionIDs {
+		if aggregate.PageSelectionRevisions == nil {
+			aggregate.PageSelectionRevisions = map[string]int64{}
+		}
+		aggregate.PageSelectionRevisions[pageID]++
+	}
 	stored := domain.StoredWorkspace{Aggregate: cloneAggregate(aggregate), StoreRevision: expected + 1}
 	repo.workspaces[snapshot] = stored
 	return cloneStored(stored), nil
+}
+func (repo *memoryRepository) CommitPageSelections(_ context.Context, siteID, pageID string, expected int64, draft, published []domain.Selection, receipt *domain.MutationReceipt) (domain.StoredPageSelections, error) {
+	stored, exists := repo.workspaces[siteID]
+	if !exists {
+		return domain.StoredPageSelections{}, domain.ErrNotFound
+	}
+	if stored.Aggregate.PageSelectionRevisions == nil {
+		stored.Aggregate.PageSelectionRevisions = map[string]int64{}
+	}
+	if stored.Aggregate.PageMutationReceipts == nil {
+		stored.Aggregate.PageMutationReceipts = map[string]*domain.MutationReceipt{}
+	}
+	if stored.Aggregate.PageSelectionRevisions[pageID] != expected {
+		return domain.StoredPageSelections{}, domain.ErrConflict
+	}
+	stored.Aggregate.PageSelections[pageID] = cloneSelections(draft)
+	stored.Aggregate.PublishedPageSelections[pageID] = cloneSelections(published)
+	stored.Aggregate.PageSelectionRevisions[pageID] = expected + 1
+	stored.Aggregate.PageMutationReceipts[pageID] = receipt
+	repo.workspaces[siteID] = cloneStored(stored)
+	return domain.StoredPageSelections{Draft: cloneSelections(draft), Published: cloneSelections(published), StoreRevision: expected + 1, LastMutation: receipt}, nil
 }
 func (repo *memoryRepository) GetHistoryByID(_ context.Context, snapshot, id string) (domain.Publication, error) {
 	value, exists := repo.histories[snapshot][id]
@@ -394,13 +560,40 @@ func cloneStored(value domain.StoredWorkspace) domain.StoredWorkspace {
 }
 func cloneAggregate(value domain.Aggregate) domain.Aggregate {
 	value.Records = cloneRecords(value.Records)
-	value.Selections = cloneSelections(value.Selections)
+	value.PageSelections = clonePageSelections(value.PageSelections)
+	value.PublishedPageSelections = clonePageSelections(value.PublishedPageSelections)
+	if value.PageSelectionRevisions != nil {
+		revisions := make(map[string]int64, len(value.PageSelectionRevisions))
+		for pageID, revision := range value.PageSelectionRevisions {
+			revisions[pageID] = revision
+		}
+		value.PageSelectionRevisions = revisions
+	}
+	if value.PageMutationReceipts != nil {
+		receipts := make(map[string]*domain.MutationReceipt, len(value.PageMutationReceipts))
+		for pageID, receipt := range value.PageMutationReceipts {
+			if receipt == nil {
+				continue
+			}
+			copy := *receipt
+			copy.ClientRecordIDs = cloneStringMap(receipt.ClientRecordIDs)
+			receipts[pageID] = &copy
+		}
+		value.PageMutationReceipts = receipts
+	}
 	if value.LastMutation != nil {
 		receipt := *value.LastMutation
 		receipt.ClientRecordIDs = cloneStringMap(receipt.ClientRecordIDs)
 		value.LastMutation = &receipt
 	}
 	return value
+}
+func clonePageSelections(source map[string][]domain.Selection) map[string][]domain.Selection {
+	result := make(map[string][]domain.Selection, len(source))
+	for id, selections := range source {
+		result[id] = cloneSelections(selections)
+	}
+	return result
 }
 func clonePublication(value domain.Publication) domain.Publication {
 	value.Records = cloneRecords(value.Records)

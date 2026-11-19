@@ -9,8 +9,8 @@ import (
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 )
 
-// DeleteSnapshot removes an unprotected snapshot and reparents its children in
-// one Core module-data CAS batch. It never deletes referenced Core files.
+// DeleteSnapshot removes a snapshot and reparents its children in one Core
+// module-data CAS batch. It never deletes referenced Core files.
 func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteSnapshotRequest) error {
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
 		return err
@@ -25,32 +25,36 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 	if targetRecord.Revision != request.ExpectedRevision {
 		return websiteapi.ErrConflict
 	}
-	registryRecord, registryState, err := s.loadSiteRegistry(ctx, target.SiteID)
+	page, _, err := s.loadPage(ctx, target.SiteID, target.PageID)
 	if err != nil {
 		return err
 	}
-	registryState.LastSequence, err = s.ensureSiteSequence(ctx, target.SiteID, registryState)
-	if err != nil {
-		return err
-	}
-	// Re-read after the registry revision. Every concurrent create/assignment
-	// commits against that same revision, so this snapshot read and the final
-	// batch form a safe optimistic transaction across separate Core records.
-	target, targetRecord, err = s.snapshotInSite(ctx, target.SiteID, request.SnapshotID)
-	if err != nil {
-		return err
-	}
-	targetKey = snapshotKey(target.SiteID, target.ID)
-	if targetRecord.Revision != request.ExpectedRevision {
+	if page.LatestSnapshotID == target.ID {
 		return websiteapi.ErrConflict
 	}
-	if err := s.checkSnapshotDeletionProtection(ctx, target); err != nil {
+	registryRecord, registryState, err := s.loadSiteRegistry(ctx, target.SiteID, target.PageID)
+	if err != nil {
 		return err
+	}
+	registryState.LastSequence, err = s.ensureSiteSequence(ctx, target.SiteID, target.PageID, registryState)
+	if err != nil {
+		return err
+	}
+	// Re-read after the page-tree registry revision. Every concurrent create/delete
+	// commits against that same revision, so this read and the final batch form a
+	// safe optimistic transaction within the page tree.
+	target, targetRecord, err = s.snapshotInPage(ctx, target.SiteID, target.PageID, request.SnapshotID)
+	if err != nil {
+		return err
+	}
+	targetKey = snapshotKey(target.SiteID, target.PageID, target.ID)
+	if targetRecord.Revision != request.ExpectedRevision {
+		return websiteapi.ErrConflict
 	}
 
 	var newParent *websiteapi.Snapshot
 	if target.ParentID != "" {
-		parent, _, err := s.snapshotInSite(ctx, target.SiteID, target.ParentID)
+		parent, _, err := s.snapshotInPage(ctx, target.SiteID, target.PageID, target.ParentID)
 		if err != nil {
 			// A missing parent indicates corrupt tree state; deleting would make
 			// the remaining children impossible to place consistently.
@@ -61,6 +65,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 
 	selectors := []core.ModuleDataSelector{
 		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
+		{Field: "page_id", Operator: core.SelectorEqual, Values: []any{target.PageID}},
 		{Field: "parent_id", Operator: core.SelectorEqual, Values: []any{target.ID}},
 	}
 	childrenKeys, childrenRecords, err := s.listSnapshotChildren(ctx, target.SiteID, selectors)
@@ -117,7 +122,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 		})
 	}
 	mutations = append(mutations, core.ModuleDataMutation{Key: targetKey, ExpectedRevision: targetRecord.Revision})
-	registryMutation, err := siteRegistryMutation(target.SiteID, registryRecord, registryState.LastSequence)
+	registryMutation, err := siteRegistryMutation(target.SiteID, target.PageID, registryRecord, registryState.LastSequence)
 	if err != nil {
 		return err
 	}
@@ -163,31 +168,4 @@ func (s *Service) listSnapshotChildren(ctx context.Context, siteID string, selec
 		}
 		after = next
 	}
-}
-
-func (s *Service) checkSnapshotDeletionProtection(ctx context.Context, target websiteapi.Snapshot) error {
-	for _, branchID := range s.branchOrder {
-		branch := s.branches[branchID]
-		if branch.SiteID != target.SiteID {
-			continue
-		}
-		state, _, err := s.loadBranchState(ctx, branch)
-		if err != nil {
-			return err
-		}
-		if state.SnapshotID == "" {
-			continue
-		}
-		if state.SnapshotID == target.ID {
-			return websiteapi.ErrConflict
-		}
-		assigned, _, err := s.snapshotInSite(ctx, target.SiteID, state.SnapshotID)
-		if err != nil {
-			return websiteapi.ErrUnavailable
-		}
-		if assigned.ParentID == target.ID {
-			return websiteapi.ErrConflict
-		}
-	}
-	return nil
 }
