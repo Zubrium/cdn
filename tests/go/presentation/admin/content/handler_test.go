@@ -115,7 +115,7 @@ func newHandler(t *testing.T, api *fakeContentAPI) http.Handler {
 func TestContentHandlerFailsClosedWhenTrustedSchemaProjectionIsUnavailable(t *testing.T) {
 	api := &fakeContentAPI{schemaErr: engine.ErrUnavailable}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/content/snapshots/snap-1/workspace", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -135,7 +135,7 @@ func TestContentHandlerRequiresExplicitSchemaProvider(t *testing.T) {
 func TestContentHandlerReadsWorkspaceAndSetsNoStoreHeaders(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/content/snapshots/snap-1/workspace", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -151,7 +151,7 @@ func TestContentHandlerRequiresCookieCSRFOriginAndIdempotencyForDraftWrite(t *te
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
 	body := `{"expected_revision":0,"records":[],"selections":[]}`
-	path := "/api/v2/admin/content/snapshots/snap-1/workspace"
+	path := "/api/admin/content/snapshots/snap-1/workspace"
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.AddCookie(&http.Cookie{Name: adminhttpauth.SessionCookieName, Value: "ss_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))})
@@ -180,7 +180,7 @@ func TestContentHandlerRequiresCookieCSRFOriginAndIdempotencyForDraftWrite(t *te
 func TestContentHandlerPaginatesHistoryAndRejectsDuplicateQueryValues(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/content/snapshots/snap-1/history?cursor=next&limit=7", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/history?cursor=next&limit=7", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -188,7 +188,7 @@ func TestContentHandlerPaginatesHistoryAndRejectsDuplicateQueryValues(t *testing
 		t.Fatalf("history status=%d called=%t snapshot=%q cursor=%q limit=%d body=%s", response.Code, api.historyCalled, api.historySnapshot, api.historyCursor, api.historyLimit, response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/content/snapshots/snap-1/history?limit=2&limit=3", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/history?limit=2&limit=3", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -200,7 +200,7 @@ func TestContentHandlerPaginatesHistoryAndRejectsDuplicateQueryValues(t *testing
 func TestContentHandlerRejectsUnknownDuplicateAndInvalidWorkspaceJSON(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	path := "/api/v2/admin/content/snapshots/snap-1/workspace"
+	path := "/api/admin/content/snapshots/snap-1/workspace"
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"expected_revision":0,"records":[],"selections":[],"ignored":true}`))
 	request.Header.Set("Authorization", "Bearer service-key")
 	request.Header.Set("Content-Type", "application/json")
@@ -235,7 +235,7 @@ func TestContentHandlerRejectsUnknownDuplicateAndInvalidWorkspaceJSON(t *testing
 func TestContentHandlerRejectsDuplicateContentTypeAndInvalidUTF8(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	path := "/api/v2/admin/content/snapshots/snap-1/workspace"
+	path := "/api/admin/content/snapshots/snap-1/workspace"
 	validBody := `{"expected_revision":0,"records":[],"selections":[]}`
 
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(validBody))
@@ -266,7 +266,7 @@ func TestContentHandlerRejectsDuplicateContentTypeAndInvalidUTF8(t *testing.T) {
 func TestContentHandlerRestoresHistoryWithCASAndIdempotency(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/content/snapshots/snap-1/history/history-1/restore", strings.NewReader(`{"expected_revision":4}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/content/snapshots/snap-1/history/history-1/restore", strings.NewReader(`{"expected_revision":4}`))
 	request.Header.Set("Authorization", "Bearer service-key")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "restore-1")

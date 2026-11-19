@@ -20,7 +20,7 @@ import (
 	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
-const apiPrefix = "/api/v2/files"
+const apiPrefix = "/api/files"
 
 type Handler struct {
 	loader Loader

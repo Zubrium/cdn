@@ -93,19 +93,19 @@ describe("manifest engine-owned array identity", () => {
     const data: JsonObject = { rows: [
       { id: "stable-id", title: "First" },
       { id: "stable-id", title: "Duplicate" },
-      { title: "Legacy" },
+      { title: "Third" },
     ] };
     let next = 0;
     const normalized = normalizeEngineRecordIDs(fields, data, () => `generated-${++next}`);
     expect(normalized.rows).toEqual([
       { id: "stable-id", title: "First" },
       { id: "generated-1", title: "Duplicate" },
-      { title: "Legacy", id: "generated-2" },
+      { title: "Third", id: "generated-2" },
     ]);
     expect(data).toEqual({ rows: [
       { id: "stable-id", title: "First" },
       { id: "stable-id", title: "Duplicate" },
-      { title: "Legacy" },
+      { title: "Third" },
     ] });
   });
 

@@ -50,11 +50,11 @@ func TestAdminRouterAdapterDoesNotExposePublicDeliveryRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/assets/app.js", "/api/v2/admin/router/routes"} {
+	for _, path := range []string{"/", "/assets/app.js", "/api/admin/router/routes"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
-		if path == "/api/v2/admin/router/routes" {
+		if path == "/api/admin/router/routes" {
 			if response.Code != http.StatusUnauthorized {
 				t.Errorf("Admin route without auth status=%d body=%s", response.Code, response.Body.String())
 			}

@@ -22,14 +22,14 @@ export function deriveFeatureComposition(config: SiteEditorDraft): FeatureRefere
   return Array.from(references, ([featureKey, version]) => ({ featureKey, version }));
 }
 
-/** Replaces legacy/manual selections with the placement-derived composition. */
+/** Normalizes feature references from page placements. */
 export function normalizeFeatureComposition(config: SiteEditorDraft): SiteEditorDraft {
   const features = deriveFeatureComposition(config);
   if (JSON.stringify(config.features ?? []) === JSON.stringify(features)) return config;
   return { ...config, features };
 }
 
-/** Uses only placement-derived references; legacy config.features is not authoritative. */
+/** Placement-derived references are authoritative. */
 export function selectedFeatures(config: SiteEditorDraft): Map<string, string> {
   return new Map(deriveFeatureComposition(config).map(({ featureKey, version }) => [featureKey, version]));
 }

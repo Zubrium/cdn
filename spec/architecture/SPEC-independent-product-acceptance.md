@@ -1,58 +1,35 @@
 # Независимая приёмка Website Engine
 
-> **dev_v2:** Этот документ описывает legacy-поведение, контракты или исторические результаты. Целевая внутренняя архитектура новой платформы определена в [SPEC-modular-platform.md](SPEC-modular-platform.md) и [SPEC-core-v2.md](../core/history/SPEC-core-v2.md). Внешнюю совместимость необходимо реализовать и проверить на границах engines/presentation, за согласованным исключением: поле `role` и прежняя матрица ролей удаляются из нового API и админки. Совместимость остальных контрактов для нового кода не подтверждена.
+## Цель
 
-Статус: критерии независимой приёмки обновлены 15 ноября 2026. Проверка не использует Vitasil ZIP, пути к Vitasil, API, базы, object storage или fixtures. Цель — подтвердить, что Engine и `/admin` поддерживают общий flat-model контракт для сторонних feature builds.
+Подтвердить Website/Content/Admin contracts на синтетических feature builds независимо от Vitasil. Проверки не используют рабочие API, credentials, базы, object storage или файлы.
 
-## Синтетические feature builds
+## Синтетические builds
 
-Тесты сами создают минимальные ZIP format 2 с `manifest.json`, `static-module-v1`, JS и CSS. Сборки не загружаются из реестра Vitasil, не используют npm-пакеты, внешний CDN или server-side renderer.
+Тесты создают минимальные ZIP с `manifest.json`, target runtime ABI, локальными ESM assets и typed `dataInputs`.
 
-- `qa-catalog@1.0.0`: collection-вход для Product; аргументы строки, числа, boolean, enum, массива простых значений и media; отображает каталог.
-- `qa-product-detail@1.0.0`: record-вход Product, typed path-аргумент `slug` и lookup по уникальному model field; отображает тот же Product.
-- `qa-featured-products@1.0.0`: collection-вход Product и редакционный selection/order; отображает выбранное подмножество без копирования полей записи.
+- Catalog feature: collection input для Product, typed arguments и media input.
+- Detail feature: record input Product и lookup по уникальному model field.
+- Featured collection: ordered selection Product без копирования record fields.
 
-Общая модель содержит независимые Product и, при необходимости, другие flat entities. Binding fixtures должны включать direct scalar, record и collection mappings, аргументы разных типов и media argument. Варианты с неверным типом, отсутствующей моделью/полем, неверным `relationIds` и несовместимым legacy relation payload отклоняются API до сохранения; UI показывает ошибку рядом с соответствующим binding.
+Модель содержит flat entities. Direct scalar/record/collection bindings поддерживаются; неизвестные модели/поля, несовместимые типы и поля вне контракта отклоняются до сохранения.
 
-## Сквозной Engine сценарий
+## Сквозные сценарии
 
-На уникальной disposable PostgreSQL и disposable object storage проверяются:
+На disposable PostgreSQL и object storage проверить:
 
-1. Пустая БД, baseline migration, регистрация трёх ZIP и создание корневого снапшота.
-2. В браузере `/site` открывается список моделей и отдельная страница модели; создаются модели и поля, порядок управляется мышью и клавиатурой; аргументы и все типизированные inputs связываются напрямую с model/field IDs. Relation/canvas controls и пустые relation placeholders отсутствуют.
-3. Структура сохраняется только дочерним снапшотом. Родительский payload и назначения веток не меняются.
-4. `/content` создаёт Product и другие flat records, редактирует только собственные поля, выбирает и сортирует featured Products, сохраняет draft и явно публикует его.
-5. Media upload выполняется через `/media`; argument и model media field выбирают существующий файл. В редакторах нет upload control.
-6. Каталог и detail используют одну Product, detail разрешается по уникальному slug, виджет отображает выбранный порядок. Публичная выдача/prerender использует опубликованные данные, а publish, snapshot assignment и rollback обновляют HTML/ETag без утечки draft.
-7. Fork копирует published/draft model state и selections независимо; история restore создаёт новый draft и не публикует его автоматически. Sitepack import/export проверяется на независимой установке.
+1. Чистую начальную схему, feature import и создание root snapshot.
+2. Создание модели/полей и direct bindings в `/site`; отсутствие model record value editing в этом UI.
+3. Сохранение структурных изменений в child snapshot без изменения parent и Router route targets.
+4. Создание и изменение records, draft save, selection/order и явную публикацию в `/content`.
+5. Media selection и readiness; загрузка остаётся в `/media`.
+6. Catalog/detail/collection на одной published Product модели, route lookup, prerender, cache identity и отсутствие draft values в публичной выдаче.
+7. Snapshot fork, history restore в новый draft и отсутствие автоматической публикации.
+8. Revision conflicts, concurrent edits, network retries, authorization failure и отсутствие частичного изменения.
+9. Responsive browser/keyboard behavior, destructive confirmations и защита несохранённых изменений.
 
-Проверки должны использовать синтетическую ESM-реализацию, создавать минимум две ветки и проверять назначения только через `/snapshots/branches`. Все роли, conflicts, browser/keyboard flows и media picker проходят на disposable окружении.
+Все доступа контролируются direct group levels и отдельным правом управления администраторами. Проверки соответствуют фактическим Core и Presentation contracts; роль пользователя не является источником авторизации.
 
-## Матрица ролей
+## Результаты и ограничения
 
-| Действие | admin | moderator | staff | user |
-| --- | --- | --- | --- | --- |
-| Читать, менять структуру сайта и модель; менять feature builds; назначать ветки | Да | Да | Нет | Нет |
-| Читать, редактировать, сохранять, публиковать и восстанавливать content history | Да | Да | Да | Да |
-| Читать и экспортировать заявки | Да | Да | Да | Да |
-| Менять статус и архивировать заявки | Да | Да | Нет | Нет |
-| Удалять заявки | Да | Нет | Нет | Нет |
-| Читать, загружать и переименовывать media; выбирать в редакторе | Да | Да | Да | Да |
-| Безвозвратно удалять media | Да | Нет | Нет | Нет |
-
-Неавторизованный вызов возвращает 401; запрещённая роль — 403; ни одна из операций с запретом не оставляет частично изменённую структуру, ревизию, файл или заявку. `staff` — поддерживаемая legacy content role, она должна быть описана и в серверной role registry, и в клиентских `can*` helpers.
-
-## Конкурентные и восстановительные сценарии
-
-- Устаревшая ревизия draft save, publish, restore, структурного fork/binding и branch assignment отклоняется без перезаписи серверного состояния.
-- Вкладки с одинаковым исходным revision сохраняют локальный ввод; UI сообщает локальную и серверную ревизии и предлагает явно загрузить/сравнить состояние.
-- Network failure до отправки не меняет сервер; потеря ответа после commit допускает повтор запроса без дублирования записей, publication или снапшота.
-- Browser reload и уход со страницы сохраняют локальные несохранённые значения либо требуют явного решения; никакая ошибка не публикует content draft.
-- Restore создаёт новый revision draft; published revision и публичный HTML меняются только после отдельной publish операции.
-- При отказе роли API и UI не применяют часть multi-record или binding изменений.
-
-## Текущий статус
-
-Vitasil acceptance не используется как доказательство независимого контракта. Ранее прошли synthetic runtime/prerender/SEO, S3 media и sitepack сценарии; role/revision API и browser acceptance подтвердили серверную и браузерную матрицы ролей и revision guards. После удаления relation-модели текущие frontend component tests и Go compatibility tests заново проверяют flat model, direct bindings и отказ непустых legacy relation-полей. Старые синтетические ER relation acceptance tests удалены как проверки снятой возможности; новый независимый full-stack flat-model run остаётся открытым.
-
-Критерии пока не закрыты целиком. Role/revision API и browser acceptance проходят на disposable окружении, включая сохранение локального черновика при конфликте, повтор после неопределённого ответа, восстановление отдельным черновиком и последующую явную публикацию. Текущий flat-model list/page проверен component tests и Chromium QA на desktop и 390 px; direct bindings и legacy rejection проверены Go tests и HTTP lifecycle test. Полный synthetic flat-model browser run с media/S3/prerender, ручная screen reader/WCAG оценка и расширенная keyboard matrix остаются открытыми.
+Эти сценарии — критерии, а не утверждение о прохождении. Результаты, команды и ограничения записываются в [QA_REPORT.md](../../docs/QA_REPORT.md); незакрытые пункты находятся в [TODO](../../docs/TODO-admin-snapshots-content-files.md). Полный независимый browser/API run и реальная Vitasil acceptance остаются открытыми до выполнения применимых сценариев на disposable ресурсах.

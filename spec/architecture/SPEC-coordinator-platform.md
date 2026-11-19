@@ -33,9 +33,11 @@ Build profile v1 задаёт списки `engines`, `workers`, `apis.admin` и
 
 ## Runtime message bus
 
-The bus is process-local, synchronous request/response only, and exists to route statically registered component calls to the correct adapter/capability. Contracts are typed and versioned in the independent root `pkg` module (`pkg/contracts`); there is no generic user-controlled handler name, peer-engine target, callback, or arbitrary payload dispatch. A request is accepted only when its operation/version has exactly one registered handler in the selected profile and the caller holds that operation's scoped contract. Missing or duplicate handlers, incompatible versions, invalid requests, or a closed bus fail explicitly. Calls inherit caller context for cancellation/deadlines; shutdown closes admission and waits for in-flight requests within the configured shutdown deadline. The bus has no persistence, retry, ordering, cross-replica delivery, or replay guarantee; handler errors return to the caller and do not imply durable work.
+Bus process-local, синхронный request/response и маршрутизирует вызовы между зарегистрированными runtime-компонентами к адаптеру или capability владельца операции. Внутримодульные вызовы слоёв остаются прямыми. На границе bus используется общий JSON envelope с `operation_id`, `version` и JSON `payload`; конкретная operation строго декодирует и валидирует payload, после чего вызывает typed contract владельца. Регистрация handler-ов статична и определяется выбранным build profile; неизвестные operation/version, дубликаты, неизвестные JSON-поля, повторяющиеся ключи, некорректный payload и закрытая шина отклоняются явно. Клиент HTTP не выбирает operation ID и не видит bus envelope: ingress вызывает заранее назначенную операцию, а транспортная авторизация остаётся в Presentation.
 
-The bus cannot invoke another engine/worker on behalf of a component. When one component's workflow needs another registered operation, the caller submits it to Core Coordinator through its scoped `WorkflowClient`; the Coordinator persists task state and routes work to a selected worker handler. Presentation may call its owning engine through the typed facade contract, but the engine may not call peer engines. `main` injects bus adapters and scoped Core contracts only; it does not own product business rules or Core state.
+Caller не передаёт authority, principal или group grants в payload. Scoped contract и доверенный server-side context задаются composition; владелец повторно применяет собственную авторизацию. Большие файлы не сериализуются в JSON: операция получает ограниченную scoped stream capability с явным владением/закрытием потока, backpressure, лимитами и отменой. Bus синхронно передаёт вызов и не содержит бизнес-правил, persistence, retry, ordering, cross-replica delivery или replay guarantees. Ошибки handler возвращаются вызывающему и сами по себе не означают durable work.
+
+Долговременная межкомпонентная работа проходит через Core Coordinator, вызванный через scoped bus operation: вызывающий компонент создаёт workflow через свой `WorkflowClient`, Coordinator сохраняет состояние и назначает зарегистрированный worker handler. Bus не становится durable queue и не заменяет leases, fencing, retry или recovery Coordinator. `main` владеет registry/dispatcher и адаптерами, но не бизнес-правилами или состоянием Core. Текущий код пока использует bus только для Core readiness; прямые вызовы между компонентами в composition и HTTP adapters ещё требуют миграции и не считаются соответствующими целевому контракту.
 
 ## Durable workflows
 
@@ -53,11 +55,13 @@ Workflow и задачи долговечны между перезапуска�
 
 Когда включён `admin.coordinator`, Core предоставляет узкую capability для страницы очереди. Она не возвращает payload/result и не выдаёт права на запуск или исполнение задач. HTTP adapter каждый раз проверяет bearer credential и прямой доступ к настроенной группе: уровень 1 разрешает чтение сводок, уровень 2 — ручной retry завершившейся ошибкой задачи. Пользовательская администрация и глобальные роли не обходят групповое разрешение.
 
-Существующий внешний контракт Admin API v1:
+Ручной запуск не является операцией `admin.coordinator` и не открывает общий task-submission API. Он начинается с типизированного доменного endpoint в Presentation, проходит domain authorization и direct level `2` в `coordinator_jobs`, затем engine создаёт свой workflow через scoped Core capability. Worker tasks добавляются как зарегистрированные children в том же durable workflow/task store. Admin не выбирает worker/component/operation ID и не отправляет произвольный payload. Это сохраняет разделение ответственности: Coordinator остаётся worker-agnostic, а входы, проверка и запуск принадлежат domain API и engine.
 
-- `GET /api/v2/coordinator/jobs` — безопасные сводки, фильтры `type`, `state`, `limit`, `before`, cursor по времени и UUID;
-- `GET /api/v2/coordinator/jobs/permissions` — `can_retry` для того же credential;
-- `POST /api/v2/coordinator/jobs/{jobID}/retry` — явный retry только допустимой failed-задачи.
+Существующий внешний контракт Admin API:
+
+- `GET /api/coordinator/jobs` — безопасные сводки, фильтры `type`, `state`, `limit`, `before`, cursor по времени и UUID;
+- `GET /api/coordinator/jobs/permissions` — `can_retry` для того же credential;
+- `POST /api/coordinator/jobs/{jobID}/retry` — явный retry только допустимой failed-задачи.
 
 Ответы имеют `Cache-Control: no-store` и `X-Content-Type-Options: nosniff`. UI — клиент этого API; серверная авторизация остаётся обязательной. Эти `jobs`-имена сохранены как внешний контракт страницы очереди; внутренняя модель исполнения — workflow и tasks.
 

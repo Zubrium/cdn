@@ -10,7 +10,6 @@ import { AppShell } from "@/app/layouts/AppShell";
 import { LoginPage, NoAccessScreen } from "@/app/pages/LoginPage";
 import NotFoundPage, { RouteErrorPage } from "@/app/pages/NotFoundPage";
 import { LoadingPage } from "@/components/common/page";
-import { redirectLocation } from "./legacy-routes";
 import { canManageAdministrators, hasAnyGroupAccess, hasGroupAccess } from "@/lib/permissions";
 
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
@@ -31,16 +30,10 @@ const DataModelEntityPage = lazy(() => import("@/pages/site/DataModelEntityPage"
 const SnapshotManagementLayout = lazy(() => import("@/pages/site/SnapshotManagementLayout"));
 const FeatureBuildRegistryPage = lazy(() => import("@/pages/site/FeatureBuildRegistryPage"));
 const SnapshotsPage = lazy(() => import("@/pages/site/SnapshotsPage"));
-const BranchesPage = lazy(() => import("@/pages/site/BranchesPage"));
 const SiteWorkspace = lazy(() => import("@/pages/site/SiteWorkspace").then((module) => ({ default: module.SiteWorkspace })));
 const SiteMetadataPage = lazy(() => import("@/pages/content/SiteMetadataPage"));
 const CoordinatorJobsPage = lazy(() => import("@/pages/coordinator/CoordinatorJobsPage"));
 const RouterRoutesPage = lazy(() => import("@/pages/router/RouterRoutesPage"));
-
-function RedirectWithSearch({ to }: { to: string }) {
-  const location = useLocation();
-  return <Navigate to={redirectLocation(to, location.search, location.hash)} replace />;
-}
 
 function RequireAuth() {
   const auth = useAuth();
@@ -142,17 +135,11 @@ export const router = createBrowserRouter(
             { path: "content/entities/:entityKey", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
             { path: "content/entities/:entityKey/records/:recordId", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
             { path: "content/placements", element: <RequireGroup group="content"><ContentHomePage /></RequireGroup> },
-            { path: "site-metadata", element: <RequireSiteManager><RedirectWithSearch to="/site/settings" /></RequireSiteManager> },
             { path: "snapshots", element: <RequireSiteManager><SnapshotManagementLayout /></RequireSiteManager>, children: [
               { index: true, element: <Navigate to="tree" replace /> },
               { path: "registry", element: <FeatureBuildRegistryPage /> },
               { path: "tree", element: <SnapshotsPage /> },
-              { path: "branches", element: <BranchesPage /> },
             ] },
-            { path: "branches", element: <RedirectWithSearch to="/snapshots/branches" /> },
-            { path: "site/snapshots", element: <RedirectWithSearch to="/snapshots/tree" /> },
-            { path: "features", element: <Navigate to="/content" replace /> },
-            { path: "features/:featureId/*", element: <Navigate to="/content" replace /> },
             { path: "submissions", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
             { path: "submissions/:submissionId", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
             { path: "forms", element: <RequireGroup group="forms_schemas"><FormsPage /></RequireGroup> },
@@ -166,7 +153,6 @@ export const router = createBrowserRouter(
                 element: <SiteWorkspace />,
                 children: [
                   { index: true, element: <Navigate to="pages" replace /> },
-                  { path: "router", element: <Navigate to="../pages" replace /> },
                   { path: "pages", element: <PagesPage /> },
                   { path: "templates", element: <PageTemplatesPage /> },
                   { path: "features", element: <RequireSiteManager><FeatureRegistryPage /></RequireSiteManager> },
@@ -192,10 +178,6 @@ export const router = createBrowserRouter(
             {
               element: <RequireGroup group="features" level={1} />,
               children: [{ path: "settings", element: <SettingsPage /> }],
-            },
-            {
-              element: <RequireSiteManager />,
-              children: [{ path: "settings/environments/:envKey", element: <Navigate to="/branches" replace /> }],
             },
             { path: "*", element: <NotFoundPage /> },
           ],

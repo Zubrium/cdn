@@ -45,7 +45,6 @@ export function modelEntityFields(entity: DataModelEntity): SchemaFieldNode[] {
     })),
     children: [],
     itemType: "string",
-    allowedBlocks: [],
   }));
 }
 

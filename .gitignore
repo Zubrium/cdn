@@ -14,12 +14,6 @@ pkg/static/dist/assets/
 pkg/static/dist/favicon.svg
 pkg/runtime/dist/*
 !pkg/runtime/dist/.gitkeep
-legacy/**/node_modules/
-legacy/frontend/dist/
-legacy/pkg/static/dist/assets/
-legacy/pkg/static/dist/favicon.svg
-legacy/pkg/runtime/dist/*
-!legacy/pkg/runtime/dist/.gitkeep
 docs-site/.vitepress/dist/
 docs-site/.vitepress/cache/
 docs-site/node_modules/

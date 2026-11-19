@@ -71,7 +71,7 @@ func TestSettingsAPIAuthenticatesAndPinsConfiguredBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/router/routes?host=site.example", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/router/routes?host=site.example", nil)
 	request.Header.Set("Authorization", "Bearer admin-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -101,7 +101,7 @@ func TestListPublicOperationsReturnsOnlyCompiledCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/router/operations", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/router/operations", nil)
 	request.Header.Set("Authorization", "Bearer admin-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -358,7 +358,7 @@ func TestCreateRouteAcceptsExplicitCoreTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/router/routes", strings.NewReader(`{"host":"site.example","path":"/","match":"exact","target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301"}}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/router/routes", strings.NewReader(`{"host":"site.example","path":"/","match":"exact","target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301"}}`))
 	request.Header.Set("Authorization", "Bearer admin-secret")
 	request.Header.Set("Idempotency-Key", "router-route-create-0001")
 	request.Header.Set("Content-Type", "application/json")
@@ -437,7 +437,7 @@ func TestCreateRouteRejectsHandlersAndUnknownFields(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/router/routes", strings.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/router/routes", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer admin-secret")
 		request.Header.Set("Idempotency-Key", "router-route-create-0001")
 		request.Header.Set("Content-Type", "application/json")

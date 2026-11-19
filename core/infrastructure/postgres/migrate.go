@@ -45,7 +45,7 @@ var coreSchemaRelations = append(append([]string(nil), coreSchemaTables...), "en
 var atlasURLPattern = regexp.MustCompile(`(?i)\bpostgres(?:ql)?://[^\s"'<>]+`)
 var atlasPasswordPattern = regexp.MustCompile(`(?i)\b(password\s*[=:]\s*)(?:'[^']*'|"[^"]*"|[^\s,;]+)`)
 
-// Migrate validates the embedded clean baseline, refuses legacy or unmanaged
+// Migrate validates the embedded clean baseline, refuses unknown or unmanaged
 // application objects before Atlas can execute DDL, and applies one migration
 // history to a fresh database. Existing Core databases are never converted.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, atlasBinary string, lockTimeout time.Duration) error {

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	apiPrefix              = "/api/v2/admin"
+	apiPrefix              = "/api/admin"
 	adminSessionCookieName = adminhttpauth.SessionCookieName
 	adminCSRFCookieName    = adminhttpauth.CSRFCookieName
 )
@@ -296,14 +296,14 @@ func setSessionCookies(w http.ResponseWriter, token, csrf string, expires time.T
 	if maxAge < 1 {
 		maxAge = 1
 	}
-	w.Header().Add("Set-Cookie", (&http.Cookie{Name: adminSessionCookieName, Value: token, Path: "/api/v2", Expires: expires,
+	w.Header().Add("Set-Cookie", (&http.Cookie{Name: adminSessionCookieName, Value: token, Path: "/api", Expires: expires,
 		MaxAge: maxAge, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode}).String())
 	w.Header().Add("Set-Cookie", (&http.Cookie{Name: adminCSRFCookieName, Value: csrf, Path: "/", Expires: expires,
 		MaxAge: maxAge, HttpOnly: false, Secure: secure, SameSite: http.SameSiteStrictMode}).String())
 }
 
 func clearSessionCookies(w http.ResponseWriter, secure bool) {
-	w.Header().Add("Set-Cookie", (&http.Cookie{Name: adminSessionCookieName, Value: "", Path: "/api/v2", MaxAge: -1,
+	w.Header().Add("Set-Cookie", (&http.Cookie{Name: adminSessionCookieName, Value: "", Path: "/api", MaxAge: -1,
 		HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode}).String())
 	w.Header().Add("Set-Cookie", (&http.Cookie{Name: adminCSRFCookieName, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: false, Secure: secure, SameSite: http.SameSiteStrictMode}).String())

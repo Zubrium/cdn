@@ -192,9 +192,5 @@ function validateField(
       });
       break;
     }
-    case "blocks":
-      // Block fields are legacy: their data passes through untouched and the
-      // editor no longer validates it.
-      break;
   }
 }

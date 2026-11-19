@@ -15,8 +15,8 @@ import (
 )
 
 type snapshotConfigProjection struct {
-	FormatVersion int `json:"format_version"`
-	Page          *snapshotPageProjection `json:"page"`
+	FormatVersion int                      `json:"format_version"`
+	Page          *snapshotPageProjection  `json:"page"`
 	Pages         []snapshotPageProjection `json:"pages"`
 }
 
@@ -24,9 +24,9 @@ type snapshotPageProjection struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Placements []struct {
-		ID          string `json:"id"`
-		Slot        string `json:"slot"`
-		Build       *struct {
+		ID    string `json:"id"`
+		Slot  string `json:"slot"`
+		Build *struct {
 			FeatureKey string `json:"featureKey"`
 			Version    string `json:"version"`
 		} `json:"build"`
@@ -35,10 +35,10 @@ type snapshotPageProjection struct {
 }
 
 type snapshotDataBinding struct {
-	InputKey  string `json:"inputKey"`
-	EntityID  string `json:"entityId"`
-	FieldID   string `json:"fieldId"`
-	Fields    []struct {
+	InputKey string `json:"inputKey"`
+	EntityID string `json:"entityId"`
+	FieldID  string `json:"fieldId"`
+	Fields   []struct {
 		InputPath string `json:"inputPath"`
 		FieldID   string `json:"fieldId"`
 	} `json:"fields"`
@@ -47,11 +47,11 @@ type snapshotDataBinding struct {
 		FieldID  string `json:"fieldId"`
 	} `json:"lookup"`
 	DetailSEO *struct {
-		TitleFieldID       string `json:"titleFieldId"`
-		DescriptionFieldID string `json:"descriptionFieldId"`
-		OGTitleFieldID     string `json:"ogTitleFieldId"`
+		TitleFieldID         string `json:"titleFieldId"`
+		DescriptionFieldID   string `json:"descriptionFieldId"`
+		OGTitleFieldID       string `json:"ogTitleFieldId"`
 		OGDescriptionFieldID string `json:"ogDescriptionFieldId"`
-		OGImageFieldID     string `json:"ogImageFieldId"`
+		OGImageFieldID       string `json:"ogImageFieldId"`
 	} `json:"detailSEO"`
 }
 
@@ -88,7 +88,6 @@ type dataModelContract struct {
 	FormatVersion int                 `json:"formatVersion"`
 	Entities      *[]dataModelEntity  `json:"entities"`
 	Positions     map[string]position `json:"positions,omitempty"`
-	Relations     json.RawMessage     `json:"relations"`
 }
 
 type dataModelEntity struct {
@@ -148,9 +147,6 @@ func validateDataModel(raw json.RawMessage) error {
 	}
 	var extra any
 	if !errors.Is(decoder.Decode(&extra), io.EOF) || contract.FormatVersion != 1 || contract.Entities == nil {
-		return websiteapi.ErrInvalid
-	}
-	if nonEmptyLegacyRelations(contract.Relations) {
 		return websiteapi.ErrInvalid
 	}
 	entities := *contract.Entities
@@ -213,20 +209,6 @@ func validateDataModel(raw json.RawMessage) error {
 		}
 	}
 	return nil
-}
-
-func nonEmptyLegacyRelations(raw json.RawMessage) bool {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || trimmed == "null" {
-		return false
-	}
-	switch trimmed[0] {
-	case '[':
-		var values []json.RawMessage
-		return json.Unmarshal(raw, &values) != nil || len(values) != 0
-	default:
-		return true
-	}
 }
 
 func canonicalUUID(value string) bool {

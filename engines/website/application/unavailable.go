@@ -14,6 +14,9 @@ func (s *Service) BeginFeatureImport(ctx context.Context, _ websiteapi.ImportFea
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
 		return websiteapi.FeatureImport{}, err
 	}
+	if err := s.requireCoordinatorWrite(ctx); err != nil {
+		return websiteapi.FeatureImport{}, err
+	}
 	return websiteapi.FeatureImport{}, websiteapi.ErrUnavailable
 }
 
@@ -56,6 +59,9 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	if snapshot.State != "ready" {
 		return websiteapi.BuildJob{}, websiteapi.ErrConflict
 	}
+	if err := s.requireCoordinatorWrite(ctx); err != nil {
+		return websiteapi.BuildJob{}, err
+	}
 	return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 }
 
@@ -68,6 +74,9 @@ func (s *Service) GetBuild(ctx context.Context, _ string) (websiteapi.BuildJob, 
 
 func (s *Service) CreateMediaDerivative(ctx context.Context, _ websiteapi.CreateDerivativeRequest) (websiteapi.MediaJob, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+		return websiteapi.MediaJob{}, err
+	}
+	if err := s.requireCoordinatorWrite(ctx); err != nil {
 		return websiteapi.MediaJob{}, err
 	}
 	return websiteapi.MediaJob{}, websiteapi.ErrUnavailable

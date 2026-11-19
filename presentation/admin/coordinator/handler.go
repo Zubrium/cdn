@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	apiPrefix      = "/api/v2/coordinator/jobs"
+	apiPrefix      = "/api/coordinator/jobs"
 	maxPageLimit   = 200
 	maxCursorBytes = 256
 )

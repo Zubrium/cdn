@@ -1,9 +1,40 @@
-# Zubrium: modular platform
+# Zubrium Website Engine
 
-The experimental `dev_v2` branch contains a clean Go workspace with separate modules for Core, engines, and Presentation. The legacy product remains under `legacy/`. The platform is not yet a replacement for the legacy service: Router, Loader, Admin API, Admin UI, and the migrated Website, Content, and Forms engines are still incomplete.
+Модульная платформа для управления сайтами и их публичной выдачи. Единственная product composition root и исполняемое приложение находятся в `main/`; Core, engines, workers и Presentation остаются независимо собираемыми Go-модулями.
 
-Core now owns a clean PostgreSQL `core` schema, immutable private files, static access groups, direct per-user group levels, credentials and administrator-management permission, file sets, S3 access, and local byte/metadata caching. Its database schema is created only by Atlas SQL migrations; Go code performs data operations and invokes the pinned Atlas CLI. See [the Core specification](spec/core/history/SPEC-core-v2.md), [modular architecture](spec/architecture/SPEC-modular-platform.md), and [deployment requirements](docs/CORE-OPERATIONS.md).
+## Структура
 
-The first administrator is created only after Atlas succeeds. If no bootstrap secret is configured, a generated credential is printed once to stderr; restrict process-log access. `--recover-admin config.yaml` is an offline operator command and must not be exposed as a public service route. Configure distinct runtime and migration PostgreSQL users; the runtime login must be a member of `zubrium_core_runtime` and have no schema DDL or cross-module access.
+- `core/` — идентичности, доступ, файлы, scoped engine data и durable Coordinator.
+- `engines/` — Website, Loader, Content, Forms и Router workflows.
+- `workers/` — фоновые обработчики.
+- `presentation/` — HTTP adapters и внешние API.
+- `main/` — конфигурация, profile и композиция приложения.
+- `frontend/admin/` — React 18 + TypeScript Admin SPA.
+- `spec/` — архитектурные и модульные контракты; OpenAPI 3.1 находится в `spec/presentation/openapi/`.
+- `tests/` — Go/frontend tests и acceptance matrix.
 
-`make build` builds the Core-only profile; `make build-full` includes optional module contracts. `make test`, `make vet`, and `make coverage` cover the new Go workspace; coverage must reach 70%. Integration tests require fresh disposable PostgreSQL databases named `zubrium_core_qa_*` and S3 buckets named `zubrium-core-qa-*`. Never point them at working data. See [the Core coverage and test matrix](docs/CORE-TEST-COVERAGE.md).
+Внешние HTTP-маршруты имеют вид `/api/...` без версионного префикса. OpenAPI `info.version` остаётся метаданными документа и не задаёт URL.
+
+## Разработка
+
+Из корня репозитория:
+
+```bash
+make test
+make vet
+make build
+make build-full
+```
+
+Из `frontend/`:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
+Интеграционные проверки требуют отдельных disposable PostgreSQL/S3 ресурсов. Не направляйте их на рабочие данные. Публичный Router listener должен быть размещён за внешним proxy; конфигурация и admission policy proxy принадлежат deployer.
+
+Активный статус и критерии реализации: [TODO](docs/TODO-admin-snapshots-content-files.md). Контракты проверки: [acceptance matrix](tests/ACCEPTANCE-MATRIX.md). Результаты QA и ограничения: [QA report](docs/QA_REPORT.md).

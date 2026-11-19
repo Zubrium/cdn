@@ -1,282 +1,70 @@
 # Универсальный ABI статических фич
 
-## Целевой ABI `dev_v2`
+## Целевой ABI
 
-Этот раздел нормативен для новой системы. Все последующие разделы документа описывают прежний runtime и служат только справочным материалом; при расхождении действует этот target-раздел и актуальная спека Website.
+Target ABI называется `static-lifecycle-v2` и указывается в `manifest.json` как `runtime.abi`. `runtime.entry` указывает на локальный ESM entry; `runtime.styles` и `runtime.sharedStyles` задают CSS-ресурсы сборки. Runtime принимает только этот ABI.
 
-- Target ABI называется `static-lifecycle-v2` и указывается только в `manifest.json` как `runtime.abi`. `runtime.entry` указывает на локальный ESM entry; `runtime.styles` и `runtime.sharedStyles` сохраняют описанные ниже правила ресурсов. ABI `legacy-react-v1`, `static-module-v1` и `static-html-v1` относится только к legacy и целевым runtime не исполняется.
-- Entry экспортирует `render`, `hydrate`, `update` и `dispose` со следующими сигнатурами:
-
-  ```ts
-  export type FeatureContext = Readonly<{
-    placementId: string;
-    featureKey: string;
-    version: string;
-    arguments: Readonly<Record<string, unknown>>;
-    content: Readonly<Record<string, unknown>>;
-    route: Readonly<{ path: string; params: Readonly<Record<string, string>>; search: string }>;
-    systemAssets: Readonly<{ logoUrl?: string }>;
-    collectionEndpoint?: string;
-    detailLink?: Readonly<{ routeId: string; field: string; pathTemplate: string }>;
-    sdk: FeatureSDK;
-    signal: AbortSignal;
-  }>;
-
-  export type FeatureModule = {
-    render(root: HTMLElement, context: FeatureContext): void | Promise<void>;
-    hydrate(root: HTMLElement, context: FeatureContext): void | Promise<void>;
-    update(root: HTMLElement, context: FeatureContext): void | Promise<void>;
-    dispose(root: HTMLElement): void | Promise<void>;
-  };
-  ```
-
-- `render` получает пустой lifecycle root и создаёт начальную разметку. `hydrate` получает уже сформированную Website/Prerender разметку и подключает к ней интерактивное состояние, не заменяя root. `update` применяет новый context к тому же placement; `dispose` освобождает принадлежащие feature ресурсы. Завершение Promise `render`/`hydrate` означает готовность первоначального содержимого и необходимых для первого отображения разрешённых чтений; отказ изолируется в placement.
-- На одном root runtime исполняет не более одной lifecycle-операции одновременно. При новом `update` он отменяет signal прежнего контекста, ждёт завершения текущей операции и применяет только самый новый ожидающий context. Замена placement отменяет текущий context, ждёт текущую операцию в пределах настроенного lifecycle timeout, вызывает `dispose` и только затем удаляет root; ошибка/таймаут одного placement не блокирует соседние. Feature обязана прекращать работу по отменённому signal и не мутировать root после завершения своей операции.
-- Context содержит только публичные проекции выбранной страницы и site-wide published Content, плюс scoped SDK; он не содержит секретов, credentials, приватных Core file data, произвольных callbacks или выбора engine/module namespace. Страница не задаёт route: runtime получает текущие `path` и `params` от Router как request projection.
-- Feature dependencies разрешаются Website по manifest SemVer ranges до готовности page snapshot. Dependency graph должен быть конечным, без циклов и конфликтующих диапазонов; каждый точный provider version, package digest и требуемая версия public runtime API фиксируются в immutable lock. Feature импортирует только exports объявленного versioned public API, не произвольные внутренние файлы.
-- Feature manifest объявляет сетевые возможности фичи: точные `https` origins и типизированные контракты запросов/ответов. Это декларация разрешений и данных, а не site-level registry и не настройка request bindings для placement. Runtime строит browser `connect-src` только из same-origin и exact origins manifest-ов закреплённых feature builds в dependency lock; wildcard, credentials и произвольные origins запрещены. Значение path может поступать из опубликованной модели Content только как относительный путь под одним из объявленных origins; вводимые значения не могут менять origin.
-- Запрос и декодирование ответа выполняются browser-кодом фичи. Запросы могут использовать объявленные typed inputs, включая значения опубликованных Content records, а feature code отвечает за сериализацию, проверку ответа и UI состояний. `/content` редактирует значения записей; `/site` связывает поля модели с объявленными `dataInputs`; редактор не регистрирует origin и не настраивает path/query/body/header bindings. Manifest описывает контракт запроса и его модель данных; код фичи выполняет его.
-- Фича может получать сетевые функции через versioned exports явно объявленной provider-фичи, например `api`; обращаться к произвольным фичам, их внутренним файлам, ambient globals или незафиксированному общему store нельзя. Provider может инкапсулировать сетевые запросы и framework-specific state, но runtime не требует Pinia, Vue или общего mutable store. Публичные методы provider принимают `AbortSignal` вызывающего placement и не возвращают результаты после отмены.
-- В feature manifest, аргументах и опубликованном Content запрещено хранить секреты и credentials. Внешний вызов выполняется напрямую из браузера и зависит от CORS backend; Website не становится proxy. Публичный runtime и prerender worker никогда не получают credentials.
-- Runtime lifecycle `context.signal` распространяется на запросы самого placement и вызванные им provider methods. При update, замене или dispose отменённый запрос не должен менять DOM/state и не должен блокировать соседние placements. Если запрос не завершён или ответ невалиден, feature показывает своё контролируемое состояние; никакой внешний ответ не сохраняется как редакционный Content.
-- Prerender worker остаётся без внешней сети и не выполняет browser-only API запросы. Его HTML и cache identity не зависят от ответов, получаемых только после browser hydration; значение Content, использованное для начальной серверной разметки, учитывается обычными model/content revisions. Включение внешнего API-ответа в prerender требует отдельного target-контракта и не следует из manifest network permission.
-- Design tokens — часть feature-provider manifest, namespaced по `feature_id`; только provider объявляет token schema и value. Consumers и Admin не переопределяют их. Общей базовой дизайн-системы, site-level tokens и пользовательских overrides нет.
-- Site-wide `dataModel` и записи разделяются по сайту и общим published revision; page snapshots содержат placements и typed bindings к этой модели. Prerender получает immutable trusted projections и включает все revisions/digests в build identity. Публикация общей схемы или записей автоматически запускает пересборку затронутых страниц согласно [SPEC-website-engine.md](../SPEC-website-engine.md).
-- Vitasil ZIP адаптируются на build/export boundary. Импортёр не угадывает ABI, не подменяет его и не исполняет старые ABI. Website build создаёт HTML для initial paint; browser runtime вызывает `hydrate` поверх готовой разметки. UI-kit — обычная feature-provider, используемая через публичный runtime API и dependency lock; Admin fallback остаётся отдельной встроенной возможностью и не участвует в provider rollout страниц.
-
-> **Legacy reference:** остальные разделы ниже описывают прежний runtime. Они могут содержать старые утверждения о трёх ABI, mount/unmount, wrapper DOM и Vitasil ZIP. Эти утверждения не являются требованиями `dev_v2`.
-
-> **Legacy reference below:** следующие разделы описывают прежнее поведение, контракты или исторические результаты. Целевая архитектура новой платформы определена в [SPEC-modular-platform.md](../../../architecture/SPEC-modular-platform.md) и [SPEC-core-architecture.md](../../../core/SPEC-core-architecture.md). Legacy compatibility не означает запуск старого ABI целевым runtime.
-
-Legacy implementation status: описанные ниже runtime-контракты ранее реализованы и проходили указанные проверки в старой продуктовой ветке; это не подтверждает готовность целевого ABI `dev_v2`. Историческая фича поставлялась как готовый статический ZIP вместе с `manifest.json`; детали ниже сохранены для адаптации Vitasil, а не для прямого исполнения новым Runtime.
-
-Реализованы runtime-контракты `legacy-react-v1`, `static-module-v1` и `static-html-v1`, immutable asset URLs и browser MIME types, локальные ESM/CSS/HTML-проверки, placement lifecycle, collection/form SDK, server fallback для `static-html-v1` и browser prerender. Содержимое остальных ABI присутствует в ответе без JavaScript только после успешного Chromium prerender; если worker выключен или завершился ошибкой, в shell не выполненные JS-фичи не имеют серверной разметки. Это полный текущий набор ABI: Go document rendering не добавляет и не меняет ABI. Manifest format 2 — отдельный контракт. Ранее проверено unit-тестами, disposable PostgreSQL, Chromium, девятью ZIP Vitasil, Vue SFC-фичей формы и vanilla ESM build. Эти результаты не подтверждают текущую deferred acceptance. Svelte/Angular сборки отдельно не запускались; рабочий Vitasil API/БД не использовались. См. [руководство автора фич](../../../../docs/FEATURE-RUNTIME-AUTHORING.md).
-
-## Цель и границы
-
-Один manifest-контракт должен описывать фичу независимо от языка и UI-фреймворка, использованных автором. Движок принимает только уже собранные браузерные артефакты, проверяет их, хранит неизменяемо и выдаёт с того же origin. TypeScript, JSX, Vue, Svelte, Angular, vanilla JS и другие инструменты допустимы, если сборка выдаёт один из ABI ниже.
-
-Фреймворк не запускается на сервере и не является зависимостью Website Engine. Не принимаются исходный проект, `package.json` для выполнения, серверный entrypoint, функции, SSR-сервер, Node.js API, нативные бинарники и команды сборки. Сервер не компилирует ZIP.
-
-Manifest format 2 keeps feature metadata, the `/site` argument schema, typed `dataInputs`, runtime contract and strict public `form.submissionSchema`. The snapshot `dataModel` owns CMS entity/field schemas and `/content` generates record editors from it. Format 1 and manifest `content.*` schemas are rejected; there is no conversion path. `engineApi` denotes the SDK contract and runtime ABI below describes rendering. The model and bindings are specified in [SPEC-data-model.md](../SPEC-data-model.md); removing CMS schemas does not change the runtime ABI because the Engine projects published records into the existing `content` channel.
-
-## Model-backed runtime projection
-
-Before passing a placement to any feature ABI, the Engine resolves its declared typed `dataInputs` and snapshot `dataBindings` into the existing runtime `content` channel. Collection output preserves editorial order or the explicit ordered record selection. Record output uses either the `/content` selection or the unique route lookup. Scalar, record, and collection projections follow stable field IDs on one flat model; their shape must match the manifest's typed output paths. Model/record relations and `relationIds` are not part of the runtime contract. CMS record fields remain optional. Only published model records and placement selections are public; draft workspaces, publication history, and submissions are never returned by the public runtime endpoint or embedded into prerendered HTML. Media references used by a published record must be public and ready before publication. Manifest argument values with `format: "media"` are checked against ready public files before hydration and projection; a private or unavailable file reference fails closed and is not serialized to the public runtime or HTML.
-
-On detail pages, an optional `detailSEO` mapping on the unique record input assigns stable IDs from that same bound entity to `title`, `description`, `ogTitle`, `ogDescription` and `ogImage`. Text roles accept model `text`/`longText`; the image role accepts `media`. Runtime uses the selected published record for both feature `content` and document head metadata. Empty mapped values inherit the page/site metadata, with derived Open Graph text following dynamic title/description unless an explicit static value or separate field mapping exists. An unresolved unique route lookup is HTTP 404. The runtime JSON composition and document renderer consume the same resolved `RuntimeComposition.Metadata`; this does not add feature ABI members or change format 2 manifests.
-
-Document cache identity covers branch, assigned snapshot, structural digest, published model-content revision, resolved route and path arguments, final head metadata, theme/system assets, and projected placements. Any request query that may affect output bypasses HTML caching unless a separately reviewed safe identity is introduced. Snapshot metadata and structural mappings change the snapshot digest; publish/restore advances content revision; draft-only saves do not alter public output or sitemap identity. Public sitemap detail routes are enumerated from published records only and pass the normal route resolver before inclusion.
-
-## Semantic composition DOM and lifecycle roots — agreed 9 November 2026
-
-The runtime keeps the existing `legacy-react-v1`, `static-module-v1`, and `static-html-v1` contracts. A v1 placement owns one neutral `<div>` lifecycle root, required for mount/update/unmount, isolated styles, readiness, and placement-local failure handling. That root carries `data-engine-feature`, `data-engine-placement`, and `data-engine-slot`; Vitasil or the engine must not add another generic wrapper inside it just to identify the placement. Feature-authored content keeps its semantic structure (`<article>`, `<section>`, lists and forms); no nested `<main>` is allowed.
-
-The interactive runtime renders placements in composition order as direct children of the application mount root, except `main` placements, which are direct children of the one page-level `<main>`. The engine does not create a page wrapper or shared `background`, `header`, or `footer` slot containers. The application mount node `#root` carries page classes and snapshot/content revision attributes; it is infrastructure, not a content landmark. A resolved page always contains exactly one `<main>`, including chrome-only pages; the empty main has no wrapper around it. Placement slot positioning/scoping is applied to the ABI lifecycle root via `.runtime-placement--<slot>`.
-
-The Go shell uses one `#root` with non-main placement roots as direct children and main placements inside exactly one `<main>`; verified `static-html-v1` fragments are inserted into their existing placement roots. There is no parallel `<noscript>` subtree or hidden duplicate mount tree. After successful prerender, the populated document remains the live `#root` for both no-JavaScript output and the browser ABI lifecycle. React-backed feature helpers hydrate existing markup; other modules keep their ABI-defined `mount` behavior. Already-rendered `static-html-v1` content is reused on the initial prerendered route. The worker waits for the runtime to finish mounting visible placements, traverses the remaining roots, and removes its readiness marker before serialization. The ABI lifecycle `<div>` stays for all three current ABI kinds, including static HTML, to preserve one placement scope and existing manifests. There is no new ABI or implicit manifest root-tag extension. Feature CSS remains scoped under `[data-engine-feature="<key>"]`.
-
-For a successfully prerendered page, offscreen placement roots remain deferred unless a visible descendant is `position: fixed` and intersects the current viewport. In that case the Engine initializes the placement immediately, even when its lifecycle root is below the fold. This keeps visible overlays (such as a cookie-consent panel owned by a footer feature) interactive without eagerly mounting unrelated offscreen content.
-
-The engine adds no meaningful landmarks around feature content. Its error and loading messages use a paragraph/status-compatible element rather than an extra generic block. Background is decorative and marked by its feature; header/footer landmarks are supplied by their feature roots. Error UI remains isolated to one placement.
-
-Acceptance: browser DOM assertions verify direct placement roots in slot order, no page or non-main slot wrappers, exactly one `<main>` even on chrome-only pages, no placement ancestor/descendant relationship, and continued isolation of mount/style errors. Static fallback tests verify equivalent parentage, an empty main on chrome-only pages, semantic feature content, immutable asset rewriting, and no-JavaScript HTML both after successful prerender and when the worker is unavailable. Lighthouse runs on isolated local Vitasil/engine output; the QA report records profile, category scores, notable audits, and environment limitations separately from structural code acceptance. Raw Lighthouse JSON/HTML is retained only when needed for follow-up analysis. Existing Vitasil feature manifest ABI is unchanged; feature-specific semantics are versioned normally.
-
-## Статический ZIP
-
-Новый ZIP содержит `manifest.json` в корне и только готовые файлы: JavaScript ESM-модули, CSS, HTML-фрагмент, изображения, шрифты и другие статические ресурсы, на которые ссылается сборка. Пути в манифесте относительные к корню ZIP, нормализованные и не могут выходить за него. Все импортируемые модули и обязательные ресурсы должны находиться в том же архиве; движок не скачивает npm-пакеты и не разрешает bare imports, CDN-скрипты или серверные модули.
-
-Реестр продолжает хранить ZIP как неизменяемую сборку с digest. Обновление требует новой версии фичи. Движок проверяет ZIP, manifest, совместимость ABI и существование перечисленных файлов до регистрации. Запрещены traversal-пути, дублирующиеся нормализованные имена, symlink-записи и archive bombs согласно существующим ограничениям загрузки.
-
-## Версионирование сборок и выбор в снапшоте
-
-Логическая идентичность фичи — `manifest.key`; в реестре существует одна запись фичи на ключ. Каждая сборка идентифицируется парой `key + manifest.version`, версия обязательна и проверяется как SemVer. Загрузка той же пары с тем же digest идемпотентна; другой digest для уже зарегистрированной пары отклоняется. Сборки остаются неизменяемыми, старые версии сохраняются для уже созданных снапшотов и отката.
-
-Снапшот фиксирует ровно одну точную версию для каждого `featureKey`. Все размещения и direct `dataInputs`-привязки с этой фичей используют закреплённую версию. Несколько версий одного `key` могут использоваться в разных снапшотах, но не смешиваются внутри одного снапшота. Изменение выбранной версии обновляет ссылки на неё в рабочей конфигурации; явное сохранение создаёт дочерний снапшот. Загрузка новой сборки сама по себе не меняет снапшоты и назначения веток.
-
-В глобальном реестре показывается одна запись на логическую фичу с раскрываемым списком сборок. В редакторе состава снапшота также показывается одна запись на фичу и выбирается конкретная версия; для новой фичи предварительно выбрана версия с наибольшим SemVer-приоритетом, но в снапшот она попадёт только после явного действия пользователя и сохранения. При одинаковом SemVer-приоритете (например, версии различаются только build metadata) выше показывается сборка, зарегистрированная позже. Существующая версия отображается явно; загрузка более новой версии не переводит на неё существующие снапшоты.
-
-В редакторе страницы выбор сборки группирует версии под одним логическим ключом. Если ключ уже включён в снапшот, доступна только его закреплённая версия; для ещё не включённой фичи версии упорядочены по SemVer, последняя помечена как рекомендуемая. Так редактор размещений не может незаметно создать два ABI/schema-варианта одной фичи в одном снапшоте.
-
-При выборе несовместимой схемы сохраняется существующая проверка совместимости контента: несовместимости показываются до создания дочернего снапшота, исходные данные не перезаписываются и не удаляются автоматически. API, схема БД, формат ZIP и контракт manifest для этой возможности не меняются. Новые права доступа не добавляются; действующие route guards и ограничения редактирования снапшота сохраняются.
-
-Совместимость сборок также учитывает `runtime.sharedStyles`: если разные выбранные версии объявляют один путь общей таблицы стилей с разными SHA-256, конфигурация снапшота отклоняется. Для обновления таких Vitasil-сборок выбирайте версии, собранные с одинаковым общим stylesheet; при этом каждый `manifest.key` всё равно закрепляет ровно одну версию. Ошибка возвращает путь stylesheet и требует согласовать версии явно.
-
-### Критерии приёмки версионирования
-
-1. Глобальный реестр визуально содержит одну строку на `key`; история версий доступна из этой строки и показывает точную версию, digest и manifest.
-2. В составе снапшота каждая фича показана один раз. При добавлении предложена последняя SemVer-версия; доступен ручной выбор предыдущих версий.
-3. Смена версии меняет все placement/source/binding ссылки на тот же ключ в рабочем снапшоте, но не родителя и не назначения веток; сохранение создаёт потомка и запускает существующую проверку совместимости контента.
-4. В редакторе страницы версия закреплённой фичи не расходится между её размещениями; список версий сгруппирован под логической фичей.
-5. Регистрация ZIP под уже существующей версией остаётся идемпотентной для того же digest и завершается конфликтом для другого digest. Новая сборка не обновляет ни один существующий снапшот автоматически.
-6. Тесты покрывают SemVer-порядок, группировку сборок, выбор одной версии на ключ, сохранение родителя, точную регистрацию и неизменность назначения веток. Не добавляются API и миграции.
-
-### Результат реализации версии редактора
-
-- Глобальный реестр и состав снапшота группируют сборки по `manifest.key`; история раскрывается внутри логической фичи.
-- Новая фича предварительно показывает старшую SemVer-сборку. Добавление или смена версии требуют явного действия; существующие версии не обновляются автоматически.
-- Редактор страницы группирует сборки по ключу и ограничивает уже включённую фичу её закреплённой версией. `selectFeature()` переносит выбранную версию на ссылки размещений, коллекций и content bindings в новой рабочей конфигурации; исходный объект остаётся неизменным.
-- Версия манифеста проверяется как SemVer, включая корректные prerelease/build identifiers. Backend отклоняет две версии одного ключа в одном снапшоте; никакие API или миграции не добавлены.
-- Проверки: `pnpm typecheck`, `pnpm lint`, `pnpm test` (12 файлов, 58 тестов), `pnpm build` под Node 20; `go test ./features/sitebuilder`. Тесты покрывают SemVer-порядок, группировку, выбор старшей версии, ссылки placement/source/binding, неизменность родительской конфигурации, запрет смешения версий и валидные/невалидные SemVer identifiers.
-- Проверка реальных артефактов: `sitebuilder.VerifyArchive` через read-only Go runner успешно провалидировал все 24 ZIP в `/Users/docup/Projects/vitasil/frontend/dist/feature-builds`; для каждого сохранена исходная пара `key/version`. Рабочие API, БД, хранилище и файлы Vitasil не менялись.
-- Browser QA на disposable API: реальная Vitasil-сборка `catalog@1.0.9` появилась в одной раскрываемой записи вместе с `1.0.5`; до выбора снимок остался закреплён на `1.0.5`. Первая попытка обновить только `catalog` была отклонена, потому что его `core.css` отличается от `main-data@1.0.5`; UI/API показали ошибку общего stylesheet без создания снапшота. После выбора согласованной пары `catalog@1.0.9` + `main-data@1.0.9` редактор показал предупреждение о копировании одной опубликованной записи каждой фичи без преобразования и создал дочерний снапшот `#5`. В disposable PostgreSQL подтверждены закреплённые версии, неизменные parent `#1` (`1.0.5`), хеши опубликованного контента в родителе и ребёнке и неизменное назначение ветки на родитель (revision `2`). Рабочие Vitasil API, БД, хранилище и файлы не менялись.
-
-## Единый manifest-контракт
-
-Сборки объявляют один из существующих вариантов в `runtime`. Добавление новых ABI и изменение существующих runtime-контрактов не входит в эту спецификацию. Пример модуля:
-
-```json
-{
-  "runtime": {
-    "abi": "static-module-v1",
-    "entry": "dist/feature.js",
-    "styles": ["dist/feature.css"],
-    "sharedStyles": ["dist/core.css"]
-  }
-}
-```
-
-Пример HTML-фрагмента:
-
-```json
-{
-  "runtime": {
-    "abi": "static-html-v1",
-    "entry": "dist/feature.html",
-    "styles": ["dist/feature.css"]
-  }
-}
-```
-
-Это варианты одного `manifest.json`, а не отдельные каталоги регистрации. Общие поля manifest и правила версионирования одинаковы. Для `static-module-v1` `entry` указывает на ESM ABI модуля; для `static-html-v1` — на HTML fragment. `styles` может быть пустым или отсутствовать. Engine API version и runtime ABI проверяются раздельно; неизвестная версия отклоняется при импорте, а не приводит к попытке угадать контракт.
-
-Для runtime-вариантов нельзя одновременно задавать legacy `entry`, `styles` или `sharedStyles` в корне: это исключает неоднозначный ABI. `runtime.styles` содержит feature-scoped стили размещения. Необязательный `runtime.sharedStyles` перечисляет локальные CSS-ресурсы общей основы, одинаковые для версий выбранных сборок и подключаемые один раз; эта общая основа может задавать базовые глобальные стили. JavaScript entries имеют расширение `.js` или `.mjs`, HTML fragment — `.html` или `.htm`; статический HTML entry ограничен 2 MiB.
-
-JavaScript assets разбираются ECMAScript parser перед проверкой import-графа. Статические `import` и `export … from`, а также dynamic `import()` ровно с одной строковой константой проходят проверку относительного локального пути, наличия файла и JS-расширения. Bare, внешние, отсутствующие и вычисляемые импорты отклоняются. Лексические конструкции JavaScript, включая regex literals с экранированным `/` и операторы деления, не должны ошибочно классифицироваться как import-пути.
-
-Сборки без `runtime` используют существующий `legacy-react-v1` contract. Значение ABI не угадывается по содержимому архива и не переписывается при регистрации. Публичный Go document renderer оставляет feature assets и lifecycle текущему runtime.
-
-## `static-module-v1`
-
-Модуль реализует один framework-neutral lifecycle. На каждое размещение движок создаёт отдельный корневой DOM-элемент и вызывает экспорт `mount`:
+Entry экспортирует `render`, `hydrate`, `update` и `dispose`:
 
 ```ts
-export type FeatureContext = {
+export type FeatureContext = Readonly<{
   placementId: string;
   featureKey: string;
   version: string;
-  arguments: Record<string, unknown>;
-  content: Record<string, unknown>;
-  route: { path: string; params: Record<string, string>; search: string };
-  systemAssets: { logoUrl?: string };
+  arguments: Readonly<Record<string, unknown>>;
+  content: Readonly<Record<string, unknown>>;
+  route: Readonly<{ path: string; params: Readonly<Record<string, string>>; search: string }>;
+  systemAssets: Readonly<{ logoUrl?: string }>;
   collectionEndpoint?: string;
-  detailLink?: { routeId: string; field: string; pathTemplate: string };
+  detailLink?: Readonly<{ routeId: string; field: string; pathTemplate: string }>;
   sdk: FeatureSDK;
   signal: AbortSignal;
+}>;
+
+export type FeatureModule = {
+  render(root: HTMLElement, context: FeatureContext): void | Promise<void>;
+  hydrate(root: HTMLElement, context: FeatureContext): void | Promise<void>;
+  update(root: HTMLElement, context: FeatureContext): void | Promise<void>;
+  dispose(root: HTMLElement): void | Promise<void>;
 };
-
-export type FeatureInstance = {
-  ready: Promise<void>;
-  update(next: FeatureContext): void | Promise<void>;
-  unmount(): void | Promise<void>;
-};
-
-export function mount(root: HTMLElement, context: FeatureContext):
-  FeatureInstance | Promise<FeatureInstance>;
 ```
 
-`mount` создаёт UI в переданном root и возвращает handle. `ready` разрешается после первоначального содержимого и допустимых чтений, нужных для первого отображения; reject считается ошибкой фичи. На смену маршрута или контекста движок вызывает `update`; при удалении или замене размещения вызывает `unmount`, отменяет старый `signal` и освобождает подписки, timers и framework roots. Ошибка импорта, mount, update или ready изолируется границей одного размещения и не скрывает остальную страницу.
+`render` получает пустой lifecycle root и создаёт начальную разметку. `hydrate` получает уже сформированную Website/Prerender разметку и подключает интерактивное состояние, не заменяя root. `update` применяет новый context к тому же placement; `dispose` освобождает принадлежащие feature ресурсы. Завершение Promise `render`/`hydrate` означает готовность первоначального содержимого и необходимых для первого отображения разрешённых чтений; отказ изолируется в placement.
 
-`FeatureContext` не содержит секретов, прав администратора, выбора ветки, произвольного доступа к серверной БД или приватным файлам. Все разрешённые операции с данными идут через версионируемый `FeatureSDK` из `engineApi`. Формы используют существующий SDK и публичный endpoint форм; обязательность полей и проверка на сервере сохраняются.
+На одном root выполняется не более одной lifecycle-операции одновременно. При новом `update` runtime отменяет signal прежнего контекста, ждёт завершения текущей операции и применяет только самый новый ожидающий context. Замена placement отменяет текущий context, ожидает текущую операцию в пределах настроенного lifecycle timeout, вызывает `dispose` и только затем удаляет root. Ошибка или timeout одного placement не блокирует соседние. Feature прекращает работу по отменённому signal и не мутирует root после завершения операции.
 
-В текущем browser SDK доступны `listCollection(endpoint, { field?, value?, offset?, limit? })` и `submitForm(featureKey, data)`. Composition передаёт `collectionEndpoint` и `detailLink`, если они настроены. Это существующий SDK, а не новый серверный API.
+Context содержит только публичные проекции выбранной страницы и site-wide published Content, плюс scoped SDK; в нём нет секретов, credentials, приватных Core file data, произвольных callbacks или выбора engine/module namespace. Страница не задаёт route: runtime получает текущие `path` и `params` от Router как request projection.
 
-Автор может использовать framework, если конечный ESM entry самой фичи реализует этот lifecycle. Framework и его клиентские зависимости включаются в ZIP; движок не предоставляет обязательную framework global-зависимость. Это правило описывает имеющийся `static-module-v1` контракт и не вводит дополнительный ABI или Engine-side адаптер.
+Feature dependencies разрешаются Website по manifest SemVer ranges до готовности page snapshot. Dependency graph конечен, не содержит циклов и конфликтующих диапазонов; точные provider version, package digest и требуемая версия public runtime API фиксируются в immutable lock. Feature импортирует только exports объявленного versioned public API.
 
-## `static-html-v1`
+Feature manifest объявляет сетевые возможности: точные `https` origins и типизированные контракты запросов/ответов. Runtime строит browser `connect-src` только из same-origin и exact origins manifest-ов закреплённых feature builds в dependency lock; wildcard, credentials и произвольные origins запрещены. Значение path может поступать из опубликованной модели Content только как относительный путь под одним из объявленных origins; вводимые значения не могут менять origin.
 
-`entry` — фрагмент разметки для одного placement, а не полный `<html>/<head>/<body>` документ. Фрагмент вставляется в root страницы движка без шаблонной подстановки. Он может содержать доступную семантическую разметку, обычные ссылки и локальные пути к включённым ресурсам.
+Запросы и декодирование ответов выполняются browser-кодом фичи. Они могут использовать объявленные typed inputs, включая значения опубликованных Content records; feature code отвечает за сериализацию, проверку ответа и UI-состояния. `/content` редактирует значения записей; `/site` связывает поля модели с объявленными `dataInputs`, но не регистрирует origins и не настраивает path/query/body/header bindings. Manifest описывает контракт запроса и его модель данных; код фичи выполняет его.
 
-HTML-вариант не исполняет inline script, event-handler атрибуты (`on*`), `javascript:` URL, загруженные скрипты или внешние executable зависимости. Он не принимает редакционные content values, не выполняет data binding и не реализует отправку формы. Если нужны данные по manifest schema, интерактивность или формы, используется `static-module-v1`. Полный HTML-документ, меняющий head, canonical, robots или оболочку сайта, не является фичей placement и остаётся ответственностью движка.
+Фича может получать сетевые функции через versioned exports явно объявленной provider-фичи, например `api`; обращения к произвольным фичам, их внутренним файлам, ambient globals или незафиксированному общему store запрещены. Provider может инкапсулировать запросы и framework-specific state, но runtime не требует Pinia, Vue или общего mutable store. Публичные методы provider принимают `AbortSignal` вызывающего placement и не возвращают результаты после отмены.
 
-Go document rendering помещает fragment непосредственно в соответствующий ABI placement root, переписывает локальные `src`, `poster` и `srcset` на immutable asset URLs и подключает styles placement и темы. После успешного Chromium prerender runtime обновляет тот же placement root; отдельная дублирующая fallback-ветка не создаётся.
+В manifest, аргументах и опубликованном Content запрещены secrets и credentials. Внешний вызов выполняется напрямую из браузера, зависит от CORS backend и не проходит через Website. Публичный runtime и prerender worker никогда не получают credentials. `context.signal` распространяется на запросы placement и вызванные им provider methods; отменённый запрос не должен менять DOM/state или блокировать соседние placements. При невалидном ответе feature показывает контролируемое состояние; внешний ответ не сохраняется как редакционный Content.
 
-## CSS и ресурсы
+Prerender worker не имеет внешней сети и не выполняет browser-only API requests. Его HTML и cache identity не зависят от ответов, получаемых только после browser hydration. Значения Content для начальной серверной разметки учитываются обычными model/content revisions. Включение внешнего API-ответа в prerender требует отдельного target-контракта.
 
-Engine создаёт стабильную границу placement с `data-engine-feature` и `data-engine-placement`. CSS сборки должен быть ограничен этой границей и не менять `html`, `body`, соседние фичи или админку. Дизайн-токены движка доступны через наследуемые CSS custom properties; имена/значения токенов в админке по-прежнему не вводятся кодом.
+Design tokens — часть feature-provider manifest, namespaced по `feature_id`; только provider объявляет token schema и value. Consumers и Admin не переопределяют их. Общей базовой дизайн-системы, site-level tokens и пользовательских overrides нет.
 
-Runtime-shell fallback для `html`/`body` (минимальная геометрия, системный шрифт, нейтральные цвет и фон) находится в низкоприоритетном CSS-слое `runtime-base`. `runtime.sharedStyles` подключаются после shell и могут задавать общую тему сайта, включая глобальные `html`/`body` цвета и фон; они должны перекрывать fallback при одинаковой специфичности. Сгенерированные движком токены загружаются после shared styles и остаются источником выбранных значений `--base-*`/`--feature-*`. Feature-scoped `runtime.styles` по-прежнему ограничены placement boundary и не могут изменять оболочку.
+Site-wide `dataModel` and records are shared by site; translated Content records are separate locale-specific records linked by `translation_id`. Page snapshots contain placements and typed bindings to that model. Prerender receives the selected locale, locale-catalog revision, immutable trusted projections and includes all revisions/digests in build identity. A publication rebuilds only affected locale targets according to [SPEC-website-engine.md](../SPEC-website-engine.md) and [SPEC-router-engine.md](../../router/SPEC-router-engine.md).
 
-Проверка 7 ноября на реальном ZIP Vitasil `not-found@1.0.7` подтвердила cascade: Engine fallback допускает тёмный фон и цвет страницы из общей CSS фичи; цвет кнопки `text-primary-foreground` не блокируется общим reset-селектором ссылки. Предыдущий CSS содержал unlayered fallback оболочки и unlayered `a { color: inherit }`, из-за которых текущий 404 был нечитаемым.
+## Media declarations
 
-Для новых runtime-вариантов загрузчик проверяет CSS selectors в `runtime.styles` на `data-engine-feature="<featureKey>"` либо `:where(...)` с этой границей. Имена `@keyframes`, layers, counter styles, registered properties и `@font-face` должны иметь префикс feature key. `@import` и внешние CSS resources не допускаются. `runtime.sharedStyles` предназначены только для явно разделяемой основы сборок и входят в digest/проверку архива, но не считаются feature-scoped стилями.
+A media field declares `x-media` in its pinned feature manifest. Supported profiles are `accept: image | raster-image | video | file`; optional `renditions` are allowed only for `raster-image`, with unique names, bounded positive `width`/`height` and `fit: contain | cover`. A `video` profile instead declares bounded `maxWidth`/`maxHeight` and a `poster` rendition. Unknown properties, invalid combinations and unbounded rendition counts are rejected before the feature version becomes ready. Profiles contain no command, executable, path, URL, filter expression or resource limit.
 
-Ресурсы загружаются по same-origin URL, адресуемому digest сборки и относительному пути; cache policy остаётся immutable. Относительные CSS `url()` и ESM imports разрешаются внутри той же сборки. Внешние CDN зависимости и runtime-компиляция запрещены в ABI v1. HTML ссылки на внешние сайты допускаются, но встроенные ресурсы HTML/CSS должны находиться в ZIP или обращаться к разрешённым публичным файлам движка.
+The editor submits the original Core file ID and its manifest-bound placement/field identity; Website resolves profile from the snapshot's exact feature version and rejects client-supplied profile overrides. The editor waits until every declared output is ready before replacing the field's previous value. On processing error or cancellation the previous value remains unchanged. The original file remains the stored Content value and is never replaced by a derivative; prerender resolves only outputs matching canonical profile digest and processor version. Derivatives are immutable Core files in the original's FileSet memberships and inherit its current access groups; membership never grants access. See [SPEC-workers.md](../../../workers/SPEC-workers.md) for worker retry and resource-isolation guarantees.
 
-## Доверие и ограничения
+Vitasil ZIP проверяются на build/export boundary. Импортёр не угадывает и не подменяет ABI. Website build создаёт HTML для initial paint; browser runtime вызывает `hydrate` поверх готовой разметки. UI-kit — обычная feature-provider, используемая через публичный runtime API и dependency lock; Admin fallback остаётся отдельной встроенной возможностью и не участвует в provider rollout страниц.
 
-Загрузка ZIP разрешена только существующей роли site manager. Регистрация сборки означает разрешение доверенному автору исполнять JavaScript в origin публичного сайта; static build не является sandbox. Такой код потенциально имеет доступ к DOM и публичным same-origin API, поэтому секреты, административные API и закрытые данные в feature context не передаются. Изоляция недоверенных сборок в iframe — отдельный продуктовый контракт и в ABI v1 не входит.
+## Проверяемые требования
 
-Сборка не должна выполнять побочные действия при `mount` или начальном рендере. В режиме пререндеринга worker изолирован Chromium-контекстом, разрешает только согласованные GET/HEAD публичных ресурсов и блокирует POST/PUT/PATCH/DELETE. `sdk.submitForm` в worker не отправляет заявку. В обычном браузере разрешённые действия выполняются через SDK с действующей серверной валидацией.
-
-## Пререндеринг и SEO
-
-Engine остаётся владельцем маршрутизации, статуса HTTP, head metadata, canonical, robots и sitemap. `static-html-v1` сразу даёт содержимую HTML-разметку. Для `static-module-v1` существующий browser worker открывает страницу в Chromium, загружает статическую сборку, ждёт `FeatureInstance.ready`, окончания публичных GET и quiet interval и сохраняет rendered HTML. Это browser prerender, не запуск server framework и не использование User-Agent для выбора содержимого.
-
-Engine также владеет семантической оболочкой страницы: все placements со слотом `main` находятся внутри одного `<main>` после header и перед footer; placements `background`, `header` и `footer` остаются вне него. Фичи в `main` являются фрагментами содержимого и не должны создавать вложенный `<main>`; используйте `<article>`, `<section>` и заголовки подходящего уровня. Оболочка одинаково попадает в browser prerender и интерактивную страницу; manifest и ABI не меняются.
-
-После загрузки страницы клиентский runtime запускает module ABI, пока prerendered копия остаётся видимой; после успешной готовности она заменяется интерактивным размещением. Пререндер с ошибкой сборки, несовпавшей ревизией или timeout не кешируется и не объявляется успешным. Браузерный JS должен дать тот же основной контент, что и HTML-фрагмент пререндера; формам сохраняется защита от повторной отправки.
-
-Placement, содержащий намеренно отмеченный feature-элемент `[data-engine-runtime-overlay]`, монтируется сразу, даже если корень placement расположен ниже viewport. Это явная runtime-граница для viewport UI: она не зависит от того, успела ли таблица стилей применить `position: fixed` к моменту проверки геометрии. До завершения клиентской инициализации shell скрывает такие элементы только при `@media (scripting: enabled)`; без JavaScript пререндер остаётся видимым. Runtime снимает gate после завершения mount/update всех eager placements, поэтому сохранённое в браузере предпочтение успевает убрать пререндерный overlay до его показа.
-
-## Права, ошибки и совместимость
-
-Импорт ZIP защищён существующей авторизацией. Build immutable; snapshot pins точную версию/digest. Замена runtime или manifest требует новой feature version и проходит существующий compatibility preflight для контента. Повреждённый/небезопасный архив, отсутствующий entry/style/import, неизвестный ABI, нарушенный HTML fragment contract и превышение лимита отклоняются без частичной регистрации. Публичная ошибка одной фичи показывает fallback только её placement; worker сообщает безопасную категорию сбоя и не записывает содержимое или контекст пользователя.
-
-Не вводить отдельный API, таблицу, редактор сборок или schema management. Сохраняются существующие `/api/v2/admin/feature-builds`, digest-хранилище, manifest registration/versioning, snapshot composition и `FeatureSDK`; меняется только поддерживаемая декларация и runtime adapter согласно этой спецификации.
-
-## Критерии приёмки
-
-1. Реальные Vitasil ZIP продолжают регистрироваться; актуальные версии (`background@1.0.6`, `catalog@1.0.9`, `catalog-detail@1.0.8`, `footer@1.0.4`, `form@1.0.9`, `header@1.0.6`, `hero@1.0.9`, `main-data@1.0.9`, `not-found@1.0.6`) прошли disposable integration. `hero@1.0.9` пререндерится через module ABI, `catalog-detail@1.0.8` проходит проверку landmark/H1 в Chromium, а `form@1.0.9` из Vue SFC выполняет реальную отправку через Engine SDK в Chromium. Рабочая Vitasil API/БД не изменяется.
-2. Engine не содержит ветвлений по framework; `static-module-v1` проверен независимым vanilla ESM build. Любая framework-сборка может включить свой runtime в локальные ZIP-модули и реализовать тот же adapter.
-3. `static-html-v1` фрагмент загружается, виден без JavaScript, не может менять head документа и отклоняет запрещённые inline handlers/scripts/unsafe URLs.
-4. Невалидные ZIP: traversal, дубликаты, symlinks, отсутствующий entry/asset, bare или внешний import, неизвестный ABI и нес scoped CSS отклоняются с понятной ошибкой до регистрации.
-5. Проверены два placements одного build, lifecycle `update`/`unmount`, смена маршрута, content, `listCollection`, валидная `submitForm` после keyboard activation и запрет отправки формы из prerender worker.
-6. CSS upload принимается только с feature scope; Chromium проверяет локальный asset, вычисленные стили двух feature scopes с одинаковым классом и отсутствие меж-placement утечки. Ошибки `mount` и загрузки stylesheet показывают локальный `role=alert`, сохраняя работающий соседний placement.
-7. Браузерная проверка текущего ZIP с `runtime.sharedStyles` подтверждает, что его глобальная тема переопределяет низкоприоритетные shell fallback цвета/фон; без shared theme сохраняется нейтральный fallback.
-7. Chromium prerender содержит основной текст HTML/module фичи, не отправляет форму и отражает актуальные branch/snapshot/content revisions; worker fail не оставляет stale HTML.
-8. Проверены клавиатурная отправка формы, семантические заголовки и alt-текст изображения в статическом HTML без JavaScript, локальные immutable URLs и отдельные runtime/resource errors. Ручная проверка скринридером и полная responsive/accessibility матрица реальных страниц Vitasil остаются отдельным QA сценарием.
-
-## Осталось проверить
-
-- Выполнить ручной screen-reader и responsive/accessibility audit публичных страниц на полном изолированном экземпляре Vitasil. Автоматизированный Chromium сценарий проверяет keyboard activation, accessible names/alt, no-JS rendering, CSS scope и локальную изоляцию runtime/resource errors.
-
-## Результаты проверки
-
-- После адаптации Vitasil на Node 20 прошли `npm --prefix frontend run typecheck`, `npm --prefix frontend run lint` и `FEATURE_BUILD_OUTPUT_DIR=/tmp/vitasil-static-feature-builds.ApgFsM npm --prefix frontend run build`. Девять актуальных ZIP прошли полный Go integration и Chromium для реальных hero/catalog/main-data; все ZIP скопированы в стандартный `frontend/dist/feature-builds/`, предыдущие ZIP сохранены. Предыдущий `hero-1.0.6.zip` отдельно прошёл Chromium с legacy ABI.
-- `TEST_DATABASE_URL=… TEST_FEATURE_DIR=… go test -count=1 ./...` прошёл на disposable PostgreSQL со всеми DB-backed тестами и ZIP Vitasil; браузерные тесты, требующие Playwright environment variables, запускались отдельно. `go vet ./...` также прошёл.
-- Из `frontend/` на Node 20 прошли `pnpm typecheck`, `pnpm lint`, `pnpm test` (55 тестов) и `pnpm build`.
-- Отдельная Chromium-команда `go test ./cmd/integration -run '^(TestStatic.*|TestExternalVitasil.*|TestBranchBrowserPrerenderUpdatesAfterContentAndAssignment)$' -count=1 -v` прошла на disposable PostgreSQL. Она включает два одинаковых класса под разными CSS scopes, no-JS fallback, локальную изоляцию ошибки `mount` и отказа stylesheet, форму с keyboard activation, коллекционный SDK, route lifecycle, актуализацию prerender, регистрацию девяти ZIP Vitasil и prerender настоящего legacy hero.
-- `go test ./pkg/runtime -run '^TestPrerenderWorkerRendersAndRejectsSideEffects$' -count=1 -v` прошёл с Chromium; fixture использует отдельный cache identity для query-зависимого небезопасного сценария, поэтому гарантированно запускает worker.
-- `TEST_FEATURE_DIR=/Users/docup/Projects/vitasil/frontend/dist/feature-builds go test ./cmd/integration -run '^TestExternalVitasil' -count=1 -v` прошёл. Это проверяло ZIP и поведение в disposable test server, не в рабочем Vitasil.
-- **Историческая запись, Vitasil до перехода на model-backed manifest v2.** `form@1.0.9` тогда использовала один SFC `ContactForm.vue`, а CMS-схема формы находилась в manifest. Этот контракт снят: актуальная `form@2.0.0` хранит копирайт в snapshot DataModel и отдельно объявляет обязательную схему отправки через `form.submissionSchema`. Старые результаты сборки и E2E относятся к прежнему контракту и не подтверждают новую модель; актуальное состояние Vitasil зафиксировано в [его спецификации dataInputs](../../../../../vitasil/docs/SPEC-feature-data-inputs.md) и [QA отчёте движка](../../../../docs/QA_REPORT.md).
-- Повторная проверка текущей версии движка 6 ноября 2026 выявила, что lexer-based import scanning ошибочно отклонял regex literals из новых ZIP Vitasil. Проверка переведена на AST traversal существующего parser; regression покрывает `/\/+/g`, `\d`-класс, division, static import/export и запрещённые bare/external/dynamic вычисляемые пути. На актуальной временной сборке девяти ZIP прошли `go test -count=1 ./...`, `go vet ./...`, Vitasil `npm run lint`, `npm run typecheck` и `npm run build`. Browser prerender реального `hero@1.0.9` включён в полный Go-прогон. Рабочие API/БД/storage Vitasil не использовались.
-- Дополнительный focused Chromium прогон 6 ноября на disposable PostgreSQL прошёл с актуальными hero и catalog-detail ZIP. Проверена содержательная prerendered разметка, landmark/H1 и повторный ответ из runtime cache. Наблюдаемое время одного cold/warm HTTP запроса: hero — 1.497 s / 10 ms при 3,245 bytes HTML, catalog-detail — 830 ms / 9 ms при 4,010 bytes HTML. Это единичные локальные замеры, cold включает запуск Chromium; они не заменяют Lighthouse/Core Web Vitals или сравнительный mobile/desktop профайл.
-
-### Повторная проверка сборки текущих исходников Vitasil — 7 ноября 2026
-
-Изменённые исходники Vitasil собраны read-only в production режиме. Девять source manifests совпали с каталогами и содержат `static-module-v1`: `background@1.0.7`, `catalog@1.0.11`, `catalog-detail@1.0.10`, `footer@1.0.5`, `form@1.0.10`, `header@1.0.8`, `hero@1.0.12`, `main-data@1.0.11`, `not-found@1.0.7`. `npm run typecheck`, `npm run lint` и production build завершились без warning/error. В output находилось ровно девять ZIP, по одному на каждый текущий manifest key/version.
-
-Стандартный `sitebuilder.VerifyArchive`-based тест `TestExternalBackendBindingsVitasilArchiveCompatibility` прошёл 9/9: ZIP filename identity совпала с `manifest.json`, архивы прошли runtime/manifest/archive checks. Тест не создаёт Engine environment и не требует БД. ZIP взяты из новой временной output директории; стандартный `frontend/dist`, Vitasil API, БД, storage, volumes и исходники не менялись. После валидации каталог `/tmp/website-engine-vitasil-features-build-20261107-mBco0y` удалён.
-
-Команды (Node `v20.19.4`, из Vitasil `frontend/` для npm-команд):
-
-```sh
-PATH='/Users/docup/.nvm/versions/node/v20.19.4/bin:/usr/bin:/bin:/opt/homebrew/bin' npm run typecheck
-PATH='/Users/docup/.nvm/versions/node/v20.19.4/bin:/usr/bin:/bin:/opt/homebrew/bin' npm run lint
-PATH='/Users/docup/.nvm/versions/node/v20.19.4/bin:/usr/bin:/bin:/opt/homebrew/bin' FEATURE_BUILD_OUTPUT_DIR='/tmp/website-engine-vitasil-features-build-20261107-mBco0y' npm run build
-```
-
-```sh
-TEST_FEATURE_DIR='/tmp/website-engine-vitasil-features-build-20261107-mBco0y' go test -count=1 -v ./cmd/integration -run '^TestExternalBackendBindingsVitasilArchiveCompatibility$'
-```
+- Проверить, что неизвестные ABI и некорректные/неполные lifecycle exports отклоняются до импорта сборки.
+- Проверить `render` и `hydrate` на initial paint, сериализацию публичного context и изоляцию ошибок одного placement.
+- Проверить конкурентные `update`, cancellation, timeout, dispose и замену placement без мутации DOM после отмены.
+- Проверить фиксирование dependency version/digest/API version и отказ на циклах, неразрешённых диапазонах и конфликтующих provider versions.
+- Проверить строгую проверку manifest origins, CSP `connect-src`, typed request/response contract и отсутствие credentials в публичных payloads.
+- Проверить, что prerender не имеет внешней сети, а публикация site-wide Content инициирует rebuild с сохранением предыдущего готового artifact при сбое.
+- Проверять поведение на применимых реальных Vitasil features в disposable среде; не направлять QA-запросы на рабочие API или хранилища.

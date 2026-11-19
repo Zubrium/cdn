@@ -12,7 +12,7 @@ The migration login must be allowed to create the Core schemas, objects and Atla
 
 ## Atlas baseline
 
-There is one initial baseline under `migrations/`; there is no bootstrap `schema-migrations/` directory. It creates `access`, `files`, `uploads`, `file_index`, `engine_data` and `coordination`, with defaults and constraints in the fresh schema. `atlas.sum` belongs beside the migration. The runtime startup rejects legacy/unmanaged objects before applying the baseline and never resets or converts an existing database.
+There is one initial baseline under `migrations/`; there is no bootstrap `schema-migrations/` directory. It creates `access`, `files`, `uploads`, `file_index`, `engine_data` and `coordination`, with defaults and constraints in the fresh schema. `atlas.sum` belongs beside the migration. The runtime startup rejects unknown or unmanaged objects before applying the baseline and never resets or converts an existing database.
 
 Go sources must contain no schema `CREATE`, `ALTER`, `DROP` or `GRANT` statements. Atlas SQL is the only source for tables, indexes, constraints, schemas, sequence and grants. Runtime queries name schemas explicitly; the pool search path is restricted to `pg_catalog`.
 

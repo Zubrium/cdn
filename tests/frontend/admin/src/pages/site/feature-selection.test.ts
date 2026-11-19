@@ -12,7 +12,7 @@ import {
 const config: SiteConfig = {
   formatVersion: 3,
   features: [
-    { featureKey: "legacy-unplaced", version: "9.9.9" },
+    { featureKey: "unplaced-feature", version: "9.9.9" },
     { featureKey: "catalog", version: "1.0.0" },
   ],
   pages: [
@@ -37,7 +37,7 @@ const config: SiteConfig = {
 };
 
 describe("placement-derived feature composition", () => {
-  it("derives unique pinned builds from placements and drops unplaced legacy selections", () => {
+  it("derives unique pinned builds from placements and drops unplaced selections", () => {
     expect(deriveFeatureComposition(config)).toEqual([
       { featureKey: "main-data", version: "1.0.0" },
       { featureKey: "detail", version: "1.0.0" },
@@ -49,7 +49,7 @@ describe("placement-derived feature composition", () => {
       ["catalog", "1.0.0"],
     ]);
     expect(normalizeFeatureComposition(config).features).toEqual(deriveFeatureComposition(config));
-    expect(config.features).toContainEqual({ featureKey: "legacy-unplaced", version: "9.9.9" });
+    expect(config.features).toContainEqual({ featureKey: "unplaced-feature", version: "9.9.9" });
   });
 
   it("deduplicates identical placement references while preserving first-use order", () => {
@@ -87,7 +87,7 @@ describe("placement-derived feature composition", () => {
     expect(withDuplicate.pages[2]?.placements).toHaveLength(2);
   });
 
-  it("removes a placement and normalizes the child composition without legacy relation cleanup", () => {
+  it("removes a placement and normalizes the child composition without changing model records", () => {
     const result = removePlacement(config, "home", "main-data");
     expect(result.pages[0]?.placements.map((placement) => placement.id)).toEqual(["main-data-copy"]);
     expect(result.features).toEqual([

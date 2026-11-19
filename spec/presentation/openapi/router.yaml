@@ -12,8 +12,14 @@ security:
   - AdminSession: []
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
+x-locale-resolution:
+  order: [valid-route-supported-cookie, accept-language, default-locale]
+  locale_cookie: { name: zubrium_locale, httpOnly: true, sameSite: Lax, path: '/', domain: omitted, secure: explicit-startup-setting, maxAge: required-startup-setting }
+  accept_language: { quality_order: descending, tie_break: header-order, matching: RFC4647-Lookup, wildcard: default-locale }
+  locale_in_path_or_query: false
+  preference_operation: public.locale-preference
 paths:
-  /api/v2/admin/router/operations:
+  /api/admin/router/operations:
     get:
       operationId: listPublicOperations
       x-required-group-level: { group: router_routes, level: 1 }
@@ -23,7 +29,7 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/PublicOperationPage' } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/router/routes:
+  /api/admin/router/routes:
     get:
       operationId: listRoutes
       x-required-group-level: { group: router_routes, level: 1 }
@@ -57,7 +63,7 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/router/routes/{id}:
+  /api/admin/router/routes/{id}:
     get:
       operationId: getRoute
       x-required-group-level: { group: router_routes, level: 1 }
@@ -80,7 +86,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/router/routes/{id}/target:
+  /api/admin/router/routes/{id}/target:
     put:
       operationId: replaceRouteTarget
       x-required-group-level: { group: router_routes, level: 2 }
@@ -101,6 +107,31 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '428': { $ref: '#/components/responses/Error' }
+  /api/locale-preference:
+    post:
+      operationId: setPublicLocalePreference
+      security: []
+      x-registered-public-operation: public.locale-preference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [locale, return_path]
+              properties:
+                locale: { type: string, minLength: 2, maxLength: 64, description: Canonical supported BCP 47 locale for the route resolved by return_path. }
+                return_path: { type: string, minLength: 1, maxLength: 2048, description: Same-origin relative path; external URLs, fragments and ambiguous encoded paths are rejected. }
+      responses:
+        '303':
+          description: Preference cookie set; redirect to the validated same-origin path.
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie: { schema: { type: string }, description: HttpOnly host-only locale preference cookie with configured lifetime. }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /:
     x-public-route-match: all-paths-not-under-configured-admin-prefixes
     x-cache-default: no-store
@@ -257,19 +288,37 @@ components:
       type: object
       additionalProperties: false
       required: [kind]
+      allOf:
+        - if: { properties: { kind: { const: static-page-artifact } } }
+          then: { required: [default_locale, locale_targets] }
+        - if: { properties: { kind: { const: core-file } } }
+          then: { required: [file_id] }
+        - if: { properties: { kind: { const: registered-operation } } }
+          then: { required: [operation_id] }
       description: >-
         A core-file target serves exactly the configured file_id at an exact
         route path via GET/HEAD. It never accepts a visitor-selected ID or
-        resolves files through FileSets. A static-site-artifact target binds a
-        `static-page-artifact/v1` manifest: the exact route path serves its one
-        document, while paths below a prefix route resolve only to declared
-        assets in that manifest. Unknown asset paths return 404; artifacts have
-        no entrypoints or fallback. Prefix matching uses complete path segments;
-        exact matches win, otherwise the longest prefix wins. Registered
-        operations use exact path matching and enforce their declared methods.
+        resolves files through FileSets. A static-site-artifact target binds
+        one ready manifest per configured locale plus a default_locale included
+        in that map. Router negotiates locale from its preference cookie,
+        Accept-Language and default locale; neither path nor query selects it.
+        Each selected manifest serves its one document, while paths below a
+        prefix route resolve only to declared assets in that manifest. Unknown
+        asset paths return 404; artifacts have no fallback. Prefix matching uses
+        complete path segments; exact matches win, otherwise the longest prefix
+        wins. Registered operations use exact path matching and enforce their methods.
       properties:
         kind: { type: string, enum: [core-file, static-site-artifact, registered-operation] }
         file_id: { type: string, format: uuid }
+        default_locale: { type: string, minLength: 2, maxLength: 64 }
+        locale_targets:
+          type: array
+          minItems: 1
+          maxItems: 256
+          uniqueItems: true
+          x-unique-by: locale
+          description: Complete locale catalog in catalog order; locale values must be unique and default_locale must be included.
+          items: { $ref: '#/components/schemas/LocaleArtifactTarget' }
         operation_id: { type: string, pattern: '^public\.[A-Za-z0-9._-]+$' }
         operation_config:
           type: object
@@ -281,6 +330,13 @@ components:
             public.form-session: { $ref: '#/components/schemas/PublicFormBinding' }
             public.form-submit: { $ref: '#/components/schemas/PublicFormBinding' }
           additionalProperties: true
+    LocaleArtifactTarget:
+      type: object
+      additionalProperties: false
+      required: [locale, artifact_manifest_file_id]
+      properties:
+        locale: { type: string, minLength: 2, maxLength: 64, description: Canonical supported BCP 47 tag. }
+        artifact_manifest_file_id: { type: string, format: uuid }
     PublicUploadRouteConfig:
       type: object
       additionalProperties: false

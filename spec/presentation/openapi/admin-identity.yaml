@@ -13,7 +13,7 @@ security:
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
 paths:
-  /api/v2/admin/session:
+  /api/admin/session:
     post:
       operationId: createAdminSession
       security: []
@@ -58,7 +58,7 @@ paths:
         '204': { description: Cookies cleared and session revoked. }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/principals:
+  /api/admin/principals:
     get:
       operationId: listPrincipals
       responses:
@@ -88,7 +88,7 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/principals/{id}:
+  /api/admin/principals/{id}:
     delete:
       operationId: deactivatePrincipal
       x-csrf-required-for-cookie-auth: true
@@ -99,7 +99,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/principals/{id}/management:
+  /api/admin/principals/{id}/management:
     patch:
       operationId: setAdministratorManagementPermission
       x-csrf-required-for-cookie-auth: true
@@ -115,7 +115,7 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/principals/{id}/credentials:
+  /api/admin/principals/{id}/credentials:
     parameters: [{ $ref: '#/components/parameters/ID' }]
     get:
       operationId: listPrincipalCredentials
@@ -134,7 +134,7 @@ paths:
         '201': { description: Credential secret returned once., content: { application/json: { schema: { $ref: '#/components/schemas/IssuedCredential' } } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/principals/{id}/groups/{group}:
+  /api/admin/principals/{id}/groups/{group}:
     parameters:
       - { $ref: '#/components/parameters/ID' }
       - name: group
@@ -158,7 +158,7 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/credentials/{id}:
+  /api/admin/credentials/{id}:
     delete:
       operationId: revokeCredential
       x-csrf-required-for-cookie-auth: true
@@ -167,7 +167,7 @@ paths:
         '204': { description: Credential and associated sessions revoked. }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/access-groups:
+  /api/admin/access-groups:
     get:
       operationId: listAccessGroups
       responses:

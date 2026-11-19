@@ -17,7 +17,6 @@ export interface MediaPickTarget {
 }
 
 export interface EntryFieldsFormProps {
-  /** Visible schema fields (without the legacy blocks key). */
   fields: SchemaFieldNode[];
   metadata: JsonObject;
   onChange: (key: string, value: JsonValue) => void;

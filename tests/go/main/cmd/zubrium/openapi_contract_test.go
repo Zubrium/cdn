@@ -89,7 +89,7 @@ func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 					if operation.OperationID == "" || len(operation.Responses) == 0 {
 						t.Errorf("%s %s must have operationId and responses", method, path)
 					}
-					if operation.Security != nil && len(*operation.Security) == 0 && path != "/api/v2/admin/session" && path != "/" {
+					if operation.Security != nil && len(*operation.Security) == 0 && path != "/api/admin/session" && path != "/" {
 						t.Errorf("%s %s disables authentication outside the login or public router document", method, path)
 					}
 					if isStateChangingMethod(method) && path != "/" && !operation.CSRF && !operation.Origin {
@@ -237,12 +237,12 @@ func TestRouterOpenAPIRegistersUploadAndReservesPublicDeliveryBoundary(t *testin
 		method string
 		level  int
 	}{
-		{path: "/api/v2/admin/router/operations", method: "GET", level: 1},
-		{path: "/api/v2/admin/router/routes", method: "GET", level: 1},
-		{path: "/api/v2/admin/router/routes", method: "POST", level: 2},
-		{path: "/api/v2/admin/router/routes/{id}", method: "GET", level: 1},
-		{path: "/api/v2/admin/router/routes/{id}", method: "DELETE", level: 2},
-		{path: "/api/v2/admin/router/routes/{id}/target", method: "PUT", level: 2},
+		{path: "/api/admin/router/operations", method: "GET", level: 1},
+		{path: "/api/admin/router/routes", method: "GET", level: 1},
+		{path: "/api/admin/router/routes", method: "POST", level: 2},
+		{path: "/api/admin/router/routes/{id}", method: "GET", level: 1},
+		{path: "/api/admin/router/routes/{id}", method: "DELETE", level: 2},
+		{path: "/api/admin/router/routes/{id}/target", method: "PUT", level: 2},
 	}
 	for _, test := range accessCases {
 		operation := contract.Paths[test.path].operations()[test.method]
@@ -270,7 +270,7 @@ func TestRouterOpenAPIRegistersUploadAndReservesPublicDeliveryBoundary(t *testin
 		!public.Post.ExternalProxyRequired || public.Post.ProxyConfigurationOwner != "deployer" || public.Post.ProxyAdmissionPolicyOwner != "deployer" {
 		t.Fatalf("public upload must document the external proxy boundary and no Router rate limiter: %+v", public.Post)
 	}
-	if _, ok := contract.Paths["/api/v2/admin/router/routes"]; !ok {
+	if _, ok := contract.Paths["/api/admin/router/routes"]; !ok {
 		t.Fatal("Router route settings API is missing")
 	}
 }
@@ -286,7 +286,7 @@ func TestAdminIdentityOpenAPIHasNoRoleOrPrincipalKindFields(t *testing.T) {
 			t.Errorf("Principal schema must not define the retired %q field", forbidden)
 		}
 	}
-	if contract.Paths["/api/v2/admin/session"].Post == nil {
+	if contract.Paths["/api/admin/session"].Post == nil {
 		t.Fatal("Core-backed browser session endpoint is missing")
 	}
 }

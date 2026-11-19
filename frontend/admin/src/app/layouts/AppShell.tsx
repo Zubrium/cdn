@@ -23,7 +23,6 @@ import {
   Menu,
   Settings,
   Blocks,
-  GitBranch,
   History,
   ShieldCheck,
   ListTodo,
@@ -78,10 +77,9 @@ const routerNav: NavItem[] = [
 ];
 
 const snapshotManagementNav: NavItem[] = [
-  { to: "/site/pages", label: "Редактор сайтов", icon: Layers, match: (p) => p.startsWith("/site/") || p.startsWith("/site-metadata") },
+  { to: "/site/pages", label: "Редактор сайтов", icon: Layers, match: (p) => p.startsWith("/site/") },
   { to: "/snapshots/registry", label: "Реестр фичей", icon: Blocks, match: (p) => p.startsWith("/snapshots/registry") },
   { to: "/snapshots/tree", label: "Дерево снапшотов", icon: History, match: (p) => p.startsWith("/snapshots/tree") },
-  { to: "/snapshots/branches", label: "Назначения веток", icon: GitBranch, match: (p) => p.startsWith("/snapshots/branches") },
 ];
 
 const siteReadNav: NavItem[] = [
@@ -388,14 +386,14 @@ export function AppShell() {
         queryClient.invalidateQueries({ queryKey: ["media"] }),
       ]);
     };
-    void fetch("/api/v2/admin/notifications", {
+    void fetch("/api/admin/notifications", {
       method: "HEAD",
       credentials: "same-origin",
       cache: "no-store",
       signal: controller.signal,
     }).then((response) => {
       if (!response.ok || controller.signal.aborted) return;
-      source = new EventSource("/api/v2/admin/notifications", { withCredentials: true });
+      source = new EventSource("/api/admin/notifications", { withCredentials: true });
       source.onopen = refreshOperationQueries;
       source.addEventListener("snapshot.state_changed", refreshOperationQueries);
       source.addEventListener("feature_import.state_changed", refreshOperationQueries);

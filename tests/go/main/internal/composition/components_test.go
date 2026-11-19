@@ -59,7 +59,7 @@ func TestFileAPIStaysClosedUntilCoreCoordinatorIsReady(t *testing.T) {
 		called = true
 	}))
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/files", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/files", nil))
 	if response.Code != http.StatusServiceUnavailable || called {
 		t.Fatalf("File API served without Core's Coordinator: status=%d handlerCalled=%v", response.Code, called)
 	}
@@ -73,7 +73,7 @@ func TestSyntheticDataModeMarksResponsesAndDisablesCaching(t *testing.T) {
 		http.Error(w, "synthetic write unavailable", http.StatusServiceUnavailable)
 	}))
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v2/admin/content/records", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/admin/content/records", nil))
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("synthetic handler status = %d, want %d", response.Code, http.StatusServiceUnavailable)
@@ -88,7 +88,7 @@ func TestFileAPIStaysClosedWhenComposedApplicationLosesReadiness(t *testing.T) {
 	component := &fileAPIComponent{ready: true, applicationReadiness: testApplicationReadiness(false)}
 	response := httptest.NewRecorder()
 	component.requireCoreRuntime(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(
-		response, httptest.NewRequest(http.MethodGet, "/api/v2/files", nil),
+		response, httptest.NewRequest(http.MethodGet, "/api/files", nil),
 	)
 	if response.Code != http.StatusServiceUnavailable || called {
 		t.Fatalf("File API served after composed application lost readiness: status=%d handlerCalled=%v", response.Code, called)
@@ -161,7 +161,7 @@ func TestCoordinatorAdminComponentServesOnlyAfterStart(t *testing.T) {
 		t.Fatalf("stop nil Coordinator Admin component: %v", err)
 	}
 	response := httptest.NewRecorder()
-	nilComponent.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/coordinator/jobs", nil))
+	nilComponent.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/coordinator/jobs", nil))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("uninitialized Coordinator Admin returned %d, want 503", response.Code)
 	}
@@ -181,7 +181,7 @@ func TestCoordinatorAdminComponentServesOnlyAfterStart(t *testing.T) {
 		t.Fatalf("started Coordinator Admin readiness: ready=%t err=%v", component.IsReady(), err)
 	}
 	response = httptest.NewRecorder()
-	component.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/coordinator/jobs", nil))
+	component.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/coordinator/jobs", nil))
 	if response.Code != http.StatusAccepted || !called {
 		t.Fatalf("started Coordinator Admin did not forward the request: status=%d called=%t", response.Code, called)
 	}
@@ -190,7 +190,7 @@ func TestCoordinatorAdminComponentServesOnlyAfterStart(t *testing.T) {
 	}
 	called = false
 	response = httptest.NewRecorder()
-	component.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/coordinator/jobs", nil))
+	component.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/coordinator/jobs", nil))
 	if response.Code != http.StatusServiceUnavailable || called {
 		t.Fatalf("stopped Coordinator Admin served a request: status=%d called=%t", response.Code, called)
 	}

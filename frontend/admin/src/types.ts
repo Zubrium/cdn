@@ -538,7 +538,7 @@ export interface SiteSnapshot {
 }
 
 export interface SnapshotCreationSummary {
-  origin: "root" | "child" | "content_fork" | "sitepack_import" | string;
+  origin: "root" | "child" | "content_fork" | string;
   changes?: Array<"pages_routes" | "features" | "site_metadata" | "design_system" | string>;
   featureChanges?: Array<{
     featureKey: string;

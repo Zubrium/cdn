@@ -220,7 +220,7 @@ func TestStaticPageArtifactDeliversDocumentAndOnlyDeclaredAssets(t *testing.T) {
 	}
 }
 
-func TestArtifactManifestRejectsLegacyFormatAndMalformedShape(t *testing.T) {
+func TestArtifactManifestRejectsUnsupportedFormatAndMalformedShape(t *testing.T) {
 	for _, body := range []string{
 		`{"format":"static-site-artifact/v1","digest":"sha256:` + strings.Repeat("0", 64) + `","entrypoints":{"/":"/index.html"},"files":{},"fallback":null}`,
 		`{"format":"static-page-artifact/v1","digest":"sha256:` + strings.Repeat("0", 64) + `","document":{},"assets":{},"entrypoints":{}}`,

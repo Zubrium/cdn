@@ -21,8 +21,8 @@ import (
 	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
-const importPath = "/api/v2/admin/sites/feature-imports"
-const apiPrefix = "/api/v2/admin/sites"
+const importPath = "/api/admin/sites/feature-imports"
+const apiPrefix = "/api/admin/sites"
 
 type Config struct {
 	MaxJSONBytes         int64

@@ -81,7 +81,7 @@ func TestFormsHandlerMapsSubmissionsQueryToEngineContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions?snapshot_id=snapshot-1&form_id=contact&state=new&cursor=next&limit=20", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions?snapshot_id=snapshot-1&form_id=contact&state=new&cursor=next&limit=20", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -100,7 +100,7 @@ func TestFormsHandlerRequiresCookieCSRFForStatusAndPassesExpectedRevision(t *tes
 		t.Fatal(err)
 	}
 	body := `{"snapshot_id":"snapshot-1","status":"read","expected_revision":6}`
-	request := httptest.NewRequest(http.MethodPatch, "/api/v2/admin/forms/submissions/submission-1/status", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPatch, "/api/admin/forms/submissions/submission-1/status", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.AddCookie(&http.Cookie{Name: adminhttpauth.SessionCookieName, Value: "ss_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))})
 	response := httptest.NewRecorder()
@@ -110,7 +110,7 @@ func TestFormsHandlerRequiresCookieCSRFForStatusAndPassesExpectedRevision(t *tes
 	}
 
 	csrf := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	request = httptest.NewRequest(http.MethodPatch, "/api/v2/admin/forms/submissions/submission-1/status", strings.NewReader(body))
+	request = httptest.NewRequest(http.MethodPatch, "/api/admin/forms/submissions/submission-1/status", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "https://admin.example")
 	request.Header.Set("X-CSRF-Token", csrf)
@@ -130,7 +130,7 @@ func TestFormsHandlerRejectsDuplicateJSONKeysBeforeMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := `{"snapshot_id":"snapshot-1","snapshot_id":"snapshot-2","key":"contact","fields":{},"expected_revision":0}`
-	request := httptest.NewRequest(http.MethodPut, "/api/v2/admin/forms/schemas", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/forms/schemas", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
@@ -155,7 +155,7 @@ func TestFormsHandlerRejectsDuplicateAndZeroRevisionIfMatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest(http.MethodDelete, "/api/v2/admin/forms/submissions/submission-1?snapshot_id=snapshot-1", nil)
+			request := httptest.NewRequest(http.MethodDelete, "/api/admin/forms/submissions/submission-1?snapshot_id=snapshot-1", nil)
 			request.Header.Set("Authorization", "Bearer service-key")
 			for _, revision := range test.revisions {
 				request.Header.Add("If-Match", revision)
@@ -180,7 +180,7 @@ func TestFormsHandlerExportsFilteredCSVAndNeutralizesSpreadsheetFormulas(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1&form_id=form-1&state=new", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1&form_id=form-1&state=new", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -220,7 +220,7 @@ func TestFormsHandlerExportRequiresAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || api.listed || strings.Contains(response.Body.String(), "text/csv") {
@@ -239,7 +239,7 @@ func TestFormsHandlerDoesNotReturnPartialCSVWhenExportExceedsRowLimit(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -259,7 +259,7 @@ func TestFormsHandlerDoesNotReturnPartialCSVWhenExportExceedsByteLimit(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -277,7 +277,7 @@ func TestFormsHandlerRejectsRepeatedCursorDuringExport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -297,14 +297,14 @@ func TestFormsHandlerBoundsConcurrentExports(t *testing.T) {
 	firstResponse := httptest.NewRecorder()
 	firstDone := make(chan struct{})
 	go func() {
-		request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
+		request := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
 		request.Header.Set("Authorization", "Bearer service-key")
 		handler.ServeHTTP(firstResponse, request)
 		close(firstDone)
 	}()
 	<-api.listStarted
 
-	secondRequest := httptest.NewRequest(http.MethodGet, "/api/v2/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
+	secondRequest := httptest.NewRequest(http.MethodGet, "/api/admin/forms/submissions/export?snapshot_id=snapshot-1", nil)
 	secondRequest.Header.Set("Authorization", "Bearer service-key")
 	secondResponse := httptest.NewRecorder()
 	handler.ServeHTTP(secondResponse, secondRequest)

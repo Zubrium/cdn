@@ -19,9 +19,8 @@ describe("snapshot provenance", () => {
     ]);
   });
 
-  it("labels independent roots and imports and handles missing creators", () => {
+  it("labels independent roots and handles missing creators", () => {
     expect(snapshotCreationLines({ origin: "root" })).toEqual(["Самостоятельный сайт"]);
-    expect(snapshotCreationLines({ origin: "sitepack_import" })).toEqual(["Импорт sitepack"]);
     expect(snapshotCreatorLabel({ createdByName: "  QA operator  " })).toBe("QA operator");
     expect(snapshotCreatorLabel({})).toBe("Недоступен");
   });

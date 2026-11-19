@@ -13,8 +13,7 @@ export type BuilderFieldType =
   | "object"
   | "array"
   | "media"
-  | "file"
-  | "blocks";
+  | "file";
 
 export type ArrayItemType =
   | "string"
@@ -25,18 +24,6 @@ export type ArrayItemType =
   | "object"
   | "media"
   | "file";
-
-export type BlockTypeName =
-  | "paragraph"
-  | "heading"
-  | "bulletedList"
-  | "numberedList"
-  | "quote"
-  | "code"
-  | "divider"
-  | "image"
-  | "gallery"
-  | "video";
 
 export interface EnumOption {
   id: string;
@@ -74,7 +61,6 @@ export interface SchemaFieldNode {
   itemType: ArrayItemType;
   minItems?: number;
   maxItems?: number;
-  allowedBlocks: BlockTypeName[];
 }
 
 export type IssueSeverity = "error" | "warning";

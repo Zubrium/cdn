@@ -17,14 +17,14 @@ func csrfFixture() string {
 }
 
 func TestResolveSessionAndBearerCredentials(t *testing.T) {
-	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/v2/admin/session", nil)
+	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/admin/session", nil)
 	sessionRequest.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionFixture()})
 	credential, err := Resolve(sessionRequest)
 	if err != nil || !credential.Session || credential.Value != sessionFixture() {
 		t.Fatalf("session credential=%+v err=%v", credential, err)
 	}
 
-	bearerRequest := httptest.NewRequest(http.MethodGet, "/api/v2/files", nil)
+	bearerRequest := httptest.NewRequest(http.MethodGet, "/api/files", nil)
 	bearerRequest.Header.Set("Authorization", "Bearer service-secret")
 	credential, err = Resolve(bearerRequest)
 	if err != nil || credential.Session || credential.Value != "service-secret" {
@@ -79,7 +79,7 @@ func TestSessionWritesRequireExactOriginAndMatchingCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPut, "/api/v2/files/123", nil)
+	request := httptest.NewRequest(http.MethodPut, "/api/files/123", nil)
 	request.Header.Set("Origin", "https://admin.example")
 	request.AddCookie(&http.Cookie{Name: CSRFCookieName, Value: csrfFixture()})
 	request.Header.Set("X-CSRF-Token", csrfFixture())
@@ -103,7 +103,7 @@ func TestSessionReadsDoNotRequireCSRFAndOriginsAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.ValidateSessionRequest(httptest.NewRequest(http.MethodGet, "/api/v2/files", nil)); err != nil {
+	if err := transport.ValidateSessionRequest(httptest.NewRequest(http.MethodGet, "/api/files", nil)); err != nil {
 		t.Fatalf("safe read was rejected: %v", err)
 	}
 	for _, origin := range [][]string{

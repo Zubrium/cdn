@@ -10,7 +10,7 @@ security:
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
 paths:
-  /api/v2/admin/sites:
+  /api/admin/sites:
     get:
       operationId: listConfiguredSites
       responses:
@@ -22,7 +22,7 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/feature-imports:
+  /api/admin/sites/feature-imports:
     post:
       operationId: beginFeatureImport
       x-csrf-required-for-cookie-auth: true
@@ -54,7 +54,7 @@ paths:
         '413': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/feature-imports/{id}:
+  /api/admin/sites/feature-imports/{id}:
     get:
       operationId: getFeatureImport
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -64,7 +64,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/features:
+  /api/admin/sites/features:
     get:
       operationId: listFeatureCatalog
       parameters:
@@ -76,7 +76,7 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/features/{featureID}/versions:
+  /api/admin/sites/features/{featureID}/versions:
     get:
       operationId: listFeatureVersions
       parameters:
@@ -89,7 +89,7 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/features/{featureID}/versions/{version}:
+  /api/admin/sites/features/{featureID}/versions/{version}:
     get:
       operationId: getFeatureVersion
       parameters:
@@ -101,7 +101,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/model:
+  /api/admin/sites/{siteID}/model:
     get:
       operationId: getSiteContentSchema
       parameters: [{ name: siteID, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$' } }]
@@ -137,7 +137,7 @@ paths:
         '413': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/pages/{pageID}/snapshots/{snapshotID}/content-projection:
+  /api/admin/sites/{siteID}/pages/{pageID}/snapshots/{snapshotID}/content-projection:
     get:
       operationId: getPagePlacementProjection
       description: Returns only the requested site's page snapshot projection. Outer Presentation combines it with SiteContentSchema and the pinned feature manifest to create Content projections; clients never submit model data to Content endpoints.
@@ -152,7 +152,7 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/pages:
+  /api/admin/sites/{siteID}/pages:
     get:
       operationId: listPages
       parameters:
@@ -198,7 +198,7 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/pages/{pageID}:
+  /api/admin/sites/{siteID}/pages/{pageID}:
     get:
       operationId: getPage
       parameters:
@@ -209,7 +209,26 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/templates:
+    delete:
+      operationId: retirePage
+      x-csrf-required-for-cookie-auth: true
+      parameters:
+        - { name: siteID, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$' } }
+        - { name: pageID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: If-Match, in: header, required: true, schema: { type: string, pattern: '^"[1-9][0-9]*"$' } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+      responses:
+        '202': { description: Durable route-withdrawal workflow accepted. Page and snapshots are retained; poll its state until all registered route targets are removed., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/PageRetirement' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/admin/sites/{siteID}/templates:
     get:
       operationId: listPageTemplates
       parameters:
@@ -248,7 +267,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/templates/{templateID}:
+  /api/admin/sites/{siteID}/templates/{templateID}:
     get:
       operationId: getPageTemplate
       parameters:
@@ -300,7 +319,7 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '412': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/{siteID}/pages/{pageID}/template-applications:
+  /api/admin/sites/{siteID}/pages/{pageID}/template-applications:
     post:
       operationId: applyPageTemplate
       x-csrf-required-for-cookie-auth: true
@@ -334,7 +353,7 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/snapshots:
+  /api/admin/sites/snapshots:
     get:
       operationId: listSnapshots
       parameters:
@@ -382,7 +401,7 @@ paths:
         '413': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/snapshots/{snapshotID}:
+  /api/admin/sites/snapshots/{snapshotID}:
     get:
       operationId: getSnapshot
       parameters: [{ name: snapshotID, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -408,7 +427,7 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '428': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/builds:
+  /api/admin/sites/builds:
     post:
       operationId: buildSnapshot
       x-csrf-required-for-cookie-auth: true
@@ -419,7 +438,7 @@ paths:
           schema: { type: string, minLength: 16, maxLength: 128 }
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, additionalProperties: false, required: [snapshot_id], properties: { snapshot_id: { type: string } } } } }
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [snapshot_id, locale], properties: { snapshot_id: { type: string, format: uuid }, locale: { type: string, minLength: 2, maxLength: 64, description: Must be in the site's locale catalog. } } } } }
       responses:
         '202': { description: Build accepted., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/BuildJob' } } } }
         '401': { $ref: '#/components/responses/Error' }
@@ -428,7 +447,7 @@ paths:
         '413': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/builds/{jobID}:
+  /api/admin/sites/builds/{jobID}:
     get:
       operationId: getBuild
       parameters: [{ name: jobID, in: path, required: true, schema: { type: string } }]
@@ -438,7 +457,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/media/derivatives:
+  /api/admin/sites/media/derivatives:
     post:
       operationId: createMediaDerivative
       x-csrf-required-for-cookie-auth: true
@@ -449,16 +468,27 @@ paths:
           schema: { type: string, minLength: 16, maxLength: 128 }
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, additionalProperties: false, required: [source_file_id, feature_id, profile], properties: { source_file_id: { type: string, format: uuid }, feature_id: { type: string }, profile: { type: string } } } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [snapshot_id, placement_id, field_path, source_file_id]
+              properties:
+                snapshot_id: { type: string, format: uuid }
+                placement_id: { type: string, minLength: 1, maxLength: 128 }
+                field_path: { type: string, minLength: 1, maxLength: 512 }
+                source_file_id: { type: string, format: uuid }
+              description: Website resolves the exact profile from the pinned feature manifest; clients cannot provide profile or processor parameters.
       responses:
-        '202': { description: Derivative job accepted., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/MediaJob' } } } }
+        '202': { description: Derivative workflow accepted from the pinned manifest profile; the editor must keep the previous field value until all outputs are ready., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/MediaJob' } } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '413': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/sites/media/jobs/{jobID}:
+  /api/admin/sites/media/jobs/{jobID}:
     get:
       operationId: getMediaJob
       parameters: [{ name: jobID, in: path, required: true, schema: { type: string } }]
@@ -584,14 +614,34 @@ components:
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Page' } }, next_cursor: { type: string } }
     Page:
       type: object
-      required: [id, site_id, name, latest_snapshot_id, latest_snapshot_state, created_at]
+      required: [id, site_id, name, lifecycle_state, latest_snapshot_id, latest_snapshot_state, created_at]
       properties:
-        id: { type: string, format: uuid, description: Server-generated, stable page identity. }
+        id: { type: string, format: uuid, description: Server-generated, stable page identity; never reused. }
         site_id: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$' }
         name: { type: string, minLength: 1, maxLength: 120 }
+        lifecycle_state: { type: string, enum: [active, retiring, retired] }
+        retirement_job_id: { type: string, format: uuid }
         latest_snapshot_id: { type: string, format: uuid }
         latest_snapshot_state: { type: string, enum: [provisioning, ready, failed] }
         created_at: { type: string, format: date-time }
+    PageRetirement:
+      type: object
+      additionalProperties: false
+      required: [id, page_id, state, routes]
+      properties:
+        id: { type: string, format: uuid }
+        page_id: { type: string, format: uuid }
+        state: { type: string, enum: [queued, running, succeeded, retryable_failed] }
+        routes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [route_id, state]
+            properties:
+              route_id: { type: string, format: uuid }
+              state: { type: string, enum: [pending, removed, retryable_failed] }
+              error_code: { type: string }
     PageTemplatePage:
       type: object
       required: [items]
@@ -667,10 +717,13 @@ components:
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }, next_cursor: { type: string } }
     BuildJob:
       type: object
-      required: [id, snapshot_id, state, created_at, updated_at]
+      required: [id, snapshot_id, locale, locale_catalog_revision, input_digest, state, created_at, updated_at]
       properties:
         id: { type: string }
-        snapshot_id: { type: string }
+        snapshot_id: { type: string, format: uuid }
+        locale: { type: string, minLength: 2, maxLength: 64 }
+        locale_catalog_revision: { type: integer, minimum: 1 }
+        input_digest: { type: string, pattern: '^[a-f0-9]{64}$', description: Digest of the immutable locale-bound build inputs. }
         state: { type: string }
         artifact_manifest_file_id: { type: string, format: uuid }
         error_code: { type: string }
@@ -678,13 +731,15 @@ components:
         updated_at: { type: string, format: date-time }
     MediaJob:
       type: object
-      required: [id, source_file_id, profile, state, created_at, updated_at]
+      additionalProperties: false
+      required: [id, source_file_id, profile_digest, processor_version, state, created_at, updated_at]
       properties:
-        id: { type: string }
+        id: { type: string, format: uuid }
         source_file_id: { type: string, format: uuid }
-        derivative_file_id: { type: string, format: uuid }
-        profile: { type: string }
-        state: { type: string }
+        profile_digest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        processor_version: { type: string, minLength: 1, maxLength: 128 }
+        state: { type: string, enum: [queued, running, ready, retryable_failed, rejected, cancelled] }
+        outputs: { type: object, additionalProperties: { type: string, format: uuid }, description: Rendition name to immutable derivative Core file ID; present only when ready. }
         error_code: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

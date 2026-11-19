@@ -29,8 +29,9 @@ type RecordStore interface {
 }
 
 type Config struct {
-	AccessGroup string
-	Sites       []string
+	AccessGroup            string
+	CoordinatorAccessGroup string
+	Sites                  []string
 	// PageIDs is retained for source compatibility only. Page identities are
 	// Website-owned records and are never seeded or authorized from static config.
 	PageIDs map[string][]string
@@ -52,7 +53,7 @@ type actorContextKey struct{}
 
 func NewService(config Config, store RecordStore, authority core.GroupAuthorizationCapability, sessions core.SessionCapability) (*Service, error) {
 	if !validInterface(store) || !validInterface(authority) || !validInterface(sessions) ||
-		!core.ValidAccessGroupKey(config.AccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 {
+		!core.ValidAccessGroupKey(config.AccessGroup) || !core.ValidAccessGroupKey(config.CoordinatorAccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 {
 		return nil, errConfigInvalid
 	}
 	siteSet := make(map[string]struct{}, len(config.Sites))
@@ -121,6 +122,20 @@ func (s *Service) requireLevel(ctx context.Context, minimum core.AccessLevel) er
 		return websiteapi.ErrUnauthorized
 	}
 	if err := s.authority.RequireGroupLevel(ctx, current.session, []string{s.config.AccessGroup}, minimum); err != nil {
+		return mapCoreError(err)
+	}
+	return nil
+}
+
+func (s *Service) requireCoordinatorWrite(ctx context.Context) error {
+	if s == nil || ctx == nil {
+		return websiteapi.ErrUnauthorized
+	}
+	current, ok := ctx.Value(actorContextKey{}).(actor)
+	if !ok {
+		return websiteapi.ErrUnauthorized
+	}
+	if err := s.authority.RequireGroupLevel(ctx, current.session, []string{s.config.CoordinatorAccessGroup}, core.AccessLevelWrite); err != nil {
 		return mapCoreError(err)
 	}
 	return nil

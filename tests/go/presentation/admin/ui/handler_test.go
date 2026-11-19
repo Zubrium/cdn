@@ -33,7 +33,7 @@ func TestAdminUIRejectsPathsOutsideMountAndRequiresAssets(t *testing.T) {
 	if _, err := NewHandler(nil); err == nil { t.Fatal("nil filesystem accepted") }
 	handler, err := NewHandler(fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("index")}})
 	if err != nil { t.Fatal(err) }
-	for _, path := range []string{"/api/v2/admin/principals", "/admin/%2e%2e/secret"} {
+	for _, path := range []string{"/api/admin/principals", "/admin/%2e%2e/secret"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code == http.StatusOK { t.Errorf("unexpectedly served %s", path) }

@@ -234,7 +234,7 @@ func TestCoreGoCodeDoesNotExecuteSchemaDDL(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() && (entry.Name() == "legacy" || entry.Name() == ".git") {
+		if entry.IsDir() && entry.Name() == ".git" {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

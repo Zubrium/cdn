@@ -36,9 +36,9 @@ describe("static runtime settings", () => {
     expect(rendered).not.toContain("Сохранить");
   });
 
-  it("offers branch assignment only to a user with feature group write access", () => {
+  it("does not expose snapshot assignment controls", () => {
     const rendered = renderPage({ group_access: { features: 2 } });
 
-    expect(rendered).toContain("Назначения снапшотов");
+    expect(rendered).not.toContain("Назначения снапшотов");
   });
 });

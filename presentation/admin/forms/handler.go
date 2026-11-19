@@ -20,7 +20,7 @@ import (
 	"github.com/Zubrium/cdn/presentation/httpjson"
 )
 
-const apiPrefix = "/api/v2/admin/forms"
+const apiPrefix = "/api/admin/forms"
 
 type Config struct {
 	MaxJSONBytes        int64

@@ -12,9 +12,34 @@ import (
 type pingRequest struct{ Value string }
 type pingResponse struct{ Value string }
 
+func TestStaticAllowlistRestrictsRegistrationAndDispatch(t *testing.T) {
+	allowed := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
+	dispatcher, err := NewAllowlisted(allowed.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlisted := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.other", Version: 1}}
+	handler := func(context.Context, pingRequest) (pingResponse, error) { return pingResponse{}, nil }
+	if err := Register(dispatcher, unlisted, handler); !errors.Is(err, ErrOperationNotAllowed) {
+		t.Fatalf("unlisted registration = %v", err)
+	}
+	if err := Register(dispatcher, allowed, handler); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatcher.Dispatch(context.Background(), contracts.Envelope{OperationID: unlisted.Key.ID, Version: unlisted.Key.Version, Payload: []byte(`{}`)}); !errors.Is(err, ErrOperationNotAllowed) {
+		t.Fatalf("unlisted dispatch = %v", err)
+	}
+}
+
 func TestDispatcherRequiresSealAndRejectsDuplicateOperations(t *testing.T) {
-	dispatcher := New()
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
+	dispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := func(_ context.Context, request pingRequest) (pingResponse, error) {
 		return pingResponse{Value: request.Value}, nil
 	}
@@ -43,9 +68,12 @@ func TestDispatcherRequiresSealAndRejectsDuplicateOperations(t *testing.T) {
 }
 
 func TestDispatcherPropagatesHandlerErrorsAndRejectsUnknownOrWrongTypes(t *testing.T) {
-	dispatcher := New()
-	failure := errors.New("handler failed")
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
+	dispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("handler failed")
 	if err := Register(dispatcher, operation, func(context.Context, pingRequest) (pingResponse, error) {
 		return pingResponse{}, failure
 	}); err != nil {
@@ -57,17 +85,61 @@ func TestDispatcherPropagatesHandlerErrorsAndRejectsUnknownOrWrongTypes(t *testi
 	if _, err := contracts.Call(context.Background(), dispatcher, operation, pingRequest{}); !errors.Is(err, failure) {
 		t.Fatalf("handler error = %v", err)
 	}
-	if _, err := dispatcher.Dispatch(context.Background(), contracts.Key{ID: "core.unknown", Version: 1}, nil); !errors.Is(err, ErrHandlerNotFound) {
+	if _, err := dispatcher.Dispatch(context.Background(), contracts.Envelope{OperationID: "core.unknown", Version: 1, Payload: []byte("null")}); !errors.Is(err, ErrOperationNotAllowed) {
 		t.Fatalf("unknown operation = %v", err)
 	}
-	if _, err := dispatcher.Dispatch(context.Background(), operation.Key, "wrong"); !errors.Is(err, contracts.ErrRequestTypeMismatch) {
-		t.Fatalf("wrong request type = %v", err)
+	if _, err := dispatcher.Dispatch(context.Background(), contracts.Envelope{OperationID: operation.Key.ID, Version: operation.Key.Version, Payload: []byte(`"wrong"`)}); !errors.Is(err, contracts.ErrRequestTypeMismatch) {
+		t.Fatalf("wrong request payload = %v", err)
+	}
+}
+
+func TestEnvelopeRejectsMalformedDuplicateAndUnknownPayloadFields(t *testing.T) {
+	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
+	dispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(dispatcher, operation, func(context.Context, pingRequest) (pingResponse, error) {
+		return pingResponse{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Seal(); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, payload := range map[string][]byte{
+		"malformed":       []byte(`{"Value":`),
+		"duplicate key":   []byte(`{"Value":"first","Value":"second"}`),
+		"unknown field":   []byte(`{"Value":"ok","Unexpected":true}`),
+		"wrong JSON type": []byte(`42`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := dispatcher.Dispatch(context.Background(), contracts.Envelope{
+				OperationID: operation.Key.ID,
+				Version:     operation.Key.Version,
+				Payload:     payload,
+			})
+			if err == nil {
+				t.Fatal("expected payload validation error")
+			}
+		})
+	}
+	if _, err := dispatcher.Dispatch(context.Background(), contracts.Envelope{
+		OperationID: operation.Key.ID,
+		Version:     operation.Key.Version + 1,
+		Payload:     []byte(`{"Value":"ok"}`),
+	}); !errors.Is(err, ErrOperationNotAllowed) {
+		t.Fatalf("unsupported version = %v", err)
 	}
 }
 
 func TestCloseStopsAdmissionAndWaitsForInFlightHandlers(t *testing.T) {
-	dispatcher := New()
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
+	dispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	if err := Register(dispatcher, operation, func(ctx context.Context, _ pingRequest) (pingResponse, error) {
@@ -106,7 +178,11 @@ func TestCloseStopsAdmissionAndWaitsForInFlightHandlers(t *testing.T) {
 }
 
 func TestCoreReadinessUsesTypedOperationAndPropagatesFailures(t *testing.T) {
-	dispatcher := New()
+	operation := contracts.CoreReadinessOperation()
+	dispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	failure := errors.New("coordinator is not ready")
 	if err := RegisterCoreReadiness(dispatcher, func(context.Context) error { return failure }); err != nil {
 		t.Fatal(err)
@@ -114,12 +190,14 @@ func TestCoreReadinessUsesTypedOperationAndPropagatesFailures(t *testing.T) {
 	if err := dispatcher.Seal(); err != nil {
 		t.Fatal(err)
 	}
-	operation := contracts.CoreReadinessOperation()
 	if _, err := contracts.Call(context.Background(), dispatcher, operation, contracts.CoreReadinessRequest{}); !errors.Is(err, failure) {
 		t.Fatalf("readiness failure = %v", err)
 	}
 
-	readyDispatcher := New()
+	readyDispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := RegisterCoreReadiness(readyDispatcher, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,6 @@ type DataModel struct {
 	FormatVersion int                 `json:"formatVersion"`
 	Entities      []Entity            `json:"entities"`
 	Positions     map[string]Position `json:"positions,omitempty"`
-	Relations     json.RawMessage     `json:"relations,omitempty"`
 }
 
 type Entity struct {
@@ -70,7 +69,7 @@ func ParseDataModel(raw json.RawMessage) (DataModel, error) {
 }
 
 func (model DataModel) Validate() error {
-	if model.FormatVersion != 1 || model.Entities == nil || !emptyRelations(model.Relations) {
+	if model.FormatVersion != 1 || model.Entities == nil {
 		return ErrInvalid
 	}
 	entityIDs := make(map[string]struct{}, len(model.Entities))
@@ -154,15 +153,6 @@ func validName(value string) bool {
 		}
 	}
 	return true
-}
-
-func emptyRelations(raw json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return true
-	}
-	var relations []json.RawMessage
-	return json.Unmarshal(trimmed, &relations) == nil && len(relations) == 0
 }
 
 func canonicalUUID(value string) bool {

@@ -102,7 +102,7 @@ describe("Forms schema API contract", () => {
 
     expect(saved).toEqual(schema);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/api/v2/admin/forms/schemas");
+    expect(url).toBe("/api/admin/forms/schemas");
     expect(init.method).toBe("PUT");
     expect(JSON.parse(String(init.body))).toMatchObject({ expected_revision: 7, schema_id: schema.id, snapshot_id: "22222222-2222-4222-8222-222222222222" });
   });
@@ -150,7 +150,7 @@ describe("development fixture response mode", () => {
     try {
       const principal = await api.auth.me();
       expect(principal.id).toBe("principal-1");
-      expect(fetchMock).toHaveBeenCalledWith("/api/v2/admin/session", expect.any(Object));
+      expect(fetchMock).toHaveBeenCalledWith("/api/admin/session", expect.any(Object));
       expect(getSyntheticDataMode()).toBe(true);
       expect(notify).toHaveBeenCalledTimes(1);
     } finally {
@@ -181,7 +181,7 @@ describe("identity and browser session API", () => {
     const principal = await api.auth.login("secret-credential");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/v2/admin/session");
+    expect(input).toBe("/api/admin/session");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
@@ -238,7 +238,7 @@ describe("Coordinator jobs API", () => {
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
-    expect(url.pathname).toBe("/api/v2/coordinator/jobs");
+    expect(url.pathname).toBe("/api/coordinator/jobs");
     expect(url.searchParams.get("type")).toBe("archive.inspect/v1");
     expect(url.searchParams.get("state")).toBe("failed");
     expect(url.searchParams.get("limit")).toBe("50");
@@ -262,10 +262,10 @@ describe("Coordinator jobs API", () => {
 
     const [permissionsInput, permissionsInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const [retryInput, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(permissionsInput).toBe("/api/v2/coordinator/jobs/permissions");
+    expect(permissionsInput).toBe("/api/coordinator/jobs/permissions");
     expect(new Headers(permissionsInit.headers).get("Authorization")).toBeNull();
     expect(permissionsInit.credentials).toBe("same-origin");
-    expect(retryInput).toBe("/api/v2/coordinator/jobs/job%2Fid%20with%20space/retry");
+    expect(retryInput).toBe("/api/coordinator/jobs/job%2Fid%20with%20space/retry");
     expect(retryInit.method).toBe("POST");
     expect(retryInit.credentials).toBe("same-origin");
     expect(retryInit.body).toBeUndefined();
@@ -289,7 +289,7 @@ describe("Core-backed file upload API", () => {
     }, "upload-intent-0000000001");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/v2/files/uploads");
+    expect(input).toBe("/api/files/uploads");
     expect(JSON.parse(String(init.body))).toEqual({
       name: "asset.bin", size: 7, sha256: "a".repeat(64),
       contentType: "application/octet-stream", groups: ["content_assets"],
@@ -368,7 +368,7 @@ describe("Website feature catalog API", () => {
     expect(result.items[0]?.manifest.key).toBe("header");
     const [firstInput, firstInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const [secondInput, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(new URL(firstInput, "http://localhost").pathname).toBe("/api/v2/admin/sites/features");
+    expect(new URL(firstInput, "http://localhost").pathname).toBe("/api/admin/sites/features");
     expect(new URL(firstInput, "http://localhost").searchParams.has("limit")).toBe(false);
     expect(new URL(secondInput, "http://localhost").searchParams.get("cursor")).toBe("cursor-2");
     expect(new Headers(firstInit.headers).get("Authorization")).toBeNull();
@@ -390,7 +390,7 @@ describe("Website feature catalog API", () => {
     await api.website.beginFeatureImport("file-1", "feature-import:request-0001", "c".repeat(64));
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/v2/admin/sites/feature-imports");
+    expect(input).toBe("/api/admin/sites/feature-imports");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
@@ -413,7 +413,7 @@ describe("Website feature catalog API", () => {
     await api.website.featureImport("11111111-1111-4111-8111-111111111111");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/v2/admin/sites/feature-imports/11111111-1111-4111-8111-111111111111");
+    expect(input).toBe("/api/admin/sites/feature-imports/11111111-1111-4111-8111-111111111111");
     expect(init.method).toBe("GET");
     expect(init.credentials).toBe("same-origin");
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
@@ -466,7 +466,7 @@ describe("Content workspace API", () => {
 
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
-    expect(url.pathname).toBe("/api/v2/admin/content/snapshots/11111111-1111-4111-8111-111111111111/history");
+    expect(url.pathname).toBe("/api/admin/content/snapshots/11111111-1111-4111-8111-111111111111/history");
     expect(url.searchParams.get("cursor")).toBe("before");
     expect(url.searchParams.get("limit")).toBe("25");
     expect(page.nextCursor).toBe("opaque-history-cursor");
@@ -477,24 +477,24 @@ describe("Content workspace API", () => {
 describe("modular Website, Content, Forms and Router clients", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  function stubV2(fetchMock: ReturnType<typeof vi.fn>) {
+  function stubApi(fetchMock: ReturnType<typeof vi.fn>) {
     vi.stubGlobal("window", { location: { origin: "http://localhost" }, dispatchEvent: () => true });
     vi.stubGlobal("document", { cookie: `zubrium_admin_csrf=${"a".repeat(43)}` });
     vi.stubGlobal("fetch", fetchMock);
   }
 
-  it("lists Website snapshots through the typed, paginated v2 contract", async () => {
+  it("lists Website snapshots through the typed, paginated API contract", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", page_id: "home", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" }],
       next_cursor: "next-page",
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     const page = await api.website.snapshots("33333333-3333-4333-8333-333333333333", "home", "first-page", 20);
 
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
-    expect(url.pathname).toBe("/api/v2/admin/sites/snapshots");
+    expect(url.pathname).toBe("/api/admin/sites/snapshots");
     expect(url.searchParams.get("site_id")).toBe("33333333-3333-4333-8333-333333333333");
     expect(url.searchParams.get("page_id")).toBe("home");
     expect(url.searchParams.get("cursor")).toBe("first-page");
@@ -507,7 +507,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", page_id: "home", name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning" }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     const page = await api.siteBuilder.contentSnapshots();
 
@@ -524,7 +524,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
       feature_pins: {},
       state: "draft",
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await expect(api.website.snapshot("22222222-2222-4222-8222-222222222222"))
       .rejects.toMatchObject({ code: "invalid_response", status: 502 });
@@ -538,7 +538,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
         name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning",
       }), { status: 202, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await api.website.createSnapshot({
       site_id: "33333333-3333-4333-8333-333333333333",
@@ -560,7 +560,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     await api.website.deleteSnapshot(snapshotID, 7);
 
     const [createInput, createInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(createInput).toBe("/api/v2/admin/sites/snapshots");
+    expect(createInput).toBe("/api/admin/sites/snapshots");
     expect(createInit.method).toBe("POST");
     const createBody = JSON.parse(String(createInit.body));
     expect(createBody).toMatchObject({
@@ -575,7 +575,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     expect(new Headers(createInit.headers).get("Idempotency-Key")).toBe("create-snapshot:request-0001");
     expect(new Headers(createInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
     const [deleteInput, deleteInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(deleteInput).toBe(`/api/v2/admin/sites/snapshots/${snapshotID}`);
+    expect(deleteInput).toBe(`/api/admin/sites/snapshots/${snapshotID}`);
     expect(deleteInit.method).toBe("DELETE");
     expect(new Headers(deleteInit.headers).get("If-Match")).toBe('"7"');
     expect(new Headers(deleteInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
@@ -586,12 +586,12 @@ describe("modular Website, Content, Forms and Router clients", () => {
       id: "build-1", snapshot_id: "snapshot-1", state: "queued",
       created_at: "2026-11-18T10:00:00Z", updated_at: "2026-11-18T10:00:00Z",
     }), { status: 202, headers: { "Content-Type": "application/json" } }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await api.website.buildSnapshot("snapshot-1", "website-build:request-0001");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/v2/admin/sites/builds");
+    expect(input).toBe("/api/admin/sites/builds");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ snapshot_id: "snapshot-1" });
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("website-build:request-0001");
@@ -615,7 +615,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
         revision: 3, published_revision: 2, records: [], selections: [], placements: [],
       }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await api.contentEngine.saveWorkspaceDraft("snapshot-1", 2, [
       { clientKey: "draft-row-1", entityId: "model-1", sortOrder: 0, values: { title: "Draft" } },
@@ -623,7 +623,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     await api.formsEngine.deleteSubmission("snapshot-1", "submission-1", 7);
 
     const [contentInput, contentInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(contentInput).toBe("/api/v2/admin/content/snapshots/snapshot-1/workspace");
+    expect(contentInput).toBe("/api/admin/content/snapshots/snapshot-1/workspace");
     expect(contentInit.method).toBe("PUT");
     expect(JSON.parse(String(contentInit.body))).toEqual({
       expected_revision: 2,
@@ -635,7 +635,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
     const [formsInput, formsInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     const formsURL = new URL(formsInput, "http://localhost");
-    expect(formsURL.pathname).toBe("/api/v2/admin/forms/submissions/submission-1");
+    expect(formsURL.pathname).toBe("/api/admin/forms/submissions/submission-1");
     expect(formsURL.searchParams.get("snapshot_id")).toBe("snapshot-1");
     expect(formsInit.method).toBe("DELETE");
     expect(new Headers(formsInit.headers).get("If-Match")).toBe('"r7"');
@@ -644,7 +644,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("does not send Forms mutations with a zero revision", async () => {
     const fetchMock = vi.fn();
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await expect(api.formsEngine.deleteSubmission("snapshot-1", "submission-1", 0))
       .rejects.toMatchObject({ code: "invalid_revision", status: 400 });
@@ -661,12 +661,12 @@ describe("modular Website, Content, Forms and Router clients", () => {
         "Content-Disposition": 'attachment; filename="forms-snapshot-1-submissions.csv"',
       },
     }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     const result = await api.formsEngine.exportSubmissions("snapshot-1", { form_id: "form-1", state: "new" });
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
-    expect(url.pathname).toBe("/api/v2/admin/forms/submissions/export");
+    expect(url.pathname).toBe("/api/admin/forms/submissions/export");
     expect(url.searchParams.get("snapshot_id")).toBe("snapshot-1");
     expect(url.searchParams.get("form_id")).toBe("form-1");
     expect(url.searchParams.get("state")).toBe("new");
@@ -681,7 +681,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await expect(api.formsEngine.exportSubmissions("snapshot-1"))
       .rejects.toMatchObject({ code: "invalid_response", status: 502 });
@@ -697,19 +697,19 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify(route), { status: 201, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(JSON.stringify({ ...route, revision: 5 }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    stubV2(fetchMock);
+    stubApi(fetchMock);
 
     await api.router.routes.create({ host: route.host, path: route.path, match: route.match, target: route.target }, "router-route:request-0001");
     await api.router.routes.replaceTarget(routeID, { kind: "core-file", file_id: "01938f7a-68af-7c10-a51d-78b6ca125303" }, 4);
 
     const [createInput, createInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(createInput).toBe("/api/v2/admin/router/routes");
+    expect(createInput).toBe("/api/admin/router/routes");
     expect(new Headers(createInit.headers).get("Idempotency-Key")).toBe("router-route:request-0001");
     expect(JSON.parse(String(createInit.body))).toEqual({ host: route.host, path: route.path, match: route.match, target: route.target });
     expect(new Headers(createInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
 
     const [replaceInput, replaceInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(replaceInput).toBe(`/api/v2/admin/router/routes/${routeID}/target`);
+    expect(replaceInput).toBe(`/api/admin/router/routes/${routeID}/target`);
     expect(new Headers(replaceInit.headers).get("If-Match")).toBe('"4"');
     expect(JSON.parse(String(replaceInit.body))).toEqual({ target: { kind: "core-file", file_id: "01938f7a-68af-7c10-a51d-78b6ca125303" } });
   });
@@ -771,7 +771,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const operations = await api.router.operations.list();
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 
-    expect(input).toBe("/api/v2/admin/router/operations");
+    expect(input).toBe("/api/admin/router/operations");
     expect(operations.items[0]).toEqual({
       id: "public.form-upload", contract_version: 1, methods: ["POST"], max_request_bytes: 1048576,
       allowed_content_types: ["image/png", "application/pdf"],
@@ -807,7 +807,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
 
-    expect(url.pathname).toBe("/api/v2/files/sets");
+    expect(url.pathname).toBe("/api/files/sets");
     expect(url.searchParams.get("q")).toBe("uploads");
     expect(url.searchParams.get("limit")).toBe("25");
     expect(url.searchParams.get("cursor")).toBe("previous-cursor");

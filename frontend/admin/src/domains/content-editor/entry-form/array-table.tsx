@@ -5,7 +5,7 @@ import type { SchemaFieldNode } from "@/domains/content-schema/types";
 import { Button } from "@/components/ui/button";
 import { SortableList, SortableTableRow } from "@/components/ui/sortable-list";
 import { assignArrayItemRecordID } from "@/domains/content-schema/record-identity";
-import { starterValue } from "../blocks";
+import { starterValue } from "./schema-values";
 import type { ArrayFieldRendererProps } from "./array-field-types";
 import { arrayItemKey, type ArrayMoveAction, cloneOriginal, entryFieldAnchorId, isRecordValue, pointerPart, useArrayRowFocusRestoration } from "./helpers";
 

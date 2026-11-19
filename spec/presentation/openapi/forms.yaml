@@ -13,10 +13,10 @@ security:
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
 paths:
-  /api/v2/admin/forms/schemas:
+  /api/admin/forms/schemas:
     get:
       operationId: listFormSchemas
-      x-required-group-level: { group: forms, level: 1 }
+      x-required-group-level: { group: forms_schemas, level: 1 }
       parameters:
         - { $ref: '#/components/parameters/SnapshotID' }
         - { $ref: '#/components/parameters/Cursor' }
@@ -27,7 +27,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
     put:
       operationId: saveFormSchema
-      x-required-group-level: { group: forms, level: 2 }
+      x-required-group-level: { group: forms_schemas, level: 2 }
       x-csrf-required-for-cookie-auth: true
       requestBody:
         required: true
@@ -38,10 +38,10 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/forms/schemas/{schemaID}:
+  /api/admin/forms/schemas/{schemaID}:
     get:
       operationId: getFormSchema
-      x-required-group-level: { group: forms, level: 1 }
+      x-required-group-level: { group: forms_schemas, level: 1 }
       parameters:
         - { name: schemaID, in: path, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/SnapshotID' }
@@ -50,10 +50,10 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/forms/submissions:
+  /api/admin/forms/submissions:
     get:
       operationId: listFormSubmissions
-      x-required-group-level: { group: forms, level: 1 }
+      x-required-group-level: { group: forms_submissions, level: 1 }
       parameters:
         - { $ref: '#/components/parameters/SnapshotID' }
         - { name: form_id, in: query, schema: { type: string } }
@@ -65,10 +65,10 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/forms/submissions/export:
+  /api/admin/forms/submissions/export:
     get:
       operationId: exportFormSubmissions
-      x-required-group-level: { group: forms, level: 1 }
+      x-required-group-level: { group: forms_submissions, level: 1 }
       description: >-
         Traverses accessible submissions with the same snapshot, form and state filters as the list endpoint.
         Cursor pages are independent Core reads and do not form a transactional snapshot. The response is a complete
@@ -92,10 +92,10 @@ paths:
         '429': { description: All configured export slots are occupied; retry after the indicated delay., headers: { Retry-After: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '413': { description: Export exceeds the configured row or byte limit; no CSV is returned., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/forms/submissions/{submissionID}:
+  /api/admin/forms/submissions/{submissionID}:
     get:
       operationId: getFormSubmission
-      x-required-group-level: { group: forms, level: 1 }
+      x-required-group-level: { group: forms_submissions, level: 1 }
       parameters:
         - { name: submissionID, in: path, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/SnapshotID' }
@@ -106,7 +106,7 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
     delete:
       operationId: deleteFormSubmission
-      x-required-group-level: { group: forms, level: 2 }
+      x-required-group-level: { group: forms_submissions, level: 2 }
       x-csrf-required-for-cookie-auth: true
       parameters:
         - { name: submissionID, in: path, required: true, schema: { type: string } }
@@ -122,10 +122,10 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/forms/submissions/{submissionID}/status:
+  /api/admin/forms/submissions/{submissionID}/status:
     patch:
       operationId: setFormSubmissionStatus
-      x-required-group-level: { group: forms, level: 2 }
+      x-required-group-level: { group: forms_submissions, level: 2 }
       x-csrf-required-for-cookie-auth: true
       parameters: [{ name: submissionID, in: path, required: true, schema: { type: string } }]
       requestBody:

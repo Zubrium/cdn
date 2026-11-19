@@ -14,7 +14,7 @@ security:
 x-reject-cookie-and-bearer-together: true
 x-notification-component: admin.notifications
 paths:
-  /api/v2/admin/notifications:
+  /api/admin/notifications:
     head:
       operationId: probeAdminNotifications
       summary: Check whether SSE notifications are enabled

@@ -118,7 +118,7 @@ func TestSessionLoginSetsScopedHttpOnlySessionAndReadableCSRFCookies(t *testing.
 			csrfCookie = cookie
 		}
 	}
-	if sessionCookie == nil || !sessionCookie.HttpOnly || !sessionCookie.Secure || sessionCookie.Path != "/api/v2" || sessionCookie.SameSite != http.SameSiteStrictMode {
+	if sessionCookie == nil || !sessionCookie.HttpOnly || !sessionCookie.Secure || sessionCookie.Path != "/api" || sessionCookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("session cookie has unsafe attributes: %#v", sessionCookie)
 	}
 	if csrfCookie == nil || csrfCookie.HttpOnly || !csrfCookie.Secure || csrfCookie.SameSite != http.SameSiteStrictMode {

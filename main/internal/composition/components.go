@@ -88,7 +88,11 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		_ = runtime.Close()
 		return fmt.Errorf("start Core Coordinator: %w", err)
 	}
-	dispatcher := bus.New()
+	dispatcher, err := bus.NewAllowlisted(contracts.CoreReadinessOperation().Key)
+	if err != nil {
+		_ = runtime.Close()
+		return fmt.Errorf("configure runtime bus allowlist: %w", err)
+	}
 	if err := bus.RegisterCoreReadiness(dispatcher, runtime.CoordinatorStartupReady); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("register Core readiness operation: %w", err)
@@ -253,11 +257,11 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/v2/files", c.requireCoreRuntime(handler))
-	mux.Handle("/api/v2/files/", c.requireCoreRuntime(handler))
+	mux.Handle("/api/files", c.requireCoreRuntime(handler))
+	mux.Handle("/api/files/", c.requireCoreRuntime(handler))
 	if c.coordinatorAdmin != nil {
-		mux.Handle("/api/v2/coordinator/jobs", c.requireCoreRuntime(c.coordinatorAdmin))
-		mux.Handle("/api/v2/coordinator/jobs/", c.requireCoreRuntime(c.coordinatorAdmin))
+		mux.Handle("/api/coordinator/jobs", c.requireCoreRuntime(c.coordinatorAdmin))
+		mux.Handle("/api/coordinator/jobs/", c.requireCoreRuntime(c.coordinatorAdmin))
 	}
 	if c.identityAdmin != nil {
 		coreAdapter, adapterErr := adminapi.NewCoreAdapter(c.core.runtime.IdentityAdmin(), c.core.runtime.Sessions())
@@ -278,8 +282,8 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		if c.developmentFixtures {
 			sessionHandler = syntheticDataMode(sessionHandler)
 		}
-		mux.Handle("/api/v2/admin/session", sessionHandler)
-		mux.Handle("/api/v2/admin/", c.requireCoreRuntime(c.identityAdmin))
+		mux.Handle("/api/admin/session", sessionHandler)
+		mux.Handle("/api/admin/", c.requireCoreRuntime(c.identityAdmin))
 	}
 	if fixtureAPIs != nil {
 		websiteHandler, handlerErr := sitesapi.NewHandler(fixtureAPIs.website, sitesapi.Config{
@@ -305,10 +309,10 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		if handlerErr != nil {
 			return fmt.Errorf("initialize synthetic Forms API: %w", handlerErr)
 		}
-		mux.Handle("/api/v2/admin/sites", c.requireCoreRuntime(syntheticDataMode(websiteHandler)))
-		mux.Handle("/api/v2/admin/sites/", c.requireCoreRuntime(syntheticDataMode(websiteHandler)))
-		mux.Handle("/api/v2/admin/content/", c.requireCoreRuntime(syntheticDataMode(contentHandler)))
-		mux.Handle("/api/v2/admin/forms/", c.requireCoreRuntime(syntheticDataMode(formsHandler)))
+		mux.Handle("/api/admin/sites", c.requireCoreRuntime(syntheticDataMode(websiteHandler)))
+		mux.Handle("/api/admin/sites/", c.requireCoreRuntime(syntheticDataMode(websiteHandler)))
+		mux.Handle("/api/admin/content/", c.requireCoreRuntime(syntheticDataMode(contentHandler)))
+		mux.Handle("/api/admin/forms/", c.requireCoreRuntime(syntheticDataMode(formsHandler)))
 	} else if c.formsAdminEnabled {
 		if c.formsEngine == nil || c.formsEngine.engine == nil {
 			return errors.New("Forms Engine is not initialized")
@@ -322,7 +326,7 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		if handlerErr != nil {
 			return fmt.Errorf("initialize Forms API: %w", handlerErr)
 		}
-		mux.Handle("/api/v2/admin/forms/", c.requireCoreRuntime(formsHandler))
+		mux.Handle("/api/admin/forms/", c.requireCoreRuntime(formsHandler))
 	}
 	if !c.developmentFixtures && c.websiteAdminEnabled {
 		if c.websiteEngine == nil || c.websiteEngine.service == nil {
@@ -335,13 +339,13 @@ func (c *fileAPIComponent) Start(context.Context) error {
 		if handlerErr != nil {
 			return fmt.Errorf("initialize Website API: %w", handlerErr)
 		}
-		mux.Handle("/api/v2/admin/sites", c.requireCoreRuntime(websiteHandler))
-		mux.Handle("/api/v2/admin/sites/", c.requireCoreRuntime(websiteHandler))
+		mux.Handle("/api/admin/sites", c.requireCoreRuntime(websiteHandler))
+		mux.Handle("/api/admin/sites/", c.requireCoreRuntime(websiteHandler))
 	}
 	if c.routerAdminEnabled {
 		routerAdmin := c.requireCoreRuntime(http.HandlerFunc(c.serveRouterAdmin))
-		mux.Handle("/api/v2/admin/router", routerAdmin)
-		mux.Handle("/api/v2/admin/router/", routerAdmin)
+		mux.Handle("/api/admin/router", routerAdmin)
+		mux.Handle("/api/admin/router/", routerAdmin)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

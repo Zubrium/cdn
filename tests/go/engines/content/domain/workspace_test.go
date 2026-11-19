@@ -95,32 +95,33 @@ func TestSingletonRecordInputResolvesAutomaticallyAndOldManualChoiceStaysEditabl
 	if err := domain.ValidateWorkspace(model, placements, automatic, nil, false); err != nil {
 		t.Fatalf("singleton record input without a manual selection: %v", err)
 	}
-	legacy := domain.WorkspaceData{
+	existing := domain.WorkspaceData{
 		Records:    []domain.Record{record},
 		Selections: []domain.Selection{{PlacementID: "placement-one", InputKey: "settings", Mode: "ids", RecordIDs: []string{record.ID}}},
 	}
-	if err := domain.ValidateWorkspace(model, placements, legacy, &legacy, false); err != nil {
+	if err := domain.ValidateWorkspace(model, placements, existing, &existing, false); err != nil {
 		t.Fatalf("unchanged selection from before singleton conversion should remain editable: %v", err)
 	}
-	if err := domain.ValidateWorkspace(model, placements, legacy, &legacy, true); err == nil {
+	if err := domain.ValidateWorkspace(model, placements, existing, &existing, true); err == nil {
 		t.Fatal("publication accepted a manual choice for an automatically resolved singleton")
 	}
-	if err := domain.ValidateWorkspace(model, placements, legacy, nil, false); err == nil {
+	if err := domain.ValidateWorkspace(model, placements, existing, nil, false); err == nil {
 		t.Fatal("new manual selection for a singleton record input was accepted")
 	}
 }
 
-func TestDataModelAcceptsOnlyRetiredEmptyRelations(t *testing.T) {
-	for name, relations := range map[string]string{"absent": "", "null": `,"relations":null`, "empty": `,"relations":[]`} {
+func TestDataModelRejectsUnknownRelationsField(t *testing.T) {
+	for name, relations := range map[string]string{
+		"null":  `,"relations":null`,
+		"empty": `,"relations":[]`,
+		"items": `,"relations":[{"id":"relation-one"}]`,
+	} {
 		t.Run(name, func(t *testing.T) {
 			raw := `{"formatVersion":1,"entities":[]` + relations + `}`
-			if _, err := domain.ParseDataModel(json.RawMessage(raw)); err != nil {
-				t.Fatalf("empty legacy relations were rejected: %v", err)
+			if _, err := domain.ParseDataModel(json.RawMessage(raw)); err == nil {
+				t.Fatal("retired relations field was accepted")
 			}
 		})
-	}
-	if _, err := domain.ParseDataModel(json.RawMessage(`{"formatVersion":1,"entities":[],"relations":[{"id":"legacy"}]}`)); err == nil {
-		t.Fatal("non-empty retired relations were accepted")
 	}
 	if _, err := domain.ParseDataModel(json.RawMessage(`{"formatVersion":1,"entities":[{"id":"11111111-1111-4111-8111-111111111111","key":"settings","name":"Settings"}]}`)); err == nil {
 		t.Fatal("model entity without its fields array was accepted")

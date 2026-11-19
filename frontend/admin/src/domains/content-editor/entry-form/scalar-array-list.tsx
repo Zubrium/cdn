@@ -6,7 +6,7 @@ import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import type { MediaPickTarget } from "./types";
 import { clearMediaArraySelection, cloneOriginal, entryFieldAnchorId, mediaAccept } from "./helpers";
 import { MediaValue, ScalarControl } from "./field-controls";
-import { starterValue } from "../blocks";
+import { starterValue } from "./schema-values";
 
 export function ScalarArrayList({
   field,

@@ -11,9 +11,35 @@ security:
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
 paths:
-  /api/v2/admin/content/snapshots/{snapshotID}/workspace:
+  /api/admin/sites/{siteID}/content/locales:
+    parameters:
+      - { name: siteID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    get:
+      operationId: getSiteLocales
+      responses:
+        '200': { description: Supported locales, default locale and revision., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LocaleConfig' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: replaceSiteLocales
+      x-csrf-required-for-cookie-auth: true
+      x-required-group-level: { group: content, level: 2 }
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceLocaleConfig' } } }
+      responses:
+        '200': { description: Locale catalog replaced by CAS., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LocaleConfig' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/admin/content/snapshots/{snapshotID}/workspace:
     parameters:
       - { $ref: '#/components/parameters/SnapshotID' }
+      - { $ref: '#/components/parameters/Locale' }
     get:
       operationId: getContentWorkspace
       responses:
@@ -38,12 +64,13 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '413': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/content/snapshots/{snapshotID}/workspace/publish:
+  /api/admin/content/snapshots/{snapshotID}/workspace/publish:
     post:
       operationId: publishContentWorkspace
       x-csrf-required-for-cookie-auth: true
       parameters:
         - { $ref: '#/components/parameters/SnapshotID' }
+        - { $ref: '#/components/parameters/Locale' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
@@ -55,11 +82,12 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/content/snapshots/{snapshotID}/history:
+  /api/admin/content/snapshots/{snapshotID}/history:
     get:
       operationId: listContentHistory
       parameters:
         - { $ref: '#/components/parameters/SnapshotID' }
+        - { $ref: '#/components/parameters/Locale' }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Limit' }
       responses:
@@ -67,12 +95,13 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/v2/admin/content/snapshots/{snapshotID}/history/{historyID}/restore:
+  /api/admin/content/snapshots/{snapshotID}/history/{historyID}/restore:
     post:
       operationId: restoreContentHistoryAsDraft
       x-csrf-required-for-cookie-auth: true
       parameters:
         - { $ref: '#/components/parameters/SnapshotID' }
+        - { $ref: '#/components/parameters/Locale' }
         - { name: historyID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
@@ -91,6 +120,7 @@ components:
     BearerCredential: { type: http, scheme: bearer }
   parameters:
     SnapshotID: { name: snapshotID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    Locale: { name: locale, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 64, pattern: '^[A-Za-z0-9-]+$' } }
     Cursor: { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' } }
@@ -99,13 +129,31 @@ components:
       description: Error response.
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   schemas:
+    LocaleConfig:
+      type: object
+      additionalProperties: false
+      required: [revision, locales, default_locale]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        locales: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 2, maxLength: 64, description: Canonical BCP 47 language tag. } }
+        default_locale: { type: string, minLength: 2, maxLength: 64, description: Must be present in locales. }
+    ReplaceLocaleConfig:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, locales, default_locale]
+      properties:
+        expected_revision: { type: integer, minimum: 0 }
+        locales: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 2, maxLength: 64, description: Canonical BCP 47 language tag. } }
+        default_locale: { type: string, minLength: 2, maxLength: 64, description: Must be present in locales. }
     Workspace:
       type: object
-      required: [snapshot_id, site_id, page_snapshot_id, model_revision, model_digest, page_revision, page_digest, data_model, revision, published_revision, records, selections, placements]
+      required: [snapshot_id, site_id, page_snapshot_id, locale, locale_catalog_revision, model_revision, model_digest, page_revision, page_digest, data_model, revision, published_revision, records, selections, placements]
       properties:
         snapshot_id: { type: string, description: Selected page snapshot context. }
         site_id: { type: string, description: Site-wide records and publication scope. }
         page_snapshot_id: { type: string, description: Page-scoped placement selection scope. }
+        locale: { type: string, description: Requested locale. }
+        locale_catalog_revision: { type: integer, minimum: 1 }
         model_revision: { type: integer, minimum: 1 }
         model_digest: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
         page_revision: { type: integer, minimum: 1 }
@@ -120,11 +168,17 @@ components:
           type: object
           description: Request-local client_key to generated record ID mapping; returned only after draft save.
           additionalProperties: { type: string }
+        client_translation_ids:
+          type: object
+          description: Request-local client_key to generated translation_id mapping for newly created translation groups; returned only after draft save.
+          additionalProperties: { type: string, format: uuid }
     Record:
       type: object
-      required: [id, entity_id, sort_order, values]
+      required: [id, translation_id, locale, entity_id, sort_order, values]
       properties:
         id: { type: string }
+        translation_id: { type: string, format: uuid }
+        locale: { type: string, description: Canonical configured locale. }
         entity_id: { type: string }
         sort_order: { type: integer, minimum: 0 }
         values: { type: object, additionalProperties: true }
@@ -135,6 +189,7 @@ components:
       properties:
         id: { type: string, description: Previously issued server-generated ID. }
         client_key: { type: string, minLength: 1, maxLength: 128, description: Request-local correlation key for a new record. }
+        translation_id: { type: string, format: uuid, description: Existing server-issued translation group ID; omit to create a new group. }
         entity_id: { type: string }
         sort_order: { type: integer, minimum: 0 }
         values: { type: object, additionalProperties: true }

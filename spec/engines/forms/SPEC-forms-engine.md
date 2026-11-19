@@ -53,11 +53,11 @@ CSV-экспорт проходит курсором по доступным з�
 
 ## Административный API
 
-- `GET /api/v2/admin/forms/schemas?snapshot_id=...` — страница схем;
-- `GET /api/v2/admin/forms/schemas/{schema_id}?snapshot_id=...` — схема;
-- `PUT /api/v2/admin/forms/schemas` — создание или обновление схемы с `expected_revision`;
-- `GET /api/v2/admin/forms/submissions` и `GET /.../{submission_id}` — ответы;
-- `GET /api/v2/admin/forms/submissions/export?snapshot_id=...&form_id=...&state=...` — полный CSV для выбранных фильтров;
+- `GET /api/admin/forms/schemas?snapshot_id=...` — страница схем;
+- `GET /api/admin/forms/schemas/{schema_id}?snapshot_id=...` — схема;
+- `PUT /api/admin/forms/schemas` — создание или обновление схемы с `expected_revision`;
+- `GET /api/admin/forms/submissions` и `GET /.../{submission_id}` — ответы;
+- `GET /api/admin/forms/submissions/export?snapshot_id=...&form_id=...&state=...` — полный CSV для выбранных фильтров;
 - `PATCH /.../{submission_id}/status` — изменение статуса через CAS;
 - `DELETE /.../{submission_id}?snapshot_id=...` с `If-Match` — окончательное удаление.
 

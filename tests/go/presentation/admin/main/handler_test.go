@@ -70,7 +70,7 @@ func TestCreatePrincipalReturnsOneTimeCredentialAndExplicitGroupAccess(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/principals", strings.NewReader(`{"name":"Feature editor","can_manage_administrators":false,"group_access":{"features":2}}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/principals", strings.NewReader(`{"name":"Feature editor","can_manage_administrators":false,"group_access":{"features":2}}`))
 	request.Header.Set("Authorization", "Bearer manager-secret")
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -97,7 +97,7 @@ func TestAdminAPIRequiresBearerAndRejectsRolesOrUnknownFields(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/principals", strings.NewReader(tc.body))
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/principals", strings.NewReader(tc.body))
 		if tc.authorization != "" {
 			request.Header.Set("Authorization", tc.authorization)
 		}
@@ -123,7 +123,7 @@ func TestAdminAPIMapsAuthorizationAndHidesInternalErrors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/principals", nil)
+		request := httptest.NewRequest(http.MethodGet, "/api/admin/principals", nil)
 		request.Header.Set("Authorization", "Bearer manager-secret")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -133,7 +133,7 @@ func TestAdminAPIMapsAuthorizationAndHidesInternalErrors(t *testing.T) {
 	}
 }
 
-func TestAdminAPIUsesLowercaseIdentityContractsWithoutLegacyRoleFields(t *testing.T) {
+func TestAdminAPIUsesLowercaseIdentityContractsWithoutRoleFields(t *testing.T) {
 	api := &fakeIdentityAdmin{
 		principals:   []platform.Principal{{ID: "principal-1", Name: "Editor", Active: true, CanManageAdministrators: false}},
 		credentials:  []platform.Credential{{ID: "credential-1", PrincipalID: "principal-1", CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}},

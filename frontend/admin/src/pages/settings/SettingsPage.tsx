@@ -1,11 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { Link } from "react-router-dom";
 import { getSyntheticDataMode, subscribeSyntheticDataMode } from "@/api";
-import { useAuth } from "@/app/auth";
 import { PageHeader, useDocumentTitle } from "@/components/common/page";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { hasGroupAccess } from "@/lib/permissions";
 
 const previewBranches = [
   { name: "основная", address: "127.0.0.1:8081", indexing: "Разрешена", origins: "https://example.invalid" },
@@ -14,24 +10,17 @@ const previewBranches = [
 
 export default function SettingsPage() {
   useDocumentTitle("Настройки");
-  const { principal } = useAuth();
   const synthetic = useSyncExternalStore(
     subscribeSyntheticDataMode,
     getSyntheticDataMode,
     () => false,
   );
-  const canManageSnapshots = hasGroupAccess(principal, "features", 2);
 
   return (
     <div className="page-grid">
       <PageHeader
         title="Конфигурация запуска"
         description="Состав веток, адреса, CORS и индексация задаются в YAML при запуске."
-        actions={canManageSnapshots ? (
-          <Button variant="outline" asChild>
-            <Link to="/snapshots/branches">Назначения снапшотов</Link>
-          </Button>
-        ) : undefined}
       />
       {synthetic ? (
         <section className="overflow-hidden rounded-lg border border-warning/40 bg-card" aria-labelledby="runtime-preview-title">

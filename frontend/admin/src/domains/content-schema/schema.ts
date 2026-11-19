@@ -2,7 +2,6 @@ import type { JsonObject, JsonValue } from "@/types";
 import { isRecord, uid } from "@/lib/utils";
 import type {
   ArrayItemType,
-  BlockTypeName,
   BuilderFieldType,
   BuilderIssue,
   EnumOption,
@@ -10,22 +9,7 @@ import type {
   SchemaFieldNode,
 } from "./types";
 
-export const BLOCK_TYPES: Array<{ value: BlockTypeName; label: string }> = [
-  { value: "paragraph", label: "Параграф" },
-  { value: "heading", label: "Заголовок" },
-  { value: "bulletedList", label: "Маркированный список" },
-  { value: "numberedList", label: "Нумерованный список" },
-  { value: "quote", label: "Цитата" },
-  { value: "code", label: "Код" },
-  { value: "divider", label: "Разделитель" },
-  { value: "image", label: "Изображение" },
-  { value: "gallery", label: "Галерея" },
-  { value: "video", label: "Видео" },
-];
-
 export const FIELD_KEY_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-const BLOCK_TYPE_NAMES = BLOCK_TYPES.map((block) => block.value);
 
 export function createEnumOption(value = "", label = ""): EnumOption {
   return { id: uid("enum"), value, label };
@@ -56,7 +40,6 @@ export function createField(
     itemType: "string",
     minItems: undefined,
     maxItems: undefined,
-    allowedBlocks: BLOCK_TYPES.map((block) => block.value),
     ...overrides,
   };
 }
@@ -89,12 +72,6 @@ function buildUi(field: SchemaFieldNode): JsonObject | null {
   if (field.type === "richText") ui.widget = "richText";
   if (field.type === "media") ui.widget = "media";
   if (field.type === "file") ui.widget = "file";
-  if (field.type === "blocks") {
-    ui.widget = "blocks";
-    ui.allowedBlocks = field.allowedBlocks.filter((block) =>
-      BLOCK_TYPE_NAMES.includes(block),
-    );
-  }
   if ((field.type === "number" || field.type === "integer") && field.step !== undefined) {
     ui.step = field.step;
   }
@@ -109,7 +86,7 @@ function applyCommon(schema: JsonObject, field: SchemaFieldNode): JsonObject {
   if (field.engineRecordID) schema["x-engine-record-id"] = true;
   const ui = buildUi(field);
   if (ui) schema["x-ui"] = ui;
-  if (field.defaultValue !== "" && field.type !== "object" && field.type !== "array" && field.type !== "blocks") {
+  if (field.defaultValue !== "" && field.type !== "object" && field.type !== "array") {
     if (field.type === "number" || field.type === "integer") {
       const parsed = Number(field.defaultValue);
       if (Number.isFinite(parsed)) {
@@ -313,26 +290,6 @@ function fieldToSchema(field: SchemaFieldNode): JsonObject {
       if (field.maxItems !== undefined) schema.maxItems = field.maxItems;
       return applyCommon(schema, field);
     }
-    case "blocks": {
-      const blockNames = field.allowedBlocks.length
-        ? field.allowedBlocks
-        : BLOCK_TYPE_NAMES;
-      const schema: JsonObject = {
-        type: nullableType("array", field.nullable),
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            type: { type: "string", enum: blockNames },
-            data: { type: "object" },
-          },
-          required: ["id", "type", "data"],
-        },
-      };
-      if (field.minItems !== undefined) schema.minItems = field.minItems;
-      if (field.maxItems !== undefined) schema.maxItems = field.maxItems;
-      return applyCommon(schema, field);
-    }
     default:
       return applyCommon({ type: nullableType("string", field.nullable) }, field);
   }
@@ -449,12 +406,6 @@ function parseField(
     itemType: "string",
     minItems: numberValue(raw.minItems),
     maxItems: numberValue(raw.maxItems),
-    allowedBlocks:
-      Array.isArray(ui.allowedBlocks) && ui.allowedBlocks.length > 0
-        ? ui.allowedBlocks.filter((value): value is BlockTypeName =>
-            typeof value === "string" && BLOCK_TYPE_NAMES.includes(value as BlockTypeName),
-          )
-        : [...BLOCK_TYPE_NAMES],
   };
 
   if (raw.anyOf || raw.oneOf) {
@@ -496,9 +447,6 @@ function parseField(
   }
   if (type === "array") {
     const items = isRecord(raw.items) ? raw.items : {};
-    if (widget === "blocks") {
-      return createField("blocks", base);
-    }
     const itemTypeRaw = baseType(items);
     if (itemTypeRaw === "object") {
       const properties = isRecord(items.properties) ? items.properties : {};
@@ -760,14 +708,6 @@ export function validateFields(fields: SchemaFieldNode[]): BuilderIssue[] {
           }
         }
       }
-      if (field.type === "blocks" && field.allowedBlocks.length === 0) {
-        issues.push({
-          fieldId: field.id,
-          path,
-          message: "Выберите хотя бы один разрешённый тип блока",
-          severity: "error",
-        });
-      }
     });
   };
   walk(fields, "");
@@ -787,9 +727,6 @@ export function fieldLabel(path: string, fields: SchemaFieldNode[]): string {
   return label;
 }
 
-export function findBlocksField(fields: SchemaFieldNode[]): SchemaFieldNode | undefined {
-  return fields.find((field) => field.type === "blocks");
-}
 
 export interface FlatField {
   field: SchemaFieldNode;

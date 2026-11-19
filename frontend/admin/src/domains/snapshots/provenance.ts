@@ -4,7 +4,6 @@ const originLabels: Record<string, string> = {
   root: "Самостоятельный сайт",
   child: "Изменения сайта",
   content_fork: "Новый снапшот из черновиков контента",
-  sitepack_import: "Импорт sitepack",
 };
 
 const changeLabels: Record<string, string> = {

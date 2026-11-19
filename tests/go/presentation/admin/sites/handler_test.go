@@ -250,7 +250,7 @@ func TestListConfiguredSitesReturnsStaticSiteIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -266,7 +266,7 @@ func TestPagesAndTemplatesUseSiteScopedContractsAndCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	const siteID = "33333333-3333-4333-8333-333333333333"
-	pageRequest := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/"+siteID+"/pages", strings.NewReader(`{"name":"Landing"}`))
+	pageRequest := httptest.NewRequest(http.MethodPost, "/api/admin/sites/"+siteID+"/pages", strings.NewReader(`{"name":"Landing"}`))
 	pageRequest.Header.Set("Authorization", "Bearer user-secret")
 	pageRequest.Header.Set("Content-Type", "application/json")
 	pageRequest.Header.Set("Idempotency-Key", "page-create-request-0001")
@@ -275,12 +275,12 @@ func TestPagesAndTemplatesUseSiteScopedContractsAndCAS(t *testing.T) {
 	if pageResponse.Code != http.StatusCreated || api.pageInput.SiteID != siteID || api.pageInput.Name != "Landing" || api.pageInput.IdempotencyKey != "page-create-request-0001" {
 		t.Fatalf("create page response=%d input=%+v body=%s", pageResponse.Code, api.pageInput, pageResponse.Body.String())
 	}
-	if pageResponse.Header().Get("Location") != "/api/v2/admin/sites/"+siteID+"/pages/22222222-2222-4222-8222-222222222222" {
+	if pageResponse.Header().Get("Location") != "/api/admin/sites/"+siteID+"/pages/22222222-2222-4222-8222-222222222222" {
 		t.Fatalf("page Location = %q", pageResponse.Header().Get("Location"))
 	}
 
 	config := `{"schema_version":1,"payload":{"config":{"format_version":1},"metadata":{"format_version":1}},"feature_pins":{},"placement_slots":[]}`
-	templateRequest := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/"+siteID+"/templates", strings.NewReader(`{"name":"Landing template","description":"Reusable","configuration":`+config+`}`))
+	templateRequest := httptest.NewRequest(http.MethodPost, "/api/admin/sites/"+siteID+"/templates", strings.NewReader(`{"name":"Landing template","description":"Reusable","configuration":`+config+`}`))
 	templateRequest.Header.Set("Authorization", "Bearer user-secret")
 	templateRequest.Header.Set("Content-Type", "application/json")
 	templateRequest.Header.Set("Idempotency-Key", "template-create-request-01")
@@ -291,7 +291,7 @@ func TestPagesAndTemplatesUseSiteScopedContractsAndCAS(t *testing.T) {
 	}
 
 	templateID := "33333333-3333-4333-8333-333333333333"
-	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/"+siteID+"/templates/"+templateID, strings.NewReader(`{"name":"Updated","description":"","configuration":`+config+`}`))
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/templates/"+templateID, strings.NewReader(`{"name":"Updated","description":"","configuration":`+config+`}`))
 	updateRequest.Header.Set("Authorization", "Bearer user-secret")
 	updateRequest.Header.Set("Content-Type", "application/json")
 	updateRequest.Header.Set("If-Match", `"4"`)
@@ -301,7 +301,7 @@ func TestPagesAndTemplatesUseSiteScopedContractsAndCAS(t *testing.T) {
 		t.Fatalf("update template response=%d input=%+v body=%s", updateResponse.Code, api.templateUpdateInput, updateResponse.Body.String())
 	}
 
-	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v2/admin/sites/"+siteID+"/templates/"+templateID, nil)
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/admin/sites/"+siteID+"/templates/"+templateID, nil)
 	deleteRequest.Header.Set("Authorization", "Bearer user-secret")
 	deleteRequest.Header.Set("If-Match", `"5"`)
 	deleteResponse := httptest.NewRecorder()
@@ -322,7 +322,7 @@ func TestApplyPageTemplateStartsSelectionResetWorkflow(t *testing.T) {
 	}
 	const siteID = "33333333-3333-4333-8333-333333333333"
 	const pageID = "22222222-2222-4222-8222-222222222222"
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/"+siteID+"/pages/"+pageID+"/template-applications", strings.NewReader(`{"template_id":"33333333-3333-4333-8333-333333333333","template_revision":2,"expected_snapshot_id":"11111111-1111-4111-8111-111111111111","expected_snapshot_revision":4,"expected_content_revision":7,"confirmed":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/"+siteID+"/pages/"+pageID+"/template-applications", strings.NewReader(`{"template_id":"33333333-3333-4333-8333-333333333333","template_revision":2,"expected_snapshot_id":"11111111-1111-4111-8111-111111111111","expected_snapshot_revision":4,"expected_content_revision":7,"confirmed":true}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "template-apply-request-0001")
@@ -346,7 +346,7 @@ func TestCreateFeatureImportUsesAuthenticatedFileIDAndConfiguredFileSet(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "feature-import-request-0001")
@@ -376,7 +376,7 @@ func TestCreateFeatureImportRejectsClientSuppliedFileSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111","target_file_set_id":"set-1"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111","target_file_set_id":"set-1"}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "feature-import-request-0001")
@@ -393,7 +393,7 @@ func TestCreateFeatureImportRequiresAuthenticationBeforeCallingEngine(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
 	request.Header.Set("Idempotency-Key", "feature-import-request-0001")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -408,7 +408,7 @@ func TestCreateFeatureImportEnforcesBodyLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "feature-import-request-0001")
@@ -425,7 +425,7 @@ func TestFeatureVersionsValidatesQueryAndUsesEngineContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/features/feature-a/versions?cursor=next&limit=7", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/features/feature-a/versions?cursor=next&limit=7", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -442,7 +442,7 @@ func TestFeatureCatalogUsesConfiguredPaginationAndReturnsImmutableVersions(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/features?cursor=next&limit=19", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/features?cursor=next&limit=19", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -453,7 +453,7 @@ func TestFeatureCatalogUsesConfiguredPaginationAndReturnsImmutableVersions(t *te
 	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || len(page.Items) != 1 || page.Items[0].FeatureID != "feature-a" {
 		t.Fatalf("catalog response=%s error=%v", response.Body.String(), err)
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/features?limit=22", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/sites/features?limit=22", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -468,7 +468,7 @@ func TestBuildSnapshotRequiresIdempotencyAndUsesClientSnapshotOnly(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/builds", strings.NewReader(`{"snapshot_id":"snapshot-1"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/builds", strings.NewReader(`{"snapshot_id":"snapshot-1"}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "build-snapshot-request-0001")
@@ -488,19 +488,19 @@ func TestWriteRoutesRejectDuplicateIdempotencyHeaders(t *testing.T) {
 	}{
 		{
 			name:  "feature import",
-			path:  "/api/v2/admin/sites/feature-imports",
+			path:  "/api/admin/sites/feature-imports",
 			body:  `{"source_file_id":"11111111-1111-4111-8111-111111111111"}`,
 			calls: func(api *fakeWebsite) int { return api.beginCalls },
 		},
 		{
 			name:  "snapshot build",
-			path:  "/api/v2/admin/sites/builds",
+			path:  "/api/admin/sites/builds",
 			body:  `{"snapshot_id":"snapshot-1"}`,
 			calls: func(api *fakeWebsite) int { return api.buildCalls },
 		},
 		{
 			name:  "media derivative",
-			path:  "/api/v2/admin/sites/media/derivatives",
+			path:  "/api/admin/sites/media/derivatives",
 			body:  `{"source_file_id":"11111111-1111-4111-8111-111111111111","feature_id":"feature-a","profile":"thumbnail"}`,
 			calls: func(api *fakeWebsite) int { return api.mediaCalls },
 		},
@@ -532,7 +532,7 @@ func TestSitesAPIRejectsDuplicateContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/feature-imports", strings.NewReader(`{"source_file_id":"11111111-1111-4111-8111-111111111111"}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Add("Content-Type", "application/json")
 	request.Header.Add("Content-Type", "text/plain")
@@ -550,7 +550,7 @@ func TestCookieWriteRequiresExactOriginAndCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(`{"site_id":"site-1","expected_revision":0}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader(`{"site_id":"site-1","expected_revision":0}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.AddCookie(&http.Cookie{Name: adminhttpauth.SessionCookieName, Value: "ss_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))})
 	response := httptest.NewRecorder()
@@ -568,14 +568,14 @@ func TestFeatureVersionsUsesConfiguredPaginationBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/features/feature-a/versions", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/features/feature-a/versions", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || api.versionCalls != 1 || api.versionLimit != 17 {
 		t.Fatalf("default page status=%d calls=%d limit=%d body=%s", response.Code, api.versionCalls, api.versionLimit, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/features/feature-a/versions?limit=22", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/sites/features/feature-a/versions?limit=22", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -592,21 +592,21 @@ func TestListSnapshotsUsesValidatedSiteFilterAndConfiguredPagination(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?site_id=11111111-1111-4111-8111-111111111111&page_id=home&cursor=next-page", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/snapshots?site_id=11111111-1111-4111-8111-111111111111&page_id=home&cursor=next-page", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || api.snapshotSiteID != "11111111-1111-4111-8111-111111111111" || api.snapshotPageID != "22222222-2222-4222-8222-222222222222" || api.snapshotCursor != "next-page" || api.snapshotLimit != 17 {
 		t.Fatalf("status=%d site=%q cursor=%q limit=%d body=%s", response.Code, api.snapshotSiteID, api.snapshotCursor, api.snapshotLimit, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?site_id=not%20a%20valid%20id", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/sites/snapshots?site_id=not%20a%20valid%20id", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid site filter status=%d body=%s", response.Code, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots?page_id=bad%20page", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/sites/snapshots?page_id=bad%20page", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -622,7 +622,7 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 		t.Fatal(err)
 	}
 	body := `{"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":3,"page":{"placements":[]}},"metadata":{"format_version":1,"site_name":"Example"}}}`
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -630,7 +630,7 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 	if response.Code != http.StatusBadRequest || api.createSnapshotCalls != 0 {
 		t.Fatalf("missing idempotency key: status=%d calls=%d body=%s", response.Code, api.createSnapshotCalls, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
+	request = httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-snapshot-request-0001")
@@ -641,7 +641,7 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 		len(api.createSnapshotInput.Payload.Config) == 0 || len(api.createSnapshotInput.Payload.Metadata) == 0 || api.createSnapshotInput.PageID != "22222222-2222-4222-8222-222222222222" {
 		t.Fatalf("status=%d calls=%d input=%+v body=%s", response.Code, api.createSnapshotCalls, api.createSnapshotInput, response.Body.String())
 	}
-	if response.Header().Get("Location") != "/api/v2/admin/sites/snapshots/22222222-2222-4222-8222-222222222222" {
+	if response.Header().Get("Location") != "/api/admin/sites/snapshots/22222222-2222-4222-8222-222222222222" {
 		t.Fatalf("Location=%q", response.Header().Get("Location"))
 	}
 	if response.Header().Get("ETag") != `"1"` {
@@ -660,7 +660,7 @@ func TestCreateChildSnapshotRequiresBothParentRevisions(t *testing.T) {
 	}
 	base := `"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","payload":{"config":{"format_version":3},"metadata":{"format_version":1}}`
 	for _, revisions := range []string{`"expected_revision":0,"expected_content_revision":8`, `"expected_revision":4,"expected_content_revision":-1`} {
-		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader("{"+base+","+revisions+"}"))
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader("{"+base+","+revisions+"}"))
 		request.Header.Set("Authorization", "Bearer user-secret")
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "create-child-snapshot-0001")
@@ -670,7 +670,7 @@ func TestCreateChildSnapshotRequiresBothParentRevisions(t *testing.T) {
 			t.Fatalf("invalid revisions response=%d calls=%d body=%s", response.Code, api.createSnapshotCalls, response.Body.String())
 		}
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader("{"+base+`,"expected_revision":4,"expected_content_revision":0}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader("{"+base+`,"expected_revision":4,"expected_content_revision":0}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-child-snapshot-0001")
@@ -698,7 +698,7 @@ func TestCreateChildSnapshotFailsClosedWithoutWorkflowBeforePersisting(t *testin
 		t.Fatal(err)
 	}
 	body := `{"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","expected_revision":4,"expected_content_revision":8,"payload":{"config":{},"metadata":{}}}`
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-child-snapshot-0001")
@@ -716,7 +716,7 @@ func TestSiteModelRoutesUseTypedSiteScopedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	siteID := "33333333-3333-4333-8333-333333333333"
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/"+siteID+"/model", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/"+siteID+"/model", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -724,7 +724,7 @@ func TestSiteModelRoutesUseTypedSiteScopedContract(t *testing.T) {
 		t.Fatalf("GET status=%d calls=%d site=%q ETag=%q body=%s", response.Code, api.modelGetCalls, api.modelSiteID, response.Header().Get("ETag"), response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/"+siteID+"/model", strings.NewReader(`{"expected_revision":2,"data_model":{"formatVersion":1,"entities":[]}}`))
+	request = httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/model", strings.NewReader(`{"expected_revision":2,"data_model":{"formatVersion":1,"entities":[]}}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -733,7 +733,7 @@ func TestSiteModelRoutesUseTypedSiteScopedContract(t *testing.T) {
 		t.Fatalf("PUT status=%d calls=%d input=%+v ETag=%q body=%s", response.Code, api.modelSaveCalls, api.modelSaveRequest, response.Header().Get("ETag"), response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodPut, "/api/v2/admin/sites/"+siteID+"/model", strings.NewReader(`{"site_id":"44444444-4444-4444-8444-444444444444","expected_revision":2,"data_model":{"formatVersion":1,"entities":[]}}`))
+	request = httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/model", strings.NewReader(`{"site_id":"44444444-4444-4444-8444-444444444444","expected_revision":2,"data_model":{"formatVersion":1,"entities":[]}}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -751,7 +751,7 @@ func TestPagePlacementProjectionIsReadOnlyAndBoundToPathScope(t *testing.T) {
 	}
 	siteID := "33333333-3333-4333-8333-333333333333"
 	snapshotID := "22222222-2222-4222-8222-222222222222"
-	path := "/api/v2/admin/sites/" + siteID + "/pages/home/snapshots/" + snapshotID + "/content-projection"
+	path := "/api/admin/sites/" + siteID + "/pages/home/snapshots/" + snapshotID + "/content-projection"
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
@@ -774,7 +774,7 @@ func TestGetSnapshotReturnsRevisionAndPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/snapshots/22222222-2222-4222-8222-222222222222", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/snapshots/22222222-2222-4222-8222-222222222222", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -797,7 +797,7 @@ func TestCreateSnapshotRejectsDuplicateJSONKeysAtEveryDepth(t *testing.T) {
 		`{"site_id":"33333333-3333-4333-8333-333333333333","site_id":"44444444-4444-4444-8444-444444444444","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":3},"metadata":{}}}`,
 		`{"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","name":"Main","expected_revision":0,"expected_content_revision":0,"payload":{"config":{"format_version":2,"format_version":3},"metadata":{}}}`,
 	} {
-		request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/sites/snapshots", strings.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer user-secret")
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "create-snapshot-request-0001")
@@ -815,7 +815,7 @@ func TestDeleteSnapshotRequiresRevisionAndPassesCAS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	url := "/api/v2/admin/sites/snapshots/22222222-2222-4222-8222-222222222222"
+	url := "/api/admin/sites/snapshots/22222222-2222-4222-8222-222222222222"
 	request := httptest.NewRequest(http.MethodDelete, url, nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
@@ -852,7 +852,7 @@ func TestUnknownSitesRouteStillSetsSecurityAndCacheHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v2/admin/sites/unknown", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/admin/sites/unknown", nil))
 	if response.Code != http.StatusNotFound || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("status=%d headers=%v", response.Code, response.Header())
 	}

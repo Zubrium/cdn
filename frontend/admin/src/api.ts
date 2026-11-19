@@ -78,7 +78,7 @@ function observeResponseDataMode(response: Response): void {
   for (const listener of syntheticDataModeListeners) listener();
 }
 
-const ADMIN_V2_ROOT = "/api/v2/admin";
+const ADMIN_ROOT = "/api/admin";
 
 type QueryValue = string | number | boolean | null | undefined;
 
@@ -629,39 +629,6 @@ export class ApiError extends Error {
   }
 }
 
-export interface SitepackImportReport {
-  snapshot: SiteSnapshot;
-  newBuilds: number;
-  reusedBuilds: number;
-  newFiles: number;
-  reusedFiles: number;
-  modelPublishedRecords: number;
-  modelDraftRecords: number;
-  modelHistoryRevisions: number;
-  remappedModelEntityIds: number;
-  remappedModelFieldIds: number;
-  remappedModelRecordIds: number;
-  fileIds: Record<string, string>;
-  fileIdsTruncated?: boolean;
-  items: SitepackReportItem[];
-  itemsTruncated?: boolean;
-}
-
-export interface SitepackReportItem {
-  kind: "build" | "file" | "model_entity" | "model_field" | "model_record";
-  path: string;
-  action: string;
-  sourceId?: string;
-  targetId?: string;
-  count?: number;
-  message: string;
-}
-
-interface SitepackLimits {
-  maxBytes: number;
-  browserFallbackBytes: number;
-}
-
 export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
@@ -880,13 +847,13 @@ export const api = {
   website: {
     async siteModel(siteID: string, signal?: AbortSignal): Promise<SiteContentSchema> {
       return parseSiteContentSchema(
-        await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/model`, { signal }),
+        await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/model`, { signal }),
         siteID,
       );
     },
     async saveSiteModel(siteID: string, expectedRevision: number, dataModel: DataModel): Promise<SiteContentSchema> {
       return parseSiteContentSchema(
-        await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/model`, {
+        await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/model`, {
           method: "PUT",
           body: { expected_revision: expectedRevision, data_model: dataModel },
         }),
@@ -894,53 +861,53 @@ export const api = {
       );
     },
     async pages(siteID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePagePage> {
-      const page = await requestList<WebsitePage>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages`, { signal, query: { cursor, limit } });
+      const page = await requestList<WebsitePage>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages`, { signal, query: { cursor, limit } });
       return { ...page, items: page.items.map((item) => parseWebsitePage(item, siteID)) };
     },
     async page(siteID: string, pageID: string, signal?: AbortSignal): Promise<WebsitePage> {
-      return parseWebsitePage(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}`, { signal }), siteID);
+      return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}`, { signal }), siteID);
     },
     async createPage(siteID: string, input: { name: string; template_id?: string; template_revision?: number }, idempotencyKey: string): Promise<WebsitePage> {
-      return parseWebsitePage(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages`, {
+      return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       }), siteID);
     },
     async pageTemplates(siteID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePageTemplatePage> {
-      const page = await requestList<WebsitePageTemplate>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates`, { signal, query: { cursor, limit } });
+      const page = await requestList<WebsitePageTemplate>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates`, { signal, query: { cursor, limit } });
       return { ...page, items: page.items.map((item) => parseWebsitePageTemplate(item, siteID)) };
     },
     async pageTemplate(siteID: string, templateID: string, signal?: AbortSignal): Promise<WebsitePageTemplate> {
-      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, { signal }), siteID);
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, { signal }), siteID);
     },
     async createPageTemplate(siteID: string, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }, idempotencyKey: string): Promise<WebsitePageTemplate> {
-      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates`, {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       }), siteID);
     },
     async updatePageTemplate(siteID: string, templateID: string, revision: number, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }): Promise<WebsitePageTemplate> {
-      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
         method: "PUT", headers: { "If-Match": `"${revision}"` }, body: input,
       }), siteID);
     },
     deletePageTemplate(siteID: string, templateID: string, revision: number): Promise<void> {
-      return request<void>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
+      return request<void>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
         method: "DELETE", headers: { "If-Match": `"${revision}"` },
       });
     },
     applyPageTemplate(siteID: string, pageID: string, input: { template_id: string; template_revision: number; expected_snapshot_id: string; expected_snapshot_revision: number; expected_content_revision: number; confirmed: true }, idempotencyKey: string): Promise<WebsiteSnapshot> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}/template-applications`, {
+      return request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}/template-applications`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       }).then(validateWebsiteSnapshot);
     },
     snapshots(siteID?: string, pageID?: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteSnapshotPage> {
-      return requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor, limit } });
+      return requestList<WebsiteSnapshot>(`${ADMIN_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor, limit } });
     },
     async allSnapshots(signal?: AbortSignal, siteID?: string, pageID?: string): Promise<WebsiteSnapshot[]> {
       const items: WebsiteSnapshot[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
       for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
-        const page = await requestList<WebsiteSnapshot>(`${ADMIN_V2_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor } });
+        const page = await requestList<WebsiteSnapshot>(`${ADMIN_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor } });
         items.push(...page.items.map(validateWebsiteSnapshot));
         const nextCursor = page.next_cursor || undefined;
         if (!nextCursor) return items;
@@ -951,16 +918,16 @@ export const api = {
       throw new ApiError(502, "snapshot_list_too_large", "Список снапшотов превышает допустимый размер");
     },
     featureCatalog(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
-      return request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features`, { signal, query: { cursor, limit } });
+      return request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/sites/features`, { signal, query: { cursor, limit } });
     },
     featureVersions(featureID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
-      return request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features/${encoded(featureID)}/versions`, { signal, query: { cursor, limit } });
+      return request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/sites/features/${encoded(featureID)}/versions`, { signal, query: { cursor, limit } });
     },
     featureVersion(featureID: string, version: string, signal?: AbortSignal): Promise<WebsiteFeatureVersion> {
-      return request<WebsiteFeatureVersion>(`${ADMIN_V2_ROOT}/sites/features/${encoded(featureID)}/versions/${encoded(version)}`, { signal });
+      return request<WebsiteFeatureVersion>(`${ADMIN_ROOT}/sites/features/${encoded(featureID)}/versions/${encoded(version)}`, { signal });
     },
     snapshot(id: string, signal?: AbortSignal): Promise<WebsiteSnapshot> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(id)}`, { signal }).then((value) => {
+      return request<unknown>(`${ADMIN_ROOT}/sites/snapshots/${encoded(id)}`, { signal }).then((value) => {
         const snapshot = validateWebsiteSnapshot(value);
         if (snapshot.id !== id) throw new ApiError(502, "invalid_response", "Сервер вернул другой снапшот");
         return snapshot;
@@ -968,7 +935,7 @@ export const api = {
     },
     createSnapshot(input: { site_id: string; page_id: string; parent_id?: string; name: string; expected_revision: number; expected_content_revision: number; payload: WebsiteSnapshotPayload }, idempotencyKey: string): Promise<WebsiteSnapshot> {
       const payload = snapshotPayloadFromWebsite(input.payload, input.page_id, true);
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/snapshots`, {
+      return request<unknown>(`${ADMIN_ROOT}/sites/snapshots`, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
         body: { ...input, payload },
@@ -976,30 +943,30 @@ export const api = {
     },
     deleteSnapshot(id: string, revision: number): Promise<void> {
       if (!Number.isSafeInteger(revision) || revision < 1) throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия снапшота");
-      return request<void>(`${ADMIN_V2_ROOT}/sites/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
+      return request<void>(`${ADMIN_ROOT}/sites/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
     },
     buildSnapshot(snapshotID: string, idempotencyKey: string): Promise<WebsiteBuild> {
-      return request<WebsiteBuild>(`${ADMIN_V2_ROOT}/sites/builds`, {
+      return request<WebsiteBuild>(`${ADMIN_ROOT}/sites/builds`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { snapshot_id: snapshotID },
       });
     },
     build(id: string, signal?: AbortSignal): Promise<WebsiteBuild> {
-      return request<WebsiteBuild>(`${ADMIN_V2_ROOT}/sites/builds/${encoded(id)}`, { signal });
+      return request<WebsiteBuild>(`${ADMIN_ROOT}/sites/builds/${encoded(id)}`, { signal });
     },
     createMediaDerivative(input: { source_file_id: string; feature_id: string; profile: string }, idempotencyKey: string): Promise<WebsiteMediaJob> {
-      return request<WebsiteMediaJob>(`${ADMIN_V2_ROOT}/sites/media/derivatives`, {
+      return request<WebsiteMediaJob>(`${ADMIN_ROOT}/sites/media/derivatives`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       });
     },
     mediaJob(id: string, signal?: AbortSignal): Promise<WebsiteMediaJob> {
-      return request<WebsiteMediaJob>(`${ADMIN_V2_ROOT}/sites/media/jobs/${encoded(id)}`, { signal });
+      return request<WebsiteMediaJob>(`${ADMIN_ROOT}/sites/media/jobs/${encoded(id)}`, { signal });
     },
     async featureBuilds(signal?: AbortSignal): Promise<{ items: FeatureBuild[] }> {
       const items: FeatureBuild[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
       for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
-        const page = await request<WebsiteFeatureVersionPage>(`${ADMIN_V2_ROOT}/sites/features`, { signal, query: { cursor } });
+        const page = await request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/sites/features`, { signal, query: { cursor } });
         if (!page || !Array.isArray(page.items)) throw invalidFeatureCatalog();
         items.push(...page.items.map(featureBuildFromCatalog));
         if (page.next_cursor != null && typeof page.next_cursor !== "string") throw invalidFeatureCatalog();
@@ -1012,20 +979,20 @@ export const api = {
       throw new ApiError(502, "catalog_too_large", "Каталог фич превышает допустимый размер");
     },
     beginFeatureImport(sourceFileID: string, idempotencyKey: string, expectedSHA256?: string): Promise<WebsiteFeatureImport> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/feature-imports`, {
+      return request<unknown>(`${ADMIN_ROOT}/sites/feature-imports`, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
         body: { source_file_id: sourceFileID, ...(expectedSHA256 ? { expected_sha256: expectedSHA256 } : {}) },
       }).then(parseFeatureImport);
     },
     featureImport(id: string, signal?: AbortSignal): Promise<WebsiteFeatureImport> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/sites/feature-imports/${encoded(id)}`, { signal }).then(parseFeatureImport);
+      return request<unknown>(`${ADMIN_ROOT}/sites/feature-imports/${encoded(id)}`, { signal }).then(parseFeatureImport);
     },
   },
 
   contentEngine: {
     workspace(snapshotID: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, { signal })
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, { signal })
         .then((value) => parseContentWorkspace(value, snapshotID));
     },
     saveWorkspaceDraft(
@@ -1051,21 +1018,21 @@ export const api = {
           ...(selection.mode === "ids" ? { record_ids: selection.recordIds } : {}),
         })),
       };
-      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, {
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, {
         method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body,
       }).then((value) => parseContentWorkspace(value, snapshotID));
     },
     publishWorkspace(snapshotID: string, expectedRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace/publish`, {
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace/publish`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision },
       }).then((value) => parseContentWorkspace(value, snapshotID));
     },
     history(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<ModelContentHistoryResponse> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/history`, { signal, query: { cursor, limit } })
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/history`, { signal, query: { cursor, limit } })
         .then(parseContentHistory);
     },
     restoreHistory(snapshotID: string, historyID: string, expectedRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/content/snapshots/${encoded(snapshotID)}/history/${encoded(historyID)}/restore`, {
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/history/${encoded(historyID)}/restore`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision },
       }).then((value) => parseContentWorkspace(value, snapshotID));
     },
@@ -1073,21 +1040,21 @@ export const api = {
 
   formsEngine: {
     schemas(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return request<unknown>(`${ADMIN_V2_ROOT}/forms/schemas`, { signal, query: { snapshot_id: snapshotID, cursor, limit } })
+      return request<unknown>(`${ADMIN_ROOT}/forms/schemas`, { signal, query: { snapshot_id: snapshotID, cursor, limit } })
         .then(parseFormSchemaPage);
     },
     schema(snapshotID: string, schemaID: string, signal?: AbortSignal): Promise<FormSchema> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal, query: { snapshot_id: snapshotID } })
+      return request<unknown>(`${ADMIN_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal, query: { snapshot_id: snapshotID } })
         .then(parseFormSchema);
     },
     saveSchema(input: { snapshot_id: string; schema_id?: string; key: string; fields: Record<string, FormFieldDefinition>; expected_revision: number }): Promise<FormSchema> {
-      return request<unknown>(`${ADMIN_V2_ROOT}/forms/schemas`, { method: "PUT", body: input }).then(parseFormSchema);
+      return request<unknown>(`${ADMIN_ROOT}/forms/schemas`, { method: "PUT", body: input }).then(parseFormSchema);
     },
     submissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return requestList<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions`, { signal, query: { snapshot_id: snapshotID, ...filters, cursor, limit } });
+      return requestList<FormSubmission>(`${ADMIN_ROOT}/forms/submissions`, { signal, query: { snapshot_id: snapshotID, ...filters, cursor, limit } });
     },
     async exportSubmissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
-      const response = await rawRequest(`${ADMIN_V2_ROOT}/forms/submissions/export`, {
+      const response = await rawRequest(`${ADMIN_ROOT}/forms/submissions/export`, {
         signal, headers: { Accept: "text/csv" }, query: { snapshot_id: snapshotID, ...filters },
       });
       if (!response.ok) throw await parseErrorResponse(response);
@@ -1098,19 +1065,19 @@ export const api = {
       return { blob: await response.blob(), filename };
     },
     submission(snapshotID: string, id: string, signal?: AbortSignal): Promise<FormSubmission> {
-      return request<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}`, { signal, query: { snapshot_id: snapshotID } });
+      return request<FormSubmission>(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}`, { signal, query: { snapshot_id: snapshotID } });
     },
     async setSubmissionStatus(snapshotID: string, id: string, status: string, expectedRevision: number): Promise<FormSubmission> {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
         throw new ApiError(400, "invalid_revision", "Для изменения статуса требуется актуальная ревизия заявки");
       }
-      return request<FormSubmission>(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}/status`, { method: "PATCH", body: { snapshot_id: snapshotID, status, expected_revision: expectedRevision } });
+      return request<FormSubmission>(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}/status`, { method: "PATCH", body: { snapshot_id: snapshotID, status, expected_revision: expectedRevision } });
     },
     async deleteSubmission(snapshotID: string, id: string, revision: number): Promise<void> {
       if (!Number.isSafeInteger(revision) || revision < 1) {
         throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия заявки");
       }
-      return request(`${ADMIN_V2_ROOT}/forms/submissions/${encoded(id)}`, {
+      return request(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}`, {
         method: "DELETE", query: { snapshot_id: snapshotID }, headers: { "If-Match": `"r${revision}"` },
       });
     },
@@ -1119,35 +1086,35 @@ export const api = {
   router: {
     operations: {
       async list(signal?: AbortSignal): Promise<RouterPublicOperationPage> {
-        const response = await request<unknown>(`${ADMIN_V2_ROOT}/router/operations`, { signal });
+        const response = await request<unknown>(`${ADMIN_ROOT}/router/operations`, { signal });
         if (!isRecord(response) || !Array.isArray(response.items)) throw invalidRouterOperation();
         return { items: response.items.map(validateRouterPublicOperation) };
       },
     },
     routes: {
       async list(params: { host?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal): Promise<RouterRoutePage> {
-        const page = await requestList<unknown>(`${ADMIN_V2_ROOT}/router/routes`, { signal, query: params });
+        const page = await requestList<unknown>(`${ADMIN_ROOT}/router/routes`, { signal, query: params });
         return { items: page.items.map(validateRouterRoute), next_cursor: page.next_cursor ?? undefined };
       },
       get(id: string, signal?: AbortSignal): Promise<RouterRoute> {
-        return request<unknown>(`${ADMIN_V2_ROOT}/router/routes/${encoded(id)}`, { signal }).then((value) => {
+        return request<unknown>(`${ADMIN_ROOT}/router/routes/${encoded(id)}`, { signal }).then((value) => {
           const route = validateRouterRoute(value);
           if (route.id !== id) throw invalidRouterRoute();
           return route;
         });
       },
       create(input: { host: string; path: string; match: RouterRouteMatch; target: RouterRouteTarget }, idempotencyKey: string): Promise<RouterRoute> {
-        return request<unknown>(`${ADMIN_V2_ROOT}/router/routes`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input }).then(validateRouterRoute);
+        return request<unknown>(`${ADMIN_ROOT}/router/routes`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input }).then(validateRouterRoute);
       },
       replaceTarget(id: string, target: RouterRouteTarget, revision: number): Promise<RouterRoute> {
-        return request<unknown>(`${ADMIN_V2_ROOT}/router/routes/${encoded(id)}/target`, { method: "PUT", headers: { "If-Match": `"${revision}"` }, body: { target } }).then((value) => {
+        return request<unknown>(`${ADMIN_ROOT}/router/routes/${encoded(id)}/target`, { method: "PUT", headers: { "If-Match": `"${revision}"` }, body: { target } }).then((value) => {
           const route = validateRouterRoute(value);
           if (route.id !== id || route.revision <= revision) throw invalidRouterRoute();
           return route;
         });
       },
       delete(id: string, revision: number): Promise<void> {
-        return request(`${ADMIN_V2_ROOT}/router/routes/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
+        return request(`${ADMIN_ROOT}/router/routes/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
       },
     },
   },
@@ -1155,29 +1122,29 @@ export const api = {
   coordinator: {
     jobs: {
       list(params: { type?: string; state?: string; limit?: number; before?: string }, signal?: AbortSignal) {
-        return requestList<CoordinatorJob>("/api/v2/coordinator/jobs", {
+        return requestList<CoordinatorJob>("/api/coordinator/jobs", {
           signal,
           query: { type: params.type, state: params.state, limit: params.limit, before: params.before },
         });
       },
       permissions(signal?: AbortSignal): Promise<CoordinatorJobPermissions> {
-        return request<CoordinatorJobPermissions>("/api/v2/coordinator/jobs/permissions", { signal });
+        return request<CoordinatorJobPermissions>("/api/coordinator/jobs/permissions", { signal });
       },
       retry(id: string): Promise<void> {
-        return request<void>(`/api/v2/coordinator/jobs/${encoded(id)}/retry`, { method: "POST" });
+        return request<void>(`/api/coordinator/jobs/${encoded(id)}/retry`, { method: "POST" });
       },
     },
   },
 
   auth: {
     me(signal?: AbortSignal): Promise<Principal> {
-      return request<{ principal: Principal }>(`${ADMIN_V2_ROOT}/session`, {
+      return request<{ principal: Principal }>(`${ADMIN_ROOT}/session`, {
         signal,
         suppressUnauthorizedEvent: true,
       }).then((response) => response.principal);
     },
     async login(credential: string): Promise<Principal> {
-      const response = await request<{ principal: Principal }>(`${ADMIN_V2_ROOT}/session`, {
+      const response = await request<{ principal: Principal }>(`${ADMIN_ROOT}/session`, {
         method: "POST",
         body: { credential },
         suppressUnauthorizedEvent: true,
@@ -1185,62 +1152,62 @@ export const api = {
       return response.principal;
     },
     logout(): Promise<void> {
-      return request<void>(`${ADMIN_V2_ROOT}/session`, { method: "DELETE", suppressUnauthorizedEvent: true });
+      return request<void>(`${ADMIN_ROOT}/session`, { method: "DELETE", suppressUnauthorizedEvent: true });
     },
   },
 
   principals: {
     list(signal?: AbortSignal): Promise<Principal[]> {
-      return request<Principal[]>(`${ADMIN_V2_ROOT}/principals`, { signal });
+      return request<Principal[]>(`${ADMIN_ROOT}/principals`, { signal });
     },
     create(input: { name: string; can_manage_administrators: boolean; group_access: Record<string, GroupLevel>; expires_at?: string }): Promise<CreatedPrincipal> {
-      return request<CreatedPrincipal>(`${ADMIN_V2_ROOT}/principals`, { method: "POST", body: input });
+      return request<CreatedPrincipal>(`${ADMIN_ROOT}/principals`, { method: "POST", body: input });
     },
     deactivate(id: string): Promise<void> {
-      return request<void>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}`, { method: "DELETE" });
+      return request<void>(`${ADMIN_ROOT}/principals/${encoded(id)}`, { method: "DELETE" });
     },
     setAdministratorManagement(id: string, enabled: boolean): Promise<void> {
-      return request<void>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}/management`, { method: "PATCH", body: { enabled } });
+      return request<void>(`${ADMIN_ROOT}/principals/${encoded(id)}/management`, { method: "PATCH", body: { enabled } });
     },
     credentials(id: string, signal?: AbortSignal): Promise<Credential[]> {
-      return request<Credential[]>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}/credentials`, { signal });
+      return request<Credential[]>(`${ADMIN_ROOT}/principals/${encoded(id)}/credentials`, { signal });
     },
     issueCredential(id: string, expires_at?: string): Promise<IssuedCredential> {
-      return request<IssuedCredential>(`${ADMIN_V2_ROOT}/principals/${encoded(id)}/credentials`, { method: "POST", body: { expires_at } });
+      return request<IssuedCredential>(`${ADMIN_ROOT}/principals/${encoded(id)}/credentials`, { method: "POST", body: { expires_at } });
     },
     revokeCredential(id: string): Promise<void> {
-      return request<void>(`${ADMIN_V2_ROOT}/credentials/${encoded(id)}`, { method: "DELETE" });
+      return request<void>(`${ADMIN_ROOT}/credentials/${encoded(id)}`, { method: "DELETE" });
     },
     groups(signal?: AbortSignal): Promise<AccessGroup[]> {
-      return request<AccessGroup[]>(`${ADMIN_V2_ROOT}/access-groups`, { signal });
+      return request<AccessGroup[]>(`${ADMIN_ROOT}/access-groups`, { signal });
     },
     groupAccess(principalId: string, group: string, signal?: AbortSignal): Promise<{ principal_id: string; group: string; level: GroupLevel }> {
-      return request(`${ADMIN_V2_ROOT}/principals/${encoded(principalId)}/groups/${encoded(group)}`, { signal });
+      return request(`${ADMIN_ROOT}/principals/${encoded(principalId)}/groups/${encoded(group)}`, { signal });
     },
     setGroupAccess(principalId: string, group: string, level: GroupLevel): Promise<void> {
-      return request<void>(`${ADMIN_V2_ROOT}/principals/${encoded(principalId)}/groups/${encoded(group)}`, { method: "PUT", body: { level } });
+      return request<void>(`${ADMIN_ROOT}/principals/${encoded(principalId)}/groups/${encoded(group)}`, { method: "PUT", body: { level } });
     },
   },
 
   media: {
     limits(signal?: AbortSignal): Promise<FileLimits> {
-      return request<FileLimits>("/api/v2/files/limits", { signal });
+      return request<FileLimits>("/api/files/limits", { signal });
     },
     createUpload(input: {name:string;size:number;sha256:string;contentType:string;groups:string[]}, idempotencyKey: string): Promise<FileUploadSession> {
-      return request("/api/v2/files/uploads",{method:"POST",body:input,headers:{"Idempotency-Key":idempotencyKey}});
+      return request("/api/files/uploads",{method:"POST",body:input,headers:{"Idempotency-Key":idempotencyKey}});
     },
     uploadStatus(id:string): Promise<FileUploadSession> {
-      return request(`/api/v2/files/uploads/${encoded(id)}`);
+      return request(`/api/files/uploads/${encoded(id)}`);
     },
     commitUpload(id:string): Promise<{id:string}> {
-      return request(`/api/v2/files/uploads/${encoded(id)}/commit`,{method:"POST"});
+      return request(`/api/files/uploads/${encoded(id)}/commit`,{method:"POST"});
     },
     abortUpload(id:string): Promise<void> {
-      return request(`/api/v2/files/uploads/${encoded(id)}`,{method:"DELETE"});
+      return request(`/api/files/uploads/${encoded(id)}`,{method:"DELETE"});
     },
 
     async list(params: MediaListParams = {}, signal?: AbortSignal): Promise<ListResponse<Media>> {
-      const response = await request<{items?: CoreFile[] | null; nextCursor?: string | null}>("/api/v2/files", {
+      const response = await request<{items?: CoreFile[] | null; nextCursor?: string | null}>("/api/files", {
         signal,
         query: {
           q: params.q,
@@ -1251,7 +1218,7 @@ export const api = {
       return {items: arrayOrEmpty(response?.items).map(toMedia), next_cursor: response?.nextCursor ?? null};
     },
     async fileSets(params: { namespace?: string; query?: string; limit?: number; cursor?: string } = {}, signal?: AbortSignal): Promise<ListResponse<FileSet>> {
-      const response = await request<{ items?: unknown[] | null; nextCursor?: string | null } | null>("/api/v2/files/sets", {
+      const response = await request<{ items?: unknown[] | null; nextCursor?: string | null } | null>("/api/files/sets", {
         signal,
         query: { namespace: params.namespace, q: params.query, limit: params.limit, cursor: params.cursor },
       });
@@ -1263,10 +1230,10 @@ export const api = {
       return { items: response.items.map(validateFileSet), next_cursor: typeof nextCursor === "string" ? nextCursor : null };
     },
     async get(id: string, signal?: AbortSignal): Promise<Media> {
-      return toMedia(await request<CoreFile>(`/api/v2/files/objects/${encoded(id)}`, { signal }));
+      return toMedia(await request<CoreFile>(`/api/files/objects/${encoded(id)}`, { signal }));
     },
     async rename(id: string, filename: string, revision: number): Promise<Media> {
-      return toMedia(await request<CoreFile>(`/api/v2/files/objects/${encoded(id)}`, {
+      return toMedia(await request<CoreFile>(`/api/files/objects/${encoded(id)}`, {
         method: "PATCH",
         body: { name: filename },
         headers: { "If-Match": `"${id}-r${revision}"` },
@@ -1274,7 +1241,7 @@ export const api = {
     },
     prepareRenditions(id: string, context: MediaRenditionContext): Promise<MediaRenditionState> {
       return request<MediaRenditionState>(
-        `${ADMIN_V2_ROOT}/sites/media/${encoded(id)}/renditions/prepare`,
+        `${ADMIN_ROOT}/sites/media/${encoded(id)}/renditions/prepare`,
         {
           method: "POST",
           body: {
@@ -1289,7 +1256,7 @@ export const api = {
       );
     },
     remove(id: string, revision: number): Promise<void> {
-      return request<void>(`/api/v2/files/objects/${encoded(id)}`, {
+      return request<void>(`/api/files/objects/${encoded(id)}`, {
         method: "DELETE",
         headers: { "If-Match": `"${id}-r${revision}"` },
       });
@@ -1297,51 +1264,6 @@ export const api = {
   },
 
   siteBuilder: {
-    importSitepack(file: File, signal?: AbortSignal): Promise<SitepackImportReport> {
-      // The server identifies the archive by bytes and validates every entry;
-      // browser-specific file MIME labels do not change the API contract.
-      const body = new Blob([file], { type: "application/zip" });
-      return request<SitepackImportReport>(`${ADMIN_V2_ROOT}/site/snapshots/import`, { method: "POST", body, signal });
-    },
-    async exportSitepack(snapshotId: string, destination?: WritableStream<Uint8Array>, signal?: AbortSignal): Promise<{ blob?: Blob; filename: string }> {
-      const limits = destination ? undefined : await request<SitepackLimits>(`${ADMIN_V2_ROOT}/sitepack/limits`, { signal });
-      let response: Response;
-      try {
-        response = await rawRequest(`${ADMIN_V2_ROOT}/site/snapshots/${encoded(snapshotId)}/export`, { signal });
-        if (!response.ok) throw await parseErrorResponse(response);
-        if (!response.body) throw new ApiError(0, "missing_stream", "Браузер не поддерживает потоковое скачивание.");
-      } catch (error) {
-        if (destination) await destination.abort(error);
-        throw error;
-      }
-      const filename = filenameFromDisposition(response.headers.get("Content-Disposition"), `snapshot-${snapshotId}.sitepack`);
-      if (destination) {
-        // The browser writes each chunk directly to the chosen file. pipeTo
-        // closes it only after a complete response and aborts it on failure.
-        await response.body.pipeTo(destination, { signal });
-        return { filename };
-      }
-      const limit = limits?.browserFallbackBytes ?? 0;
-      if (!Number.isSafeInteger(limit) || limit <= 0) throw new ApiError(0, "invalid_download_limit", "Не удалось получить допустимый размер скачивания.");
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      try {
-        for (;;) {
-          const next = await reader.read();
-          if (next.done) break;
-          size += next.value.byteLength;
-          if (size > limit) {
-            await reader.cancel();
-            throw new ApiError(0, "download_too_large", `Архив превышает лимит скачивания в этом браузере (${Math.floor(limit / 1048576)} МиБ). Используйте браузер с потоковым сохранением, например Chrome или Edge.`);
-          }
-          chunks.push(next.value);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      return { blob: new Blob(chunks, { type: "application/zip" }), filename };
-    },
     async snapshot(id: string, signal?: AbortSignal): Promise<SnapshotDetail> {
       return siteSnapshotDetailFromWebsite(await api.website.snapshot(id, signal));
     },
@@ -1395,7 +1317,7 @@ export const api = {
 
 export function publicMediaPath(id: string, variant?: string): string {
   const suffix = variant ? `?variant=${encodeURIComponent(variant)}` : "";
-  return `/api/v2/files/objects/${encodeURIComponent(id)}/content${suffix}`;
+  return `/api/files/objects/${encodeURIComponent(id)}/content${suffix}`;
 }
 
 export function absolutePublicMediaUrl(id: string, variant?: string): string {
@@ -1437,7 +1359,7 @@ function hashFile(file:File,partBytes:number,onProgress:(progress:number)=>void,
 function uploadPart(id:string,number:number,blob:Blob,sha256:string,onProgress:(fraction:number)=>void,signal?:AbortSignal):Promise<FileUploadSession> {
   return new Promise((resolve,reject)=>{
     if(signal?.aborted){reject(new DOMException("Aborted","AbortError"));return;}
-    const xhr=new XMLHttpRequest();xhr.open("PUT",buildUrl(`/api/v2/files/uploads/${encoded(id)}/parts/${number}`));
+    const xhr=new XMLHttpRequest();xhr.open("PUT",buildUrl(`/api/files/uploads/${encoded(id)}/parts/${number}`));
     xhr.responseType="json";xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.setRequestHeader("X-Content-SHA256",sha256);
     xhr.withCredentials=true;
     const csrf=csrfToken();if(csrf)xhr.setRequestHeader("X-CSRF-Token",csrf);

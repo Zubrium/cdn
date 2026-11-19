@@ -24,7 +24,7 @@ const (
 )
 
 func TestListConfiguredSitesRequiresReadAccessAndReturnsStableIDs(t *testing.T) {
-	service := newService(t, newMemoryStore(), core.AccessLevelRead, websiteapp.Config{AccessGroup: "features", Sites: []string{siteB, siteA}})
+	service := newService(t, newMemoryStore(), core.AccessLevelRead, websiteapp.Config{AccessGroup: "features", CoordinatorAccessGroup: "coordinator_jobs", Sites: []string{siteB, siteA}})
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -800,8 +800,12 @@ func createSnapshotRequest(name, idempotencyKey string) websiteapi.CreateSnapsho
 }
 
 func newService(t *testing.T, store *memoryStore, level core.AccessLevel, config websiteapp.Config) *websiteapp.Service {
+	return newServiceWithLevels(t, store, level, level, config)
+}
+
+func newServiceWithLevels(t *testing.T, store *memoryStore, level, coordinatorLevel core.AccessLevel, config websiteapp.Config) *websiteapp.Service {
 	t.Helper()
-	authority := &fakeAuthority{level: level}
+	authority := &fakeAuthority{level: level, coordinatorLevel: coordinatorLevel}
 	service, err := websiteapp.NewService(config, store, authority, fakeSessions{})
 	if err != nil {
 		t.Fatal(err)
@@ -809,8 +813,28 @@ func newService(t *testing.T, store *memoryStore, level core.AccessLevel, config
 	return service
 }
 
+func TestWorkerActionsRequireCoordinatorWriteAccess(t *testing.T) {
+	store := newMemoryStore()
+	putSnapshot(t, store, siteA, snapshotA, 1)
+	service := newServiceWithLevels(t, store, core.AccessLevelWrite, core.AccessLevelRead, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.BeginFeatureImport(ctx, websiteapi.ImportFeatureRequest{}); !errors.Is(err, websiteapi.ErrForbidden) {
+		t.Fatalf("feature import with coordinator read access = %v, want forbidden", err)
+	}
+	if _, err := service.CreateMediaDerivative(ctx, websiteapi.CreateDerivativeRequest{}); !errors.Is(err, websiteapi.ErrForbidden) {
+		t.Fatalf("media derivative with coordinator read access = %v, want forbidden", err)
+	}
+	if _, err := service.BuildSnapshot(ctx, websiteapi.BuildSnapshotRequest{SnapshotID: snapshotA}); !errors.Is(err, websiteapi.ErrForbidden) {
+		t.Fatalf("snapshot build with coordinator read access = %v, want forbidden", err)
+	}
+}
+
 func websiteConfig() websiteapp.Config {
-	return websiteapp.Config{AccessGroup: "features", Sites: []string{siteA, siteB}}
+	return websiteapp.Config{AccessGroup: "features", CoordinatorAccessGroup: "coordinator_jobs", Sites: []string{siteA, siteB}}
 }
 
 func putSnapshot(t *testing.T, store *memoryStore, siteID, id string, revision int64) {
@@ -891,7 +915,10 @@ func mustJSON(value any) json.RawMessage {
 	return data
 }
 
-type fakeAuthority struct{ level core.AccessLevel }
+type fakeAuthority struct {
+	level            core.AccessLevel
+	coordinatorLevel core.AccessLevel
+}
 
 func (a *fakeAuthority) Authenticate(_ context.Context, credential string) (core.Session, core.Principal, error) {
 	if credential != "credential" {
@@ -901,10 +928,19 @@ func (a *fakeAuthority) Authenticate(_ context.Context, credential string) (core
 }
 
 func (a *fakeAuthority) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, minimum core.AccessLevel) error {
-	if len(groups) != 1 || groups[0] != "features" {
+	if len(groups) != 1 {
 		return errors.New("unexpected access group")
 	}
-	if a.level < minimum {
+	var level core.AccessLevel
+	switch groups[0] {
+	case "features":
+		level = a.level
+	case "coordinator_jobs":
+		level = a.coordinatorLevel
+	default:
+		return errors.New("unexpected access group")
+	}
+	if level < minimum {
 		return core.ErrForbidden
 	}
 	return nil

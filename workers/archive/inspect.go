@@ -1,5 +1,5 @@
 // Package archive implements bounded ZIP inspection without storage access.
-// Path and archive limits adapt the checks in legacy/features/sitebuilder/archive.go.
+// Path and archive limits enforce the archive ingestion contract.
 package archive
 
 import (

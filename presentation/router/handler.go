@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	routesPath     = "/api/v2/admin/router/routes"
-	operationsPath = "/api/v2/admin/router/operations"
+	routesPath     = "/api/admin/router/routes"
+	operationsPath = "/api/admin/router/operations"
 )
 
 type Config struct {
@@ -76,10 +76,10 @@ func NewHandler(api API, cfg Config) (*Handler, error) {
 	h.adminMux.HandleFunc("GET "+routesPath+"/{id}", h.getRoute)
 	h.adminMux.HandleFunc("PUT "+routesPath+"/{id}/target", h.replaceTarget)
 	h.adminMux.HandleFunc("DELETE "+routesPath+"/{id}", h.deleteRoute)
-	h.adminMux.HandleFunc("/api/v2/admin/{path...}", h.adminNotFound)
+	h.adminMux.HandleFunc("/api/admin/{path...}", h.adminNotFound)
 	h.publicMux.HandleFunc("/{$}", h.deliver)
 	h.publicMux.HandleFunc("/{path...}", h.deliver)
-	h.mux.Handle("/api/v2/admin/", h.adminMux)
+	h.mux.Handle("/api/admin/", h.adminMux)
 	h.mux.HandleFunc("/{$}", h.deliver)
 	h.mux.HandleFunc("/{path...}", h.deliver)
 	return h, nil
@@ -150,7 +150,7 @@ func (h *Handler) adminNotFound(w http.ResponseWriter, _ *http.Request) {
 }
 
 func reservedAdminPath(path string) bool {
-	return path == "/api/v2/admin" || strings.HasPrefix(path, "/api/v2/admin/")
+	return path == "/api/admin" || strings.HasPrefix(path, "/api/admin/")
 }
 
 func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import { assignArrayItemRecordID } from "@/domains/content-schema/record-identity";
-import { starterValue } from "../blocks";
+import { starterValue } from "./schema-values";
 import type { ArrayFieldRendererProps } from "./array-field-types";
 import { type ArrayMoveAction, arrayItemKey, cloneOriginal, entryFieldAnchorId, isRecordValue, useArrayRowFocusRestoration } from "./helpers";
 
