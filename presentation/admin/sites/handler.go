@@ -17,8 +17,8 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
 
 const importPath = "/api/admin/sites/feature-imports"
@@ -415,8 +415,8 @@ func (h *Handler) createPageTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Name          string                              `json:"name"`
-		Description   string                              `json:"description"`
+		Name          string                            `json:"name"`
+		Description   string                            `json:"description"`
 		Configuration website.PageTemplateConfiguration `json:"configuration"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
@@ -460,8 +460,8 @@ func (h *Handler) updatePageTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Name          string                              `json:"name"`
-		Description   string                              `json:"description"`
+		Name          string                            `json:"name"`
+		Description   string                            `json:"description"`
 		Configuration website.PageTemplateConfiguration `json:"configuration"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
@@ -786,7 +786,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 			SourceSnapshotID: input.ParentID, TargetSnapshotID: value.ID,
 			ExpectedSourceContentRevision: input.ExpectedContentRevision, TargetSnapshotRevision: value.Revision,
 			ContentCopyIdempotencyKey: copyKey,
-			SelectionPolicy:          "copy",
+			SelectionPolicy:           "copy",
 		})
 		if marshalErr != nil {
 			writeError(w, http.StatusServiceUnavailable, "unavailable")

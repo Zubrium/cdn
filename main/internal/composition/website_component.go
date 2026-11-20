@@ -27,7 +27,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	service, err := websiteapp.NewService(websiteapp.Config{AccessGroup: "features", CoordinatorAccessGroup: component.config.Coordinator.JobAccessGroup, Sites: component.config.Website.Sites}, data,
+	service, err := websiteapp.NewService(websiteapp.Config{AccessGroup: "features", CoordinatorAccessGroup: component.config.Coordinator.WorkflowAccessGroup, Sites: component.config.Website.Sites}, data,
 		component.core.runtime.GroupAuthorization(), component.core.runtime.Sessions())
 	if err != nil {
 		return err

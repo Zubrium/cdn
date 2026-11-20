@@ -25,13 +25,11 @@ var (
 // Compatibility names retained for the stable Core task-control API while
 // its persistence contract is represented by workflows and tasks.
 var (
-	ErrCoordinatorConflict    = ErrConflict
-	ErrCoordinatorLeaseLost   = ErrLeaseLost
-	ErrCoordinatorConfigDiff  = ErrConfigDiff
-	ErrCoordinatorJobMissing  = ErrTaskMissing
-	ErrCoordinatorJobNotOwned = ErrTaskNotOwned
-	ErrCoordinatorStale       = ErrStale
-	ErrCoordinatorInvalid     = ErrInvalid
+	ErrCoordinatorConflict   = ErrConflict
+	ErrCoordinatorLeaseLost  = ErrLeaseLost
+	ErrCoordinatorConfigDiff = ErrConfigDiff
+	ErrCoordinatorStale      = ErrStale
+	ErrCoordinatorInvalid    = ErrInvalid
 )
 
 // ComponentOperation is a public, engine-neutral operation registration.
@@ -76,15 +74,16 @@ type InstanceRepository interface {
 }
 
 type TaskRepository interface {
-	Claim(context.Context, uuid.UUID, int64, int, time.Duration, time.Duration) ([]CoordinatorJob, error)
+	Claim(context.Context, uuid.UUID, int64, int, time.Duration, time.Duration) ([]Task, error)
 	Extend(context.Context, uuid.UUID, uuid.UUID, int64, int64, time.Duration) error
-	Complete(context.Context, uuid.UUID, uuid.UUID, int64, int64, int, int, time.Duration, CoordinatorTaskOutcome) error
+	Complete(context.Context, uuid.UUID, uuid.UUID, int64, int64, int, int, time.Duration, TaskOutcome) error
 	Fail(context.Context, uuid.UUID, uuid.UUID, int64, int64, string, bool, time.Duration, time.Duration) error
 }
 
-type JobControlRepository interface {
-	ListJobs(context.Context, CoordinatorJobListRequest) (CoordinatorJobPage, error)
-	Retry(context.Context, uuid.UUID, uuid.UUID, int64) error
+type WorkflowControlRepository interface {
+	ListWorkflows(context.Context, WorkflowListRequest) (WorkflowPage, error)
+	GetWorkflowDetail(context.Context, uuid.UUID, int64, uuid.UUID, int, *TaskCursor) (WorkflowDetail, error)
+	RetryTask(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int64) error
 }
 
 type WorkflowRepository interface {
@@ -93,51 +92,60 @@ type WorkflowRepository interface {
 	CancelWorkflow(context.Context, string, uuid.UUID, int64, uuid.UUID, time.Duration) error
 }
 
-// Task is the durable work unit observed by a registered operation handler.
-type Task struct {
-	ID              uuid.UUID
-	WorkflowID      uuid.UUID
+type TaskKind string
+
+const (
+	TaskKindWorker TaskKind = "worker"
+	TaskKindJoin   TaskKind = "join"
+)
+
+// WorkerRef points at a statically registered operation handler. Workers are
+// definitions in the runtime catalog, never durable execution records.
+type WorkerRef struct {
 	ComponentID     string
 	OperationID     string
 	ContractVersion int
-	ParentTaskID    uuid.UUID
-	EmissionKey     string
-	Payload         json.RawMessage
-	State           string
-	Attempts        int
-	MaxAttempts     int
-	AvailableAt     time.Time
-	LeaseOwner      uuid.UUID
-	LeaseUntil      *time.Time
-	FencingToken    int64
-	ConfigEpoch     int64
-	Result          json.RawMessage
-	ErrorCode       string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+}
+
+// Task is the durable unit in a workflow. A worker task invokes its registered
+// WorkerRef; a join task is completed by Core after all dependencies succeed.
+type Task struct {
+	ID             uuid.UUID
+	WorkflowID     uuid.UUID
+	Kind           TaskKind
+	Worker         *WorkerRef
+	ParentTaskID   uuid.UUID
+	EmissionKey    string
+	IdempotencyKey string
+	Payload        json.RawMessage
+	State          string
+	Attempts       int
+	MaxAttempts    int
+	AvailableAt    time.Time
+	LeaseOwner     uuid.UUID
+	LeaseUntil     *time.Time
+	FencingToken   int64
+	ConfigEpoch    int64
+	Result         json.RawMessage
+	ErrorCode      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // TaskRequest is either a workflow root or a child emitted by a successful
 // task. Dependencies are references within the same workflow.
 type TaskRequest struct {
-	ID              uuid.UUID
-	WorkflowID      uuid.UUID
-	ComponentID     string
-	OperationID     string
-	ContractVersion int
-	ParentTaskID    uuid.UUID
-	EmissionKey     string
-	Payload         json.RawMessage
-	MaxAttempts     int
-	AvailableAt     time.Time
-	DependsOn       []uuid.UUID
-}
-
-type TaskLease struct {
-	InstanceID   uuid.UUID
-	ConfigEpoch  int64
-	TaskID       uuid.UUID
-	FencingToken int64
+	ID                 uuid.UUID
+	WorkflowID         uuid.UUID
+	Kind               TaskKind
+	Worker             *WorkerRef
+	ParentTaskID       uuid.UUID
+	EmissionKey        string
+	Payload            json.RawMessage
+	MaxAttempts        int
+	AvailableAt        time.Time
+	DependsOn          []uuid.UUID
+	DependsOnEmissions []string
 }
 
 type WorkflowRequest struct {
@@ -151,20 +159,36 @@ type WorkflowRequest struct {
 	Root           TaskRequest
 }
 
-type WorkflowPageRequest struct {
-	OwnerEngineID string
-	Limit         int
-	Before        *WorkflowCursor
-}
-
 type WorkflowCursor struct {
 	CreatedAt time.Time
 	ID        uuid.UUID
 }
 
+type WorkflowListRequest struct {
+	Owner       uuid.UUID
+	ConfigEpoch int64
+	State       string
+	Limit       int
+	Before      *WorkflowCursor
+}
+
+type WorkflowSummary struct {
+	ID            uuid.UUID
+	OwnerEngineID string
+	State         string
+	TaskCount     int
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type WorkflowPage struct {
-	Items []Workflow
+	Items []WorkflowSummary
 	Next  *WorkflowCursor
+}
+
+type WorkflowDetail struct {
+	Workflow Workflow
+	TaskPage TaskPage
 }
 
 type Workflow struct {
@@ -183,28 +207,21 @@ type TaskCursor struct {
 }
 
 type TaskSummary struct {
-	ID          uuid.UUID
-	WorkflowID  uuid.UUID
-	ComponentID string
-	OperationID string
-	State       string
-	Attempts    int
-	MaxAttempts int
-	AvailableAt time.Time
-	LeaseUntil  *time.Time
-	ErrorCode   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-type TaskListRequest struct {
-	Owner       uuid.UUID
-	ConfigEpoch int64
-	ComponentID string
-	OperationID string
-	State       string
-	Limit       int
-	Before      *TaskCursor
+	ID           uuid.UUID
+	WorkflowID   uuid.UUID
+	Kind         TaskKind
+	Worker       *WorkerRef
+	ParentTaskID uuid.UUID
+	DependsOn    []uuid.UUID
+	EmissionKey  string
+	State        string
+	Attempts     int
+	MaxAttempts  int
+	AvailableAt  time.Time
+	LeaseUntil   *time.Time
+	ErrorCode    string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type TaskPage struct {
@@ -212,77 +229,18 @@ type TaskPage struct {
 	Next  *TaskCursor
 }
 
-type CoordinatorJob struct {
-	ID              uuid.UUID
-	WorkflowID      uuid.UUID
-	ComponentID     string
-	OperationID     string
-	ContractVersion int
-	Type            string
-	EmissionKey     string
-	IdempotencyKey  string
-	Payload         json.RawMessage
-	State           string
-	Attempts        int
-	MaxAttempts     int
-	AvailableAt     time.Time
-	LeaseOwner      uuid.UUID
-	LeaseUntil      *time.Time
-	FencingToken    int64
-	ConfigEpoch     int64
-	Result          json.RawMessage
-	ErrorCode       string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+type TaskChild struct {
+	Kind               TaskKind
+	Worker             *WorkerRef
+	EmissionKey        string
+	Payload            json.RawMessage
+	MaxAttempts        int
+	AvailableAt        time.Time
+	DependsOn          []uuid.UUID
+	DependsOnEmissions []string
 }
 
-type CoordinatorTaskChild struct {
-	ComponentID     string
-	OperationID     string
-	ContractVersion int
-	EmissionKey     string
-	Payload         json.RawMessage
-	MaxAttempts     int
-	AvailableAt     time.Time
-	DependsOn       []uuid.UUID
-}
-
-type CoordinatorTaskOutcome struct {
+type TaskOutcome struct {
 	Result   json.RawMessage
-	Children []CoordinatorTaskChild
-}
-
-type CoordinatorJobCursor struct {
-	CreatedAt time.Time
-	ID        uuid.UUID
-}
-
-type CoordinatorJobSummary struct {
-	ID              uuid.UUID
-	ComponentID     string
-	OperationID     string
-	ContractVersion int
-	Type            string
-	State           string
-	Attempts        int
-	MaxAttempts     int
-	AvailableAt     time.Time
-	LeaseUntil      *time.Time
-	ErrorCode       string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
-type CoordinatorJobListRequest struct {
-	Owner       uuid.UUID
-	ConfigEpoch int64
-	Type        string
-	State       string
-	Limit       int
-	Before      *CoordinatorJobCursor
-}
-
-type CoordinatorJobPage struct {
-	Items []CoordinatorJobSummary
-	Next  *CoordinatorJobCursor
+	Children []TaskChild
 }

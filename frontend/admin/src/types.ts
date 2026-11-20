@@ -40,8 +40,9 @@ export interface ListResponse<T> {
   next_cursor: string | null;
 }
 
-export type CoordinatorJobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
-export type FeatureImportState = CoordinatorJobState;
+export type AsyncOperationState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type CoordinatorWorkflowState = AsyncOperationState;
+export type FeatureImportState = AsyncOperationState;
 
 export interface WebsiteFeatureImport {
   id: string;
@@ -241,10 +242,37 @@ export interface RouterPublicOperationPage {
   items: RouterPublicOperation[];
 }
 
-export interface CoordinatorJob {
+export interface CoordinatorWorkflowSummary {
   id: string;
-  type: string;
-  state: CoordinatorJobState;
+  owner_engine_id: string;
+  state: CoordinatorWorkflowState;
+  task_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CoordinatorWorkflowPage {
+  items: CoordinatorWorkflowSummary[];
+  next_cursor: string | null;
+}
+
+export interface CoordinatorWorkerReference {
+  component_id: string;
+  operation_id: string;
+  contract_version: number;
+}
+
+export type CoordinatorTaskKind = "worker" | "join";
+
+export interface CoordinatorTask {
+  id: string;
+  workflow_id: string;
+  kind: CoordinatorTaskKind;
+  worker?: CoordinatorWorkerReference;
+  parent_task_id?: string;
+  depends_on: string[];
+  emission_key?: string;
+  state: CoordinatorWorkflowState | "skipped";
   attempts: number;
   max_attempts: number;
   available_at: string;
@@ -254,13 +282,18 @@ export interface CoordinatorJob {
   updated_at: string;
 }
 
-export interface CoordinatorJobPage {
-  items: CoordinatorJob[];
-  next_cursor: string | null;
+export interface CoordinatorTaskPage {
+  items: CoordinatorTask[];
+  next_cursor?: string;
 }
 
-export interface CoordinatorJobPermissions {
-  can_retry: boolean;
+export interface CoordinatorWorkflowDetail {
+  workflow: Omit<CoordinatorWorkflowSummary, "task_count"> & { root_task_id: string };
+  tasks: CoordinatorTaskPage;
+}
+
+export interface CoordinatorWorkflowPermissions {
+  can_retry_tasks: boolean;
 }
 
 export interface Principal {

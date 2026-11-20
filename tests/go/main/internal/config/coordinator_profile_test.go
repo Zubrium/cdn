@@ -10,11 +10,11 @@ import (
 
 func TestCoordinatorAdminAPIRequiresConfiguredAccessGroup(t *testing.T) {
 	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "admin.coordinator"}}
-	resolved := Resolved{Coordinator: CoordinatorSettings{JobsPageDefault: 25, JobsPageMaximum: 100}}
+	resolved := Resolved{Coordinator: CoordinatorSettings{WorkflowsPageDefault: 25, WorkflowsPageMaximum: 100}}
 	if err := resolved.ValidateBuildPlan(plan); err == nil {
 		t.Fatal("Coordinator Admin API without a configured group was accepted")
 	}
-	resolved.Coordinator.JobAccessGroup = "coordinator_jobs"
+	resolved.Coordinator.WorkflowAccessGroup = "coordinator_jobs"
 	resolved.Core.AccessGroups = map[string]platform.AccessLevel{"coordinator_jobs": platform.AccessLevelNone}
 	if err := resolved.ValidateBuildPlan(plan); err != nil {
 		t.Fatalf("explicitly configured zero-access group should remain valid: %v", err)

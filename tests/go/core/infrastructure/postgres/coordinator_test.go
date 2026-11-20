@@ -20,7 +20,7 @@ func TestCoordinatorStoreRejectsCallsWithoutPool(t *testing.T) {
 	ctx := context.Background()
 	owner, taskID := uuid.New(), uuid.New()
 	request := corecoord.WorkflowRequest{}
-	outcome := corecoord.CoordinatorTaskOutcome{}
+	outcome := corecoord.TaskOutcome{}
 	cases := []struct {
 		name string
 		run  func() error
@@ -38,10 +38,10 @@ func TestCoordinatorStoreRejectsCallsWithoutPool(t *testing.T) {
 		{name: "extend task lease", run: func() error { return store.Extend(ctx, taskID, owner, 1, 1, time.Minute) }},
 		{name: "complete task", run: func() error { return store.Complete(ctx, taskID, owner, 1, 1, 10, 2, time.Hour, outcome) }},
 		{name: "fail task", run: func() error { return store.Fail(ctx, taskID, owner, 1, 1, "failed", false, 0, time.Hour) }},
-		{name: "retry task", run: func() error { return store.Retry(ctx, owner, taskID, 1) }},
-		{name: "get task", run: func() error { _, err := store.GetJob(ctx, taskID); return err }},
+		{name: "retry task", run: func() error { return store.RetryTask(ctx, owner, taskID, taskID, 1) }},
+		{name: "get workflow detail", run: func() error { _, err := store.GetWorkflowDetail(ctx, owner, 1, taskID, 1, nil); return err }},
 		{name: "list tasks", run: func() error {
-			_, err := store.ListJobs(ctx, corecoord.CoordinatorJobListRequest{Owner: owner, ConfigEpoch: 1, Limit: 1})
+			_, err := store.ListWorkflows(ctx, corecoord.WorkflowListRequest{Owner: owner, ConfigEpoch: 1, Limit: 1})
 			return err
 		}},
 	}
@@ -49,6 +49,26 @@ func TestCoordinatorStoreRejectsCallsWithoutPool(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if err := test.run(); !errors.Is(err, corecoord.ErrInvalid) {
 				t.Fatalf("call without a configured PostgreSQL pool returned %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestTaskDependencyCycleDetection(t *testing.T) {
+	first, second, third := uuid.New(), uuid.New(), uuid.New()
+	for _, test := range []struct {
+		name         string
+		ids          []uuid.UUID
+		dependencies [][]uuid.UUID
+		wantCycle    bool
+	}{
+		{name: "fan in", ids: []uuid.UUID{first, second, third}, dependencies: [][]uuid.UUID{{}, {}, {first, second}}},
+		{name: "chain", ids: []uuid.UUID{first, second, third}, dependencies: [][]uuid.UUID{{}, {first}, {second}}},
+		{name: "cycle", ids: []uuid.UUID{first, second, third}, dependencies: [][]uuid.UUID{{third}, {first}, {second}}, wantCycle: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := hasTaskDependencyCycle(test.ids, test.dependencies); got != test.wantCycle {
+				t.Fatalf("hasTaskDependencyCycle()=%t want %t", got, test.wantCycle)
 			}
 		})
 	}
@@ -104,7 +124,7 @@ func TestDisposableWorkflowIdempotencyIsScopedAndPayloadBound(t *testing.T) {
 	if _, _, err := StartCoordinatorWorkflow(ctx, pool, request); !errors.Is(err, ErrCoordinatorConflict) {
 		t.Fatalf("idempotency key accepted a different input: %v", err)
 	}
-	if _, err := GetCoordinatorWorkflow(ctx, pool, "engine.content", owner, epoch, first.ID); !errors.Is(err, ErrCoordinatorJobMissing) {
+	if _, err := GetCoordinatorWorkflow(ctx, pool, "engine.content", owner, epoch, first.ID); !errors.Is(err, ErrTaskMissing) {
 		t.Fatalf("another component read an unowned workflow: %v", err)
 	}
 	if got, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, first.ID); err != nil || got.State != "queued" {
@@ -175,32 +195,32 @@ func TestDisposableDynamicWorkflowChildrenCommitAtomicallyAndFinish(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootOutcome := corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"processed":true}`), Children: []corecoord.CoordinatorTaskChild{{
-		ComponentID: "worker.example", OperationID: "transform", ContractVersion: 1, EmissionKey: "task-1",
+	rootOutcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"processed":true}`), Children: []corecoord.TaskChild{{
+		Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "transform", ContractVersion: 1}, EmissionKey: "task-1",
 		Payload: json.RawMessage(`{"input":"one"}`), MaxAttempts: 3,
 	}}}
 	if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, rootOutcome); err != nil {
 		t.Fatalf("atomically complete root and emit child: %v", err)
 	}
-	childJobs, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
-	if err != nil || len(childJobs) != 1 || childJobs[0].ComponentID != "worker.example" || childJobs[0].OperationID != "transform" {
-		t.Fatalf("claim dynamic child: jobs=%+v err=%v", childJobs, err)
+	childTasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+	if err != nil || len(childTasks) != 1 || childTasks[0].Worker == nil || childTasks[0].Worker.ComponentID != "worker.example" || childTasks[0].Worker.OperationID != "transform" {
+		t.Fatalf("claim dynamic child: tasks=%+v err=%v", childTasks, err)
 	}
-	child := childJobs[0]
-	childOutcome := corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"packaged":true}`), Children: []corecoord.CoordinatorTaskChild{{
-		ComponentID: "engine.other", OperationID: "follow-up", ContractVersion: 2, EmissionKey: "continue",
+	child := childTasks[0]
+	childOutcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"packaged":true}`), Children: []corecoord.TaskChild{{
+		Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "engine.other", OperationID: "follow-up", ContractVersion: 2}, EmissionKey: "continue",
 		Payload: json.RawMessage(`{"artifact":"opaque"}`), MaxAttempts: 2,
 	}}}
 	if err := CompleteCoordinatorTask(ctx, pool, child.ID, owner, epoch, child.FencingToken, 10, 4, time.Hour, childOutcome); err != nil {
 		t.Fatalf("child did not atomically emit its own dependent task: %v", err)
 	}
-	grandchildren, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
-	if err != nil || len(grandchildren) != 1 || grandchildren[0].ComponentID != "engine.other" {
-		t.Fatalf("claim second-generation task: jobs=%+v err=%v", grandchildren, err)
+	grandchildren, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+	if err != nil || len(grandchildren) != 1 || grandchildren[0].Worker == nil || grandchildren[0].Worker.ComponentID != "engine.other" {
+		t.Fatalf("claim second-generation task: tasks=%+v err=%v", grandchildren, err)
 	}
 	grandchild := grandchildren[0]
 	if err := CompleteCoordinatorTask(ctx, pool, grandchild.ID, owner, epoch, grandchild.FencingToken,
-		10, 4, time.Hour, corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"active":true}`)}); err != nil {
+		10, 4, time.Hour, corecoord.TaskOutcome{Result: json.RawMessage(`{"active":true}`)}); err != nil {
 		t.Fatalf("complete terminal child: %v", err)
 	}
 	got, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, workflow.ID)
@@ -234,7 +254,7 @@ func TestDisposableWorkflowCancellationRejectsLateFencedCompletion(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"late":true}`)}); !errors.Is(err, ErrCoordinatorJobNotOwned) {
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"late":true}`)}); !errors.Is(err, ErrTaskNotOwned) {
 		t.Fatalf("cancelled workflow accepted a late completion: %v", err)
 	}
 	got, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, workflow.ID)
@@ -285,9 +305,9 @@ func TestDisposableRetryRequeuesTasksCancelledByWorkflowFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome := corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"started":true}`), Children: []corecoord.CoordinatorTaskChild{
-		{ComponentID: "worker.one", OperationID: "process", ContractVersion: 1, EmissionKey: "first", Payload: json.RawMessage(`{"n":1}`), MaxAttempts: 3},
-		{ComponentID: "worker.two", OperationID: "process", ContractVersion: 1, EmissionKey: "second", Payload: json.RawMessage(`{"n":2}`), MaxAttempts: 3},
+	outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"started":true}`), Children: []corecoord.TaskChild{
+		{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.one", OperationID: "process", ContractVersion: 1}, EmissionKey: "first", Payload: json.RawMessage(`{"n":1}`), MaxAttempts: 3},
+		{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.two", OperationID: "process", ContractVersion: 1}, EmissionKey: "second", Payload: json.RawMessage(`{"n":2}`), MaxAttempts: 3},
 	}}
 	if err := store.Complete(ctx, root.ID, owner, epoch, root.FencingToken, 8, 4, time.Hour, outcome); err != nil {
 		t.Fatal(err)
@@ -300,14 +320,21 @@ func TestDisposableRetryRequeuesTasksCancelledByWorkflowFailure(t *testing.T) {
 	if err := store.Extend(ctx, failed.ID, owner, epoch, failed.FencingToken, time.Minute); err != nil {
 		t.Fatalf("extend task lease through CoordinatorStore: %v", err)
 	}
-	storedTask, err := store.GetJob(ctx, failed.ID)
-	if err != nil || storedTask.ID != failed.ID || storedTask.State != "running" || storedTask.LeaseUntil == nil {
-		t.Fatalf("read task through CoordinatorStore: task=%+v err=%v", storedTask, err)
+	detail, err := store.GetWorkflowDetail(ctx, owner, epoch, failed.WorkflowID, 100, nil)
+	var storedTask *corecoord.TaskSummary
+	for index := range detail.TaskPage.Items {
+		if detail.TaskPage.Items[index].ID == failed.ID {
+			storedTask = &detail.TaskPage.Items[index]
+			break
+		}
+	}
+	if err != nil || storedTask == nil || storedTask.State != "running" || storedTask.LeaseUntil == nil {
+		t.Fatalf("read task through workflow detail: task=%+v err=%v", storedTask, err)
 	}
 	if err := store.Fail(ctx, failed.ID, owner, epoch, failed.FencingToken, "permanent_error", false, 0, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Retry(ctx, owner, failed.ID, epoch); err != nil {
+	if err := store.RetryTask(ctx, owner, workflow.ID, failed.ID, epoch); err != nil {
 		t.Fatalf("retry failed workflow task: %v", err)
 	}
 	got, err := store.GetWorkflow(ctx, "engine.example", owner, epoch, workflow.ID)
@@ -320,13 +347,83 @@ func TestDisposableRetryRequeuesTasksCancelledByWorkflowFailure(t *testing.T) {
 	}
 	for _, task := range requeued {
 		if err := store.Complete(ctx, task.ID, owner, epoch, task.FencingToken, 8, 4, time.Hour,
-			corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
+			corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
 			t.Fatalf("complete retried task: %v", err)
 		}
 	}
 	got, err = store.GetWorkflow(ctx, "engine.example", owner, epoch, workflow.ID)
 	if err != nil || got.State != "succeeded" {
 		t.Fatalf("retried workflow did not complete: state=%q err=%v", got.State, err)
+	}
+}
+
+func TestDisposableWorkflowJoinWaitsForEveryDependency(t *testing.T) {
+	pool := openDisposablePool(t, "TEST_COORDINATOR_JOIN_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := migrateForTest(t, ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	store := CoordinatorStore{Pool: pool}
+	owner, epoch := registerWorkflowTestInstance(t, ctx, pool)
+	workflow, _, err := store.StartWorkflow(ctx, workflowTestRequest(owner, epoch, "engine.example", "process", `{"input":"join"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := claimWorkflowRoot(ctx, pool, owner, epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{
+		{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.one", OperationID: "process", ContractVersion: 1},
+			EmissionKey: "branch:one", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
+		{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.two", OperationID: "process", ContractVersion: 1},
+			EmissionKey: "branch:two", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
+		{Kind: corecoord.TaskKindJoin, EmissionKey: "barrier", Payload: json.RawMessage(`{}`),
+			DependsOnEmissions: []string{"branch:one", "branch:two"}},
+	}}
+	if err := store.Complete(ctx, root.ID, owner, epoch, root.FencingToken, 10, 3, time.Hour, outcome); err != nil {
+		t.Fatal(err)
+	}
+	branches, err := store.Claim(ctx, owner, epoch, 10, time.Minute, time.Hour)
+	if err != nil || len(branches) != 2 {
+		t.Fatalf("claim worker branches without claiming join: tasks=%+v err=%v", branches, err)
+	}
+	for _, task := range branches {
+		if task.Kind != corecoord.TaskKindWorker || task.Worker == nil {
+			t.Fatalf("Core leased a control task as worker work: %+v", task)
+		}
+	}
+	if err := store.Complete(ctx, branches[0].ID, owner, epoch, branches[0].FencingToken, 10, 3, time.Hour,
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := store.GetWorkflowDetail(ctx, owner, epoch, workflow.ID, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var join *corecoord.TaskSummary
+	for index := range detail.TaskPage.Items {
+		if detail.TaskPage.Items[index].EmissionKey == "barrier" {
+			join = &detail.TaskPage.Items[index]
+			break
+		}
+	}
+	if join == nil || join.Kind != corecoord.TaskKindJoin || join.State != "queued" || len(join.DependsOn) != 2 || detail.Workflow.State != "running" {
+		t.Fatalf("join completed before every dependency: join=%+v workflow=%+v", join, detail.Workflow)
+	}
+	if err := store.Complete(ctx, branches[1].ID, owner, epoch, branches[1].FencingToken, 10, 3, time.Hour,
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err = store.GetWorkflowDetail(ctx, owner, epoch, workflow.ID, 100, nil)
+	if err != nil || detail.Workflow.State != "succeeded" {
+		t.Fatalf("workflow did not finish after its join became ready: state=%q err=%v", detail.Workflow.State, err)
+	}
+	for _, task := range detail.TaskPage.Items {
+		if task.EmissionKey == "barrier" && task.State != "succeeded" {
+			t.Fatalf("ready join did not complete automatically: %+v", task)
+		}
 	}
 }
 
@@ -351,21 +448,21 @@ func TestDisposableDelayedWorkflowTaskWaitsUntilAvailableAt(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()+interval '1 second'`).Scan(&availableAt); err != nil {
 		t.Fatal(err)
 	}
-	child := corecoord.CoordinatorTaskChild{ComponentID: "worker.example", OperationID: "deferred", ContractVersion: 1,
+	child := corecoord.TaskChild{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "deferred", ContractVersion: 1},
 		EmissionKey: "deferred:one", Payload: json.RawMessage(`{"input":"scheduled"}`), MaxAttempts: 2, AvailableAt: availableAt}
 	if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 2, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"scheduled":true}`), Children: []corecoord.CoordinatorTaskChild{child}}); err != nil {
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"scheduled":true}`), Children: []corecoord.TaskChild{child}}); err != nil {
 		t.Fatal(err)
 	}
-	if jobs, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour); err != nil || len(jobs) != 0 {
-		t.Fatalf("future task was claimed before available_at: jobs=%+v err=%v", jobs, err)
+	if tasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour); err != nil || len(tasks) != 0 {
+		t.Fatalf("future task was claimed before available_at: tasks=%+v err=%v", tasks, err)
 	}
 	if err := waitForCoordinatorTimestamp(ctx, pool, `SELECT available_at<=clock_timestamp() FROM coordination.tasks WHERE workflow_id=$1 AND emission_key=$2`, workflow.ID, child.EmissionKey); err != nil {
 		t.Fatal(err)
 	}
-	jobs, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
-	if err != nil || len(jobs) != 1 || jobs[0].OperationID != "deferred" {
-		t.Fatalf("due task was not claimable: jobs=%+v err=%v", jobs, err)
+	tasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+	if err != nil || len(tasks) != 1 || tasks[0].Worker == nil || tasks[0].Worker.OperationID != "deferred" {
+		t.Fatalf("due task was not claimable: tasks=%+v err=%v", tasks, err)
 	}
 }
 
@@ -388,7 +485,7 @@ func TestDisposableCompletedWorkflowResultSurvivesInstanceRestart(t *testing.T) 
 	}
 	result := json.RawMessage(`{"durable":"result"}`)
 	if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 2, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: result}); err != nil {
+		corecoord.TaskOutcome{Result: result}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ReleaseCoordinatorInstance(ctx, pool, owner, epoch); err != nil {
@@ -422,11 +519,11 @@ func TestDisposableRunningTaskResumesAfterInstanceRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstJobs, err := ClaimCoordinatorJobs(ctx, pool, firstOwner, epoch, 1, time.Second, time.Hour)
-	if err != nil || len(firstJobs) != 1 {
-		t.Fatalf("first instance failed to claim task: jobs=%+v err=%v", firstJobs, err)
+	firstTasks, err := ClaimTasks(ctx, pool, firstOwner, epoch, 1, time.Second, time.Hour)
+	if err != nil || len(firstTasks) != 1 {
+		t.Fatalf("first instance failed to claim task: tasks=%+v err=%v", firstTasks, err)
 	}
-	firstLease := firstJobs[0]
+	firstLease := firstTasks[0]
 	if err := ReleaseCoordinatorInstance(ctx, pool, firstOwner, epoch); err != nil {
 		t.Fatal(err)
 	}
@@ -438,17 +535,17 @@ func TestDisposableRunningTaskResumesAfterInstanceRestart(t *testing.T) {
 	if err != nil || secondEpoch != epoch {
 		t.Fatalf("restart changed an unchanged configuration epoch: epoch=%d previous=%d err=%v", secondEpoch, epoch, err)
 	}
-	secondJobs, err := ClaimCoordinatorJobs(ctx, pool, secondOwner, secondEpoch, 1, time.Minute, time.Hour)
-	if err != nil || len(secondJobs) != 1 {
-		t.Fatalf("restarted instance did not recover expired work: jobs=%+v err=%v", secondJobs, err)
+	secondTasks, err := ClaimTasks(ctx, pool, secondOwner, secondEpoch, 1, time.Minute, time.Hour)
+	if err != nil || len(secondTasks) != 1 {
+		t.Fatalf("restarted instance did not recover expired work: tasks=%+v err=%v", secondTasks, err)
 	}
-	secondLease := secondJobs[0]
+	secondLease := secondTasks[0]
 	if secondLease.ID != firstLease.ID || secondLease.Attempts != firstLease.Attempts+1 || secondLease.FencingToken <= firstLease.FencingToken {
 		t.Fatalf("restarted instance did not fence and retry the task: before=%+v after=%+v", firstLease, secondLease)
 	}
 	result := json.RawMessage(`{"resumed":true}`)
 	if err := CompleteCoordinatorTask(ctx, pool, secondLease.ID, secondOwner, secondEpoch, secondLease.FencingToken, 10, 2, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: result}); err != nil {
+		corecoord.TaskOutcome{Result: result}); err != nil {
 		t.Fatalf("restarted instance could not complete recovered work: %v", err)
 	}
 	got, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", secondOwner, secondEpoch, workflow.ID)
@@ -473,11 +570,11 @@ func TestDisposableExpiredTaskLeaseCanBeTakenOverWithNewFencingToken(t *testing.
 	if _, _, err := StartCoordinatorWorkflow(ctx, pool, request); err != nil {
 		t.Fatal(err)
 	}
-	firstJobs, err := ClaimCoordinatorJobs(ctx, pool, firstOwner, epoch, 1, time.Second, time.Hour)
-	if err != nil || len(firstJobs) != 1 {
-		t.Fatalf("first worker failed to claim task: jobs=%+v err=%v", firstJobs, err)
+	firstTasks, err := ClaimTasks(ctx, pool, firstOwner, epoch, 1, time.Second, time.Hour)
+	if err != nil || len(firstTasks) != 1 {
+		t.Fatalf("first worker failed to claim task: tasks=%+v err=%v", firstTasks, err)
 	}
-	firstLease := firstJobs[0]
+	firstLease := firstTasks[0]
 	secondOwner := uuid.New()
 	secondEpoch, err := RegisterCoordinatorInstance(ctx, pool, secondOwner, strings.Repeat("a", 64), time.Minute, time.Hour)
 	if err != nil || secondEpoch != epoch {
@@ -493,16 +590,16 @@ func TestDisposableExpiredTaskLeaseCanBeTakenOverWithNewFencingToken(t *testing.
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	secondJobs, err := ClaimCoordinatorJobs(ctx, pool, secondOwner, secondEpoch, 1, time.Minute, time.Hour)
-	if err != nil || len(secondJobs) != 1 {
-		t.Fatalf("replacement worker failed to take expired task: jobs=%+v err=%v", secondJobs, err)
+	secondTasks, err := ClaimTasks(ctx, pool, secondOwner, secondEpoch, 1, time.Minute, time.Hour)
+	if err != nil || len(secondTasks) != 1 {
+		t.Fatalf("replacement worker failed to take expired task: tasks=%+v err=%v", secondTasks, err)
 	}
-	secondLease := secondJobs[0]
+	secondLease := secondTasks[0]
 	if secondLease.ID != firstLease.ID || secondLease.LeaseOwner != secondOwner || secondLease.FencingToken <= firstLease.FencingToken {
 		t.Fatalf("takeover did not advance task ownership and fencing: before=%+v after=%+v", firstLease, secondLease)
 	}
 	if err := CompleteCoordinatorTask(ctx, pool, firstLease.ID, firstOwner, epoch, firstLease.FencingToken, 10, 2, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"stale":true}`)}); !errors.Is(err, ErrCoordinatorJobNotOwned) {
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"stale":true}`)}); !errors.Is(err, ErrTaskNotOwned) {
 		t.Fatalf("stale worker committed after lease takeover: %v", err)
 	}
 }
@@ -525,7 +622,7 @@ func TestDisposableWorkflowRetentionPrunesExpiredResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 2, time.Second,
-		corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := waitForCoordinatorTimestamp(ctx, pool, `SELECT expires_at<=clock_timestamp() FROM coordination.workflows WHERE workflow_id=$1`, workflow.ID); err != nil {
@@ -535,7 +632,7 @@ func TestDisposableWorkflowRetentionPrunesExpiredResults(t *testing.T) {
 	if err != nil || deleted != 1 {
 		t.Fatalf("expired workflow was not pruned: deleted=%d err=%v", deleted, err)
 	}
-	if _, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, workflow.ID); !errors.Is(err, ErrCoordinatorJobMissing) {
+	if _, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, workflow.ID); !errors.Is(err, ErrTaskMissing) {
 		t.Fatalf("pruned workflow result remained readable: %v", err)
 	}
 }
@@ -570,8 +667,8 @@ func TestDisposableCrossWorkflowDependencyIsRejectedAtomically(t *testing.T) {
 	if firstRoot.WorkflowID != first.ID || secondRoot.WorkflowID != second.ID {
 		t.Fatalf("test did not claim both workflow roots: first=%s second=%s", firstRoot.WorkflowID, secondRoot.WorkflowID)
 	}
-	outcome := corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"invalidDependency":true}`), Children: []corecoord.CoordinatorTaskChild{{
-		ComponentID: "worker.example", OperationID: "child", ContractVersion: 1, EmissionKey: "foreign-dependency",
+	outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"invalidDependency":true}`), Children: []corecoord.TaskChild{{
+		Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "child", ContractVersion: 1}, EmissionKey: "foreign-dependency",
 		Payload: json.RawMessage(`{}`), MaxAttempts: 1, DependsOn: []uuid.UUID{secondRoot.ID},
 	}}}
 	if err := CompleteCoordinatorTask(ctx, pool, firstRoot.ID, owner, epoch, firstRoot.FencingToken, 10, 2, time.Hour, outcome); !errors.Is(err, ErrCoordinatorInvalid) {
@@ -604,20 +701,20 @@ func TestDisposableTaskWaitsForItsExplicitDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootOutcome := corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"root":true}`), Children: []corecoord.CoordinatorTaskChild{
-		{ComponentID: "worker.example", OperationID: "wait-for", ContractVersion: 1, EmissionKey: "dependency:source", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
-		{ComponentID: "worker.example", OperationID: "emit", ContractVersion: 1, EmissionKey: "dependency:emitter", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
+	rootOutcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"root":true}`), Children: []corecoord.TaskChild{
+		{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "wait-for", ContractVersion: 1}, EmissionKey: "dependency:source", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
+		{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "emit", ContractVersion: 1}, EmissionKey: "dependency:emitter", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
 	}}
 	if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, rootOutcome); err != nil {
 		t.Fatal(err)
 	}
-	children, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 2, time.Minute, time.Hour)
+	children, err := ClaimTasks(ctx, pool, owner, epoch, 2, time.Minute, time.Hour)
 	if err != nil || len(children) != 2 {
-		t.Fatalf("claim sibling tasks: jobs=%+v err=%v", children, err)
+		t.Fatalf("claim sibling tasks: tasks=%+v err=%v", children, err)
 	}
-	var source, emitter CoordinatorJob
+	var source, emitter Task
 	for _, child := range children {
-		switch child.OperationID {
+		switch child.Worker.OperationID {
 		case "wait-for":
 			source = child
 		case "emit":
@@ -627,26 +724,26 @@ func TestDisposableTaskWaitsForItsExplicitDependency(t *testing.T) {
 	if source.ID == uuid.Nil || emitter.ID == uuid.Nil {
 		t.Fatalf("did not receive both dependency tasks: %+v", children)
 	}
-	emitterOutcome := corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"emitted":true}`), Children: []corecoord.CoordinatorTaskChild{{
-		ComponentID: "worker.example", OperationID: "dependent", ContractVersion: 1, EmissionKey: "dependency:target",
+	emitterOutcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"emitted":true}`), Children: []corecoord.TaskChild{{
+		Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "dependent", ContractVersion: 1}, EmissionKey: "dependency:target",
 		Payload: json.RawMessage(`{}`), MaxAttempts: 2, DependsOn: []uuid.UUID{source.ID},
 	}}}
 	if err := CompleteCoordinatorTask(ctx, pool, emitter.ID, owner, epoch, emitter.FencingToken, 10, 4, time.Hour, emitterOutcome); err != nil {
 		t.Fatal(err)
 	}
-	if jobs, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour); err != nil || len(jobs) != 0 {
-		t.Fatalf("task ran before its explicit dependency succeeded: jobs=%+v err=%v", jobs, err)
+	if tasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour); err != nil || len(tasks) != 0 {
+		t.Fatalf("task ran before its explicit dependency succeeded: tasks=%+v err=%v", tasks, err)
 	}
 	if err := CompleteCoordinatorTask(ctx, pool, source.ID, owner, epoch, source.FencingToken, 10, 4, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"source":true}`)}); err != nil {
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"source":true}`)}); err != nil {
 		t.Fatal(err)
 	}
-	dependent, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
-	if err != nil || len(dependent) != 1 || dependent[0].OperationID != "dependent" {
-		t.Fatalf("task did not become claimable after its dependency succeeded: jobs=%+v err=%v", dependent, err)
+	dependent, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+	if err != nil || len(dependent) != 1 || dependent[0].Worker == nil || dependent[0].Worker.OperationID != "dependent" {
+		t.Fatalf("task did not become claimable after its dependency succeeded: tasks=%+v err=%v", dependent, err)
 	}
 	if err := CompleteCoordinatorTask(ctx, pool, dependent[0].ID, owner, epoch, dependent[0].FencingToken, 10, 4, time.Hour,
-		corecoord.CoordinatorTaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
+		corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, workflow.ID)
@@ -669,22 +766,22 @@ func TestDisposableExpiredTaskAtMaxAttemptsFailsWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Second, time.Hour)
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("claim final permitted attempt: jobs=%+v err=%v", jobs, err)
+	tasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Second, time.Hour)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("claim final permitted attempt: tasks=%+v err=%v", tasks, err)
 	}
-	if err := waitForCoordinatorTimestamp(ctx, pool, `SELECT lease_until<=clock_timestamp() FROM coordination.tasks WHERE task_id=$1`, jobs[0].ID); err != nil {
+	if err := waitForCoordinatorTimestamp(ctx, pool, `SELECT lease_until<=clock_timestamp() FROM coordination.tasks WHERE task_id=$1`, tasks[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if retried, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour); err != nil || len(retried) != 0 {
-		t.Fatalf("exhausted task was incorrectly retried: jobs=%+v err=%v", retried, err)
+	if retried, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour); err != nil || len(retried) != 0 {
+		t.Fatalf("exhausted task was incorrectly retried: tasks=%+v err=%v", retried, err)
 	}
 	got, err := GetCoordinatorWorkflow(ctx, pool, "engine.example", owner, epoch, workflow.ID)
 	if err != nil || got.State != "failed" {
 		t.Fatalf("expired task beyond its attempt bound did not fail the workflow: state=%q err=%v", got.State, err)
 	}
 	var taskState, errorCode string
-	if err := pool.QueryRow(ctx, `SELECT state,error_code FROM coordination.tasks WHERE task_id=$1`, jobs[0].ID).Scan(&taskState, &errorCode); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT state,error_code FROM coordination.tasks WHERE task_id=$1`, tasks[0].ID).Scan(&taskState, &errorCode); err != nil {
 		t.Fatal(err)
 	}
 	if taskState != "failed" || errorCode != "attempts_exhausted" {
@@ -725,8 +822,9 @@ func workflowTestRequest(owner uuid.UUID, epoch int64, componentID, operationID,
 	workflowID, taskID := uuid.New(), uuid.New()
 	return corecoord.WorkflowRequest{ID: workflowID, Owner: owner, OwnerEngineID: componentID, IdempotencyKey: "request-1",
 		InputHash: workflowInputHash(payload, operationID, 1), ConfigEpoch: epoch, Retention: time.Hour,
-		Root: corecoord.TaskRequest{ID: taskID, WorkflowID: workflowID, ComponentID: componentID, OperationID: operationID,
-			ContractVersion: 1, Payload: json.RawMessage(payload), MaxAttempts: 3}}
+		Root: corecoord.TaskRequest{ID: taskID, WorkflowID: workflowID, Kind: corecoord.TaskKindWorker,
+			Worker:  &corecoord.WorkerRef{ComponentID: componentID, OperationID: operationID, ContractVersion: 1},
+			Payload: json.RawMessage(payload), MaxAttempts: 3}}
 }
 
 func workflowInputHash(payload, operation string, version int) []byte {
@@ -735,13 +833,13 @@ func workflowInputHash(payload, operation string, version int) []byte {
 	return hash[:]
 }
 
-func claimWorkflowRoot(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch int64) (CoordinatorJob, error) {
-	jobs, err := ClaimCoordinatorJobs(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+func claimWorkflowRoot(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch int64) (Task, error) {
+	tasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
 	if err != nil {
-		return CoordinatorJob{}, err
+		return Task{}, err
 	}
-	if len(jobs) != 1 {
-		return CoordinatorJob{}, errors.New("expected one queued workflow root task")
+	if len(tasks) != 1 {
+		return Task{}, errors.New("expected one queued workflow root task")
 	}
-	return jobs[0], nil
+	return tasks[0], nil
 }

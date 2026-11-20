@@ -35,18 +35,35 @@ func ValidAccessAction(action AccessAction) bool { return appaccess.ValidAction(
 type ComponentOperation = corecoord.ComponentOperation
 type ComponentDescriptor = corecoord.ComponentDescriptor
 type ComponentDescriptorProvider = corecoord.ComponentDescriptorProvider
-type CoreJob = corecoord.CoordinatorJob
-type CoordinatorTask = corecoord.Task
-type CoordinatorTaskChild = corecoord.CoordinatorTaskChild
-type CoordinatorTaskOutcome = corecoord.CoordinatorTaskOutcome
+type Task = corecoord.Task
+type TaskKind = corecoord.TaskKind
+
+const (
+	TaskKindWorker = corecoord.TaskKindWorker
+	TaskKindJoin   = corecoord.TaskKindJoin
+)
+
+type WorkerRef = corecoord.WorkerRef
+type TaskChild = corecoord.TaskChild
+type TaskOutcome = corecoord.TaskOutcome
+type Workflow = corecoord.Workflow
+type WorkflowSummary = corecoord.WorkflowSummary
+type WorkflowPage = corecoord.WorkflowPage
+type WorkflowDetail = corecoord.WorkflowDetail
+type WorkflowCursor = corecoord.WorkflowCursor
+type WorkflowListFilter = appcoord.WorkflowListFilter
+type WorkflowDetailFilter = appcoord.WorkflowDetailFilter
+type TaskCursor = corecoord.TaskCursor
+type TaskSummary = corecoord.TaskSummary
+type TaskPage = corecoord.TaskPage
 type CoordinatorDescriptor = appcoord.Descriptor
 
 // Build and lifecycle contracts are the only public surface for the generic
 // component composition and durable Coordinator worker catalog.
 type BuildPlan = appcoord.BuildPlan
-type ComponentTaskSet = appcoord.ComponentTaskSet
-type TaskHandler = appcoord.TaskHandler
-type TaskCatalog = appcoord.TaskCatalog
+type ComponentWorkerSet = appcoord.ComponentWorkerSet
+type WorkerHandler = appcoord.WorkerHandler
+type WorkerCatalog = appcoord.WorkerCatalog
 type RuntimeRegistry = appcoord.RuntimeRegistry
 type RuntimeComponent = appcoord.RuntimeComponent
 type ManagedComponent = appcoord.ManagedComponent
@@ -63,8 +80,7 @@ var (
 	ErrComponentAlreadyRegistered   = appcoord.ErrDuplicate
 	ErrComponentUnavailable         = appcoord.ErrComponentUnavailable
 	ErrComponentPanic               = appcoord.ErrComponentPanic
-	ErrTaskProviderUnavailable      = appcoord.ErrTaskProviderUnavailable
-	ErrTaskHandlerConflict          = appcoord.ErrTaskHandlerConflict
+	ErrWorkerHandlerConflict        = appcoord.ErrWorkerHandlerConflict
 	ErrWorkflowOperationUnavailable = appcoord.ErrWorkflowOperationUnavailable
 	ErrCoordinatorNotReady          = appcoord.ErrInstanceNotReady
 	ErrCoordinatorInputInvalid      = appcoord.ErrInvalid
@@ -72,8 +88,8 @@ var (
 
 func NewRuntimeRegistry() *RuntimeRegistry { return appcoord.NewRuntimeRegistry() }
 
-func BuildTaskCatalog(plan BuildPlan, providers []ComponentTaskSet) (*TaskCatalog, error) {
-	return appcoord.BuildTaskCatalog(plan, providers)
+func BuildWorkerCatalog(plan BuildPlan, providers []ComponentWorkerSet) (*WorkerCatalog, error) {
+	return appcoord.BuildWorkerCatalog(plan, providers)
 }
 
 func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shutdownTimeout time.Duration) (*ComponentApplication, error) {

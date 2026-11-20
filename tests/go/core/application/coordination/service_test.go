@@ -62,23 +62,28 @@ func (s *serviceStore) ReleaseInstance(_ context.Context, _ uuid.UUID, epoch int
 	return nil
 }
 
-func (s *serviceStore) Claim(context.Context, uuid.UUID, int64, int, time.Duration, time.Duration) ([]CoreJob, error) {
+func (s *serviceStore) Claim(context.Context, uuid.UUID, int64, int, time.Duration, time.Duration) ([]Task, error) {
 	return nil, nil
 }
 func (*serviceStore) Extend(context.Context, uuid.UUID, uuid.UUID, int64, int64, time.Duration) error {
 	return nil
 }
-func (*serviceStore) Complete(context.Context, uuid.UUID, uuid.UUID, int64, int64, int, int, time.Duration, corecoord.CoordinatorTaskOutcome) error {
+func (*serviceStore) Complete(context.Context, uuid.UUID, uuid.UUID, int64, int64, int, int, time.Duration, corecoord.TaskOutcome) error {
 	return nil
 }
 func (*serviceStore) Fail(context.Context, uuid.UUID, uuid.UUID, int64, int64, string, bool, time.Duration, time.Duration) error {
 	return nil
 }
 
-func (*serviceStore) ListJobs(context.Context, corecoord.CoordinatorJobListRequest) (corecoord.CoordinatorJobPage, error) {
-	return corecoord.CoordinatorJobPage{}, nil
+func (*serviceStore) ListWorkflows(context.Context, corecoord.WorkflowListRequest) (corecoord.WorkflowPage, error) {
+	return corecoord.WorkflowPage{}, nil
 }
-func (*serviceStore) Retry(context.Context, uuid.UUID, uuid.UUID, int64) error { return nil }
+func (*serviceStore) GetWorkflowDetail(context.Context, uuid.UUID, int64, uuid.UUID, int, *corecoord.TaskCursor) (corecoord.WorkflowDetail, error) {
+	return corecoord.WorkflowDetail{}, nil
+}
+func (*serviceStore) RetryTask(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int64) error {
+	return nil
+}
 
 func (s *serviceStore) StartWorkflow(_ context.Context, request corecoord.WorkflowRequest) (corecoord.Workflow, bool, error) {
 	s.mu.Lock()
@@ -119,18 +124,17 @@ func (s *serviceStore) CancelWorkflow(_ context.Context, owner string, instance 
 }
 
 func serviceTestConfig(store *serviceStore) ServiceConfig {
-	catalog, err := BuildTaskCatalog(BuildPlan{Components: []string{"core", "engine.example"}}, []ComponentTaskSet{{
-		ComponentID: "engine.example", Handlers: map[string]TaskHandler{"process/v1": taskHandlerForTest},
+	catalog, err := BuildWorkerCatalog(BuildPlan{Components: []string{"core", "engine.example"}}, []ComponentWorkerSet{{
+		ComponentID: "engine.example", Handlers: map[string]WorkerHandler{"process/v1": taskHandlerForTest},
 	}})
 	if err != nil {
 		panic(err)
 	}
 	return ServiceConfig{Store: store, Fingerprint: strings.Repeat("a", 64), InstanceLease: 6 * time.Second,
-		HeartbeatInterval: time.Second, WorkerConcurrency: 1, JobLease: 4 * time.Second, TaskTimeout: time.Minute,
+		HeartbeatInterval: time.Second, ExecutorConcurrency: 1, TaskLease: 4 * time.Second, TaskTimeout: time.Minute,
 		PollInterval: 100 * time.Millisecond, RetryBase: time.Second, RetryMaximum: 5 * time.Second,
 		MaxAttempts: 3, MaxWorkflowTasks: 100, MaxChildrenPerTask: 10, WorkflowRetention: time.Hour,
-		Catalog: catalog, WorkflowComponents: []corecoord.ComponentDescriptor{{ID: "engine.example", Kind: "engine", Version: 1,
-			Operations: []corecoord.ComponentOperation{{ID: "process", ContractVersion: 1}}}}}
+		Workers: catalog}
 }
 
 func TestCoordinatorServiceLifecycleAndScopedWorkflowCapability(t *testing.T) {
@@ -183,27 +187,5 @@ func TestCoordinatorServiceLifecycleAndScopedWorkflowCapability(t *testing.T) {
 	defer store.mu.Unlock()
 	if !store.released || store.startCalls != 1 || store.cancelCalls != 1 || store.cancelOwner == uuid.Nil || store.cancelEpoch != 1 {
 		t.Fatalf("service lifecycle or scoped workflow operations incomplete: released=%v starts=%d cancels=%d owner=%s epoch=%d", store.released, store.startCalls, store.cancelCalls, store.cancelOwner, store.cancelEpoch)
-	}
-}
-
-func TestCoordinatorRejectsInvalidWorkflowComponentGraph(t *testing.T) {
-	for _, descriptors := range [][]corecoord.ComponentDescriptor{
-		nil,
-		{{ID: "engine.a", Kind: "engine", Version: 1, Dependencies: []string{"engine.missing"}}},
-		{{ID: "engine.a", Kind: "engine", Version: 1, Dependencies: []string{"engine.b"}},
-			{ID: "engine.b", Kind: "engine", Version: 1, Dependencies: []string{"engine.a"}}},
-		{{ID: "engine.a", Kind: "engine", Version: 1, Operations: []corecoord.ComponentOperation{{ID: "process", ContractVersion: 0}}}},
-	} {
-		if _, err := NewWorkflowCatalog(descriptors); !errors.Is(err, ErrInvalid) {
-			t.Errorf("invalid workflow descriptors were accepted: %+v err=%v", descriptors, err)
-		}
-	}
-}
-
-func TestCoordinatorRejectsWorkflowDescriptorsWithoutTaskHandlers(t *testing.T) {
-	config := serviceTestConfig(&serviceStore{})
-	config.Catalog = nil
-	if _, err := NewService(config); !errors.Is(err, ErrTaskProviderUnavailable) {
-		t.Fatalf("workflow operation without a registered task handler was accepted: %v", err)
 	}
 }

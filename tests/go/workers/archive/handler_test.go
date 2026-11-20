@@ -208,7 +208,7 @@ func TestHandlerValidatesThenStoresAndReconcilesIdempotently(t *testing.T) {
 	archiveBytes := manifestZIPFixture(t, manifest)
 	files := &fakeCoreFiles{}
 	handler := testHandler(t, files, archiveBytes)
-	request := Request{JobID: "job-1", SourceFileID: "source-1"}
+	request := Request{TaskID: "task-1", SourceFileID: "source-1"}
 	result, err := handler.Import(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +236,7 @@ func TestHandlerResumesSourceCleanupWithoutRereadingArchive(t *testing.T) {
 	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js","styles":[]}}`
 	files := &fakeCoreFiles{deleteFailures: 1}
 	handler := testHandler(t, files, manifestZIPFixture(t, manifest))
-	request := Request{JobID: "job-cleanup", SourceFileID: "source-cleanup"}
+	request := Request{TaskID: "task-cleanup", SourceFileID: "source-cleanup"}
 	first, err := handler.Import(context.Background(), request)
 	if err == nil || first.Ready || len(first.FileIDs) != 0 {
 		t.Fatalf("source cleanup failure was reported as completed: result=%+v err=%v", first, err)
@@ -274,13 +274,15 @@ func TestHandlerResumesSourceCleanupWithoutRereadingArchive(t *testing.T) {
 	}
 }
 
-func TestTaskHandlerDispatchesOnlyRegisteredArchiveOperation(t *testing.T) {
+func TestWorkerHandlerDispatchesOnlyRegisteredArchiveOperation(t *testing.T) {
 	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js","styles":[]}}`
 	files := &fakeCoreFiles{}
 	handler := testHandler(t, files, manifestZIPFixture(t, manifest))
-	job := core.CoreJob{ID: uuid.New(), ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1}
-	job.Payload, _ = json.Marshal(Request{JobID: job.ID.String(), SourceFileID: "source-1"})
-	outcome, err := handler.TaskHandler(context.Background(), job)
+	task := core.Task{ID: uuid.New(), Kind: core.TaskKindWorker, Worker: &core.WorkerRef{
+		ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1,
+	}}
+	task.Payload, _ = json.Marshal(Request{SourceFileID: "source-1"})
+	outcome, err := handler.WorkerHandler(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,15 +291,20 @@ func TestTaskHandlerDispatchesOnlyRegisteredArchiveOperation(t *testing.T) {
 		t.Fatalf("result=%+v decode error=%v", result, err)
 	}
 
-	job.OperationID = "other-operation"
-	if _, err := handler.TaskHandler(context.Background(), job); err == nil {
+	task.Worker.OperationID = "other-operation"
+	if _, err := handler.WorkerHandler(context.Background(), task); err == nil {
 		t.Fatal("accepted an unregistered archive operation")
+	}
+	task.Worker.OperationID = OperationID
+	task.Payload, _ = json.Marshal(Request{TaskID: "another-task", SourceFileID: "source-1"})
+	if _, err := handler.WorkerHandler(context.Background(), task); err == nil {
+		t.Fatal("accepted a payload bound to another task")
 	}
 }
 
 func TestHandlerRejectsInvalidArchiveBeforeAnyWrite(t *testing.T) {
 	files := &fakeCoreFiles{}
-	_, err := testHandler(t, files, []byte("not a ZIP")).Import(context.Background(), Request{JobID: "job-1", SourceFileID: "source-1"})
+	_, err := testHandler(t, files, []byte("not a ZIP")).Import(context.Background(), Request{TaskID: "task-1", SourceFileID: "source-1"})
 	if err == nil {
 		t.Fatalf("err=%v, want ZIP validation failure", err)
 	}
@@ -309,7 +316,7 @@ func TestHandlerRejectsInvalidArchiveBeforeAnyWrite(t *testing.T) {
 func TestHandlerRejectsUnsupportedManifestBeforeAnyWrite(t *testing.T) {
 	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-module-v1","entry":"assets/app.js"}}`
 	files := &fakeCoreFiles{}
-	_, err := testHandler(t, files, manifestZIPFixture(t, manifest)).Import(context.Background(), Request{JobID: "job-1", SourceFileID: "source-1"})
+	_, err := testHandler(t, files, manifestZIPFixture(t, manifest)).Import(context.Background(), Request{TaskID: "task-1", SourceFileID: "source-1"})
 	if err == nil {
 		t.Fatalf("err=%v, want manifest validation failure", err)
 	}
@@ -326,7 +333,7 @@ func TestHandlerRejectsUnknownManifestFieldsBeforeAnyWrite(t *testing.T) {
 	}
 	for _, manifest := range cases {
 		files := &fakeCoreFiles{}
-		_, err := testHandler(t, files, manifestZIPFixture(t, manifest)).Import(context.Background(), Request{JobID: "job-1", SourceFileID: "source-1"})
+		_, err := testHandler(t, files, manifestZIPFixture(t, manifest)).Import(context.Background(), Request{TaskID: "task-1", SourceFileID: "source-1"})
 		if err == nil || files.creates != 0 {
 			t.Fatalf("manifest accepted or wrote outputs: err=%v creates=%d", err, files.creates)
 		}
@@ -348,15 +355,15 @@ func TestHandlerRequiresPrivateAbsoluteStagingDirectory(t *testing.T) {
 }
 
 func TestFileRequestKeyIsStableAndEntrySpecific(t *testing.T) {
-	first, err := FileRequestKey("job-1", "source-1", "assets/app.js")
+	first, err := FileRequestKey("task-1", "source-1", "assets/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	repeated, err := FileRequestKey("job-1", "source-1", "assets/app.js")
+	repeated, err := FileRequestKey("task-1", "source-1", "assets/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := FileRequestKey("job-1", "source-1", "assets/other.js")
+	other, err := FileRequestKey("task-1", "source-1", "assets/other.js")
 	if err != nil {
 		t.Fatal(err)
 	}

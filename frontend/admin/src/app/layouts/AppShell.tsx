@@ -69,7 +69,7 @@ const filesNav: NavItem[] = [
 ];
 
 const coordinatorNav: NavItem[] = [
-  { to: "/coordinator/jobs", label: "Задания", icon: ListTodo, match: (p) => p.startsWith("/coordinator/jobs") },
+  { to: "/coordinator/workflows", label: "Workflows", icon: ListTodo, match: (p) => p.startsWith("/coordinator/workflows") },
 ];
 
 const routerNav: NavItem[] = [
@@ -306,7 +306,7 @@ function SidebarContent({
           />
         )}
         {fileReader && <NavGroup label="Файлы" collapsed={collapsed} items={filesNav} onNavigate={onNavigate} className="mt-3" />}
-        {coordinatorReader && <NavGroup label="Задания" collapsed={collapsed} items={coordinatorNav} onNavigate={onNavigate} className="mt-3" />}
+        {coordinatorReader && <NavGroup label="Workflows" collapsed={collapsed} items={coordinatorNav} onNavigate={onNavigate} className="mt-3" />}
         {hasGroupAccess(principal, "router_routes", 1) && <NavGroup label="Маршрутизация" collapsed={collapsed} items={routerNav} onNavigate={onNavigate} className="mt-3" />}
         {siteManager && (
           <NavGroup label="Управление" collapsed={collapsed} items={snapshotManagementNav} onNavigate={onNavigate} className="mt-3" />

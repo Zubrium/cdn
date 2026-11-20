@@ -111,7 +111,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		}
-		if _, err := fmt.Fprintln(stdout, "Core, Coordinator, Loader, and File API listening on", components.HTTPAddress()); err != nil {
+		if _, err := fmt.Fprintln(stdout, "Core, Coordinator, Loader, and File API listening on", components.AdminAddress()); err != nil {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
 			_ = application.Close(shutdownCtx)
 			cancel()

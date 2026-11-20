@@ -30,16 +30,16 @@ func TestPublicCoreFacadeProvidesEngineAndCoordinatorContracts(t *testing.T) {
 		t.Fatal("runtime registry is nil")
 	}
 	plan := platform.BuildPlan{Components: []string{"engine.example"}}
-	catalog, err := platform.BuildTaskCatalog(plan, []platform.ComponentTaskSet{{
+	catalog, err := platform.BuildWorkerCatalog(plan, []platform.ComponentWorkerSet{{
 		ComponentID: "engine.example",
-		Handlers: map[string]platform.TaskHandler{
-			"work.execute/v1": func(context.Context, platform.CoreJob) (platform.CoordinatorTaskOutcome, error) {
-				return platform.CoordinatorTaskOutcome{}, nil
+		Handlers: map[string]platform.WorkerHandler{
+			"work.execute/v1": func(context.Context, platform.Task) (platform.TaskOutcome, error) {
+				return platform.TaskOutcome{}, nil
 			},
 		},
 	}})
 	if err != nil || catalog == nil {
-		t.Fatalf("BuildTaskCatalog() = (%v, %v), want a public catalog", catalog, err)
+		t.Fatalf("BuildWorkerCatalog() = (%v, %v), want a public catalog", catalog, err)
 	}
 	if !platform.ValidAccessGroupKey("editorial") || platform.AccessLevelWrite != 2 || platform.AccessActionWrite == "" {
 		t.Fatal("Core access contracts are not available through its public facade")

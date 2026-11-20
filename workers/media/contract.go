@@ -6,7 +6,7 @@ import "context"
 // Request refers to an immutable Core file and a server-configured preset.
 // It intentionally contains no command line, paths, codec options, or limits.
 type Request struct {
-	JobID          string `json:"job_id"`
+	TaskID         string `json:"job_id"` // The v1 wire key is retained; Task.ID is authoritative.
 	SourceFileID   string `json:"source_file_id"`
 	Profile        string `json:"profile"`
 	ProfileVersion string `json:"profile_version"`

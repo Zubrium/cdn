@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
-	"sort"
-	"strings"
 	"time"
 
 	corecoord "github.com/Zubrium/cdn/core/domain/coordination"
@@ -35,95 +33,9 @@ type WorkflowReceipt struct {
 	Created    bool
 }
 
-// WorkflowCatalog is an immutable set of component contracts validated
-// before Core starts accepting traffic.
-type WorkflowCatalog struct {
-	components map[string]map[string]struct{}
-}
-
-func NewWorkflowCatalog(descriptors []corecoord.ComponentDescriptor) (*WorkflowCatalog, error) {
-	if len(descriptors) == 0 {
-		return nil, ErrInvalid
-	}
-	components := make(map[string]map[string]struct{}, len(descriptors))
-	dependencies := make(map[string][]string, len(descriptors))
-	for _, descriptor := range descriptors {
-		if !componentIDPattern.MatchString(descriptor.ID) || descriptor.Version < 1 || descriptor.Version > 1<<16 ||
-			(descriptor.Kind != "engine" && descriptor.Kind != "worker" && descriptor.Kind != "entrypoint") {
-			return nil, ErrInvalid
-		}
-		if _, duplicate := components[descriptor.ID]; duplicate {
-			return nil, ErrDuplicate
-		}
-		operations := make(map[string]struct{}, len(descriptor.Operations))
-		for _, operation := range descriptor.Operations {
-			if !operationIDPattern.MatchString(operation.ID) || operation.ContractVersion < 1 || operation.ContractVersion > 1<<16 {
-				return nil, ErrInvalid
-			}
-			key := operation.ID + "\x00" + itoa(operation.ContractVersion)
-			if _, duplicate := operations[key]; duplicate {
-				return nil, ErrDuplicate
-			}
-			operations[key] = struct{}{}
-		}
-		components[descriptor.ID] = operations
-		dependencies[descriptor.ID] = append([]string(nil), descriptor.Dependencies...)
-	}
-	for id, required := range dependencies {
-		seen := make(map[string]struct{}, len(required))
-		for _, dependency := range required {
-			if _, exists := components[dependency]; !exists || dependency == id {
-				return nil, ErrInvalid
-			}
-			if _, duplicate := seen[dependency]; duplicate {
-				return nil, ErrDuplicate
-			}
-			seen[dependency] = struct{}{}
-		}
-	}
-	visiting, visited := map[string]bool{}, map[string]bool{}
-	var visit func(string) bool
-	visit = func(id string) bool {
-		if visiting[id] {
-			return false
-		}
-		if visited[id] {
-			return true
-		}
-		visiting[id] = true
-		for _, dependency := range dependencies[id] {
-			if !visit(dependency) {
-				return false
-			}
-		}
-		delete(visiting, id)
-		visited[id] = true
-		return true
-	}
-	for id := range components {
-		if !visit(id) {
-			return nil, ErrInvalid
-		}
-	}
-	return &WorkflowCatalog{components: components}, nil
-}
-
-func (c *WorkflowCatalog) Operations(componentID string) []string {
-	if c == nil {
-		return nil
-	}
-	operations := make([]string, 0)
-	for key := range c.components[componentID] {
-		operation, _, _ := strings.Cut(key, "\x00")
-		operations = append(operations, operation)
-	}
-	sort.Strings(operations)
-	return operations
-}
-
 type WorkflowClientConfig struct {
 	Store         WorkflowStore
-	Catalog       *WorkflowCatalog
+	Workers       *WorkerCatalog
 	OwnerEngineID string
 	InstanceID    uuid.UUID
 	ConfigEpoch   int64
@@ -135,7 +47,7 @@ type WorkflowClientConfig struct {
 // cannot submit work under another engine identity or an undeclared operation.
 type WorkflowClient struct {
 	store         WorkflowStore
-	catalog       *WorkflowCatalog
+	workers       *WorkerCatalog
 	ownerEngineID string
 	instanceID    uuid.UUID
 	configEpoch   int64
@@ -144,15 +56,15 @@ type WorkflowClient struct {
 }
 
 func NewWorkflowClient(config WorkflowClientConfig) (*WorkflowClient, error) {
-	if isNilInterface(config.Store) || config.Catalog == nil || !componentIDPattern.MatchString(config.OwnerEngineID) ||
+	if isNilInterface(config.Store) || config.Workers == nil || !componentIDPattern.MatchString(config.OwnerEngineID) ||
 		config.InstanceID == uuid.Nil || config.ConfigEpoch <= 0 || config.MaxAttempts < 1 || config.MaxAttempts > 100 ||
 		config.Retention <= 0 || config.Retention > 365*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	if _, exists := config.Catalog.components[config.OwnerEngineID]; !exists {
+	if !config.Workers.hasComponent(config.OwnerEngineID) {
 		return nil, ErrComponentUnavailable
 	}
-	return &WorkflowClient{store: config.Store, catalog: config.Catalog, ownerEngineID: config.OwnerEngineID,
+	return &WorkflowClient{store: config.Store, workers: config.Workers, ownerEngineID: config.OwnerEngineID,
 		instanceID: config.InstanceID, configEpoch: config.ConfigEpoch, maxAttempts: config.MaxAttempts,
 		retention: config.Retention}, nil
 }
@@ -166,7 +78,7 @@ func (c *WorkflowClient) Start(ctx context.Context, request WorkflowStartRequest
 	if err := ctx.Err(); err != nil {
 		return WorkflowReceipt{}, err
 	}
-	if _, exists := c.catalog.components[c.ownerEngineID][request.OperationID+"\x00"+itoa(request.ContractVersion)]; !exists {
+	if _, exists := c.workers.definition(c.ownerEngineID, request.OperationID, request.ContractVersion); !exists {
 		return WorkflowReceipt{}, ErrWorkflowOperationUnavailable
 	}
 	workflowID, err := uuid.NewRandom()
@@ -187,8 +99,9 @@ func (c *WorkflowClient) Start(ctx context.Context, request WorkflowStartRequest
 	workflow, created, err := c.store.StartWorkflow(ctx, corecoord.WorkflowRequest{
 		ID: workflowID, Owner: c.instanceID, OwnerEngineID: c.ownerEngineID, IdempotencyKey: request.IdempotencyKey,
 		InputHash: inputHash[:], ConfigEpoch: c.configEpoch, Retention: c.retention,
-		Root: corecoord.TaskRequest{ID: rootID, WorkflowID: workflowID, ComponentID: c.ownerEngineID,
-			OperationID: request.OperationID, ContractVersion: request.ContractVersion, Payload: append(json.RawMessage(nil), request.Payload...),
+		Root: corecoord.TaskRequest{ID: rootID, WorkflowID: workflowID, Kind: corecoord.TaskKindWorker,
+			Worker: &corecoord.WorkerRef{ComponentID: c.ownerEngineID, OperationID: request.OperationID,
+				ContractVersion: request.ContractVersion}, Payload: append(json.RawMessage(nil), request.Payload...),
 			MaxAttempts: c.maxAttempts},
 	})
 	if err != nil {

@@ -2,8 +2,9 @@ import type {
   ApiErrorDetail,
   ApiErrorPayload,
   AccessGroup,
-  CoordinatorJob,
-  CoordinatorJobPermissions,
+  CoordinatorWorkflowDetail,
+  CoordinatorWorkflowPermissions,
+  CoordinatorWorkflowSummary,
   CreatedPrincipal,
   Credential,
   GroupLevel,
@@ -1120,18 +1121,24 @@ export const api = {
   },
 
   coordinator: {
-    jobs: {
-      list(params: { type?: string; state?: string; limit?: number; before?: string }, signal?: AbortSignal) {
-        return requestList<CoordinatorJob>("/api/coordinator/jobs", {
+    workflows: {
+      list(params: { state?: string; limit?: number; before?: string }, signal?: AbortSignal) {
+        return requestList<CoordinatorWorkflowSummary>("/api/coordinator/workflows", {
           signal,
-          query: { type: params.type, state: params.state, limit: params.limit, before: params.before },
+          query: { state: params.state, limit: params.limit, before: params.before },
         });
       },
-      permissions(signal?: AbortSignal): Promise<CoordinatorJobPermissions> {
-        return request<CoordinatorJobPermissions>("/api/coordinator/jobs/permissions", { signal });
+      detail(id: string, params: { limit?: number; before?: string } = {}, signal?: AbortSignal): Promise<CoordinatorWorkflowDetail> {
+        return request<CoordinatorWorkflowDetail>(`/api/coordinator/workflows/${encoded(id)}`, {
+          signal,
+          query: { limit: params.limit, before: params.before },
+        });
       },
-      retry(id: string): Promise<void> {
-        return request<void>(`/api/coordinator/jobs/${encoded(id)}/retry`, { method: "POST" });
+      permissions(signal?: AbortSignal): Promise<CoordinatorWorkflowPermissions> {
+        return request<CoordinatorWorkflowPermissions>("/api/coordinator/workflows/permissions", { signal });
+      },
+      retryTask(workflowID: string, taskID: string): Promise<void> {
+        return request<void>(`/api/coordinator/workflows/${encoded(workflowID)}/tasks/${encoded(taskID)}/retry`, { method: "POST" });
       },
     },
   },

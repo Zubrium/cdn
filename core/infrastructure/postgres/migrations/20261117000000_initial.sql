@@ -181,9 +181,10 @@ CREATE INDEX workflows_expiry_idx ON coordination.workflows (expires_at) WHERE e
 CREATE TABLE coordination.tasks (
   task_id uuid PRIMARY KEY,
   workflow_id uuid NOT NULL REFERENCES coordination.workflows(workflow_id) ON DELETE CASCADE,
-  component_id text NOT NULL CHECK (component_id ~ '^[a-z][a-z0-9.-]{0,63}$'),
-  operation_id text NOT NULL CHECK (operation_id ~ '^[a-z][a-z0-9._/-]{0,127}$'),
-  contract_version integer NOT NULL CHECK (contract_version > 0),
+  task_kind text NOT NULL CHECK (task_kind IN ('worker', 'join')),
+  component_id text CHECK (component_id ~ '^[a-z][a-z0-9.-]{0,63}$'),
+  operation_id text CHECK (operation_id ~ '^[a-z][a-z0-9._/-]{0,127}$'),
+  contract_version integer CHECK (contract_version > 0),
   parent_task_id uuid,
   emission_key text CHECK (emission_key IS NULL OR length(emission_key) BETWEEN 1 AND 256),
   payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
@@ -201,6 +202,8 @@ CREATE TABLE coordination.tasks (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   UNIQUE (workflow_id, task_id),
   FOREIGN KEY (workflow_id, parent_task_id) REFERENCES coordination.tasks(workflow_id, task_id),
+  CHECK ((task_kind = 'worker' AND component_id IS NOT NULL AND operation_id IS NOT NULL AND contract_version IS NOT NULL)
+    OR (task_kind = 'join' AND component_id IS NULL AND operation_id IS NULL AND contract_version IS NULL)),
   CHECK ((parent_task_id IS NULL AND emission_key IS NULL) OR (parent_task_id IS NOT NULL AND emission_key IS NOT NULL)),
   CHECK ((state = 'running' AND lease_owner IS NOT NULL AND lease_until IS NOT NULL)
     OR (state <> 'running' AND lease_owner IS NULL AND lease_until IS NULL))
@@ -208,7 +211,7 @@ CREATE TABLE coordination.tasks (
 CREATE UNIQUE INDEX tasks_emission_idempotency_idx ON coordination.tasks (workflow_id, parent_task_id, emission_key)
   WHERE parent_task_id IS NOT NULL;
 CREATE INDEX tasks_claim_idx ON coordination.tasks (state, available_at, created_at)
-  WHERE state = 'queued';
+  WHERE state = 'queued' AND task_kind = 'worker';
 CREATE INDEX tasks_lease_idx ON coordination.tasks (lease_until) WHERE state = 'running';
 CREATE INDEX tasks_workflow_idx ON coordination.tasks (workflow_id, created_at, task_id);
 

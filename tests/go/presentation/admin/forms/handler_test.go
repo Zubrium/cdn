@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	engine "github.com/Zubrium/cdn/engines/forms/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
 
 type fakeFormsAPI struct {

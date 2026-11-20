@@ -6,8 +6,7 @@ package composition
 import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	loaderEngine "github.com/Zubrium/cdn/engines/loader/presentation"
-	_ "github.com/Zubrium/cdn/presentation/admin/coordinator"
-	_ "github.com/Zubrium/cdn/presentation/adminapi"
+	_ "github.com/Zubrium/cdn/presentation/admin/base/transport"
 	_ "github.com/Zubrium/cdn/presentation/fileapi"
 )
 

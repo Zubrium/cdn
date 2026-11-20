@@ -11,7 +11,7 @@ import (
 	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 	"github.com/google/uuid"
 )
 

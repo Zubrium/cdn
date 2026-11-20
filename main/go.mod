@@ -9,11 +9,10 @@ require (
 	github.com/Zubrium/cdn/engines/loader v0.0.0
 	github.com/Zubrium/cdn/engines/router v0.0.0
 	github.com/Zubrium/cdn/engines/website v0.0.0
+	github.com/Zubrium/cdn/presentation/admin/base v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/content v0.0.0
-	github.com/Zubrium/cdn/presentation/admin/coordinator v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0
-	github.com/Zubrium/cdn/presentation/adminapi v0.0.0
 	github.com/Zubrium/cdn/presentation/adminui v0.0.0
 	github.com/Zubrium/cdn/presentation/fileapi v0.0.0
 	github.com/Zubrium/cdn/presentation/router v0.0.0

@@ -32,7 +32,7 @@ const FeatureBuildRegistryPage = lazy(() => import("@/pages/site/FeatureBuildReg
 const SnapshotsPage = lazy(() => import("@/pages/site/SnapshotsPage"));
 const SiteWorkspace = lazy(() => import("@/pages/site/SiteWorkspace").then((module) => ({ default: module.SiteWorkspace })));
 const SiteMetadataPage = lazy(() => import("@/pages/content/SiteMetadataPage"));
-const CoordinatorJobsPage = lazy(() => import("@/pages/coordinator/CoordinatorJobsPage"));
+const CoordinatorWorkflowsPage = lazy(() => import("@/pages/coordinator/CoordinatorWorkflowsPage"));
 const RouterRoutesPage = lazy(() => import("@/pages/router/RouterRoutesPage"));
 
 function RequireAuth() {
@@ -144,7 +144,8 @@ export const router = createBrowserRouter(
             { path: "submissions/:submissionId", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
             { path: "forms", element: <RequireGroup group="forms_schemas"><FormsPage /></RequireGroup> },
             { path: "media", element: <RequireAnyGroup><MediaPage /></RequireAnyGroup> },
-            { path: "coordinator/jobs", element: <RequireGroup group="coordinator_jobs"><CoordinatorJobsPage /></RequireGroup> },
+            { path: "coordinator/workflows", element: <RequireGroup group="coordinator_jobs"><CoordinatorWorkflowsPage /></RequireGroup> },
+            { path: "coordinator/workflows/:workflowId", element: <RequireGroup group="coordinator_jobs"><CoordinatorWorkflowsPage /></RequireGroup> },
             { path: "router/routes", element: <RequireGroup group="router_routes"><RouterRoutesPage /></RequireGroup> },
             {
               element: <RequireGroup group="features" level={1} />,

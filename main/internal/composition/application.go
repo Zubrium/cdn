@@ -1,8 +1,6 @@
 package composition
 
 import (
-	"net"
-
 	platform "github.com/Zubrium/cdn/core/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 )
@@ -33,9 +31,9 @@ func (components *StartupComponents) InitialAdminSecret() string {
 	return components.core.secret
 }
 
-func (components *StartupComponents) HTTPAddress() net.Addr {
-	if components == nil || components.api == nil || components.api.listener == nil {
-		return nil
+func (components *StartupComponents) AdminAddress() string {
+	if components == nil || components.api == nil || components.api.server == nil {
+		return ""
 	}
-	return components.api.listener.Addr()
+	return components.api.server.Address()
 }

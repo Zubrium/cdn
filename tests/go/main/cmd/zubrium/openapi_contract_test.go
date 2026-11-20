@@ -106,9 +106,9 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 		name string
 		src  string
 	}{
-		{name: "admin-identity.yaml", src: "presentation/admin/main/handler.go"},
+		{name: "admin-identity.yaml", src: "presentation/admin/base/admin/main/handler.go"},
 		{name: "content.yaml", src: "presentation/admin/content/handler.go"},
-		{name: "coordinator.yaml", src: "presentation/admin/coordinator/handler.go"},
+		{name: "coordinator.yaml", src: "presentation/admin/base/admin/coordinator/handler.go"},
 		{name: "files.yaml", src: "presentation/admin/files/handler.go"},
 		{name: "forms.yaml", src: "presentation/admin/forms/handler.go"},
 		{name: "router.yaml", src: "presentation/router/handler.go"},

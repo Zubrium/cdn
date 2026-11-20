@@ -17,7 +17,7 @@ import (
 	routesapp "github.com/Zubrium/cdn/engines/router/features/routes/application"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
 	"github.com/google/uuid"
 )
 

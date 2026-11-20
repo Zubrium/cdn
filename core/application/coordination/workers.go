@@ -19,21 +19,20 @@ import (
 
 const MaxTaskResultBytes = 1 << 20
 
-var taskTypePattern = regexp.MustCompile(`^[a-z][a-z0-9._/-]{0,127}$`)
 var taskErrorCodePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,127}$`)
+var taskTypePattern = regexp.MustCompile(`^[a-z][a-z0-9._/-]{0,127}$`)
 
 var ErrCoordinatorLeaseLost = corecoord.ErrCoordinatorLeaseLost
-var ErrCoordinatorJobNotOwned = corecoord.ErrCoordinatorJobNotOwned
+var ErrTaskNotOwned = corecoord.ErrTaskNotOwned
 
 type TaskStore = corecoord.TaskRepository
 
-// CoreJob keeps the worker package decoupled from Core's persistence package.
-// The Core presentation facade maps the capability onto this DTO.
-type CoreJob = corecoord.CoordinatorJob
+// Task is the durable work unit passed to one statically registered Worker.
+type Task = corecoord.Task
 
-// TaskHandler must return when ctx is cancelled. WorkerPool cannot forcibly
+// WorkerHandler must return when ctx is cancelled. TaskExecutor cannot forcibly
 // stop an in-process goroutine; non-cooperative work requires process isolation.
-type TaskHandler func(context.Context, CoreJob) (corecoord.CoordinatorTaskOutcome, error)
+type WorkerHandler func(context.Context, Task) (corecoord.TaskOutcome, error)
 
 type TaskFailure struct {
 	Code      string
@@ -54,7 +53,7 @@ func NewTaskFailure(code string, retryable bool) *TaskFailure {
 	return &TaskFailure{Code: code, Retryable: retryable}
 }
 
-type WorkerConfig struct {
+type TaskExecutorConfig struct {
 	Owner              uuid.UUID
 	ConfigEpoch        int64
 	Concurrency        int
@@ -68,10 +67,10 @@ type WorkerConfig struct {
 	WorkflowRetention  time.Duration
 }
 
-type WorkerPool struct {
+type TaskExecutor struct {
 	store    TaskStore
-	cfg      WorkerConfig
-	handlers map[string]TaskHandler
+	cfg      TaskExecutorConfig
+	handlers map[string]WorkerHandler
 
 	mu      sync.Mutex
 	started bool
@@ -83,12 +82,12 @@ type WorkerPool struct {
 }
 
 var (
-	ErrWorkerAlreadyStarted = errors.New("coordinator worker pool already started")
-	ErrWorkerNotStarted     = errors.New("coordinator worker pool has not started")
-	ErrWorkerStore          = errors.New("coordinator worker could not persist task state")
+	ErrTaskExecutorAlreadyStarted = errors.New("task executor already started")
+	ErrTaskExecutorNotStarted     = errors.New("task executor has not started")
+	ErrTaskExecutorStore          = errors.New("task executor could not persist task state")
 )
 
-func NewWorkerPool(store TaskStore, cfg WorkerConfig, handlers map[string]TaskHandler) (*WorkerPool, error) {
+func NewTaskExecutor(store TaskStore, cfg TaskExecutorConfig, handlers map[string]WorkerHandler) (*TaskExecutor, error) {
 	if isNilInterface(store) || cfg.Owner == uuid.Nil || cfg.ConfigEpoch <= 0 || cfg.Concurrency < 1 || cfg.Concurrency > 256 ||
 		cfg.LeaseDuration < 3*time.Second || cfg.LeaseDuration > time.Hour || cfg.TaskTimeout <= 0 || cfg.TaskTimeout > 24*time.Hour || cfg.PollInterval <= 0 || cfg.PollInterval >= cfg.LeaseDuration ||
 		cfg.RetryBase <= 0 || cfg.RetryMaximum < cfg.RetryBase || cfg.RetryMaximum > 24*time.Hour ||
@@ -96,17 +95,17 @@ func NewWorkerPool(store TaskStore, cfg WorkerConfig, handlers map[string]TaskHa
 		cfg.WorkflowRetention <= 0 || cfg.WorkflowRetention > 365*24*time.Hour || len(handlers) == 0 {
 		return nil, ErrInvalid
 	}
-	copyHandlers := make(map[string]TaskHandler, len(handlers))
+	copyHandlers := make(map[string]WorkerHandler, len(handlers))
 	for dispatchKey, handler := range handlers {
-		if !validTaskHandlerKey(dispatchKey) || handler == nil {
+		if !validWorkerHandlerKey(dispatchKey) || handler == nil {
 			return nil, ErrInvalid
 		}
 		copyHandlers[dispatchKey] = handler
 	}
-	return &WorkerPool{store: store, cfg: cfg, handlers: copyHandlers, done: make(chan struct{}), errors: make(chan error, 1)}, nil
+	return &TaskExecutor{store: store, cfg: cfg, handlers: copyHandlers, done: make(chan struct{}), errors: make(chan error, 1)}, nil
 }
 
-func (p *WorkerPool) Start(ctx context.Context) error {
+func (p *TaskExecutor) Start(ctx context.Context) error {
 	if p == nil || ctx == nil {
 		return ErrInvalid
 	}
@@ -116,7 +115,7 @@ func (p *WorkerPool) Start(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.started {
-		return ErrWorkerAlreadyStarted
+		return ErrTaskExecutorAlreadyStarted
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
@@ -138,7 +137,7 @@ func (p *WorkerPool) Start(ctx context.Context) error {
 	return nil
 }
 
-func (p *WorkerPool) Errors() <-chan error {
+func (p *TaskExecutor) Errors() <-chan error {
 	if p == nil {
 		ch := make(chan error)
 		close(ch)
@@ -147,7 +146,7 @@ func (p *WorkerPool) Errors() <-chan error {
 	return p.errors
 }
 
-func (p *WorkerPool) Healthy() bool {
+func (p *TaskExecutor) Healthy() bool {
 	if p == nil || p.failed.Load() {
 		return false
 	}
@@ -156,7 +155,7 @@ func (p *WorkerPool) Healthy() bool {
 	return p.started && p.ctx != nil && p.ctx.Err() == nil
 }
 
-func (p *WorkerPool) Close(ctx context.Context) error {
+func (p *TaskExecutor) Close(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
@@ -166,7 +165,7 @@ func (p *WorkerPool) Close(ctx context.Context) error {
 	p.mu.Lock()
 	if !p.started {
 		p.mu.Unlock()
-		return ErrWorkerNotStarted
+		return ErrTaskExecutorNotStarted
 	}
 	p.cancel()
 	p.mu.Unlock()
@@ -178,9 +177,9 @@ func (p *WorkerPool) Close(ctx context.Context) error {
 	}
 }
 
-func (p *WorkerPool) run(ctx context.Context) {
+func (p *TaskExecutor) run(ctx context.Context) {
 	for ctx.Err() == nil {
-		jobs, err := p.store.Claim(ctx, p.cfg.Owner, p.cfg.ConfigEpoch, 1, p.cfg.LeaseDuration, p.cfg.WorkflowRetention)
+		tasks, err := p.store.Claim(ctx, p.cfg.Owner, p.cfg.ConfigEpoch, 1, p.cfg.LeaseDuration, p.cfg.WorkflowRetention)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -189,30 +188,34 @@ func (p *WorkerPool) run(ctx context.Context) {
 				p.report(ErrInstanceNotReady)
 				return
 			}
-			p.report(ErrWorkerStore)
+			p.report(ErrTaskExecutorStore)
 			return
 		}
-		if len(jobs) == 0 {
+		if len(tasks) == 0 {
 			if !waitContext(ctx, p.cfg.PollInterval) {
 				return
 			}
 			continue
 		}
-		p.execute(ctx, jobs[0])
+		p.execute(ctx, tasks[0])
 	}
 }
 
-func (p *WorkerPool) execute(ctx context.Context, job CoreJob) {
-	handler := p.handlers[taskHandlerKey(job.ComponentID, job.OperationID, job.ContractVersion)]
+func (p *TaskExecutor) execute(ctx context.Context, task Task) {
+	if task.Kind != corecoord.TaskKindWorker || task.Worker == nil {
+		p.fail(ctx, task, NewTaskFailure("invalid_task_kind", false))
+		return
+	}
+	handler := p.handlers[workerHandlerKey(task.Worker.ComponentID, task.Worker.OperationID, task.Worker.ContractVersion)]
 	if handler == nil {
-		p.fail(ctx, job, NewTaskFailure("handler_unavailable", false))
+		p.fail(ctx, task, NewTaskFailure("handler_unavailable", false))
 		return
 	}
 	taskCtx, cancelTask := context.WithTimeout(ctx, p.cfg.TaskTimeout)
 	heartbeatDone := make(chan struct{})
 	heartbeatFailure := make(chan error, 1)
-	go p.renewTaskLease(taskCtx, cancelTask, job, heartbeatDone, heartbeatFailure)
-	result, handlerErr := invokeTaskHandler(taskCtx, handler, job)
+	go p.renewTaskLease(taskCtx, cancelTask, task, heartbeatDone, heartbeatFailure)
+	result, handlerErr := invokeWorkerHandler(taskCtx, handler, task)
 	taskErr := taskCtx.Err()
 	cancelTask()
 	<-heartbeatDone
@@ -222,19 +225,19 @@ func (p *WorkerPool) execute(ctx context.Context, job CoreJob) {
 	default:
 	}
 	if errors.Is(taskErr, context.DeadlineExceeded) {
-		p.fail(ctx, job, NewTaskFailure("task_timeout", true))
+		p.fail(ctx, task, NewTaskFailure("task_timeout", true))
 		return
 	}
 	select {
 	case heartbeatErr := <-heartbeatFailure:
-		if errors.Is(heartbeatErr, ErrCoordinatorJobNotOwned) {
+		if errors.Is(heartbeatErr, ErrTaskNotOwned) {
 			return
 		}
 		if errors.Is(heartbeatErr, ErrCoordinatorLeaseLost) {
 			p.report(ErrInstanceNotReady)
 			return
 		}
-		p.report(ErrWorkerStore)
+		p.report(ErrTaskExecutorStore)
 		return
 	default:
 	}
@@ -244,43 +247,46 @@ func (p *WorkerPool) execute(ctx context.Context, job CoreJob) {
 		if errors.As(handlerErr, &typed) && typed != nil && taskErrorCodePattern.MatchString(typed.Code) {
 			failure = typed
 		}
-		p.fail(ctx, job, failure)
+		p.fail(ctx, task, failure)
 		return
 	}
 	if !validTaskOutcome(result, p.cfg.MaxChildrenPerTask) {
-		p.fail(ctx, job, NewTaskFailure("invalid_task_result", false))
+		p.fail(ctx, task, NewTaskFailure("invalid_task_result", false))
 		return
 	}
 	for _, child := range result.Children {
-		if p.handlers[taskHandlerKey(child.ComponentID, child.OperationID, child.ContractVersion)] == nil {
-			p.fail(ctx, job, NewTaskFailure("handler_unavailable", false))
+		if child.Kind == corecoord.TaskKindJoin {
+			continue
+		}
+		if child.Worker == nil || p.handlers[workerHandlerKey(child.Worker.ComponentID, child.Worker.OperationID, child.Worker.ContractVersion)] == nil {
+			p.fail(ctx, task, NewTaskFailure("handler_unavailable", false))
 			return
 		}
 	}
 	ackCtx, cancel := context.WithTimeout(ctx, min(p.cfg.LeaseDuration/4, 5*time.Second))
-	err := p.store.Complete(ackCtx, job.ID, job.LeaseOwner, job.ConfigEpoch, job.FencingToken,
+	err := p.store.Complete(ackCtx, task.ID, task.LeaseOwner, task.ConfigEpoch, task.FencingToken,
 		p.cfg.MaxWorkflowTasks, p.cfg.MaxChildrenPerTask, p.cfg.WorkflowRetention, result)
 	cancel()
 	if errors.Is(err, corecoord.ErrLimit) || errors.Is(err, corecoord.ErrInvalid) {
-		p.fail(ctx, job, NewTaskFailure("workflow_limit_exceeded", false))
+		p.fail(ctx, task, NewTaskFailure("workflow_limit_exceeded", false))
 		return
 	}
-	if err != nil && !errors.Is(err, ErrCoordinatorJobNotOwned) && ctx.Err() == nil {
-		p.report(ErrWorkerStore)
+	if err != nil && !errors.Is(err, ErrTaskNotOwned) && ctx.Err() == nil {
+		p.report(ErrTaskExecutorStore)
 	}
 }
 
-func invokeTaskHandler(ctx context.Context, handler TaskHandler, job CoreJob) (result corecoord.CoordinatorTaskOutcome, err error) {
+func invokeWorkerHandler(ctx context.Context, handler WorkerHandler, task Task) (result corecoord.TaskOutcome, err error) {
 	defer func() {
 		if recover() != nil {
-			result = corecoord.CoordinatorTaskOutcome{}
+			result = corecoord.TaskOutcome{}
 			err = NewTaskFailure("worker_panic", true)
 		}
 	}()
-	return handler(ctx, job)
+	return handler(ctx, task)
 }
 
-func (p *WorkerPool) renewTaskLease(ctx context.Context, cancel context.CancelFunc, job CoreJob, done chan<- struct{}, failures chan<- error) {
+func (p *TaskExecutor) renewTaskLease(ctx context.Context, cancel context.CancelFunc, task Task, done chan<- struct{}, failures chan<- error) {
 	defer close(done)
 	interval := p.cfg.LeaseDuration / 3
 	ticker := time.NewTicker(interval)
@@ -291,7 +297,7 @@ func (p *WorkerPool) renewTaskLease(ctx context.Context, cancel context.CancelFu
 			return
 		case <-ticker.C:
 			opCtx, stop := context.WithTimeout(ctx, max(time.Second, p.cfg.LeaseDuration/6))
-			err := p.store.Extend(opCtx, job.ID, job.LeaseOwner, job.ConfigEpoch, job.FencingToken, p.cfg.LeaseDuration)
+			err := p.store.Extend(opCtx, task.ID, task.LeaseOwner, task.ConfigEpoch, task.FencingToken, p.cfg.LeaseDuration)
 			stop()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -308,24 +314,24 @@ func (p *WorkerPool) renewTaskLease(ctx context.Context, cancel context.CancelFu
 	}
 }
 
-func (p *WorkerPool) fail(ctx context.Context, job CoreJob, failure *TaskFailure) {
+func (p *TaskExecutor) fail(ctx context.Context, task Task, failure *TaskFailure) {
 	if ctx.Err() != nil {
 		return
 	}
 	delay := time.Duration(0)
 	if failure.Retryable {
-		delay = retryDelay(p.cfg, job.ID, job.Attempts)
+		delay = retryDelay(p.cfg, task.ID, task.Attempts)
 	}
 	ackCtx, cancel := context.WithTimeout(ctx, min(p.cfg.LeaseDuration/4, 5*time.Second))
-	err := p.store.Fail(ackCtx, job.ID, job.LeaseOwner, job.ConfigEpoch, job.FencingToken,
+	err := p.store.Fail(ackCtx, task.ID, task.LeaseOwner, task.ConfigEpoch, task.FencingToken,
 		failure.Code, failure.Retryable, delay, p.cfg.WorkflowRetention)
 	cancel()
-	if err != nil && !errors.Is(err, ErrCoordinatorJobNotOwned) && ctx.Err() == nil {
-		p.report(ErrWorkerStore)
+	if err != nil && !errors.Is(err, ErrTaskNotOwned) && ctx.Err() == nil {
+		p.report(ErrTaskExecutorStore)
 	}
 }
 
-func retryDelay(cfg WorkerConfig, jobID uuid.UUID, attempt int) time.Duration {
+func retryDelay(cfg TaskExecutorConfig, taskID uuid.UUID, attempt int) time.Duration {
 	delay := cfg.RetryBase
 	for i := 1; i < attempt && delay < cfg.RetryMaximum; i++ {
 		if delay > cfg.RetryMaximum/2 {
@@ -337,7 +343,7 @@ func retryDelay(cfg WorkerConfig, jobID uuid.UUID, attempt int) time.Duration {
 	if delay > cfg.RetryMaximum {
 		delay = cfg.RetryMaximum
 	}
-	checksum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", jobID, attempt)))
+	checksum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", taskID, attempt)))
 	variation := int64(checksum[0])%401 - 200 // stable jitter in [-20%, +20%]
 	adjustment := time.Duration(math.Round(float64(delay) * float64(variation) / 1000))
 	delay += adjustment
@@ -347,7 +353,7 @@ func retryDelay(cfg WorkerConfig, jobID uuid.UUID, attempt int) time.Duration {
 	return min(delay, cfg.RetryMaximum)
 }
 
-func validTaskOutcome(outcome corecoord.CoordinatorTaskOutcome, maxChildren int) bool {
+func validTaskOutcome(outcome corecoord.TaskOutcome, maxChildren int) bool {
 	result := outcome.Result
 	if len(result) == 0 || len(result) > MaxTaskResultBytes || !utf8.Valid(result) || !json.Valid(result) {
 		return false
@@ -358,16 +364,58 @@ func validTaskOutcome(outcome corecoord.CoordinatorTaskOutcome, maxChildren int)
 	}
 	seen := make(map[string]struct{}, len(outcome.Children))
 	for _, child := range outcome.Children {
-		if !taskComponentPattern.MatchString(child.ComponentID) || !taskTypePattern.MatchString(child.OperationID) ||
-			child.ContractVersion < 1 || child.ContractVersion > 1<<16 || !validCoordinatorIdempotencyKey(child.EmissionKey) ||
-			!validTaskPayload(child.Payload) || child.MaxAttempts < 1 || child.MaxAttempts > 100 ||
-			len(child.DependsOn) > 256 || !validAvailableAt(child.AvailableAt) {
+		if !validCoordinatorIdempotencyKey(child.EmissionKey) || len(child.DependsOn) > 256 ||
+			len(child.DependsOnEmissions) > 256 || !validAvailableAt(child.AvailableAt) {
+			return false
+		}
+		switch child.Kind {
+		case corecoord.TaskKindWorker:
+			if child.Worker == nil || !taskComponentPattern.MatchString(child.Worker.ComponentID) || !taskTypePattern.MatchString(child.Worker.OperationID) ||
+				child.Worker.ContractVersion < 1 || child.Worker.ContractVersion > 1<<16 || !validTaskPayload(child.Payload) ||
+				child.MaxAttempts < 1 || child.MaxAttempts > 100 {
+				return false
+			}
+		case corecoord.TaskKindJoin:
+			if child.Worker != nil || len(child.DependsOn)+len(child.DependsOnEmissions) == 0 || child.MaxAttempts != 0 ||
+				!validTaskPayload(child.Payload) {
+				return false
+			}
+		default:
 			return false
 		}
 		if _, duplicate := seen[child.EmissionKey]; duplicate {
 			return false
 		}
 		seen[child.EmissionKey] = struct{}{}
+	}
+	emissionKeys := make(map[string]struct{}, len(outcome.Children))
+	for _, child := range outcome.Children {
+		emissionKeys[child.EmissionKey] = struct{}{}
+	}
+	for _, child := range outcome.Children {
+		seenDependencies := make(map[string]struct{}, len(child.DependsOnEmissions))
+		for _, key := range child.DependsOnEmissions {
+			if !validCoordinatorIdempotencyKey(key) || key == child.EmissionKey {
+				return false
+			}
+			if _, duplicate := seenDependencies[key]; duplicate {
+				return false
+			}
+			if _, emitted := emissionKeys[key]; !emitted {
+				return false
+			}
+			seenDependencies[key] = struct{}{}
+		}
+		seenIDs := make(map[uuid.UUID]struct{}, len(child.DependsOn))
+		for _, id := range child.DependsOn {
+			if id == uuid.Nil {
+				return false
+			}
+			if _, duplicate := seenIDs[id]; duplicate {
+				return false
+			}
+			seenIDs[id] = struct{}{}
+		}
 	}
 	return true
 }
@@ -397,7 +445,7 @@ func waitContext(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-func (p *WorkerPool) report(err error) {
+func (p *TaskExecutor) report(err error) {
 	if p == nil || err == nil {
 		return
 	}

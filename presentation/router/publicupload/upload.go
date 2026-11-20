@@ -24,7 +24,7 @@ import (
 	forms "github.com/Zubrium/cdn/engines/forms/presentation"
 	loader "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
 	"github.com/Zubrium/cdn/presentation/router/publicforms"
 	"github.com/google/uuid"
 )

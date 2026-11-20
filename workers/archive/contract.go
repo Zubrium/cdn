@@ -11,7 +11,7 @@ import (
 const (
 	DataModuleID       = "worker.archive"
 	DataNamespace      = "imports"
-	DataScopeType      = "job"
+	DataScopeType      = "task"
 	DataPayloadVersion = 2
 	OperationID        = "feature-import"
 )
@@ -37,7 +37,7 @@ func DataDescriptor() core.ModuleDataDescriptor {
 // Request contains opaque Core identifiers prepared by trusted composition.
 // It never accepts access groups, filenames, or storage paths from visitors.
 type Request struct {
-	JobID        string `json:"job_id"`
+	TaskID       string `json:"job_id"` // The v1 wire key is retained; Task.ID is authoritative.
 	SourceFileID string `json:"source_file_id"`
 }
 

@@ -1,50 +1,81 @@
 openapi: 3.1.0
 info:
   title: Zubrium Coordinator Admin API
-  version: 2.0.0
+  version: 3.0.0
   description: >-
-    Read and manually retry durable workflow jobs. Authorization is rechecked
-    against the configured static Coordinator group on every request.
+    Read durable workflows and their task graphs, and retry an eligible failed
+    worker task. Authorization is rechecked against the configured static
+    Coordinator access group on every request.
 servers: [{ url: / }]
 security:
   - AdminSession: []
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
 paths:
-  /api/coordinator/jobs:
+  /api/coordinator/workflows:
     get:
-      operationId: listCoordinatorJobs
+      operationId: listCoordinatorWorkflows
       parameters:
-        - { name: type, in: query, schema: { type: string, maxLength: 128 } }
         - { name: state, in: query, schema: { type: string, enum: [queued, running, succeeded, failed, cancelled] } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: before, in: query, schema: { type: string, maxLength: 256 } }
       responses:
         '200':
-          description: Job summaries; internal task payloads and sensitive results are omitted.
-          content: { application/json: { schema: { $ref: '#/components/schemas/JobPage' } } }
+          description: Safe workflow summaries without payloads, results, or internal diagnostics.
+          content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowPage' } } }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-  /api/coordinator/jobs/permissions:
+  /api/coordinator/workflows/permissions:
     get:
-      operationId: getCoordinatorJobPermissions
+      operationId: getCoordinatorWorkflowPermissions
       responses:
-        '200': { description: Current group-derived controls., content: { application/json: { schema: { type: object, required: [can_retry], properties: { can_retry: { type: boolean } } } } } }
+        '200':
+          description: Current group-derived task retry capability.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [can_retry_tasks]
+                properties:
+                  can_retry_tasks: { type: boolean }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
-  /api/coordinator/jobs/{jobID}/retry:
+  /api/coordinator/workflows/{workflowID}:
+    get:
+      operationId: getCoordinatorWorkflow
+      parameters:
+        - name: workflowID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: before, in: query, schema: { type: string, maxLength: 256 } }
+      responses:
+        '200':
+          description: Workflow metadata and a paged task graph without payloads or results.
+          content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowDetail' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/coordinator/workflows/{workflowID}/tasks/{taskID}/retry:
     post:
-      operationId: retryCoordinatorJob
+      operationId: retryCoordinatorTask
       x-csrf-required-for-cookie-auth: true
       parameters:
-        - name: jobID
+        - name: workflowID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: taskID
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '204': { description: Job was placed in the retry queue. Caller needs level 2 in the configured Coordinator group. }
+        '204': { description: Failed worker task was placed in the workflow retry queue. Requires level 2 in the configured Coordinator access group. }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
@@ -56,19 +87,56 @@ components:
     AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
     BearerCredential: { type: http, scheme: bearer }
   schemas:
-    JobPage:
+    WorkflowPage:
       type: object
       required: [items]
       properties:
-        items: { type: array, items: { $ref: '#/components/schemas/Job' } }
+        items: { type: array, items: { $ref: '#/components/schemas/WorkflowSummary' } }
         next_cursor: { type: string }
-    Job:
+    WorkflowSummary:
       type: object
-      required: [id, type, state, attempts, max_attempts, available_at, created_at, updated_at]
+      required: [id, owner_engine_id, state, task_count, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
-        type: { type: string }
-        state: { type: string }
+        owner_engine_id: { type: string }
+        state: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        task_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorkflowDetail:
+      type: object
+      required: [workflow, tasks]
+      properties:
+        workflow: { $ref: '#/components/schemas/Workflow' }
+        tasks: { $ref: '#/components/schemas/TaskPage' }
+    Workflow:
+      type: object
+      required: [id, owner_engine_id, state, root_task_id, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        owner_engine_id: { type: string }
+        state: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        root_task_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TaskPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        next_cursor: { type: string }
+    Task:
+      type: object
+      required: [id, workflow_id, kind, depends_on, state, attempts, max_attempts, available_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        workflow_id: { type: string, format: uuid }
+        kind: { type: string, enum: [worker, join] }
+        worker: { $ref: '#/components/schemas/WorkerReference', description: Present only when kind is worker. Join tasks have no WorkerRef. }
+        parent_task_id: { type: string, format: uuid }
+        depends_on: { type: array, items: { type: string, format: uuid } }
+        emission_key: { type: string }
+        state: { type: string, enum: [queued, running, succeeded, failed, cancelled, skipped] }
         attempts: { type: integer, minimum: 0 }
         max_attempts: { type: integer, minimum: 1 }
         available_at: { type: string, format: date-time }
@@ -76,6 +144,13 @@ components:
         error_code: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    WorkerReference:
+      type: object
+      required: [component_id, operation_id, contract_version]
+      properties:
+        component_id: { type: string }
+        operation_id: { type: string }
+        contract_version: { type: integer, minimum: 1 }
     Error:
       type: object
       required: [error]

@@ -45,7 +45,7 @@ func (r *FFmpegRunner) Run(ctx context.Context, preset Preset, source io.Reader)
 		!safeOutputFormat(preset.OutputFormat) || !formatMatchesContentType(preset.OutputFormat, preset.OutputContentType) || len(preset.FFmpegArgs) == 0 {
 		return ProcessedOutput{}, ErrInvalidPreset
 	}
-	workdir, err := os.MkdirTemp(r.tempRoot, "media-job-")
+	workdir, err := os.MkdirTemp(r.tempRoot, "media-task-")
 	if err != nil {
 		return ProcessedOutput{}, ErrRunnerFailed
 	}

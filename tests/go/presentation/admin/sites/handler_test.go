@@ -11,43 +11,43 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
 
 type fakeWebsite struct {
 	website.API
-	authenticated       bool
-	snapshotSiteID      string
-	snapshotPageID      string
-	snapshotCursor      string
-	snapshotLimit       int
-	getSnapshotID       string
-	getSnapshotCalls    int
-	createSnapshotCalls int
-	createSnapshotInput website.CreateSnapshotRequest
-	modelSiteID         string
-	modelSaveRequest    website.SaveSiteModelRequest
-	modelGetCalls       int
-	modelSaveCalls      int
-	projectionSiteID    string
-	projectionPageID    string
+	authenticated        bool
+	snapshotSiteID       string
+	snapshotPageID       string
+	snapshotCursor       string
+	snapshotLimit        int
+	getSnapshotID        string
+	getSnapshotCalls     int
+	createSnapshotCalls  int
+	createSnapshotInput  website.CreateSnapshotRequest
+	modelSiteID          string
+	modelSaveRequest     website.SaveSiteModelRequest
+	modelGetCalls        int
+	modelSaveCalls       int
+	projectionSiteID     string
+	projectionPageID     string
 	projectionSnapshotID string
-	projectionCalls     int
-	deleteSnapshotCalls int
-	deleteSnapshotInput website.DeleteSnapshotRequest
-	beginCalls          int
-	input               website.ImportFeatureRequest
-	job                 website.FeatureImport
-	versionCalls        int
-	versionID           string
-	versionCursor       string
-	versionLimit        int
-	catalogCalls        int
-	catalogCursor       string
-	catalogLimit        int
-	configuredSiteCalls int
-	buildCalls          int
-	buildInput          website.BuildSnapshotRequest
+	projectionCalls      int
+	deleteSnapshotCalls  int
+	deleteSnapshotInput  website.DeleteSnapshotRequest
+	beginCalls           int
+	input                website.ImportFeatureRequest
+	job                  website.FeatureImport
+	versionCalls         int
+	versionID            string
+	versionCursor        string
+	versionLimit         int
+	catalogCalls         int
+	catalogCursor        string
+	catalogLimit         int
+	configuredSiteCalls  int
+	buildCalls           int
+	buildInput           website.BuildSnapshotRequest
 	mediaCalls           int
 	mediaInput           website.CreateDerivativeRequest
 	pageList             website.PagePage

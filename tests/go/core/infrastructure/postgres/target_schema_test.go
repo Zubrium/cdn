@@ -170,7 +170,7 @@ func TestFreshMigrationDefinesBoundedContextSchemas(t *testing.T) {
 		"coordination.runtime":      {"singleton", "fingerprint", "epoch"},
 		"coordination.instances":    {"instance_id", "config_epoch", "lease_until"},
 		"coordination.workflows":    {"workflow_id", "root_task_id", "owner_engine_id", "idempotency_key", "input_hash", "state", "result"},
-		"coordination.tasks":        {"task_id", "workflow_id", "component_id", "operation_id", "payload", "result", "state", "fencing_token"},
+		"coordination.tasks":        {"task_id", "workflow_id", "task_kind", "component_id", "operation_id", "contract_version", "payload", "result", "state", "fencing_token"},
 		"coordination.dependencies": {"workflow_id", "task_id", "depends_on"},
 	} {
 		definition := tableDefinition(t, schema, table)

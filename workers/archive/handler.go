@@ -86,36 +86,38 @@ func NewHandler(files CoreFiles, session core.Session, config Config) (*Handler,
 		targetFileSetID: config.TargetFileSetID, outputGroups: groups}, nil
 }
 
-// TaskHandler adapts one registered Coordinator task to the Archive operation.
-func (h *Handler) TaskHandler(ctx context.Context, job core.CoreJob) (core.CoordinatorTaskOutcome, error) {
-	if h == nil || job.ComponentID != DataModuleID || job.OperationID != OperationID || job.ContractVersion != 1 || len(job.Payload) == 0 || len(job.Payload) > 16<<10 {
-		return core.CoordinatorTaskOutcome{}, errors.New("invalid archive task")
+// WorkerHandler adapts one registered Coordinator task to the Archive operation.
+func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
+	if h == nil || task.Kind != core.TaskKindWorker || task.Worker == nil || task.Worker.ComponentID != DataModuleID ||
+		task.Worker.OperationID != OperationID || task.Worker.ContractVersion != 1 || len(task.Payload) == 0 || len(task.Payload) > 16<<10 {
+		return core.TaskOutcome{}, errors.New("invalid archive task")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(job.Payload))
+	decoder := json.NewDecoder(bytes.NewReader(task.Payload))
 	decoder.DisallowUnknownFields()
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return core.CoordinatorTaskOutcome{}, errors.New("invalid archive task")
+		return core.TaskOutcome{}, errors.New("invalid archive task")
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || request.JobID != job.ID.String() {
-		return core.CoordinatorTaskOutcome{}, errors.New("invalid archive task")
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || (request.TaskID != "" && request.TaskID != task.ID.String()) {
+		return core.TaskOutcome{}, errors.New("invalid archive task")
 	}
+	request.TaskID = task.ID.String()
 	result, err := h.Import(ctx, request)
 	if err != nil {
-		return core.CoordinatorTaskOutcome{}, err
+		return core.TaskOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.CoordinatorTaskOutcome{}, errors.New("archive result exceeds limit")
+		return core.TaskOutcome{}, errors.New("archive result exceeds limit")
 	}
-	return core.CoordinatorTaskOutcome{Result: encoded}, nil
+	return core.TaskOutcome{Result: encoded}, nil
 }
 
 // Import spools the source with a strict byte bound, fully verifies all entries
 // and the manifest, then persists progress around idempotent Core writes.
 func (h *Handler) Import(ctx context.Context, request Request) (Result, error) {
-	if h == nil || h.files == nil || ctx == nil || strings.TrimSpace(request.JobID) == "" || strings.TrimSpace(request.SourceFileID) == "" {
+	if h == nil || h.files == nil || ctx == nil || strings.TrimSpace(request.TaskID) == "" || strings.TrimSpace(request.SourceFileID) == "" {
 		return Result{}, errors.New("invalid archive import request")
 	}
 	if err := ctx.Err(); err != nil {
@@ -195,7 +197,7 @@ type importProgress struct {
 }
 
 func (h *Handler) progressKey(request Request) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: request.JobID, RecordKey: "archive"}
+	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: request.TaskID, RecordKey: "archive"}
 }
 
 func (h *Handler) loadProgress(ctx context.Context, request Request) (importProgress, int64, error) {
@@ -276,9 +278,9 @@ func (h *Handler) importEntries(ctx context.Context, request Request, source cor
 			if err != nil {
 				return Result{}, errors.New("open verified output entry")
 			}
-			requestKey, _ := FileRequestKey(request.JobID, request.SourceFileID, item.Path)
+			requestKey, _ := FileRequestKey(request.TaskID, request.SourceFileID, item.Path)
 			id, writeErr := h.files.CreateFileVerified(ctx, h.session, requestKey, source.Groups,
-				map[string]string{"archive_job_id": request.JobID, "archive_source_id": request.SourceFileID, "archive_path": item.Path},
+				map[string]string{"archive_job_id": request.TaskID, "archive_source_id": request.SourceFileID, "archive_path": item.Path},
 				"application/octet-stream", item.Size, item.SHA256,
 				&contextReader{ctx: ctx, reader: reader})
 			closeErr := reader.Close()
@@ -296,7 +298,7 @@ func (h *Handler) importEntries(ctx context.Context, request Request, source cor
 			}
 		}
 	}
-	ids, err := h.verifyOutputs(ctx, request, state.EntryIDs, verifiedPaths)
+	_, err = h.verifyOutputs(ctx, request, state.EntryIDs, verifiedPaths)
 	if err != nil {
 		return Result{}, err
 	}
@@ -325,7 +327,7 @@ func (h *Handler) verifyOutputs(ctx context.Context, request Request, entryIDs m
 		}
 		file, err := h.files.StatFile(ctx, h.session, entryIDs[archivePath])
 		if err != nil || file.ID != entryIDs[archivePath] || file.Size != want.Size || !strings.EqualFold(file.SHA256, want.SHA256) ||
-			file.Metadata["archive_job_id"] != request.JobID || file.Metadata["archive_source_id"] != request.SourceFileID || file.Metadata["archive_path"] != archivePath {
+			file.Metadata["archive_job_id"] != request.TaskID || file.Metadata["archive_source_id"] != request.SourceFileID || file.Metadata["archive_path"] != archivePath {
 			return nil, errors.New("archive output verification failed")
 		}
 		if err := h.ensureMembership(ctx, file.ID); err != nil {
@@ -374,7 +376,7 @@ func (h *Handler) reconcileSavedOutputs(ctx context.Context, request Request, en
 		}
 		file, err := h.files.StatFile(ctx, h.session, entryIDs[p])
 		if err != nil || file.ID != entryIDs[p] || file.Size != want.Size || !strings.EqualFold(file.SHA256, want.SHA256) ||
-			file.Metadata["archive_job_id"] != request.JobID || file.Metadata["archive_source_id"] != request.SourceFileID || file.Metadata["archive_path"] != p {
+			file.Metadata["archive_job_id"] != request.TaskID || file.Metadata["archive_source_id"] != request.SourceFileID || file.Metadata["archive_path"] != p {
 			return nil, errors.New("saved archive output is no longer verifiable")
 		}
 		if err := h.ensureMembership(ctx, file.ID); err != nil {
@@ -673,13 +675,13 @@ func consumeJSONValue(decoder *json.Decoder) error {
 	return nil
 }
 
-// FileRequestKey returns a deterministic UUIDv5 request key for a job, source
+// FileRequestKey returns a deterministic UUIDv5 request key for a task, source
 // archive and normalized entry path.
-func FileRequestKey(jobID, sourceFileID, entryPath string) (string, error) {
-	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(sourceFileID) == "" || !validPath(entryPath) {
+func FileRequestKey(taskID, sourceFileID, entryPath string) (string, error) {
+	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(sourceFileID) == "" || !validPath(entryPath) {
 		return "", errors.New("invalid archive request key input")
 	}
-	name := []byte("archive-file/v1\x00" + jobID + "\x00" + sourceFileID + "\x00" + entryPath)
+	name := []byte("archive-file/v1\x00" + taskID + "\x00" + sourceFileID + "\x00" + entryPath)
 	hash := sha1.New()
 	_, _ = hash.Write(requestKeyNamespace[:])
 	_, _ = hash.Write(name)

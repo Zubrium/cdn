@@ -19,7 +19,7 @@ export default function DashboardPage() {
     ...(canManageSchema(principal) ? [{ title: "Сайт", description: "Снапшоты и фичи", href: "/site/pages", icon: Layers }] : []),
     ...(hasGroupAccess(principal, "router_routes") ? [{ title: "Маршруты", description: "Публичная выдача и загрузка", href: "/router/routes", icon: Workflow }] : []),
     ...(canManageAccess(principal) ? [{ title: "Доступы", description: "Пользователи и права групп", href: "/access/users", icon: LockKeyhole }] : []),
-    ...(hasGroupAccess(principal, "coordinator_jobs") ? [{ title: "Задания", description: "Очередь автоматизации", href: "/coordinator/jobs", icon: Workflow }] : []),
+    ...(hasGroupAccess(principal, "coordinator_jobs") ? [{ title: "Workflows", description: "Графы задач автоматизации", href: "/coordinator/workflows", icon: Workflow }] : []),
   ];
 
   return (

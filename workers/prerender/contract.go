@@ -20,7 +20,7 @@ const (
 )
 
 type Request struct {
-	JobID          string `json:"job_id"`
+	TaskID         string `json:"job_id"` // The v1 wire key is retained; Task.ID is authoritative.
 	IdempotencyKey string `json:"idempotency_key"`
 	Plan           []byte `json:"plan"`
 	PlanDigest     string `json:"plan_digest"`

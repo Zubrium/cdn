@@ -12,8 +12,8 @@ type Descriptor struct{}
 
 func (Descriptor) Operations() []coordination.Operation {
 	return []coordination.Operation{
-		{Name: "coordinator.job.read", Action: access.Read, ResourceType: "coordinator-job"},
-		{Name: "coordinator.job.retry", Action: access.Manage, ResourceType: "coordinator-job"},
+		{Name: "coordinator.workflow.read", Action: access.Read, ResourceType: "coordinator-workflow"},
+		{Name: "coordinator.task.retry", Action: access.Manage, ResourceType: "coordinator-task"},
 	}
 }
 

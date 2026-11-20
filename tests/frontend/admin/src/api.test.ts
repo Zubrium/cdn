@@ -208,7 +208,7 @@ describe("identity and browser session API", () => {
   });
 });
 
-describe("Coordinator jobs API", () => {
+describe("Coordinator workflows API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function stubBrowser(fetchMock: ReturnType<typeof vi.fn>) {
@@ -219,7 +219,7 @@ describe("Coordinator jobs API", () => {
     vi.stubGlobal("fetch", fetchMock);
   }
 
-  it("sends filters and the opaque continuation cursor", async () => {
+  it("lists workflows with state filter and an opaque continuation cursor", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       items: [],
       next_cursor: "opaque-cursor",
@@ -229,8 +229,7 @@ describe("Coordinator jobs API", () => {
     }));
     stubBrowser(fetchMock);
 
-    const page = await api.coordinator.jobs.list({
-      type: "archive.inspect/v1",
+    const page = await api.coordinator.workflows.list({
       state: "failed",
       limit: 50,
       before: "cursor+with/special=chars",
@@ -238,8 +237,8 @@ describe("Coordinator jobs API", () => {
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
-    expect(url.pathname).toBe("/api/coordinator/jobs");
-    expect(url.searchParams.get("type")).toBe("archive.inspect/v1");
+    expect(url.pathname).toBe("/api/coordinator/workflows");
+    expect(url.searchParams.has("type")).toBe(false);
     expect(url.searchParams.get("state")).toBe("failed");
     expect(url.searchParams.get("limit")).toBe("50");
     expect(url.searchParams.get("before")).toBe("cursor+with/special=chars");
@@ -248,27 +247,50 @@ describe("Coordinator jobs API", () => {
     expect(page.next_cursor).toBe("opaque-cursor");
   });
 
-  it("reads retry permission and retries only through the explicit endpoint", async () => {
+  it("reads task retry permission and retries one task inside its workflow", async () => {
     const fetchMock = vi.fn()
-      .mockImplementationOnce(async () => new Response(JSON.stringify({ can_retry: false }), {
+      .mockImplementationOnce(async () => new Response(JSON.stringify({ can_retry_tasks: false }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
     stubBrowser(fetchMock);
 
-    await expect(api.coordinator.jobs.permissions()).resolves.toEqual({ can_retry: false });
-    await expect(api.coordinator.jobs.retry("job/id with space")).resolves.toBeUndefined();
+    await expect(api.coordinator.workflows.permissions()).resolves.toEqual({ can_retry_tasks: false });
+    await expect(api.coordinator.workflows.retryTask("workflow/id with space", "task/id with space")).resolves.toBeUndefined();
 
     const [permissionsInput, permissionsInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const [retryInput, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(permissionsInput).toBe("/api/coordinator/jobs/permissions");
+    expect(permissionsInput).toBe("/api/coordinator/workflows/permissions");
     expect(new Headers(permissionsInit.headers).get("Authorization")).toBeNull();
     expect(permissionsInit.credentials).toBe("same-origin");
-    expect(retryInput).toBe("/api/coordinator/jobs/job%2Fid%20with%20space/retry");
+    expect(retryInput).toBe("/api/coordinator/workflows/workflow%2Fid%20with%20space/tasks/task%2Fid%20with%20space/retry");
     expect(retryInit.method).toBe("POST");
     expect(retryInit.credentials).toBe("same-origin");
     expect(retryInit.body).toBeUndefined();
+  });
+
+  it("loads a workflow's paged task graph by ID", async () => {
+    const workflow = {
+      workflow: {
+        id: "workflow-1", owner_engine_id: "engine.example", state: "running",
+        root_task_id: "task-root", created_at: "2026-11-17T10:30:00Z", updated_at: "2026-11-17T10:35:00Z",
+      },
+      tasks: { items: [{ id: "task-root", workflow_id: "workflow-1", kind: "worker", state: "succeeded", depends_on: [] }] },
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(workflow), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    stubBrowser(fetchMock);
+
+    await expect(api.coordinator.workflows.detail("workflow/id", { limit: 100, before: "opaque" })).resolves.toEqual(workflow);
+    const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const url = new URL(input, "http://localhost");
+    expect(url.pathname).toBe("/api/coordinator/workflows/workflow%2Fid");
+    expect(url.searchParams.get("limit")).toBe("100");
+    expect(url.searchParams.get("before")).toBe("opaque");
+    expect(init.credentials).toBe("same-origin");
   });
 });
 

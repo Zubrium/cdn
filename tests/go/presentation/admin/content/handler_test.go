@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	engine "github.com/Zubrium/cdn/engines/content/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
 
 type fakeContentAPI struct {
@@ -98,7 +98,9 @@ func (fakeSchemaSnapshots) GetContentProjections(_ context.Context, pageSnapshot
 }
 
 func (f *fakeContentAPI) GetContentProjections(ctx context.Context, pageSnapshotID string) (engine.Projections, error) {
-	if f.schemaErr != nil { return engine.Projections{}, f.schemaErr }
+	if f.schemaErr != nil {
+		return engine.Projections{}, f.schemaErr
+	}
 	return (fakeSchemaSnapshots{}).GetContentProjections(ctx, pageSnapshotID)
 }
 

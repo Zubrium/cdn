@@ -53,7 +53,7 @@ func TestRegistryRejectsAmbiguousOrUnsafePresets(t *testing.T) {
 
 func TestRequestAndSourceAllowlist(t *testing.T) {
 	registry := testRegistry(t)
-	request := Request{JobID: "job-1", SourceFileID: "file-1", Profile: "image-web", ProfileVersion: "2.1.0", IdempotencyKey: "request-1"}
+	request := Request{TaskID: "task-1", SourceFileID: "file-1", Profile: "image-web", ProfileVersion: "2.1.0", IdempotencyKey: "request-1"}
 	preset, err := registry.ValidateRequest(request)
 	if err != nil {
 		t.Fatal(err)

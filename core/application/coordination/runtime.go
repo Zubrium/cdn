@@ -34,9 +34,9 @@ type RuntimeComponent struct {
 }
 
 type RuntimeRegistry struct {
-	mu           sync.RWMutex
-	components   map[string]RuntimeComponent
-	taskHandlers map[string]map[string]TaskHandler
+	mu             sync.RWMutex
+	components     map[string]RuntimeComponent
+	workerHandlers map[string]map[string]WorkerHandler
 }
 
 func NewRuntimeRegistry() *RuntimeRegistry {
@@ -60,45 +60,45 @@ func (r *RuntimeRegistry) Register(component RuntimeComponent) error {
 	return nil
 }
 
-// RegisterTaskHandlers installs statically compiled operation handlers for a
+// RegisterWorkerHandlers installs statically compiled operation handlers for a
 // generic component. The selected composition is validated before startup.
-func (r *RuntimeRegistry) RegisterTaskHandlers(componentID string, handlers map[string]TaskHandler) error {
+func (r *RuntimeRegistry) RegisterWorkerHandlers(componentID string, handlers map[string]WorkerHandler) error {
 	if r == nil || !componentIDPattern.MatchString(componentID) || len(handlers) == 0 {
 		return ErrInvalid
 	}
-	copyHandlers := make(map[string]TaskHandler, len(handlers))
+	copyHandlers := make(map[string]WorkerHandler, len(handlers))
 	for operationType, handler := range handlers {
-		if _, _, valid := parseRegisteredTaskType(operationType); !valid || handler == nil {
+		if _, _, valid := parseRegisteredWorkerType(operationType); !valid || handler == nil {
 			return ErrInvalid
 		}
 		copyHandlers[operationType] = handler
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.taskHandlers == nil {
-		r.taskHandlers = make(map[string]map[string]TaskHandler)
+	if r.workerHandlers == nil {
+		r.workerHandlers = make(map[string]map[string]WorkerHandler)
 	}
-	if _, exists := r.taskHandlers[componentID]; exists {
+	if _, exists := r.workerHandlers[componentID]; exists {
 		return ErrDuplicate
 	}
-	r.taskHandlers[componentID] = copyHandlers
+	r.workerHandlers[componentID] = copyHandlers
 	return nil
 }
 
-// CompileTaskCatalog exposes a defensive immutable view of the handlers that
+// CompileWorkerCatalog exposes a defensive immutable view of the handlers that
 // match a selected profile. Composition uses the same method before startup so
 // missing handlers fail before Core or any listener has side effects.
-func (r *RuntimeRegistry) CompileTaskCatalog(plan BuildPlan) (*TaskCatalog, error) {
+func (r *RuntimeRegistry) CompileWorkerCatalog(plan BuildPlan) (*WorkerCatalog, error) {
 	if r == nil {
 		return nil, ErrInvalid
 	}
 	r.mu.RLock()
-	providers := make([]ComponentTaskSet, 0, len(r.taskHandlers))
-	for componentID, handlers := range r.taskHandlers {
-		providers = append(providers, ComponentTaskSet{ComponentID: componentID, Handlers: handlers})
+	providers := make([]ComponentWorkerSet, 0, len(r.workerHandlers))
+	for componentID, handlers := range r.workerHandlers {
+		providers = append(providers, ComponentWorkerSet{ComponentID: componentID, Handlers: handlers})
 	}
 	r.mu.RUnlock()
-	return BuildTaskCatalog(plan, providers)
+	return BuildWorkerCatalog(plan, providers)
 }
 
 func (r *RuntimeRegistry) lookup(id string) (RuntimeComponent, bool) {
@@ -130,7 +130,7 @@ type Runtime struct {
 	monitorCancel   context.CancelFunc
 	monitorWG       sync.WaitGroup
 	failures        chan error
-	catalog         *TaskCatalog
+	catalog         *WorkerCatalog
 }
 
 func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shutdownTimeout time.Duration) (*Runtime, error) {
@@ -166,7 +166,7 @@ func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shu
 		}
 		seen[id] = true
 	}
-	catalog, err := registry.CompileTaskCatalog(plan)
+	catalog, err := registry.CompileWorkerCatalog(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -288,9 +288,9 @@ func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shu
 	return runtime, nil
 }
 
-// TaskCatalog returns the immutable handler set compiled into this runtime.
+// WorkerCatalog returns the immutable handler set compiled into this runtime.
 // A composition without task handlers has no task catalog.
-func (r *Runtime) TaskCatalog() *TaskCatalog {
+func (r *Runtime) WorkerCatalog() *WorkerCatalog {
 	if r == nil {
 		return nil
 	}

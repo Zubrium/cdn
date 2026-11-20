@@ -23,7 +23,7 @@ var (
 )
 
 // Preset is trusted startup configuration. A preset version is immutable once
-// jobs refer to it; runtime callers can only select the exact name and version.
+// tasks refer to it; runtime callers can only select the exact name and version.
 type Preset struct {
 	Name              string        `json:"name"`
 	Version           string        `json:"version"`
@@ -110,7 +110,7 @@ func (r *Registry) Lookup(name, version string) (Preset, bool) {
 // ValidateRequest rejects arbitrary/unconfigured profile versions and values
 // that could otherwise be interpreted as paths or commands.
 func (r *Registry) ValidateRequest(request Request) (Preset, error) {
-	if request.JobID == "" || request.SourceFileID == "" || !validToken(request.Profile) || !validToken(request.ProfileVersion) ||
+	if request.TaskID == "" || request.SourceFileID == "" || !validToken(request.Profile) || !validToken(request.ProfileVersion) ||
 		!validToken(request.IdempotencyKey) {
 		return Preset{}, ErrInvalidRequest
 	}

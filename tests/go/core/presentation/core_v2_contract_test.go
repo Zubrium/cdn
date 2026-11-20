@@ -1283,15 +1283,15 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 		t.Fatalf("register generic workflow component: %v", err)
 	}
 	workerStarted := make(chan struct{}, 1)
-	catalog, err := BuildTaskCatalog(BuildPlan{Components: []string{"engine.example"}}, []ComponentTaskSet{{
+	catalog, err := BuildWorkerCatalog(BuildPlan{Components: []string{"engine.example"}}, []ComponentWorkerSet{{
 		ComponentID: "engine.example",
-		Handlers: map[string]TaskHandler{"process/v1": func(taskCtx context.Context, _ CoreJob) (CoordinatorTaskOutcome, error) {
+		Handlers: map[string]WorkerHandler{"process/v1": func(taskCtx context.Context, _ Task) (TaskOutcome, error) {
 			select {
 			case workerStarted <- struct{}{}:
 			default:
 			}
 			<-taskCtx.Done()
-			return CoordinatorTaskOutcome{}, taskCtx.Err()
+			return TaskOutcome{}, taskCtx.Err()
 		}},
 	}})
 	if err != nil {
@@ -1299,10 +1299,10 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	}
 	if err := first.StartCoordinator(ctx, CoordinatorRuntimeConfig{
 		Fingerprint: strings.Repeat("c", 64), InstanceLease: 6 * time.Second, HeartbeatInterval: time.Second,
-		WorkerConcurrency: 1, JobLease: 4 * time.Second, TaskTimeout: 15 * time.Second,
+		ExecutorConcurrency: 1, TaskLease: 4 * time.Second, TaskTimeout: 15 * time.Second,
 		PollInterval: 100 * time.Millisecond, RetryBase: time.Second, RetryMaximum: 5 * time.Second,
 		MaxAttempts: 2, MaxWorkflowTasks: 10, MaxChildrenPerTask: 2,
-		WorkflowRetention: time.Hour, ShutdownTimeout: 10 * time.Second, TaskCatalog: catalog,
+		WorkflowRetention: time.Hour, ShutdownTimeout: 10 * time.Second, WorkerCatalog: catalog,
 	}); err != nil {
 		t.Fatalf("start Core-owned Coordinator: %v", err)
 	}
@@ -1322,9 +1322,9 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create component-scoped workflow capability: %v", err)
 	}
-	jobControl, err := first.NewJobControl()
+	workflowControl, err := first.NewWorkflowControl()
 	if err != nil {
-		t.Fatalf("create Coordinator job-control capability: %v", err)
+		t.Fatalf("create Coordinator workflow-control capability: %v", err)
 	}
 	receipt, err := workflowClient.Start(ctx, WorkflowStartRequest{
 		OperationID: "process", ContractVersion: 1, IdempotencyKey: "core-runtime-workflow",
@@ -1338,9 +1338,9 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("registered worker did not receive its durable task: %v", ctx.Err())
 	}
-	jobs, err := jobControl.List(ctx, JobListFilter{Limit: 10})
-	if err != nil || len(jobs.Items) != 1 || jobs.Items[0].State != "running" {
-		t.Fatalf("authorized job-control capability did not return the running task summary: jobs=%+v err=%v", jobs, err)
+	workflows, err := workflowControl.List(ctx, WorkflowListFilter{Limit: 10})
+	if err != nil || len(workflows.Items) != 1 || workflows.Items[0].State != "running" {
+		t.Fatalf("authorized workflow-control capability did not return the running workflow summary: workflows=%+v err=%v", workflows, err)
 	}
 	workflow, err := workflowClient.Get(ctx, receipt.WorkflowID)
 	if err != nil || workflow.State != "running" {

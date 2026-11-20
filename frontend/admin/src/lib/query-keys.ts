@@ -1,8 +1,9 @@
 export const queryKeys = {
   coordinator: {
-    jobs: ["coordinator", "jobs"] as const,
-    jobList: (params: Record<string, unknown> = {}) => ["coordinator", "jobs", "list", params] as const,
-    jobPermissions: ["coordinator", "jobs", "permissions"] as const,
+    workflows: ["coordinator", "workflows"] as const,
+    workflowList: (params: Record<string, unknown> = {}) => ["coordinator", "workflows", "list", params] as const,
+    workflow: (id: string) => ["coordinator", "workflows", "detail", id] as const,
+    workflowPermissions: ["coordinator", "workflows", "permissions"] as const,
   },
   features: {
     all: ["features"] as const,

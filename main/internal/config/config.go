@@ -155,39 +155,39 @@ type HTTPServerConfig struct {
 }
 
 type CoordinatorConfig struct {
-	JobAccessGroup     string `yaml:"job_access_group"`
-	JobsPageDefault    int    `yaml:"jobs_page_default"`
-	JobsPageMaximum    int    `yaml:"jobs_page_maximum"`
-	InstanceLease      string `yaml:"instance_lease"`
-	HeartbeatInterval  string `yaml:"heartbeat_interval"`
-	WorkerConcurrency  int    `yaml:"worker_concurrency"`
-	JobLease           string `yaml:"job_lease"`
-	TaskTimeout        string `yaml:"task_timeout"`
-	PollInterval       string `yaml:"poll_interval"`
-	RetryBase          string `yaml:"retry_base"`
-	RetryMaximum       string `yaml:"retry_maximum"`
-	MaxAttempts        int    `yaml:"max_attempts"`
-	MaxWorkflowTasks   int    `yaml:"max_workflow_tasks"`
-	MaxChildrenPerTask int    `yaml:"max_children_per_task"`
-	WorkflowRetention  string `yaml:"workflow_retention"`
+	WorkflowAccessGroup  string `yaml:"workflow_access_group"`
+	WorkflowsPageDefault int    `yaml:"workflows_page_default"`
+	WorkflowsPageMaximum int    `yaml:"workflows_page_maximum"`
+	InstanceLease        string `yaml:"instance_lease"`
+	HeartbeatInterval    string `yaml:"heartbeat_interval"`
+	ExecutorConcurrency  int    `yaml:"worker_concurrency"`
+	TaskLease            string `yaml:"task_lease"`
+	TaskTimeout          string `yaml:"task_timeout"`
+	PollInterval         string `yaml:"poll_interval"`
+	RetryBase            string `yaml:"retry_base"`
+	RetryMaximum         string `yaml:"retry_maximum"`
+	MaxAttempts          int    `yaml:"max_attempts"`
+	MaxWorkflowTasks     int    `yaml:"max_workflow_tasks"`
+	MaxChildrenPerTask   int    `yaml:"max_children_per_task"`
+	WorkflowRetention    string `yaml:"workflow_retention"`
 }
 
 type CoordinatorSettings struct {
-	JobAccessGroup     string
-	JobsPageDefault    int
-	JobsPageMaximum    int
-	InstanceLease      time.Duration
-	HeartbeatInterval  time.Duration
-	WorkerConcurrency  int
-	JobLease           time.Duration
-	TaskTimeout        time.Duration
-	PollInterval       time.Duration
-	RetryBase          time.Duration
-	RetryMaximum       time.Duration
-	MaxAttempts        int
-	MaxWorkflowTasks   int
-	MaxChildrenPerTask int
-	WorkflowRetention  time.Duration
+	WorkflowAccessGroup  string
+	WorkflowsPageDefault int
+	WorkflowsPageMaximum int
+	InstanceLease        time.Duration
+	HeartbeatInterval    time.Duration
+	ExecutorConcurrency  int
+	TaskLease            time.Duration
+	TaskTimeout          time.Duration
+	PollInterval         time.Duration
+	RetryBase            time.Duration
+	RetryMaximum         time.Duration
+	MaxAttempts          int
+	MaxWorkflowTasks     int
+	MaxChildrenPerTask   int
+	WorkflowRetention    time.Duration
 }
 
 type AdminAPISettings struct {
@@ -255,10 +255,10 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 		}
 	}
 	if _, hasCoordinatorAPI := selected["admin.coordinator"]; hasCoordinatorAPI {
-		if !platform.ValidAccessGroupKey(r.Coordinator.JobAccessGroup) {
+		if !platform.ValidAccessGroupKey(r.Coordinator.WorkflowAccessGroup) {
 			return ErrCoordinatorProfileMismatch
 		}
-		if _, configured := r.Core.AccessGroups[r.Coordinator.JobAccessGroup]; !configured {
+		if _, configured := r.Core.AccessGroups[r.Coordinator.WorkflowAccessGroup]; !configured {
 			return ErrCoordinatorProfileMismatch
 		}
 	}
@@ -401,7 +401,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if loaderDurations[0] > time.Duration(1<<63-1)-loaderDurations[1] {
 		return Resolved{}, errors.New("Loader session and commit timeouts overflow")
 	}
-	coordinatorDurationValues := []string{c.Coordinator.InstanceLease, c.Coordinator.HeartbeatInterval, c.Coordinator.JobLease,
+	coordinatorDurationValues := []string{c.Coordinator.InstanceLease, c.Coordinator.HeartbeatInterval, c.Coordinator.TaskLease,
 		c.Coordinator.TaskTimeout, c.Coordinator.PollInterval, c.Coordinator.RetryBase, c.Coordinator.RetryMaximum,
 		c.Coordinator.WorkflowRetention}
 	var coordinatorDurations [8]time.Duration
@@ -416,12 +416,12 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		coordinatorDurations[1] >= coordinatorDurations[0]/3 || coordinatorDurations[2] < 3*time.Second || coordinatorDurations[2] > time.Hour ||
 		coordinatorDurations[3] > 24*time.Hour || coordinatorDurations[4] >= coordinatorDurations[2] ||
 		coordinatorDurations[5] > coordinatorDurations[6] || coordinatorDurations[6] > 24*time.Hour ||
-		c.Coordinator.WorkerConcurrency < 1 || c.Coordinator.WorkerConcurrency > 256 || c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 ||
+		c.Coordinator.ExecutorConcurrency < 1 || c.Coordinator.ExecutorConcurrency > 256 || c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 ||
 		c.Coordinator.MaxWorkflowTasks < 1 || c.Coordinator.MaxWorkflowTasks > 100000 ||
 		c.Coordinator.MaxChildrenPerTask < 0 || c.Coordinator.MaxChildrenPerTask > 256 ||
 		coordinatorDurations[7] > 365*24*time.Hour ||
-		c.Coordinator.JobsPageDefault < 1 || c.Coordinator.JobsPageMaximum < c.Coordinator.JobsPageDefault || c.Coordinator.JobsPageMaximum > 200 ||
-		(c.Coordinator.JobAccessGroup != "" && !platform.ValidAccessGroupKey(c.Coordinator.JobAccessGroup)) {
+		c.Coordinator.WorkflowsPageDefault < 1 || c.Coordinator.WorkflowsPageMaximum < c.Coordinator.WorkflowsPageDefault || c.Coordinator.WorkflowsPageMaximum > 200 ||
+		(c.Coordinator.WorkflowAccessGroup != "" && !platform.ValidAccessGroupKey(c.Coordinator.WorkflowAccessGroup)) {
 		return Resolved{}, errors.New("invalid Coordinator configuration")
 	}
 	var formsSessionTTL, formsCleanupInterval time.Duration
@@ -467,15 +467,15 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		}
 		accessGroups[key] = level
 	}
-	if c.Coordinator.JobAccessGroup != "" {
-		if _, exists := accessGroups[c.Coordinator.JobAccessGroup]; !exists {
-			return Resolved{}, errors.New("Coordinator job access group must exist in Core access_groups")
+	if c.Coordinator.WorkflowAccessGroup != "" {
+		if _, exists := accessGroups[c.Coordinator.WorkflowAccessGroup]; !exists {
+			return Resolved{}, errors.New("Coordinator workflow access group must exist in Core access_groups")
 		}
 	}
 	if c.Loader.MaxFileBytes <= 0 || c.Loader.MaxFileBytes > c.Core.MaxObjectBytes || c.Loader.MaxPartBytes <= 0 || c.Loader.MaxPartBytes > c.Core.MaxObjectBytes ||
 		c.Loader.PartSize <= 0 || c.Loader.PartSize > c.Loader.MaxPartBytes || c.Loader.MaxParts <= 0 || c.Loader.MaxParts > 1000 ||
 		c.Loader.MaxConcurrentCommits <= 0 || c.Loader.MaxConcurrentCommits > 100 ||
-		int64(c.Core.MaxConnections) < 1+2*int64(c.Loader.MaxConcurrentCommits)+2*int64(c.Coordinator.WorkerConcurrency) ||
+		int64(c.Core.MaxConnections) < 1+2*int64(c.Loader.MaxConcurrentCommits)+2*int64(c.Coordinator.ExecutorConcurrency) ||
 		c.Loader.BufferThreshold < 0 || c.Loader.MaxBufferedBytes < 0 || c.Loader.SessionCacheEntries <= 0 || c.Loader.SessionCacheEntries > 100000 ||
 		c.Loader.SessionCacheMaxBytes <= 0 || c.Loader.SessionCacheMaxBytes > 256<<20 || c.Loader.CleanupBatchSize <= 0 ||
 		(c.Loader.Mode != loaderapp.ModeAuto && c.Loader.Mode != loaderapp.ModeStream && c.Loader.Mode != loaderapp.ModeBuffered) ||
@@ -590,10 +590,10 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},
 		Website: WebsiteSettings{Sites: append([]string(nil), c.Website.SiteIDs...)},
 		Coordinator: CoordinatorSettings{
-			JobAccessGroup:  c.Coordinator.JobAccessGroup,
-			JobsPageDefault: c.Coordinator.JobsPageDefault, JobsPageMaximum: c.Coordinator.JobsPageMaximum,
+			WorkflowAccessGroup:  c.Coordinator.WorkflowAccessGroup,
+			WorkflowsPageDefault: c.Coordinator.WorkflowsPageDefault, WorkflowsPageMaximum: c.Coordinator.WorkflowsPageMaximum,
 			InstanceLease: coordinatorDurations[0], HeartbeatInterval: coordinatorDurations[1],
-			WorkerConcurrency: c.Coordinator.WorkerConcurrency, JobLease: coordinatorDurations[2], TaskTimeout: coordinatorDurations[3],
+			ExecutorConcurrency: c.Coordinator.ExecutorConcurrency, TaskLease: coordinatorDurations[2], TaskTimeout: coordinatorDurations[3],
 			PollInterval: coordinatorDurations[4], RetryBase: coordinatorDurations[5], RetryMaximum: coordinatorDurations[6],
 			MaxAttempts: c.Coordinator.MaxAttempts, MaxWorkflowTasks: c.Coordinator.MaxWorkflowTasks,
 			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[7],

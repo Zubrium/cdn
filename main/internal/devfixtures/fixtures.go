@@ -252,22 +252,22 @@ func (a *Website) DeleteSnapshot(ctx context.Context, _ website.DeleteSnapshotRe
 	return a.writeUnavailable(ctx)
 }
 func (a *Website) BuildSnapshot(ctx context.Context, _ website.BuildSnapshotRequest) (website.BuildJob, error) {
-	return website.BuildJob{}, a.writeUnavailable(ctx)
+	return website.BuildWorker{}, a.writeUnavailable(ctx)
 }
 func (a *Website) GetBuild(ctx context.Context, _ string) (website.BuildJob, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return website.BuildJob{}, err
+		return website.BuildWorker{}, err
 	}
-	return website.BuildJob{}, website.ErrNotFound
+	return website.BuildWorker{}, website.ErrNotFound
 }
 func (a *Website) CreateMediaDerivative(ctx context.Context, _ website.CreateDerivativeRequest) (website.MediaJob, error) {
-	return website.MediaJob{}, a.writeUnavailable(ctx)
+	return website.MediaWorker{}, a.writeUnavailable(ctx)
 }
 func (a *Website) GetMediaJob(ctx context.Context, _ string) (website.MediaJob, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return website.MediaJob{}, err
+		return website.MediaWorker{}, err
 	}
-	return website.MediaJob{}, website.ErrNotFound
+	return website.MediaWorker{}, website.ErrNotFound
 }
 
 func (a *Content) GetWorkspace(ctx context.Context, projections content.Projections) (content.Workspace, error) {

@@ -17,8 +17,8 @@ import (
 	"unicode/utf8"
 
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 	"github.com/google/uuid"
 )
 
@@ -28,12 +28,12 @@ const (
 )
 
 type Config struct {
-	BranchID         string
-	MaxJSONBytes     int64
-	DefaultPageSize  int
-	MaxPageSize      int
-	AllowedOrigins   []string
-	PublicOperations engine.PublicOperationCatalog
+	BranchID                string
+	MaxJSONBytes            int64
+	DefaultPageSize         int
+	MaxPageSize             int
+	AllowedOrigins          []string
+	PublicOperations        engine.PublicOperationCatalog
 	FormSessionCookieSecure bool
 }
 

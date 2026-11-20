@@ -126,7 +126,7 @@ func TestDataDescriptorUsesWorkerNamespaceNotWebsiteNamespace(t *testing.T) {
 	if descriptor.ModuleID != "worker.media" || len(descriptor.Namespaces) != 1 || descriptor.Namespaces[0].Name != "media" || descriptor.Namespaces[0].Name == "website/media" {
 		t.Fatalf("unexpected worker data descriptor: %#v", descriptor)
 	}
-	if descriptor.Namespaces[0].ScopeTypes[0] != "job" {
+	if descriptor.Namespaces[0].ScopeTypes[0] != "task" {
 		t.Fatalf("unexpected scope: %#v", descriptor.Namespaces[0].ScopeTypes)
 	}
 }
@@ -155,7 +155,7 @@ func TestFFmpegRunnerIsNotClaimedAsIsolated(t *testing.T) {
 func TestHandlerPersistsReadyAndUsesCurrentSourceGroups(t *testing.T) {
 	runner := &testRunner{isolated: true}
 	handler, files, data := handlerFixture(t, runner)
-	request := Request{JobID: "job-1", SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: "idem-1"}
+	request := Request{TaskID: "task-1", SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: "idem-1"}
 	first, err := handler.Handle(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -166,38 +166,45 @@ func TestHandlerPersistsReadyAndUsesCurrentSourceGroups(t *testing.T) {
 	if len(files.createGroups) != 2 || files.createGroups[0] != "media" || files.createGroups[1] != "uploads" {
 		t.Fatalf("output groups were not copied from source: %v", files.createGroups)
 	}
-	if data.key.Namespace != DataNamespace || data.key.ScopeType != DataScopeType || data.key.ScopeID != request.JobID || data.key.RecordKey != "job" {
-		t.Fatalf("job was not persisted in its own worker scope: %#v", data.key)
+	if data.key.Namespace != DataNamespace || data.key.ScopeType != DataScopeType || data.key.ScopeID != request.TaskID || data.key.RecordKey != "task" {
+		t.Fatalf("task was not persisted in its own worker scope: %#v", data.key)
+	}
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(data.record.Payload, &saved); err != nil || string(saved["job_id"]) != `"task-1"` {
+		t.Fatalf("versioned run payload did not preserve its serialized job_id field: %s, err=%v", data.record.Payload, err)
+	}
+	if _, exists := saved["task_id"]; exists {
+		t.Fatalf("versioned run payload unexpectedly changed its field schema: %s", data.record.Payload)
 	}
 	second, err := handler.Handle(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second != first || runner.calls != 1 || files.createCalls != 1 {
-		t.Fatalf("ready job was not idempotent: result=%#v calls=%d/%d", second, runner.calls, files.createCalls)
+		t.Fatalf("ready task was not idempotent: result=%#v calls=%d/%d", second, runner.calls, files.createCalls)
 	}
 }
 
-func TestReadyJobRequiresAccessiblePersistedOutput(t *testing.T) {
+func TestReadyTaskRunRequiresAccessiblePersistedOutput(t *testing.T) {
 	runner := &testRunner{isolated: true}
 	handler, files, _ := handlerFixture(t, runner)
-	request := Request{JobID: "job-1", SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: "idem-1"}
+	request := Request{TaskID: "task-1", SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: "idem-1"}
 	if _, err := handler.Handle(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	files.created = map[string]Result{}
 	if _, err := handler.Handle(context.Background(), request); !errors.Is(err, ErrOutputUncertain) {
-		t.Fatalf("ready job returned an inaccessible output: %v", err)
+		t.Fatalf("ready task returned an inaccessible output: %v", err)
 	}
 	if runner.calls != 1 {
 		t.Fatalf("missing output triggered a new conversion: %d", runner.calls)
 	}
 }
 
-func TestHandlerRejectsIdempotencyKeyReuseWithDifferentJob(t *testing.T) {
+func TestHandlerRejectsIdempotencyKeyReuseWithDifferentTask(t *testing.T) {
 	runner := &testRunner{isolated: true}
 	handler, _, _ := handlerFixture(t, runner)
-	request := Request{JobID: "job-1", SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: "idem-1"}
+	request := Request{TaskID: "task-1", SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: "idem-1"}
 	if _, err := handler.Handle(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -207,15 +214,25 @@ func TestHandlerRejectsIdempotencyKeyReuseWithDifferentJob(t *testing.T) {
 	}
 	request.ProfileVersion, request.SourceFileID = "1", "source-2"
 	if _, err := handler.Handle(context.Background(), request); err == nil {
-		t.Fatal("different source accepted for existing job")
+		t.Fatal("different source accepted for existing task")
 	}
 }
 
-func TestTaskHandlerRejectsWrongOperationAndUnknownFields(t *testing.T) {
+func TestWorkerHandlerRejectsWrongOperationAndUnknownFields(t *testing.T) {
 	runner := &testRunner{isolated: true}
-	handler, _, _ := handlerFixture(t, runner)
-	job := core.CoreJob{ComponentID: "other", OperationID: OperationID, ContractVersion: 1}
-	if _, err := handler.TaskHandler(context.Background(), job); !errors.Is(err, ErrInvalidRequest) {
+	handler, _, data := handlerFixture(t, runner)
+	task := core.Task{Kind: core.TaskKindWorker, Worker: &core.WorkerRef{ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1},
+		IdempotencyKey: "idem-worker"}
+	task.ID[15] = 1
+	task.Payload, _ = json.Marshal(Request{SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: task.IdempotencyKey})
+	if _, err := handler.WorkerHandler(context.Background(), task); err != nil {
+		t.Fatalf("Worker handler did not derive task identity from its envelope: %v", err)
+	}
+	if data.key.ScopeID != task.ID.String() {
+		t.Fatalf("worker state was not scoped to the envelope task: got %q, want %q", data.key.ScopeID, task.ID.String())
+	}
+	otherTask := core.Task{Kind: core.TaskKindWorker, Worker: &core.WorkerRef{ComponentID: "other", OperationID: OperationID, ContractVersion: 1}}
+	if _, err := handler.WorkerHandler(context.Background(), otherTask); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("wrong component accepted: %v", err)
 	}
 }

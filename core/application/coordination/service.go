@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	corecoord "github.com/Zubrium/cdn/core/domain/coordination"
 )
 
 // ServiceStore is the Coordinator's complete typed Core boundary. Core still
@@ -16,27 +14,26 @@ import (
 type ServiceStore interface {
 	InstanceStore
 	TaskStore
-	JobControlStore
+	WorkflowControlStore
 	WorkflowStore
 }
 
 type ServiceConfig struct {
-	Store              ServiceStore
-	Fingerprint        string
-	InstanceLease      time.Duration
-	HeartbeatInterval  time.Duration
-	WorkerConcurrency  int
-	JobLease           time.Duration
-	TaskTimeout        time.Duration
-	PollInterval       time.Duration
-	RetryBase          time.Duration
-	RetryMaximum       time.Duration
-	MaxAttempts        int
-	MaxWorkflowTasks   int
-	MaxChildrenPerTask int
-	WorkflowRetention  time.Duration
-	Catalog            *TaskCatalog
-	WorkflowComponents []corecoord.ComponentDescriptor
+	Store               ServiceStore
+	Fingerprint         string
+	InstanceLease       time.Duration
+	HeartbeatInterval   time.Duration
+	ExecutorConcurrency int
+	TaskLease           time.Duration
+	TaskTimeout         time.Duration
+	PollInterval        time.Duration
+	RetryBase           time.Duration
+	RetryMaximum        time.Duration
+	MaxAttempts         int
+	MaxWorkflowTasks    int
+	MaxChildrenPerTask  int
+	WorkflowRetention   time.Duration
+	Workers             *WorkerCatalog
 }
 
 // Service owns the live Coordinator instance, scoped workflow clients, safe
@@ -45,8 +42,7 @@ type Service struct {
 	mu           sync.RWMutex
 	cfg          ServiceConfig
 	instance     *Instance
-	workers      *WorkerComponent
-	workflows    *WorkflowCatalog
+	executor     *TaskExecutor
 	ready        bool
 	failed       bool
 	closing      bool
@@ -64,32 +60,17 @@ type Service struct {
 func NewService(config ServiceConfig) (*Service, error) {
 	if isNilInterface(config.Store) || !validFingerprint(config.Fingerprint) ||
 		config.InstanceLease < 3*time.Second || config.InstanceLease > time.Hour || config.HeartbeatInterval <= 0 || config.HeartbeatInterval >= config.InstanceLease/3 ||
-		config.WorkerConcurrency < 1 || config.WorkerConcurrency > 256 || config.JobLease < 3*time.Second || config.JobLease > time.Hour ||
-		config.TaskTimeout <= 0 || config.TaskTimeout > 24*time.Hour || config.PollInterval <= 0 || config.PollInterval >= config.JobLease ||
+		config.ExecutorConcurrency < 1 || config.ExecutorConcurrency > 256 || config.TaskLease < 3*time.Second || config.TaskLease > time.Hour ||
+		config.TaskTimeout <= 0 || config.TaskTimeout > 24*time.Hour || config.PollInterval <= 0 || config.PollInterval >= config.TaskLease ||
 		config.RetryBase <= 0 || config.RetryMaximum < config.RetryBase || config.RetryMaximum > 24*time.Hour ||
 		config.MaxAttempts < 1 || config.MaxAttempts > 100 || config.MaxWorkflowTasks < 1 || config.MaxWorkflowTasks > 100000 ||
 		config.MaxChildrenPerTask < 0 || config.MaxChildrenPerTask > 256 || config.WorkflowRetention <= 0 || config.WorkflowRetention > 365*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	if config.Catalog != nil && len(config.Catalog.handlers) == 0 {
+	if config.Workers != nil && len(config.Workers.workers) == 0 {
 		return nil, ErrInvalid
 	}
-	var workflows *WorkflowCatalog
-	if len(config.WorkflowComponents) > 0 {
-		var err error
-		workflows, err = NewWorkflowCatalog(config.WorkflowComponents)
-		if err != nil {
-			return nil, err
-		}
-		for _, component := range config.WorkflowComponents {
-			for _, operation := range component.Operations {
-				if _, registered := config.Catalog.definition(component.ID, operation.ID, operation.ContractVersion); !registered {
-					return nil, ErrTaskProviderUnavailable
-				}
-			}
-		}
-	}
-	return &Service{cfg: config, workflows: workflows, closeDone: make(chan struct{}), errors: make(chan error, 1)}, nil
+	return &Service{cfg: config, closeDone: make(chan struct{}), errors: make(chan error, 1)}, nil
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -102,7 +83,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.started || s.closing {
 		s.mu.Unlock()
-		return ErrWorkerAlreadyStarted
+		return ErrTaskExecutorAlreadyStarted
 	}
 	s.started = true
 	s.mu.Unlock()
@@ -114,23 +95,23 @@ func (s *Service) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var workers *WorkerComponent
-	if s.cfg.Catalog != nil {
-		workers, err = NewWorkerComponent(s.cfg.Store, WorkerConfig{
+	var executor *TaskExecutor
+	if s.cfg.Workers != nil {
+		executor, err = NewTaskExecutor(s.cfg.Store, TaskExecutorConfig{
 			Owner: instance.ID(), ConfigEpoch: instance.Epoch(),
-			Concurrency: s.cfg.WorkerConcurrency, LeaseDuration: s.cfg.JobLease,
+			Concurrency: s.cfg.ExecutorConcurrency, LeaseDuration: s.cfg.TaskLease,
 			TaskTimeout: s.cfg.TaskTimeout, PollInterval: s.cfg.PollInterval,
 			RetryBase: s.cfg.RetryBase, RetryMaximum: s.cfg.RetryMaximum,
 			MaxWorkflowTasks: s.cfg.MaxWorkflowTasks, MaxChildrenPerTask: s.cfg.MaxChildrenPerTask,
 			WorkflowRetention: s.cfg.WorkflowRetention,
-		}, s.cfg.Catalog.WorkerHandlers())
+		}, s.cfg.Workers.handlers())
 		if err != nil {
 			return errors.Join(err, closeInstanceAfterStartFailure(instance, s.cfg.InstanceLease))
 		}
 	}
 	monitorCtx, monitorStop := context.WithCancel(context.Background())
 	s.mu.Lock()
-	s.instance, s.workers = instance, workers
+	s.instance, s.executor = instance, executor
 	s.monitorCtx, s.monitorStop = monitorCtx, monitorStop
 	s.ready = true
 	s.mu.Unlock()
@@ -172,16 +153,16 @@ func (s *Service) Activate(ctx context.Context) error {
 	}
 	if s.activated {
 		s.mu.Unlock()
-		return ErrWorkerAlreadyStarted
+		return ErrTaskExecutorAlreadyStarted
 	}
-	workers := s.workers
+	executor := s.executor
 	s.mu.Unlock()
-	if workers != nil {
-		if err := workers.Start(ctx); err != nil {
+	if executor != nil {
+		if err := executor.Start(ctx); err != nil {
 			return err
 		}
-		if !workers.IsReady() {
-			return ErrWorkerComponentNotReady
+		if !executor.Healthy() {
+			return ErrTaskExecutorNotReady
 		}
 	}
 	s.mu.Lock()
@@ -191,8 +172,8 @@ func (s *Service) Activate(ctx context.Context) error {
 	}
 	s.activated = true
 	s.mu.Unlock()
-	if workers != nil {
-		s.monitor("workers", workers.Errors())
+	if executor != nil {
+		s.monitor("task executor", executor.Errors())
 	}
 	return nil
 }
@@ -254,9 +235,9 @@ func (s *Service) Ready() bool {
 	}
 	s.mu.RLock()
 	ready, activated, closing, failed := s.ready, s.activated, s.closing, s.failed
-	instance, workers := s.instance, s.workers
+	instance, executor := s.instance, s.executor
 	s.mu.RUnlock()
-	return ready && activated && !closing && !failed && instance != nil && instance.Ready() && (workers == nil || workers.IsReady())
+	return ready && activated && !closing && !failed && instance != nil && instance.Ready() && (executor == nil || executor.Healthy())
 }
 
 func (s *Service) IsReady() bool { return s.Ready() }
@@ -271,27 +252,28 @@ func (s *Service) Errors() <-chan error {
 }
 
 func (s *Service) NewWorkflowClient(componentID string) (*WorkflowClient, error) {
-	if s == nil || !s.Ready() || s.workflows == nil {
+	if s == nil || !s.Ready() || s.cfg.Workers == nil {
 		return nil, ErrInstanceNotReady
 	}
 	s.mu.RLock()
 	instance := s.instance
 	s.mu.RUnlock()
-	return NewWorkflowClient(WorkflowClientConfig{Store: s.cfg.Store, Catalog: s.workflows,
+	return NewWorkflowClient(WorkflowClientConfig{Store: s.cfg.Store, Workers: s.cfg.Workers,
 		OwnerEngineID: componentID, InstanceID: instance.ID(), ConfigEpoch: instance.Epoch(), MaxAttempts: s.cfg.MaxAttempts,
 		Retention: s.cfg.WorkflowRetention})
 }
 
-// NewJobControl is safe only behind an authenticated, separately authorized
-// presentation handler. It exposes bounded summaries and explicit retry.
-func (s *Service) NewJobControl() (*JobControl, error) {
+// NewWorkflowControl is safe only behind an authenticated, separately
+// authorized presentation handler. It exposes summaries, task graphs, and
+// task retry without exposing payloads or results.
+func (s *Service) NewWorkflowControl() (*WorkflowControl, error) {
 	if s == nil || !s.Ready() {
 		return nil, ErrInstanceNotReady
 	}
 	s.mu.RLock()
 	instance := s.instance
 	s.mu.RUnlock()
-	return NewJobControl(JobControlConfig{Store: s.cfg.Store,
+	return NewWorkflowControl(WorkflowControlConfig{Store: s.cfg.Store,
 		Owner: instance.ID(), ConfigEpoch: instance.Epoch()})
 }
 
@@ -324,10 +306,10 @@ func (s *Service) Close(ctx context.Context) error {
 		return nil
 	}
 	s.closing, s.ready = true, false
-	workers, instance, monitorStop := s.workers, s.instance, s.monitorStop
+	executor, instance, monitorStop := s.executor, s.instance, s.monitorStop
 	s.mu.Unlock()
 	s.shutdownOnce.Do(func() {
-		go s.shutdown(workers, instance, monitorStop)
+		go s.shutdown(executor, instance, monitorStop)
 	})
 	select {
 	case <-s.closeDone:
@@ -342,20 +324,20 @@ func (s *Service) Close(ctx context.Context) error {
 // shutdown continues after the caller's deadline. Core must keep its database
 // open until cooperative handlers have stopped and the instance lease is
 // released; later Close calls can wait for this same shutdown.
-func (s *Service) shutdown(workers *WorkerComponent, instance *Instance, monitorStop context.CancelFunc) {
+func (s *Service) shutdown(executor *TaskExecutor, instance *Instance, monitorStop context.CancelFunc) {
 	if monitorStop != nil {
 		monitorStop()
 	}
 	var closeErr error
-	if workers != nil {
-		closeErr = errors.Join(closeErr, workers.Stop(context.Background()))
+	if executor != nil {
+		closeErr = errors.Join(closeErr, executor.Close(context.Background()))
 	}
 	if instance != nil {
 		closeErr = errors.Join(closeErr, instance.Close(context.Background()))
 	}
 	s.monitorWG.Wait()
 	s.mu.Lock()
-	s.instance, s.workers = nil, nil
+	s.instance, s.executor = nil, nil
 	s.closeErr = closeErr
 	close(s.errors)
 	close(s.closeDone)

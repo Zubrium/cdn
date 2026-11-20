@@ -134,13 +134,13 @@ http:
   max_header_bytes: 65536
 
 coordinator:
-  job_access_group: coordinator_jobs
-  jobs_page_default: 25
-  jobs_page_maximum: 100
+  workflow_access_group: coordinator_jobs
+  workflows_page_default: 25
+  workflows_page_maximum: 100
   instance_lease: 30s
   heartbeat_interval: 5s
   worker_concurrency: 4
-  job_lease: 30s
+  task_lease: 30s
   task_timeout: 30m
   poll_interval: 1s
   retry_base: 2s

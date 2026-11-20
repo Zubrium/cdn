@@ -14,45 +14,38 @@ var (
 	ErrCoordinatorConflict   = corecoord.ErrConflict
 	ErrCoordinatorLeaseLost  = corecoord.ErrLeaseLost
 	ErrCoordinatorConfigDiff = corecoord.ErrConfigDiff
-	ErrCoordinatorJobMissing = corecoord.ErrTaskMissing
-	ErrCoordinatorJobOwned   = corecoord.ErrTaskNotOwned
+	ErrTaskMissing           = corecoord.ErrTaskMissing
+	ErrTaskNotOwned          = corecoord.ErrTaskNotOwned
 	ErrCoordinatorStale      = corecoord.ErrStale
 	ErrCoordinatorInvalid    = corecoord.ErrInvalid
 	ErrCoordinatorLimit      = corecoord.ErrLimit
 )
 
-type CoordinatorJob = corecoord.CoordinatorJob
-type CoordinatorJobCursor = corecoord.CoordinatorJobCursor
-type CoordinatorJobSummary = corecoord.CoordinatorJobSummary
-type CoordinatorJobListRequest = corecoord.CoordinatorJobListRequest
-type CoordinatorJobPage = corecoord.CoordinatorJobPage
-type Workflow = corecoord.Workflow
 type WorkflowRequest = corecoord.WorkflowRequest
 type WorkflowStartRequest = appcoord.WorkflowStartRequest
 type WorkflowReceipt = appcoord.WorkflowReceipt
 type WorkflowClient = appcoord.WorkflowClient
-type JobControl = appcoord.JobControl
-type JobListFilter = appcoord.JobListFilter
+type WorkflowControl = appcoord.WorkflowControl
 
 // CoordinatorRuntimeConfig contains explicit operational limits. Component
 // contracts and task handlers are collected from the selected composition;
 // Core passes only their neutral descriptors into the workflow service.
 type CoordinatorRuntimeConfig struct {
-	Fingerprint        string
-	InstanceLease      time.Duration
-	HeartbeatInterval  time.Duration
-	WorkerConcurrency  int
-	JobLease           time.Duration
-	TaskTimeout        time.Duration
-	PollInterval       time.Duration
-	RetryBase          time.Duration
-	RetryMaximum       time.Duration
-	MaxAttempts        int
-	MaxWorkflowTasks   int
-	MaxChildrenPerTask int
-	WorkflowRetention  time.Duration
-	ShutdownTimeout    time.Duration
-	TaskCatalog        *appcoord.TaskCatalog
+	Fingerprint         string
+	InstanceLease       time.Duration
+	HeartbeatInterval   time.Duration
+	ExecutorConcurrency int
+	TaskLease           time.Duration
+	TaskTimeout         time.Duration
+	PollInterval        time.Duration
+	RetryBase           time.Duration
+	RetryMaximum        time.Duration
+	MaxAttempts         int
+	MaxWorkflowTasks    int
+	MaxChildrenPerTask  int
+	WorkflowRetention   time.Duration
+	ShutdownTimeout     time.Duration
+	WorkerCatalog       *appcoord.WorkerCatalog
 }
 
 // StartCoordinator is called once during Core startup after component
@@ -83,12 +76,12 @@ func (r *Runtime) StartCoordinator(ctx context.Context, cfg CoordinatorRuntimeCo
 	service, err := appcoord.NewService(appcoord.ServiceConfig{
 		Store: store, Fingerprint: cfg.Fingerprint,
 		InstanceLease: cfg.InstanceLease, HeartbeatInterval: cfg.HeartbeatInterval,
-		WorkerConcurrency: cfg.WorkerConcurrency, JobLease: cfg.JobLease,
+		ExecutorConcurrency: cfg.ExecutorConcurrency, TaskLease: cfg.TaskLease,
 		TaskTimeout: cfg.TaskTimeout, PollInterval: cfg.PollInterval,
 		RetryBase: cfg.RetryBase, RetryMaximum: cfg.RetryMaximum,
 		MaxAttempts: cfg.MaxAttempts, MaxWorkflowTasks: cfg.MaxWorkflowTasks,
 		MaxChildrenPerTask: cfg.MaxChildrenPerTask, WorkflowRetention: cfg.WorkflowRetention,
-		WorkflowComponents: r.Registry.ComponentDescriptors(), Catalog: cfg.TaskCatalog,
+		Workers: cfg.WorkerCatalog,
 	})
 	if err != nil {
 		r.coordinatorMu.Lock()
@@ -169,14 +162,14 @@ func (r *Runtime) NewWorkflowClient(componentID string) (*WorkflowClient, error)
 	return service.NewWorkflowClient(componentID)
 }
 
-// NewJobControl exposes bounded operational summaries and manual retry. HTTP
-// adapters must authenticate and authorize each request before using it.
-func (r *Runtime) NewJobControl() (*JobControl, error) {
+// NewWorkflowControl exposes workflow summaries, task graphs, and task retry.
+// HTTP adapters must authenticate and authorize each request before using it.
+func (r *Runtime) NewWorkflowControl() (*WorkflowControl, error) {
 	service := r.coordinatorService()
 	if service == nil {
 		return nil, appcoord.ErrInstanceNotReady
 	}
-	return service.NewJobControl()
+	return service.NewWorkflowControl()
 }
 
 func (r *Runtime) coordinatorService() *appcoord.Service {

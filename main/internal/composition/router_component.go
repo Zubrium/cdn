@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
-	"sync"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	routerengine "github.com/Zubrium/cdn/engines/router"
@@ -14,8 +11,8 @@ import (
 	routesrepo "github.com/Zubrium/cdn/engines/router/features/routes/repository"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
-	adminrouter "github.com/Zubrium/cdn/presentation/admin/router"
-	routerhttp "github.com/Zubrium/cdn/presentation/router"
+	"github.com/Zubrium/cdn/presentation/admin/base/transport"
+	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/presentation/router/publicforms"
 	"github.com/Zubrium/cdn/presentation/router/publicupload"
 )
@@ -27,7 +24,7 @@ type routerEngineComponent struct {
 	config   appconfig.Resolved
 	selected map[string]struct{}
 	api      *routerenginepresentation.APIAdapter
-	registry *routerhttp.PublicOperationRegistry
+	registry *router.PublicOperationRegistry
 }
 
 func (component *routerEngineComponent) Start(ctx context.Context) error {
@@ -149,154 +146,73 @@ func (adapter routerIdentityAdapter) AuthenticateSession(ctx context.Context, to
 	return adapter.sessions.AuthenticateSession(ctx, token)
 }
 
-type routerAdminComponent struct {
-	fileAPI *fileAPIComponent
-	engine  *routerEngineComponent
-	config  appconfig.Resolved
-	handler http.Handler
-}
+type routerAdminComponent struct{}
 
-func (component *routerAdminComponent) Start(context.Context) error {
-	if component == nil || component.fileAPI == nil || component.engine == nil || component.engine.api == nil {
-		return errors.New("Router Admin dependencies are not initialized")
-	}
-	settings := component.config.RouterAPI
-	handler, err := adminrouter.NewHandler(component.engine.api, routerhttp.Config{
-		BranchID: settings.BranchID, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
-		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), component.config.AdminAPI.AllowedOrigins...),
-		PublicOperations: component.engine.registry, FormSessionCookieSecure: settings.FormSessionCookieSecure,
-	})
-	if err != nil {
-		return err
-	}
-	component.fileAPI.setRouterAdminHandler(handler)
-	component.handler = handler
-	return nil
-}
-
-func (component *routerAdminComponent) Ready(context.Context) error {
-	if component == nil || component.handler == nil {
-		return errors.New("Router Admin handler is not initialized")
-	}
-	return nil
-}
-
-func (*routerAdminComponent) Stop(context.Context) error { return nil }
+func (*routerAdminComponent) Start(context.Context) error { return nil }
+func (*routerAdminComponent) Ready(context.Context) error { return nil }
+func (*routerAdminComponent) Stop(context.Context) error  { return nil }
 
 type publicRouterComponent struct {
-	core     *coreComponent
-	engine   *routerEngineComponent
-	config   appconfig.Resolved
-	mu       sync.RWMutex
-	server   *http.Server
-	listener net.Listener
-	done     chan struct{}
-	failures chan error
-	ready    bool
+	core   *coreComponent
+	engine *routerEngineComponent
+	config appconfig.Resolved
+	server *transport.PublicServer
 }
 
-func (component *publicRouterComponent) Start(context.Context) error {
-	if component == nil || component.core == nil || component.engine == nil || component.engine.api == nil {
+func (component *publicRouterComponent) Start(ctx context.Context) error {
+	if component == nil || component.core == nil || component.core.runtime == nil || component.engine == nil || component.engine.api == nil {
 		return errors.New("public Router dependencies are not initialized")
 	}
 	settings := component.config.RouterAPI
-	combined, err := routerhttp.NewHandler(component.engine.api, routerhttp.Config{
-		BranchID: settings.BranchID, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
-		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), component.config.AdminAPI.AllowedOrigins...),
-		PublicOperations: component.engine.registry, FormSessionCookieSecure: settings.FormSessionCookieSecure,
-	})
+	server, err := transport.NewPublicServer(transport.PublicConfig{
+		Server: transport.ServerConfig{
+			Address: settings.PublicListenAddress, ReadHeaderTimeout: component.config.HTTP.ReadHeaderTimeout,
+			ReadTimeout: component.config.HTTP.ReadTimeout, WriteTimeout: component.config.HTTP.WriteTimeout,
+			IdleTimeout: component.config.HTTP.IdleTimeout, MaxHeaderBytes: component.config.HTTP.MaxHeaderBytes,
+		},
+		Router: routerPresentationConfig(component.config, component.engine.registry),
+	}, component.engine.api, component.core.IsReady)
 	if err != nil {
 		return err
 	}
-	publicHandler := combined.PublicHTTPHandler()
-	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if component.core == nil || component.core.runtime == nil || !component.core.runtime.CoordinatorReady() {
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		publicHandler.ServeHTTP(w, r)
-	})
-	server := &http.Server{Handler: guarded, ReadHeaderTimeout: component.config.HTTP.ReadHeaderTimeout,
-		ReadTimeout: component.config.HTTP.ReadTimeout, WriteTimeout: component.config.HTTP.WriteTimeout,
-		IdleTimeout: component.config.HTTP.IdleTimeout, MaxHeaderBytes: component.config.HTTP.MaxHeaderBytes}
-	listener, err := net.Listen("tcp", settings.PublicListenAddress)
-	if err != nil {
-		return fmt.Errorf("listen on internal Router address: %w", err)
-	}
-	component.mu.Lock()
-	component.server, component.listener = server, listener
-	component.done, component.failures = make(chan struct{}), make(chan error, 1)
-	component.ready = true
-	component.mu.Unlock()
-	go func() {
-		defer close(component.done)
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			component.mu.Lock()
-			component.ready = false
-			component.mu.Unlock()
-			select {
-			case component.failures <- errors.New("public Router listener stopped unexpectedly"):
-			default:
-			}
-		}
-	}()
-	return nil
+	component.server = server
+	return server.Start(ctx)
 }
 
 func (component *publicRouterComponent) Ready(context.Context) error {
-	if !component.IsReady() {
-		return errors.New("public Router listener is not initialized")
+	if component == nil || component.server == nil || !component.server.IsReady() {
+		return errors.New("public Router transport is not initialized")
 	}
 	return nil
 }
 
 func (component *publicRouterComponent) Stop(ctx context.Context) error {
-	if component == nil {
+	if component == nil || component.server == nil {
 		return nil
 	}
-	component.mu.Lock()
-	server, done := component.server, component.done
-	component.ready = false
-	component.mu.Unlock()
-	if server == nil {
-		return nil
-	}
-	err := server.Shutdown(ctx)
-	if err != nil {
-		_ = server.Close()
-	}
-	select {
-	case <-done:
-	case <-ctx.Done():
-		err = errors.Join(err, ctx.Err())
-	}
-	if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
-		err = errors.Join(err, closeErr)
-	}
-	component.mu.Lock()
-	component.server, component.listener, component.done = nil, nil, nil
-	component.mu.Unlock()
-	return err
+	return component.server.Stop(ctx)
 }
 
 func (component *publicRouterComponent) IsReady() bool {
-	if component == nil {
-		return false
-	}
-	component.mu.RLock()
-	defer component.mu.RUnlock()
-	return component.ready && component.listener != nil
+	return component != nil && component.server != nil && component.server.IsReady()
 }
 
 func (component *publicRouterComponent) Errors() <-chan error {
-	if component == nil || component.failures == nil {
+	if component == nil || component.server == nil {
 		closed := make(chan error)
 		close(closed)
 		return closed
 	}
-	return component.failures
+	return component.server.Errors()
+}
+
+func routerPresentationConfig(config appconfig.Resolved, operations *router.PublicOperationRegistry) router.Config {
+	settings := config.RouterAPI
+	return router.Config{
+		BranchID: settings.BranchID, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
+		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), config.AdminAPI.AllowedOrigins...),
+		PublicOperations: operations, FormSessionCookieSecure: settings.FormSessionCookieSecure,
+	}
 }
 
 type publicUploadComponent struct {

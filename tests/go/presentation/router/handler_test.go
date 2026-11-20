@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
 
 type fakeRouter struct {

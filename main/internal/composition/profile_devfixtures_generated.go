@@ -10,10 +10,9 @@ import (
 	loaderEngine "github.com/Zubrium/cdn/engines/loader/presentation"
 	websiteEngine "github.com/Zubrium/cdn/engines/website/presentation"
 	devfixtures "github.com/Zubrium/cdn/main/internal/devfixtures"
+	_ "github.com/Zubrium/cdn/presentation/admin/base/transport"
 	_ "github.com/Zubrium/cdn/presentation/admin/content"
-	_ "github.com/Zubrium/cdn/presentation/admin/coordinator"
 	_ "github.com/Zubrium/cdn/presentation/admin/forms"
-	_ "github.com/Zubrium/cdn/presentation/adminapi"
 	_ "github.com/Zubrium/cdn/presentation/fileapi"
 	_ "github.com/Zubrium/cdn/presentation/sitesapi"
 )

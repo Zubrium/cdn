@@ -9,11 +9,12 @@ import (
 	"testing"
 
 	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/google/uuid"
 )
 
 func planRequest(plan []byte, inputDigest string) Request {
 	sum := sha256.Sum256(plan)
-	return Request{JobID: "job-1", IdempotencyKey: "stable-1", Plan: plan, PlanDigest: hex.EncodeToString(sum[:]), InputDigest: inputDigest}
+	return Request{TaskID: "task-1", IdempotencyKey: "stable-1", Plan: plan, PlanDigest: hex.EncodeToString(sum[:]), InputDigest: inputDigest}
 }
 
 func testLimits() Limits {
@@ -148,22 +149,25 @@ func TestFailClosedWorkerRejectsNilAndCancelledContextsBeforeValidation(t *testi
 	}
 }
 
-func TestTaskHandlerUsesRegisteredIdentityAndFailsClosed(t *testing.T) {
+func TestWorkerHandlerUsesRegisteredIdentityAndFailsClosed(t *testing.T) {
 	input := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	plan := []byte(`{"version":"render-plan/v1","input_digest":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","payload":{}}`)
 	request := planRequest(plan, input)
-	request.JobID = "00000000-0000-0000-0000-000000000000"
+	request.TaskID = ""
 	request.IdempotencyKey = "stable-1"
 	payload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := core.CoreJob{ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1, IdempotencyKey: "stable-1", Payload: payload}
+	task := core.Task{ID: uuid.New(), Kind: core.TaskKindWorker, Worker: &core.WorkerRef{
+		ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1,
+	}, IdempotencyKey: "stable-1", Payload: payload}
 	worker := FailClosedWorker{Limits: testLimits()}
-	if _, err := worker.TaskHandler(context.Background(), core.CoreJob{ComponentID: "other"}); !errors.Is(err, ErrInvalidPlan) {
+	if _, err := worker.WorkerHandler(context.Background(), core.Task{Kind: core.TaskKindWorker,
+		Worker: &core.WorkerRef{ComponentID: "other"}}); !errors.Is(err, ErrInvalidPlan) {
 		t.Fatalf("unregistered operation accepted: %v", err)
 	}
-	if outcome, err := worker.TaskHandler(context.Background(), job); !errors.Is(err, ErrRenderUnavailable) || len(outcome.Result) != 0 {
+	if outcome, err := worker.WorkerHandler(context.Background(), task); !errors.Is(err, ErrRenderUnavailable) || len(outcome.Result) != 0 {
 		t.Fatalf("task returned success without supervised renderer: outcome=%+v err=%v", outcome, err)
 	}
 	if descriptor := (Descriptor{}).ComponentDescriptor(); descriptor.ID != DataModuleID || len(descriptor.Operations) != 1 || descriptor.Operations[0].ID != OperationID || descriptor.Operations[0].ContractVersion != 1 {

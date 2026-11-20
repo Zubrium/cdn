@@ -14,11 +14,7 @@ import (
 func TestWorkflowStartRejectsInvalidPayloadsBeforePersistence(t *testing.T) {
 	store := &serviceStore{}
 	config := serviceTestConfig(store)
-	catalog, err := NewWorkflowCatalog(config.WorkflowComponents)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := NewWorkflowClient(WorkflowClientConfig{Store: store, Catalog: catalog,
+	client, err := NewWorkflowClient(WorkflowClientConfig{Store: store, Workers: config.Workers,
 		OwnerEngineID: "engine.example", InstanceID: uuid.New(), ConfigEpoch: 1,
 		MaxAttempts: 3, Retention: time.Hour})
 	if err != nil {

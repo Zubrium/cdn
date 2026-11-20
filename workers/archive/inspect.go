@@ -32,7 +32,7 @@ type File struct {
 const maxPortableArchivePathBytes = 1024
 
 // Inspect verifies every entry and its checksum before returning metadata.
-// It does not persist files: writing outputs and durable job recovery belong
+// It does not persist files: writing outputs and durable task recovery belong
 // to the worker application which will use Core capabilities.
 func Inspect(ctx context.Context, input io.ReaderAt, size int64, limits Limits) ([]File, error) {
 	if ctx == nil || input == nil || size <= 0 || limits.MaxArchiveBytes <= 0 || limits.MaxArchiveBytes == int64(^uint64(0)>>1) || size > limits.MaxArchiveBytes || limits.MaxEntries <= 0 || limits.MaxEntryBytes <= 0 || limits.MaxEntryBytes == int64(^uint64(0)>>1) || limits.MaxExpandedBytes <= 0 || limits.MaxCompressionRatio == 0 {

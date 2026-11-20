@@ -1,4 +1,4 @@
-package httpjson_test
+package json_test
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
 )
 
 type requestBody struct {

@@ -12,7 +12,7 @@ import (
 
 	forms "github.com/Zubrium/cdn/engines/forms/presentation"
 	router "github.com/Zubrium/cdn/engines/router/presentation"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
 	"github.com/google/uuid"
 )
 

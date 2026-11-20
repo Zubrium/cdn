@@ -41,7 +41,7 @@ func (limits Limits) Validate() error {
 // byte digest before any renderer is started. The plan body remains opaque;
 // this package does not claim that it enforces semantic input projection.
 func ValidatePlan(request Request, limits Limits) error {
-	if limits.Validate() != nil || !utf8.Valid(request.Plan) || !validIdentifier(request.JobID) || !validIdentifier(request.IdempotencyKey) || len(request.Plan) == 0 || len(request.Plan) > limits.MaxPlanBytes ||
+	if limits.Validate() != nil || !utf8.Valid(request.Plan) || !validIdentifier(request.TaskID) || !validIdentifier(request.IdempotencyKey) || len(request.Plan) == 0 || len(request.Plan) > limits.MaxPlanBytes ||
 		!digestPattern.MatchString(request.PlanDigest) || !digestPattern.MatchString(request.InputDigest) {
 		return ErrInvalidPlan
 	}

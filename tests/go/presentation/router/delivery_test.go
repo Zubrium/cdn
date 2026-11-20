@@ -15,7 +15,7 @@ import (
 	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
 )
 
 const (
@@ -204,7 +204,7 @@ func TestStaticPageArtifactDeliversDocumentAndOnlyDeclaredAssets(t *testing.T) {
 	}
 	assetResponse, err := delivery.Deliver(context.Background(), engine.DeliveryRequest{BranchID: "main", Host: "example.com", Method: http.MethodGet, EscapedPath: "/site/assets/app.js"})
 	if err != nil || assetResponse.StatusCode != http.StatusOK || assetResponse.ContentType != asset.ContentType ||
-			assetResponse.CacheControl != "public, max-age=31536000, immutable" {
+		assetResponse.CacheControl != "public, max-age=31536000, immutable" {
 		t.Fatalf("declared asset delivery = %+v, %v", assetResponse, err)
 	}
 	data, err = io.ReadAll(assetResponse.Body)
@@ -254,7 +254,7 @@ func TestArtifactMetadataMustMatchCanonicalCoreMetadata(t *testing.T) {
 	}
 
 	mismatches := []struct {
-		name  string
+		name   string
 		mutate func(*artifactFile, *core.File)
 	}{
 		{name: "size", mutate: func(entry *artifactFile, _ *core.File) { entry.Size++ }},

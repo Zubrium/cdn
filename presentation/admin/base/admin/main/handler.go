@@ -14,8 +14,8 @@ import (
 	"unicode/utf8"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/httpauth"
-	"github.com/Zubrium/cdn/presentation/httpjson"
+	httpjson "github.com/Zubrium/cdn/pkg/json"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 	"github.com/google/uuid"
 )
 

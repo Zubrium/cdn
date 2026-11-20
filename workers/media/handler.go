@@ -16,7 +16,7 @@ import (
 const (
 	DataModuleID       = "worker.media"
 	DataNamespace      = "media"
-	DataScopeType      = "job"
+	DataScopeType      = "task"
 	DataPayloadVersion = 1
 	OperationID        = "derivative"
 )
@@ -43,7 +43,7 @@ func DataDescriptor() core.ModuleDataDescriptor {
 
 var (
 	ErrNotReady        = errors.New("media_worker_not_ready")
-	ErrJobConflict     = errors.New("media_job_conflict")
+	ErrTaskConflict    = errors.New("media_job_conflict")
 	ErrOutputUncertain = errors.New("media_output_reconciliation_required")
 	ErrOutputInvalid   = errors.New("media_output_invalid")
 )
@@ -78,9 +78,9 @@ type Runner interface {
 	Isolated() bool
 }
 
-type JobRecord struct {
+type RunRecord struct {
 	Version          int       `json:"version"`
-	JobID            string    `json:"job_id"`
+	TaskID           string    `json:"job_id"`
 	SourceFileID     string    `json:"source_file_id"`
 	Profile          string    `json:"profile"`
 	ProfileVersion   string    `json:"profile_version"`
@@ -113,32 +113,34 @@ func NewHandler(registry *Registry, sessions SessionCapability, files FileCapabi
 	return &Handler{registry: registry, sessions: sessions, files: files, data: data, runner: runner, semaphore: make(chan struct{}, maxConcurrency)}, nil
 }
 
-func (h *Handler) TaskHandler(ctx context.Context, job core.CoreJob) (core.CoordinatorTaskOutcome, error) {
-	if job.ComponentID != "worker.media" || job.OperationID != OperationID || job.ContractVersion != 1 || len(job.Payload) == 0 || len(job.Payload) > 16<<10 {
-		return core.CoordinatorTaskOutcome{}, ErrInvalidRequest
+func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
+	if task.Kind != core.TaskKindWorker || task.Worker == nil || task.Worker.ComponentID != "worker.media" ||
+		task.Worker.OperationID != OperationID || task.Worker.ContractVersion != 1 || len(task.Payload) == 0 || len(task.Payload) > 16<<10 {
+		return core.TaskOutcome{}, ErrInvalidRequest
 	}
-	decoder := json.NewDecoder(bytes.NewReader(job.Payload))
+	decoder := json.NewDecoder(bytes.NewReader(task.Payload))
 	decoder.DisallowUnknownFields()
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return core.CoordinatorTaskOutcome{}, ErrInvalidRequest
+		return core.TaskOutcome{}, ErrInvalidRequest
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return core.CoordinatorTaskOutcome{}, ErrInvalidRequest
+		return core.TaskOutcome{}, ErrInvalidRequest
 	}
-	if request.JobID != job.ID.String() || request.IdempotencyKey != job.IdempotencyKey {
-		return core.CoordinatorTaskOutcome{}, ErrInvalidRequest
+	if (request.TaskID != "" && request.TaskID != task.ID.String()) || request.IdempotencyKey != task.IdempotencyKey {
+		return core.TaskOutcome{}, ErrInvalidRequest
 	}
+	request.TaskID = task.ID.String()
 	result, err := h.Handle(ctx, request)
 	if err != nil {
-		return core.CoordinatorTaskOutcome{}, err
+		return core.TaskOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.CoordinatorTaskOutcome{}, ErrOutputInvalid
+		return core.TaskOutcome{}, ErrOutputInvalid
 	}
-	return core.CoordinatorTaskOutcome{Result: encoded}, nil
+	return core.TaskOutcome{Result: encoded}, nil
 }
 
 // Handle executes one trusted, versioned worker request. Durable state is
@@ -173,7 +175,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 		return Result{}, err
 	}
 	if source.ID != request.SourceFileID {
-		return Result{}, ErrJobConflict
+		return Result{}, ErrTaskConflict
 	}
 	if err := ValidateSource(preset, source.ContentType, source.Size); err != nil {
 		return Result{}, err
@@ -182,16 +184,16 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 	if err != nil {
 		return Result{}, err
 	}
-	key := jobKey(request.JobID)
+	key := taskRunKey(request.TaskID)
 	record, err := h.data.Get(ctx, key)
 	if err == nil {
-		var persisted JobRecord
-		if record.PayloadVersion != DataPayloadVersion || json.Unmarshal(record.Payload, &persisted) != nil || !sameJob(persisted, request) {
-			return Result{}, ErrJobConflict
+		var persisted RunRecord
+		if record.PayloadVersion != DataPayloadVersion || json.Unmarshal(record.Payload, &persisted) != nil || !sameRun(persisted, request) {
+			return Result{}, ErrTaskConflict
 		}
 		if persisted.Fingerprint != fingerprint {
-			// A changed source checksum or preset version cannot silently reuse a job.
-			return Result{}, ErrJobConflict
+			// A changed source checksum or preset version cannot silently reuse a task.
+			return Result{}, ErrTaskConflict
 		}
 		if persisted.State == "ready" && persisted.Result != nil {
 			if err := ValidateOutput(preset, *persisted.Result); err != nil {
@@ -203,7 +205,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 			return *persisted.Result, nil
 		}
 		if persisted.State != "queued" && persisted.State != "retryable_failed" && persisted.State != "processing" && persisted.State != "storing" {
-			return Result{}, ErrJobConflict
+			return Result{}, ErrTaskConflict
 		}
 	} else if errors.Is(err, core.ErrModuleDataNotFound) {
 		record = core.ModuleDataRecord{}
@@ -211,16 +213,17 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 		return Result{}, err
 	}
 
-	state := JobRecord{Version: DataPayloadVersion, JobID: request.JobID, SourceFileID: request.SourceFileID,
+	state := RunRecord{Version: DataPayloadVersion, TaskID: request.TaskID, SourceFileID: request.SourceFileID,
 		Profile: request.Profile, ProfileVersion: request.ProfileVersion, IdempotencyKey: request.IdempotencyKey,
 		Fingerprint: fingerprint, State: "queued", UpdatedAt: time.Now().UTC()}
 	if record.Revision > 0 {
-		var prior JobRecord
+		var prior RunRecord
 		if record.PayloadVersion != DataPayloadVersion || json.Unmarshal(record.Payload, &prior) != nil || (prior.State != "retryable_failed" && prior.State != "queued" && prior.State != "processing" && prior.State != "storing") {
-			return Result{}, ErrJobConflict
+			return Result{}, ErrTaskConflict
 		}
 	}
-	if err := h.putState(ctx, key, state, record.Revision); err != nil {
+	record, err = h.putStateWithRecord(ctx, key, state, record.Revision)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -230,7 +233,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 	}
 	defer body.Close()
 	if actualSource.SHA256 != source.SHA256 || actualSource.Size != source.Size || !sameGroups(actualSource.Groups, source.Groups) {
-		return Result{}, ErrJobConflict
+		return Result{}, ErrTaskConflict
 	}
 	if err := ValidateSource(preset, actualSource.ContentType, actualSource.Size); err != nil {
 		return Result{}, err
@@ -262,7 +265,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 	if err != nil {
 		return Result{}, err
 	}
-	metadata := map[string]string{"worker": "media", "job_id": request.JobID, "source_file_id": request.SourceFileID, "fingerprint": fingerprint}
+	metadata := map[string]string{"worker": "media", "job_id": request.TaskID, "source_file_id": request.SourceFileID, "fingerprint": fingerprint}
 	outputID, err := h.files.CreateFileVerified(ctx, session, state.OutputRequestKey, actualSource.Groups, metadata,
 		output.ContentType, output.Size, output.SHA256, output.Body)
 	if err != nil {
@@ -294,12 +297,12 @@ func (h *Handler) verifyOutput(ctx context.Context, session core.Session, expect
 	return nil
 }
 
-func (h *Handler) putState(ctx context.Context, key core.ModuleDataKey, value JobRecord, revision int64) error {
+func (h *Handler) putState(ctx context.Context, key core.ModuleDataKey, value RunRecord, revision int64) error {
 	_, err := h.putStateWithRecord(ctx, key, value, revision)
 	return err
 }
 
-func (h *Handler) putStateWithRecord(ctx context.Context, key core.ModuleDataKey, state JobRecord, revision int64) (core.ModuleDataRecord, error) {
+func (h *Handler) putStateWithRecord(ctx context.Context, key core.ModuleDataKey, state RunRecord, revision int64) (core.ModuleDataRecord, error) {
 	payload, err := json.Marshal(state)
 	if err != nil {
 		return core.ModuleDataRecord{}, err
@@ -307,11 +310,11 @@ func (h *Handler) putStateWithRecord(ctx context.Context, key core.ModuleDataKey
 	return h.data.Put(ctx, key, core.ModuleDataValue{Payload: payload, PayloadVersion: DataPayloadVersion, IndexData: json.RawMessage(`{}`)}, revision)
 }
 
-func jobKey(id string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: id, RecordKey: "job"}
+func taskRunKey(id string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: id, RecordKey: "task"}
 }
-func sameJob(saved JobRecord, request Request) bool {
-	return saved.Version == DataPayloadVersion && saved.JobID == request.JobID && saved.SourceFileID == request.SourceFileID &&
+func sameRun(saved RunRecord, request Request) bool {
+	return saved.Version == DataPayloadVersion && saved.TaskID == request.TaskID && saved.SourceFileID == request.SourceFileID &&
 		saved.Profile == request.Profile && saved.ProfileVersion == request.ProfileVersion && saved.IdempotencyKey == request.IdempotencyKey
 }
 func outputRequestKey(request Request, fingerprint string) string {
