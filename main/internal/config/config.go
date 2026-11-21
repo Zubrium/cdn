@@ -130,6 +130,11 @@ type FormsAPI struct {
 	ExportMaxBytes             int64  `yaml:"export_max_bytes"`
 }
 
+type ContentAPI struct {
+	ServiceCredentialEnv string `yaml:"service_credential_env"`
+	Locale               string `yaml:"locale"`
+}
+
 type HTTP struct {
 	ListenAddress     string `yaml:"listen_address"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
@@ -219,6 +224,11 @@ type FormsAPISettings struct {
 	ExportMaxBytes             int64
 }
 
+type ContentAPISettings struct {
+	ServiceCredential string
+	Locale            string
+}
+
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -226,6 +236,7 @@ type Resolved struct {
 	AdminAPI               AdminAPISettings
 	RouterAPI              RouterAPISettings
 	FormsAPI               FormsAPISettings
+	ContentAPI             ContentAPISettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
@@ -280,6 +291,24 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 				settings.VisitorSessionCleanupEvery <= 0 || settings.VisitorSessionCleanupEvery > 24*time.Hour {
 				return errors.New("Forms Engine requires an explicit file service credential, visitor session TTL, and cleanup interval")
 			}
+		}
+	}
+	if _, hasContentEngine := selected["engine.content"]; hasContentEngine {
+		if _, hasWebsiteEngine := selected["engine.website"]; !hasWebsiteEngine {
+			return errors.New("Content Engine requires engine.website")
+		}
+		if _, fixtures := selected["development.fixtures"]; !fixtures {
+			if r.ContentAPI.ServiceCredential == "" || r.ContentAPI.Locale == "" {
+				return errors.New("Content Engine requires an explicit service credential and locale")
+			}
+		}
+	}
+	if _, hasPublicContentRuntime := selected["public.content-runtime"]; hasPublicContentRuntime {
+		if _, hasContentEngine := selected["engine.content"]; !hasContentEngine {
+			return errors.New("public.content-runtime requires engine.content")
+		}
+		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
+			return errors.New("public.content-runtime requires public.router")
 		}
 	}
 	if _, hasPublicFormSession := selected["public.form-session"]; hasPublicFormSession {
@@ -486,6 +515,16 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if c.FormsAPI.FileServiceCredentialEnv != "" && (!envName.MatchString(c.FormsAPI.FileServiceCredentialEnv) || len(c.FormsAPI.FileServiceCredentialEnv) > 128) {
 		return Resolved{}, errors.New("invalid Forms file service credential environment name")
 	}
+	if c.ContentAPI.ServiceCredentialEnv != "" && (!envName.MatchString(c.ContentAPI.ServiceCredentialEnv) || len(c.ContentAPI.ServiceCredentialEnv) > 128) {
+		return Resolved{}, errors.New("invalid Content service credential environment name")
+	}
+	// A missing content_api block is valid for profiles without engine.content.
+	// Once either field is present, both values must be explicitly usable.
+	if c.ContentAPI.ServiceCredentialEnv != "" || c.ContentAPI.Locale != "" {
+		if !validContentLocale(c.ContentAPI.Locale) {
+			return Resolved{}, errors.New("invalid Content locale")
+		}
+	}
 	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
 		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
 	}
@@ -518,6 +557,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		formsFileServiceCredential = getenv(c.FormsAPI.FileServiceCredentialEnv)
 		if formsFileServiceCredential == "" || strings.ContainsRune(formsFileServiceCredential, '\x00') {
 			return Resolved{}, errors.New("configured Forms file service credential is empty or invalid")
+		}
+	}
+	var contentServiceCredential string
+	if c.ContentAPI.ServiceCredentialEnv != "" {
+		contentServiceCredential = getenv(c.ContentAPI.ServiceCredentialEnv)
+		if contentServiceCredential == "" || strings.ContainsRune(contentServiceCredential, '\x00') {
+			return Resolved{}, errors.New("configured Content service credential is empty or invalid")
 		}
 	}
 	if c.Core.AccessGroups == nil {
@@ -571,6 +617,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		FormsAPI: FormsAPISettings{FileServiceCredential: formsFileServiceCredential, VisitorSessionTTL: formsSessionTTL,
 			VisitorSessionCleanupEvery: formsCleanupInterval, ExportMaxConcurrent: c.FormsAPI.ExportMaxConcurrent,
 			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},
+		ContentAPI: ContentAPISettings{ServiceCredential: contentServiceCredential, Locale: c.ContentAPI.Locale},
 		Coordinator: CoordinatorSettings{
 			WorkflowAccessGroup:  c.Coordinator.WorkflowAccessGroup,
 			WorkflowsPageDefault: c.Coordinator.WorkflowsPageDefault, WorkflowsPageMaximum: c.Coordinator.WorkflowsPageMaximum,
@@ -591,6 +638,7 @@ type Config struct {
 	AdminAPI    AdminAPI          `yaml:"admin_api"`
 	RouterAPI   RouterAPI         `yaml:"router_api"`
 	FormsAPI    FormsAPI          `yaml:"forms_api"`
+	ContentAPI  ContentAPI        `yaml:"content_api"`
 	HTTP        HTTP              `yaml:"http"`
 	Coordinator CoordinatorConfig `yaml:"coordinator"`
 }
@@ -749,6 +797,19 @@ func validListenAddress(value string) bool {
 	}
 	port, err := strconv.Atoi(portText)
 	return err == nil && port > 0 && port <= 65535
+}
+
+func validContentLocale(value string) bool {
+	if value == "" || len(value) > 35 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validBranchID(value string) bool {

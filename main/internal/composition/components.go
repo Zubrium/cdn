@@ -2,6 +2,7 @@ package composition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -21,6 +22,7 @@ type coreComponent struct {
 	runtime    *platform.Runtime
 	secret     string
 	catalog    *platform.WorkerCatalog
+	selected   map[string]struct{}
 	dispatcher *bus.Dispatcher
 }
 
@@ -81,20 +83,29 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		_ = runtime.Close()
 		return fmt.Errorf("start Core Coordinator: %w", err)
 	}
-	dispatcher, err := bus.NewAllowlisted(contracts.CoreReadinessOperation().Key)
-	if err != nil {
+	if c.dispatcher == nil {
 		_ = runtime.Close()
-		return fmt.Errorf("configure runtime bus allowlist: %w", err)
+		return errors.New("runtime bus is not configured")
 	}
-	if err := bus.RegisterCoreReadiness(dispatcher, runtime.CoordinatorStartupReady); err != nil {
+	if err := bus.RegisterCoreReadiness(c.dispatcher, runtime.CoordinatorStartupReady); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("register Core readiness operation: %w", err)
 	}
-	if err := dispatcher.Seal(); err != nil {
+	if _, selected := c.selected["admin.coordinator"]; selected {
+		control, err := runtime.NewWorkflowControl()
+		if err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("configure workflow control operation: %w", err)
+		}
+		if err := bus.RegisterWorkflowControl(c.dispatcher, control); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register workflow control operations: %w", err)
+		}
+	}
+	if err := c.dispatcher.Seal(); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("seal runtime bus: %w", err)
 	}
-	c.dispatcher = dispatcher
 	return nil
 }
 
@@ -324,6 +335,47 @@ func (c liveWorkflowControl) RetryTask(ctx context.Context, workflowID, taskID u
 	return control.RetryTask(ctx, workflowID, taskID)
 }
 
+type busWorkflowControl struct{ dispatcher contracts.Dispatcher }
+
+func (c busWorkflowControl) List(ctx context.Context, filter platform.WorkflowListFilter) (platform.WorkflowPage, error) {
+	request := contracts.WorkflowListRequest{State: filter.State, Limit: filter.Limit}
+	if filter.Before != nil {
+		request.Before = &contracts.WorkflowCursor{ID: filter.Before.ID.String(), CreatedAt: filter.Before.CreatedAt}
+	}
+	response, err := contracts.Call(ctx, c.dispatcher, contracts.WorkflowListOperation(), request)
+	if err != nil {
+		return platform.WorkflowPage{}, err
+	}
+	var page platform.WorkflowPage
+	if err := json.Unmarshal(response.Payload, &page); err != nil {
+		return platform.WorkflowPage{}, err
+	}
+	return page, nil
+}
+
+func (c busWorkflowControl) Get(ctx context.Context, id uuid.UUID, filter platform.WorkflowDetailFilter) (platform.WorkflowDetail, error) {
+	request := contracts.WorkflowGetRequest{WorkflowID: id.String(), Limit: filter.Limit}
+	if filter.Before != nil {
+		request.Before = &contracts.TaskCursor{ID: filter.Before.ID.String(), CreatedAt: filter.Before.CreatedAt}
+	}
+	response, err := contracts.Call(ctx, c.dispatcher, contracts.WorkflowGetOperation(), request)
+	if err != nil {
+		return platform.WorkflowDetail{}, err
+	}
+	var detail platform.WorkflowDetail
+	if err := json.Unmarshal(response.Payload, &detail); err != nil {
+		return platform.WorkflowDetail{}, err
+	}
+	return detail, nil
+}
+
+func (c busWorkflowControl) RetryTask(ctx context.Context, workflowID, taskID uuid.UUID) error {
+	_, err := contracts.Call(ctx, c.dispatcher, contracts.WorkflowRetryOperation(), contracts.WorkflowRetryRequest{
+		WorkflowID: workflowID.String(), TaskID: taskID.String(),
+	})
+	return err
+}
+
 func (c *fileAPIComponent) Ready(context.Context) error {
 	if c == nil || c.server == nil || !c.server.IsReady() {
 		return errors.New("Admin transport is not initialized")
@@ -358,19 +410,35 @@ func (c *fileAPIComponent) Errors() <-chan error {
 }
 
 func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*platform.RuntimeRegistry, *coreComponent, *loaderComponent, *fileAPIComponent, error) {
-	registry := platform.NewRuntimeRegistry()
-	catalog, err := registry.CompileWorkerCatalog(plan)
-	if err != nil {
-		return nil, nil, nil, nil, err
+	if len(plan.Components) == 0 {
+		return nil, nil, nil, nil, platform.ErrCoordinatorInputInvalid
 	}
+	registry := platform.NewRuntimeRegistry()
 	selected := make(map[string]struct{}, len(plan.Components))
 	for _, id := range plan.Components {
 		selected[id] = struct{}{}
 	}
+	if err := registerWorkerHandlers(registry, selected); err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("register worker handlers: %w", err)
+	}
+	keys := []contracts.Key{contracts.CoreReadinessOperation().Key}
+	if _, ok := selected["admin.coordinator"]; ok {
+		keys = append(keys, contracts.WorkflowListOperation().Key, contracts.WorkflowGetOperation().Key, contracts.WorkflowRetryOperation().Key)
+	}
+	if _, ok := selected["public.content-runtime"]; ok {
+		keys = append(keys, contracts.PublishedContentReadOperation().Key)
+	}
+	dispatcher, err := bus.NewAllowlisted(keys...)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := dispatcher.EnableScopedStreams(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	if err := validateRunnableComposition(selected); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	core := &coreComponent{config: resolved, catalog: catalog}
+	core := &coreComponent{config: resolved, selected: selected, dispatcher: dispatcher}
 	loader := &loaderComponent{core: core, config: resolved}
 	fileAPI := &fileAPIComponent{loader: loader, core: core, config: resolved}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]
@@ -385,10 +453,21 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	}
 	_, fileAPI.routerAdminEnabled = selected["admin.router"]
 	if _, enabled := selected["admin.coordinator"]; enabled {
-		fileAPI.workflowControl = liveWorkflowControl{core: core}
+		fileAPI.workflowControl = busWorkflowControl{dispatcher: dispatcher}
 	}
 	if err := registry.Register(platform.RuntimeComponent{ID: "core", New: func(context.Context) (platform.ManagedComponent, error) { return core, nil }}); err != nil {
 		return nil, nil, nil, nil, err
+	}
+	for _, workerID := range []string{"worker.archive", "worker.media", "worker.prerender"} {
+		if _, ok := selected[workerID]; !ok {
+			continue
+		}
+		workerID := workerID
+		if err := registry.Register(platform.RuntimeComponent{ID: workerID, Requires: []string{"core"}, New: func(ctx context.Context) (platform.ManagedComponent, error) {
+			return newWorkerComponent(ctx, workerID)
+		}}); err != nil {
+			return nil, nil, nil, nil, err
+		}
 	}
 	if err := registry.Register(platform.RuntimeComponent{ID: "engine.loader", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return loader, nil }}); err != nil {
 		return nil, nil, nil, nil, err
@@ -408,6 +487,30 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		websiteEngine = &websiteEngineComponent{core: core, config: resolved}
 		fileAPI.websiteEngine = websiteEngine
 		if err := registry.Register(platform.RuntimeComponent{ID: "engine.website", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return websiteEngine, nil }}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	var contentEngine *contentEngineComponent
+	if _, enabled := selected["engine.content"]; enabled && !fileAPI.developmentFixtures {
+		if websiteEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		contentEngine = newContentEngineComponent(core, resolved, nil)
+		if _, enabled := selected["public.content-runtime"]; enabled {
+			if err := bus.RegisterPublishedContent(dispatcher, func(ctx context.Context, pageSnapshotID, locale string) (json.RawMessage, error) {
+				content, err := contentEngine.ReadPublishedContent(ctx, pageSnapshotID, locale)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(content)
+			}); err != nil {
+				return nil, nil, nil, nil, err
+			}
+		}
+		if err := registry.Register(platform.RuntimeComponent{ID: "engine.content", Requires: []string{"core", "engine.website"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			contentEngine.website = websiteEngine.service
+			return contentEngine, nil
+		}}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -459,6 +562,15 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, err
 		}
 	}
+	if _, enabled := selected["admin.content"]; enabled && !fileAPI.developmentFixtures {
+		if contentEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		adminContent := &readyComponent{id: "admin.content"}
+		if err := registry.Register(platform.RuntimeComponent{ID: "admin.content", Requires: []string{"core", "engine.website", "engine.content", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminContent, nil }}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	if fileAPI.developmentFixtures {
 		for _, item := range []struct {
 			id       string
@@ -480,7 +592,10 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		if formsEngine != nil {
 			requires = append(requires, "engine.forms")
 		}
-		routerEngine = &routerEngineComponent{core: core, loader: loader, forms: formsEngine, config: resolved, selected: selected}
+		if contentEngine != nil {
+			requires = append(requires, "engine.content")
+		}
+		routerEngine = &routerEngineComponent{core: core, loader: loader, forms: formsEngine, content: contentEngine, config: resolved, selected: selected, dispatcher: dispatcher}
 		fileAPI.routerEngine = routerEngine
 		if err := registry.Register(platform.RuntimeComponent{ID: "engine.router", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
@@ -501,6 +616,16 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		}
 		publicAPI := &publicRouterComponent{core: core, engine: routerEngine, config: resolved}
 		if err := registry.Register(platform.RuntimeComponent{ID: "public.router", Requires: []string{"engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) { return publicAPI, nil }}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	if _, enabled := selected["public.content-runtime"]; enabled {
+		if routerEngine == nil || contentEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		if err := registry.Register(platform.RuntimeComponent{ID: "public.content-runtime", Requires: []string{"core", "engine.website", "engine.content", "engine.router", "public.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return &readyComponent{id: "public.content-runtime"}, nil
+		}}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -537,6 +662,11 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, err
 		}
 	}
+	catalog, err := registry.CompileWorkerCatalog(plan)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	core.catalog = catalog
 	return registry, core, loader, fileAPI, nil
 }
 
@@ -548,8 +678,9 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	}
 	available := map[string]struct{}{
 		"core": {}, "engine.loader": {}, "admin.files": {}, "admin.coordinator": {}, "admin.identity": {}, "admin.notifications": {},
-		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "admin.website": {}, "admin.forms": {}, "admin.router": {}, "public.router": {}, "public.form-upload": {},
+		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
 		"public.form-session": {}, "public.form-submit": {},
+		"worker.archive": {}, "worker.media": {}, "worker.prerender": {},
 	}
 	if _, fixtures := selected["development.fixtures"]; fixtures {
 		for _, component := range []string{"development.fixtures", "engine.website", "engine.content", "engine.forms", "admin.website", "admin.content", "admin.forms"} {
@@ -562,6 +693,15 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 		}
 	}
 	return nil
+}
+
+func failClosedWorker(componentID string) platform.WorkerHandler {
+	return func(ctx context.Context, _ platform.Task) (platform.TaskOutcome, error) {
+		if err := ctx.Err(); err != nil {
+			return platform.TaskOutcome{}, err
+		}
+		return platform.TaskOutcome{}, fmt.Errorf("%s is compiled but has no server-side execution configuration", componentID)
+	}
 }
 
 type readyComponent struct {

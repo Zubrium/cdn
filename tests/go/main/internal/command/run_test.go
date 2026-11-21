@@ -101,6 +101,7 @@ router_api:
   max_page_size: 100
   branch_id: branch-a
   service_credential_env: TEST_ROUTER_SERVICE
+  form_session_cookie_secure: false
   public_listen_address: 127.0.0.1:8081
   upload_staging_directory: /tmp/zubrium-router-upload-qa
   upload_max_file_bytes: 524288
@@ -108,9 +109,15 @@ router_api:
   upload_max_staged_bytes: 524288
   upload_allowed_content_types: [image/png]
 forms_api:
+  file_service_credential_env: TEST_FORMS_SERVICE
+  visitor_session_ttl: 30m
+  visitor_session_cleanup_interval: 1m
   export_max_concurrent: 2
   export_max_rows: 10000
   export_max_bytes: 33554432
+content_api:
+  service_credential_env: TEST_CONTENT_SERVICE
+  locale: en-US
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s
@@ -144,6 +151,8 @@ coordinator:
 	t.Setenv("TEST_ACCESS", "test")
 	t.Setenv("TEST_SECRET", "test")
 	t.Setenv("TEST_ROUTER_SERVICE", "test")
+	t.Setenv("TEST_FORMS_SERVICE", "test")
+	t.Setenv("TEST_CONTENT_SERVICE", "test")
 	out.Reset()
 	stderr.Reset()
 	if code := Run([]string{"--check-config", path}, &out, &stderr); code != 0 {

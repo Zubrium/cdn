@@ -160,9 +160,9 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 }
 
 func TestComponentRegistrationFailsClosedForUnimplementedSelectedAPIs(t *testing.T) {
-	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "engine.content", "admin.content"}}
+	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "engine.unknown"}}
 	_, _, _, _, err := registerComponents(appconfig.Resolved{}, plan)
 	if err == nil || !strings.Contains(err.Error(), "has no runtime implementation") {
-		t.Fatalf("selected Content API was silently omitted instead of failing startup: %v", err)
+		t.Fatalf("unimplemented component was silently omitted instead of failing startup: %v", err)
 	}
 }

@@ -95,6 +95,12 @@ func main() {
 						}
 					}
 				}
+				if isPresentationModule(owner.path) && isInternalEngineImport(importPath) {
+					file := relative(root, path)
+					if !presentationImportAllowed(file, importPath) {
+						violations = append(violations, fmt.Sprintf("%s imports engine internals %q; use the engine presentation facade", file, importPath))
+					}
+				}
 			}
 			return nil
 		})
@@ -103,6 +109,9 @@ func main() {
 		}
 	}
 
+	violations = append(violations, checkRuntimeBusIsolation(root, localModules)...)
+	violations = append(violations, checkIsolationProfiles(root)...)
+
 	if len(violations) > 0 {
 		fmt.Fprintln(os.Stderr, "Architecture boundary violations:")
 		for _, violation := range violations {
@@ -110,7 +119,7 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	fmt.Printf("Architecture boundaries OK: Core has no repository-local module dependencies; checked Core API and cross-engine imports across %d repository-local Go modules.\n", len(localModules))
+	fmt.Printf("Architecture boundaries OK: Core, cross-engine, runtime bus and compiled profiles checked across %d repository-local Go modules.\n", len(localModules))
 }
 
 func repositoryRoot() (string, error) {

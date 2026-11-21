@@ -138,6 +138,30 @@ paths:
     x-prefix-match: complete-path-segment
     x-exact-route-precedence: exact-wins-then-longest-prefix
     x-max-normalized-path-segments: 31
+    x-public-content-runtime-operation:
+      methods: [GET, HEAD]
+      config_schema: '#/components/schemas/PublicContentRuntimeRouteConfig'
+      success_response:
+        status: 200
+        cache-control: no-store
+        etag: content_revision quoted as a strong validator
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [snapshot_id, locale, content_revision, records, selections]
+              properties:
+                snapshot_id: { type: string, format: uuid }
+                locale: { type: string, pattern: '^[A-Za-z0-9_-]{1,35}$' }
+                content_revision: { type: integer, format: int64 }
+                records: { type: array, items: { type: object } }
+                selections: { type: array, items: { type: object } }
+        head: { status: 200, body: none, same_headers: true }
+        not_modified: { status: 304, body: none, when: If-None-Match matches the strong ETag }
+      body: none
+      visitor_inputs: none
+      errors: [400, 404, 503]
     get:
       operationId: deliverConfiguredPublicGET
       security: []
@@ -329,7 +353,8 @@ components:
             public.form-upload: { $ref: '#/components/schemas/PublicUploadRouteConfig' }
             public.form-session: { $ref: '#/components/schemas/PublicFormBinding' }
             public.form-submit: { $ref: '#/components/schemas/PublicFormBinding' }
-          additionalProperties: true
+            public.content-runtime: { $ref: '#/components/schemas/PublicContentRuntimeRouteConfig' }
+          additionalProperties: false
     LocaleArtifactTarget:
       type: object
       additionalProperties: false
@@ -374,6 +399,21 @@ components:
           file_set_id: 01938f7a-68af-7c10-a51d-78b6ca125301
           max_bytes: 10485760
           allowed_content_types: [image/jpeg, image/png, application/pdf]
+    PublicContentRuntimeRouteConfig:
+      type: object
+      additionalProperties: false
+      description: >-
+        Strict server-side deployment configuration for public.content-runtime.
+        Unknown fields are rejected. No visitor value can override these fields.
+      required: [enabled, page_snapshot_id, locale]
+      properties:
+        enabled: { const: true }
+        page_snapshot_id:
+          type: string
+          format: uuid
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          description: Canonical immutable Website page snapshot selected by the deployment.
+        locale: { type: string, pattern: '^[A-Za-z0-9_-]{1,35}$' }
     PublicFormBinding:
       type: object
       additionalProperties: false

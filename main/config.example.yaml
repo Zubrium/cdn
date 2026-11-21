@@ -118,6 +118,13 @@ forms_api:
   export_max_rows: 10000
   export_max_bytes: 33554432
 
+content_api:
+  # This ordinary Core user needs read/write access to the content group and
+  # read access to the features group. Content uses it only as a trusted
+  # service identity for Website projections; browser clients never receive it.
+  service_credential_env: ZUBRIUM_CONTENT_SERVICE_CREDENTIAL
+  locale: en-US
+
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s

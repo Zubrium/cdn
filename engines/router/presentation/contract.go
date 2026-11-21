@@ -130,6 +130,7 @@ type PublicOperationRequest struct {
 	ContentType       string
 	ContentLength     int64
 	IdempotencyKey    string
+	IfNoneMatch       string
 	Body              io.Reader
 	FormSessionTokens map[string]string
 }

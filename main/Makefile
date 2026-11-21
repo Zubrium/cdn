@@ -6,7 +6,7 @@ MODULES := core engines/website engines/content engines/forms engines/loader eng
 PACKAGES := $(addsuffix /...,$(addprefix ./,$(MODULES)))
 COVER_PACKAGES := $(subst $(space),$(comma),$(strip $(PACKAGES)))
 
-.PHONY: generate-profiles build build-full build-router build-dev-fixtures test test-router test-dev-fixtures coverage vet lint lint-core-boundary
+.PHONY: generate-profiles build build-full build-router build-dev-fixtures test test-full test-router test-dev-fixtures coverage vet lint lint-core-boundary
 generate-profiles:
 	cd "$(ROOT)" && cd main && go run ./internal/buildprofile/cmd/profilegen -profile profiles/minimal.yaml -out internal/composition/profile_core_generated.go -package composition -tag '!full && !devfixtures && !router'
 	cd "$(ROOT)" && cd main && go run ./internal/buildprofile/cmd/profilegen -profile profiles/full.yaml -out internal/composition/profile_full_generated.go -package composition -tag 'full && !devfixtures && !router'
@@ -32,6 +32,9 @@ test-dev-fixtures: generate-profiles
 test:
 	@set -eu; cd "$(ROOT)"; overlay=$$(mktemp); trap 'rm -f "$$overlay"' EXIT; python3 tests/go-overlay.py > "$$overlay"; for module in $(MODULES); do (cd "$$module" && go test -count=1 -overlay="$$overlay" ./...); done; (cd main && go test -count=1 -tags=router -overlay="$$overlay" ./...)
 
+test-full: generate-profiles
+	@set -eu; cd "$(ROOT)"; overlay=$$(mktemp); trap 'rm -f "$$overlay"' EXIT; python3 tests/go-overlay.py > "$$overlay"; (cd main && go test -count=1 -tags=full -overlay="$$overlay" ./...)
+
 test-router:
 	@set -eu; cd "$(ROOT)"; overlay=$$(mktemp); trap 'rm -f "$$overlay"' EXIT; python3 tests/go-overlay.py > "$$overlay"; (cd main && go test -count=1 -tags=router -overlay="$$overlay" ./...)
 
@@ -50,4 +53,5 @@ vet: lint-core-boundary
 lint: lint-core-boundary
 
 lint-core-boundary:
-	cd "$(ROOT)" && GOWORK=off GO111MODULE=off go run ./tests/linter/lint_core_boundary.go
+	cd "$(ROOT)" && GOWORK=off GO111MODULE=off go test ./tests/linter
+	cd "$(ROOT)" && GOWORK=off GO111MODULE=off go run ./tests/linter

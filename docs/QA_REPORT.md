@@ -1,6 +1,25 @@
 # QA-отчёт
 
-## Текущий проход — удаление мультисайтности (2026-11-21)
+## Текущий проход — изоляция `main`, профили и runtime-интеграции (2026-11-21)
+
+### Подтверждённые проверки
+
+- `make lint-core-boundary` PASS: `Architecture boundaries OK: Core, cross-engine, runtime bus and compiled profiles checked across 19 repository-local Go modules.` Линтер в `tests/linter` проверяет импорты, stale/невалидные YAML-профили и сгенерированные файлы, прямой вызов raw `Dispatch` вне `main`, а также новые внутренние импорты engines из внешнего Presentation (для четырёх существующих legacy-импортов сохранён явный baseline).
+- Из корня PASS: `make test`, `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures`, `make test-full`, `make test-router`, `make test-dev-fixtures`. Все 19 модулей `go.work` отдельно прошли `go test ./...`, `go vet ./...` и `go build ./...`.
+- Новые package-тесты PASS: `pkg/contracts`, `main/internal/bus` (scoped streams, consumed/closed refs, workflow operations, published-content operation), `main/internal/composition` (Content projection, profile composition, workflow wiring, чтение Content только через typed bus operation), `presentation/router/publiccontentruntime` (GET/HEAD, ETag/304, server-side route config, отказ visitor input).
+- OpenAPI `spec/presentation/openapi/router.yaml` и `tests/ACCEPTANCE-MATRIX.md` синхронизированы с `public.content-runtime`: только GET/HEAD, `page_snapshot_id`/`locale` из server config, strict config schema без неизвестных полей, `no-store`, quoted strong ETag и 304 по `If-None-Match`. Контрактный тест Router прошёл в составе `make test`.
+- Публичный Content runtime не хранит прямой ссылки на Content engine: Router-side adapter вызывает запечатанный dispatcher через статическую операцию `content.published.read`; allowlist операции включается только при выбранном `public.content-runtime`.
+- Admin SPA из `frontend/`: `pnpm --filter @website-engine/admin typecheck`, `test` (47 файлов, 213 тестов) и `build` — PASS.
+
+### Ограничения текущего прохода
+
+- Worker handlers скомпилированы и выбираются профилем, однако archive/media/prerender остаются fail-closed без server-side execution configuration; реальная изоляция Media runner и prerender pipeline не реализованы в этой задаче.
+- Full-профиль проходит сборку и статические тесты композиции, но не прогонялся против живого PostgreSQL/S3 и реальных feature builds. Trusted Content projections проверены unit-тестами на stub Website API.
+- `pnpm lint` в `frontend/` падает до проверки кода: отсутствует каталог `pkg/runtime/scripts`. Прямой `npx eslint --config eslint.config.js admin` даёт две существующие ошибки `react-hooks/exhaustive-deps` в `MediaPickerDialog.tsx` и `MediaPage.tsx`; ESLint-конфигурация вне зоны изменений.
+- Integration-, browser- и release-проверки, а также disposable PostgreSQL/S3 acceptance в этом проходе не запускались; их статус не меняется на `pass`.
+- Коммит и push выполняются только по прямому запросу пользователя после проверки `git status`.
+
+## Ранее зафиксированный проход — удаление мультисайтности (2026-11-21)
 
 ### Подтверждённые проверки
 

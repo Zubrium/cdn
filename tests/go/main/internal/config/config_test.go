@@ -426,3 +426,47 @@ func TestLoadRejectsUnencryptedNonLoopbackS3(t *testing.T) {
 		t.Fatal("unencrypted remote S3 endpoint accepted")
 	}
 }
+
+func TestResolveContentAPICredentialAndLocale(t *testing.T) {
+	values := map[string]string{
+		"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"ACCESS":       "access", "SECRET": "secret",
+		"CONTENT_SERVICE": "content-service-credential",
+	}
+	getenv := func(key string) string { return values[key] }
+	config := validRuntimeConfig()
+	config.ContentAPI = ContentAPI{ServiceCredentialEnv: "CONTENT_SERVICE", Locale: "en-US"}
+	resolved, err := config.Resolve(getenv)
+	if err != nil {
+		t.Fatalf("valid Content API configuration rejected: %v", err)
+	}
+	if resolved.ContentAPI.ServiceCredential != values["CONTENT_SERVICE"] || resolved.ContentAPI.Locale != "en-US" {
+		t.Fatalf("resolved Content API settings = %+v", resolved.ContentAPI)
+	}
+
+	// Profiles without engine.content keep resolving without a content_api block.
+	if _, err := (validRuntimeConfig()).Resolve(getenv); err != nil {
+		t.Fatalf("profile without Content API rejected: %v", err)
+	}
+
+	delete(values, "CONTENT_SERVICE")
+	if _, err := config.Resolve(getenv); err == nil {
+		t.Fatal("empty Content service credential accepted")
+	}
+	values["CONTENT_SERVICE"] = "content-service-credential"
+	for _, name := range []string{"BAD NAME", "9CONTENT", strings.Repeat("C", 129)} {
+		invalid := config
+		invalid.ContentAPI.ServiceCredentialEnv = name
+		if _, err := invalid.Resolve(getenv); err == nil {
+			t.Fatalf("invalid Content credential environment name %q accepted", name)
+		}
+	}
+	for _, locale := range []string{"", "en US", "en/US", strings.Repeat("a", 36)} {
+		invalid := config
+		invalid.ContentAPI.Locale = locale
+		if _, err := invalid.Resolve(getenv); err == nil {
+			t.Fatalf("invalid Content locale %q accepted", locale)
+		}
+	}
+}

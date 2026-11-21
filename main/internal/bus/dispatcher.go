@@ -12,6 +12,7 @@ import (
 var (
 	ErrClosed              = errors.New("dispatcher is closed")
 	ErrNotSealed           = errors.New("dispatcher is not sealed")
+	ErrAlreadySealed       = errors.New("dispatcher is already sealed")
 	ErrDuplicateKey        = errors.New("operation is already registered")
 	ErrHandlerNotFound     = errors.New("operation handler is not registered")
 	ErrOperationNotAllowed = errors.New("operation is not in the static allowlist")
@@ -26,6 +27,7 @@ type Dispatcher struct {
 	allowed  map[contracts.Key]struct{}
 	sealed   bool
 	closed   bool
+	streams  bool
 	active   sync.WaitGroup
 	drained  chan struct{}
 	drain    sync.Once
@@ -92,6 +94,22 @@ func (dispatcher *Dispatcher) register(key contracts.Key, handler Handler) error
 	return nil
 }
 
+func (dispatcher *Dispatcher) EnableScopedStreams() error {
+	if dispatcher == nil {
+		return contracts.ErrDispatcherUnavailable
+	}
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	if dispatcher.closed {
+		return ErrClosed
+	}
+	if dispatcher.sealed {
+		return ErrAlreadySealed
+	}
+	dispatcher.streams = true
+	return nil
+}
+
 func (dispatcher *Dispatcher) Seal() error {
 	if dispatcher == nil {
 		return contracts.ErrDispatcherUnavailable
@@ -105,7 +123,7 @@ func (dispatcher *Dispatcher) Seal() error {
 	return nil
 }
 
-func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.Envelope) (contracts.Envelope, error) {
+func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.Envelope) (result contracts.Envelope, err error) {
 	if dispatcher == nil {
 		return contracts.Envelope{}, contracts.ErrDispatcherUnavailable
 	}
@@ -131,17 +149,29 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 		dispatcher.mu.RUnlock()
 		return contracts.Envelope{}, ErrHandlerNotFound
 	}
+	withStreams := dispatcher.streams
 	dispatcher.active.Add(1)
 	dispatcher.mu.RUnlock()
 	defer dispatcher.active.Done()
 	if err := ctx.Err(); err != nil {
 		return contracts.Envelope{}, err
 	}
-	response, err := handler(ctx, request.Payload)
+	if withStreams {
+		if _, provided := contracts.StreamCapabilityFromContext(ctx); !provided {
+			streams := NewScopedStreams()
+			defer func() {
+				if closeErr := streams.Close(); err == nil {
+					err = closeErr
+				}
+			}()
+			ctx = contracts.WithStreamCapability(ctx, streams)
+		}
+	}
+	payload, err := handler(ctx, request.Payload)
 	if err != nil {
 		return contracts.Envelope{}, err
 	}
-	return contracts.Envelope{OperationID: key.ID, Version: key.Version, Payload: response}, nil
+	return contracts.Envelope{OperationID: key.ID, Version: key.Version, Payload: payload}, nil
 }
 
 func (dispatcher *Dispatcher) Close(ctx context.Context) error {

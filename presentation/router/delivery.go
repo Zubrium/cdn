@@ -176,7 +176,8 @@ func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.Delive
 		return DispatchPublicOperation(ctx, delivery.operations, route.Target, engine.PublicOperationRequest{
 			Method: request.Method, Host: route.Host, EscapedPath: path, Query: request.Query,
 			ContentType: request.ContentType, ContentLength: request.ContentLength,
-			IdempotencyKey: request.IdempotencyKey, Body: request.Body, FormSessionTokens: cloneFormSessionTokens(request.FormSessionTokens),
+			IdempotencyKey: request.IdempotencyKey, IfNoneMatch: request.IfNoneMatch,
+			Body: request.Body, FormSessionTokens: cloneFormSessionTokens(request.FormSessionTokens),
 		})
 	default:
 		return engine.DeliveryResponse{}, engine.ErrNotFound

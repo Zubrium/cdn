@@ -17,6 +17,7 @@ import (
 	_ "github.com/Zubrium/cdn/presentation/adminui"
 	_ "github.com/Zubrium/cdn/presentation/fileapi"
 	_ "github.com/Zubrium/cdn/presentation/router"
+	_ "github.com/Zubrium/cdn/presentation/router/publiccontentruntime"
 	_ "github.com/Zubrium/cdn/presentation/router/publicforms"
 	_ "github.com/Zubrium/cdn/presentation/router/publicupload"
 	_ "github.com/Zubrium/cdn/presentation/sitesapi"
@@ -32,6 +33,9 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 	if err := registry.Register("loader", loaderEngine.Descriptor{}); err != nil {
 		return err
 	}
+	if err := registry.Register("website", websiteEngine.Descriptor{}); err != nil {
+		return err
+	}
 	if err := registry.Register("content", contentEngine.Descriptor{}); err != nil {
 		return err
 	}
@@ -39,9 +43,6 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 		return err
 	}
 	if err := registry.Register("router", routerEngine.Descriptor{}); err != nil {
-		return err
-	}
-	if err := registry.Register("website", websiteEngine.Descriptor{}); err != nil {
 		return err
 	}
 	return nil
@@ -52,6 +53,7 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"core",
 		"engine.loader",
 		"admin.files",
+		"engine.website",
 		"engine.content",
 		"admin.content",
 		"admin.coordinator",
@@ -62,7 +64,6 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"engine.router",
 		"admin.router",
 		"admin.ui",
-		"engine.website",
 		"admin.website",
 		"public.router",
 		"public.content-runtime",

@@ -11,20 +11,24 @@ import (
 	routesrepo "github.com/Zubrium/cdn/engines/router/features/routes/repository"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
 	"github.com/Zubrium/cdn/presentation/router"
+	"github.com/Zubrium/cdn/presentation/router/publiccontentruntime"
 	"github.com/Zubrium/cdn/presentation/router/publicforms"
 	"github.com/Zubrium/cdn/presentation/router/publicupload"
 )
 
 type routerEngineComponent struct {
-	core     *coreComponent
-	loader   *loaderComponent
-	forms    *formsEngineComponent
-	config   appconfig.Resolved
-	selected map[string]struct{}
-	api      *routerenginepresentation.APIAdapter
-	registry *router.PublicOperationRegistry
+	core       *coreComponent
+	loader     *loaderComponent
+	forms      *formsEngineComponent
+	content    *contentEngineComponent
+	config     appconfig.Resolved
+	selected   map[string]struct{}
+	dispatcher contracts.Dispatcher
+	api        *routerenginepresentation.APIAdapter
+	registry   *router.PublicOperationRegistry
 }
 
 func (component *routerEngineComponent) Start(ctx context.Context) error {
@@ -32,13 +36,23 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		return errors.New("Router dependencies are not initialized")
 	}
 	settings := component.config.RouterAPI
-	operations := make([]routerenginepresentation.PublicOperation, 0, 3)
+	operations := make([]routerenginepresentation.PublicOperation, 0, 4)
 	var formsAPI publicforms.VisitorAPI
 	if component.forms != nil {
 		if component.forms.engine == nil {
 			return errors.New("Forms Engine is not initialized")
 		}
 		formsAPI = component.forms.engine
+	}
+	if _, enabled := component.selected["public.content-runtime"]; enabled {
+		if component.content == nil || component.content.engine == nil || component.dispatcher == nil {
+			return errors.New("Content runtime bus is not initialized")
+		}
+		content, err := publiccontentruntime.New(busPublishedContentReader{dispatcher: component.dispatcher})
+		if err != nil {
+			return fmt.Errorf("configure public Content runtime operation: %w", err)
+		}
+		operations = append(operations, content)
 	}
 	if _, enabled := component.selected["public.form-session"]; enabled {
 		session, err := publicforms.NewSessionOperation(formsAPI)

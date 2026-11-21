@@ -24,13 +24,13 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 	if err := registry.Register("loader", loaderEngine.Descriptor{}); err != nil {
 		return err
 	}
+	if err := registry.Register("website", websiteEngine.Descriptor{}); err != nil {
+		return err
+	}
 	if err := registry.Register("content", contentEngine.Descriptor{}); err != nil {
 		return err
 	}
 	if err := registry.Register("forms", formsEngine.Descriptor{}); err != nil {
-		return err
-	}
-	if err := registry.Register("website", websiteEngine.Descriptor{}); err != nil {
 		return err
 	}
 	if err := registry.Register("development.fixtures", devfixtures.Descriptor{}); err != nil {
@@ -44,13 +44,13 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"core",
 		"engine.loader",
 		"admin.files",
+		"engine.website",
 		"engine.content",
 		"admin.content",
 		"admin.coordinator",
 		"engine.forms",
 		"admin.forms",
 		"admin.identity",
-		"engine.website",
 		"admin.website",
 		"development.fixtures",
 	}}
