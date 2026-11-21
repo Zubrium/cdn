@@ -93,6 +93,7 @@ func (s *Service) Start(ctx context.Context) error {
 		LeaseDuration: s.cfg.InstanceLease, HeartbeatInterval: s.cfg.HeartbeatInterval, WorkflowRetention: s.cfg.WorkflowRetention,
 	})
 	if err != nil {
+		s.abortStart()
 		return err
 	}
 	var executor *TaskExecutor
@@ -106,6 +107,7 @@ func (s *Service) Start(ctx context.Context) error {
 			WorkflowRetention: s.cfg.WorkflowRetention,
 		}, s.cfg.Workers.handlers())
 		if err != nil {
+			s.abortStart()
 			return errors.Join(err, closeInstanceAfterStartFailure(instance, s.cfg.InstanceLease))
 		}
 	}
@@ -179,6 +181,14 @@ func (s *Service) Activate(ctx context.Context) error {
 }
 
 func (s *Service) Stop(ctx context.Context) error { return s.Close(ctx) }
+
+// abortStart releases the one-shot startup guard so a failed registration or
+// executor initialization can be retried without restarting the process.
+func (s *Service) abortStart() {
+	s.mu.Lock()
+	s.started = false
+	s.mu.Unlock()
+}
 
 func closeInstanceAfterStartFailure(instance *Instance, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

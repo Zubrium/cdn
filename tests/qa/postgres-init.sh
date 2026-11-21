@@ -23,6 +23,8 @@ for database in \
   zubrium_core_qa_credential_race \
   zubrium_core_qa_groups \
   zubrium_core_qa_schema \
+  zubrium_core_qa_dirty \
+  zubrium_core_qa_engine_data \
   zubrium_core_qa_runtime_role \
   zubrium_core_qa_coordinator \
   zubrium_core_qa_coordinator_workflow \
@@ -39,7 +41,8 @@ for database in \
   zubrium_core_qa_retention \
   zubrium_core_qa_dependency \
   zubrium_core_qa_dependency_wait \
-  zubrium_core_qa_exhausted
+  zubrium_core_qa_exhausted \
+  zubrium_core_qa_coordinator_lifecycle
 do
   psql --username "$POSTGRES_USER" --dbname postgres --set=ON_ERROR_STOP=1 --set=database="$database" <<'SQL'
 SELECT format('CREATE DATABASE %I', :'database') \gexec

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"net/url"
 	"os"
@@ -331,6 +332,37 @@ func TestDisposableMigratedSchemaHasNoRetiredModels(t *testing.T) {
 		if exists {
 			t.Errorf("retired column %s.%s.%s still exists", field.schema, field.table, field.column)
 		}
+	}
+}
+
+// A database containing an object outside the Core baseline is rejected before
+// Atlas runs. The disposable database is dedicated to this assertion so the
+// unmanaged schema may remain after the test without affecting other scenarios.
+func TestDisposableMigrationRefusesDirtyDatabaseWithoutDDL(t *testing.T) {
+	pool := openDisposablePool(t, "TEST_CORE_DIRTY_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS qa_unmanaged`); err != nil {
+		t.Fatalf("prepare unmanaged schema: %v", err)
+	}
+	if err := Migrate(ctx, pool, testAtlasBinary(), 30*time.Second); !errors.Is(err, ErrDirtyDatabase) {
+		t.Fatalf("dirty database migration error = %v, want ErrDirtyDatabase", err)
+	}
+	var coreTable, atlasHistory, unmanagedSchema bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('access.users') IS NOT NULL`).Scan(&coreTable); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.atlas_schema_revisions') IS NOT NULL`).Scan(&atlasHistory); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname='qa_unmanaged')`).Scan(&unmanagedSchema); err != nil {
+		t.Fatal(err)
+	}
+	if coreTable || atlasHistory {
+		t.Fatal("dirty database was modified by Atlas migration")
+	}
+	if !unmanagedSchema {
+		t.Fatal("unmanaged schema was removed by rejected migration")
 	}
 }
 

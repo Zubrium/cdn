@@ -28,20 +28,41 @@ type ReplaceLocaleConfigRequest struct {
 	IdempotencyKey   string   `json:"-"`
 }
 
+// maxLocaleLength matches the Admin Content API locale schema (maxLength: 64).
+// The check is applied after canonicalization because legacy tags may expand.
+const maxLocaleLength = 64
+
 // CanonicalLocale resolves BCP 47 casing and preferred language subtags.
 func CanonicalLocale(value string) (string, error) {
-	if value == "" || strings.TrimSpace(value) != value {
+	if value == "" || strings.TrimSpace(value) != value || !bcp47Characters(value) {
 		return "", ErrInvalid
 	}
 	tag, err := language.Parse(value)
 	if err != nil {
 		return "", ErrInvalid
 	}
-	canonical := language.BCP47.Canonicalize(tag).String()
-	if canonical == "" || (canonical == "und" && !strings.EqualFold(value, "und")) {
+	canonicalTag, err := language.BCP47.Canonicalize(tag)
+	if err != nil {
+		return "", ErrInvalid
+	}
+	canonical := canonicalTag.String()
+	if canonical == "" || len(canonical) > maxLocaleLength || (canonical == "und" && !strings.EqualFold(value, "und")) {
 		return "", ErrInvalid
 	}
 	return canonical, nil
+}
+
+// bcp47Characters rejects separators accepted by language.Parse for convenience
+// (for example "_"), so stored catalog entries stay canonical BCP 47 tags.
+func bcp47Characters(value string) bool {
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func NormalizeLocaleConfig(request ReplaceLocaleConfigRequest, revision int64) (LocaleConfig, error) {

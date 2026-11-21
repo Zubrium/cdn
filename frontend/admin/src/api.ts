@@ -495,12 +495,17 @@ function parseContentWorkspace(value: unknown, snapshotID: string): ModelContent
   for (const entity of dataModel?.entities ?? []) {
     for (const field of entity.fields) modelFieldTypes.set(field.id, field.type);
   }
+  if (typeof value.locale !== "string" || !value.locale || !Number.isSafeInteger(value.locale_catalog_revision) || Number(value.locale_catalog_revision) < 1 ||
+    !Number.isSafeInteger(value.selection_revision) || Number(value.selection_revision) < 0) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректные ревизии или локаль контента");
+  }
   const records = value.records.map((record): ModelContentRecord => {
-    if (!isRecord(record) || typeof record.id !== "string" || typeof record.entity_id !== "string" ||
+    if (!isRecord(record) || typeof record.id !== "string" || typeof record.translation_id !== "string" || typeof record.locale !== "string" ||
+      record.locale !== value.locale || typeof record.entity_id !== "string" ||
       !Number.isSafeInteger(record.sort_order) || Number(record.sort_order) < 0 || !isRecord(record.values)) {
       throw new ApiError(502, "invalid_response", "Сервер вернул некорректную запись контента");
     }
-    return { id: record.id, entityId: record.entity_id, sortOrder: Number(record.sort_order), values: record.values as ModelContentRecord["values"] };
+    return { id: record.id, translationId: record.translation_id, locale: record.locale, entityId: record.entity_id, sortOrder: Number(record.sort_order), values: record.values as ModelContentRecord["values"] };
   });
   const selections = value.selections.map((selection): ModelContentSelection => {
     if (!isRecord(selection) || typeof selection.placement_id !== "string" || typeof selection.input_key !== "string" ||
@@ -548,22 +553,32 @@ function parseContentWorkspace(value: unknown, snapshotID: string): ModelContent
   if (value.client_record_ids !== undefined && clientRecordIDs === undefined) {
     throw new ApiError(502, "invalid_response", "Сервер вернул некорректные идентификаторы записей");
   }
+  const clientTranslationIDs = isRecord(value.client_translation_ids) && Object.entries(value.client_translation_ids).every(([key, id]) => key.length > 0 && typeof id === "string")
+    ? value.client_translation_ids as Record<string, string>
+    : undefined;
+  if (value.client_translation_ids !== undefined && clientTranslationIDs === undefined) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректные идентификаторы переводов");
+  }
   return {
     snapshot: { id: snapshotID, site_id: value.site_id, page_id: value.page_id },
     siteId: value.site_id,
     pageSnapshotId: snapshotID,
     pageId: value.page_id,
+    locale: value.locale,
+    localeCatalogRevision: Number(value.locale_catalog_revision),
     modelRevision: Number(value.model_revision),
     modelDigest: value.model_digest,
     pageRevision: Number(value.page_revision),
     pageDigest: value.page_digest,
     dataModel,
     revision: Number(value.revision),
+    selectionRevision: Number(value.selection_revision),
     publishedRevision: Number(value.published_revision),
     records,
     selections,
     placements,
     ...(clientRecordIDs ? { clientRecordIDs } : {}),
+    ...(clientTranslationIDs ? { clientTranslationIDs } : {}),
   };
 }
 
@@ -1013,22 +1028,26 @@ export const api = {
         method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       }).then(parseContentLocaleConfig);
     },
-    workspace(snapshotID: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
-      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, { signal })
+    workspace(snapshotID: string, locale: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, { signal, query: { locale } })
         .then((value) => parseContentWorkspace(value, snapshotID));
     },
     saveWorkspaceDraft(
       snapshotID: string,
+      locale: string,
       expectedRevision: number,
+      expectedSelectionRevision: number,
       records: ModelContentRecordInput[],
       selections: ModelContentSelection[],
       idempotencyKey: string,
     ): Promise<ModelContentWorkspace> {
       const body = {
         expected_revision: expectedRevision,
+        expected_selection_revision: expectedSelectionRevision,
         records: records.map((record) => ({
           ...(record.id ? { id: record.id } : {}),
           ...(record.clientKey ? { client_key: record.clientKey } : {}),
+          ...(record.translationId ? { translation_id: record.translationId } : {}),
           entity_id: record.entityId,
           sort_order: record.sortOrder,
           values: record.values,
@@ -1041,21 +1060,21 @@ export const api = {
         })),
       };
       return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, {
-        method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body,
+        method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body, query: { locale },
       }).then((value) => parseContentWorkspace(value, snapshotID));
     },
-    publishWorkspace(snapshotID: string, expectedRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
+    publishWorkspace(snapshotID: string, locale: string, expectedRevision: number, expectedSelectionRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
       return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace/publish`, {
-        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision },
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision, expected_selection_revision: expectedSelectionRevision }, query: { locale },
       }).then((value) => parseContentWorkspace(value, snapshotID));
     },
-    history(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<ModelContentHistoryResponse> {
-      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/history`, { signal, query: { cursor, limit } })
+    history(snapshotID: string, locale: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<ModelContentHistoryResponse> {
+      return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/history`, { signal, query: { locale, cursor, limit } })
         .then(parseContentHistory);
     },
-    restoreHistory(snapshotID: string, historyID: string, expectedRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
+    restoreHistory(snapshotID: string, locale: string, historyID: string, expectedRevision: number, expectedSelectionRevision: number, idempotencyKey: string): Promise<ModelContentWorkspace> {
       return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/history/${encoded(historyID)}/restore`, {
-        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision },
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { expected_revision: expectedRevision, expected_selection_revision: expectedSelectionRevision }, query: { locale },
       }).then((value) => parseContentWorkspace(value, snapshotID));
     },
   },

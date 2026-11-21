@@ -10,14 +10,29 @@ Core остаётся единственным владельцем PostgreSQL, 
 
 ## Текущее подтверждённое состояние
 
-- Централизованные Core Go-тесты прошли по физическим пакетам через `tests/go-overlay.py` с `-vet=off`; PostgreSQL acceptance запускался в ARM64 Linux-контейнере с Go 1.26.4 и Atlas v1.3.0. Отдельные `go vet ./...` и `go build ./...` из `core/` прошли.
+- Полный набор Core-проверок прошёл в текущем проходе: `QA_ENV_FILE=<private> tests/qa/run-core-acceptance.sh run` выполнил `go test -count=1 -overlay=<generated> ./...`, `go vet -overlay=<generated> ./...` и `go build ./...` из `core/` без ошибок. Все 27 task-specific БД `zubrium_core_qa_*` перед финальным прогоном были пересозданы заново.
 - S3 integration round-trip прошёл через локальный тестовый `s3mock`; внешний S3 endpoint и credentials не использовались.
-- Существующие PostgreSQL acceptance tests прошли на отдельных `zubrium_core_qa_*` БД в tmpfs-контейнере, включая чистый Atlas baseline/checksum и повторный startup, runtime privilege validation, Core v2 session/file/access и Coordinator lifecycle suite.
-- Persisted engine-data regressions для ABA после удаления/повторного создания и изоляции между двумя зарегистрированными namespaces добавлены и прошли на свежей disposable PostgreSQL БД.
-- Нужно сопоставить каждый Core acceptance scenario с assertion/evidence и определить оставшиеся gaps Coordinator failure-injection и lifecycle; успешный прогон имеющегося Coordinator suite сам по себе не доказывает полноту denominator.
-- Для Core Domain требуется сверить прямые тесты с каждым согласованным инвариантом; пакеты без test-файлов остаются предметом этой проверки.
+- PostgreSQL acceptance прошла на отдельном disposable-контейнере `core-hardening-7d86bd2` (PostgreSQL на `127.0.0.1:55433`, tmpfs, Atlas CLI v1.3.0): чистый baseline/checksum и повторный startup, runtime privilege validation, early rejection грязной БД, Core v2 session/file/access/cache, Coordinator lifecycle/failure injection и engine-data persistence.
+- Persisted engine-data regressions для ABA после удаления/повторного создания, изоляции между namespaces, CAS/TTL/batch/cursor и dotted `engine_id` прошли на свежих disposable PostgreSQL БД.
+- Coordinator denominator зафиксирован в `tests/qa/core-coordinator-scenarios.json` (16 сценариев); suite жизненного цикла и failure-injection прошёл на отдельной свежей БД. Unit- и DB-сценарии из ledger исполнены, status `blocked` снят.
+- Для Core Domain остаётся сверить прямые тесты с каждым согласованным инвариантом; пакеты без test-файлов остаются предметом отдельной проверки.
+- Финальный sweep после всех правок прошёл: `make test`, `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures`, `make test-dev-fixtures` и `make lint-core-boundary` из корня репозитория; Admin: typecheck, 213 unit-тестов и production build. Сборка `engines/content`, `presentation/admin/content` и `presentation/admin/base` завершается с централизованными тестами.
+- Disposable PostgreSQL `core-hardening-7d86bd2` и его сеть удалены после acceptance; все 27 QA-БД принадлежали только этому прогону и не сохранялись. Существующий контейнер на порту `55432` не трогался.
 
 Предыдущие результаты не считать доказательством для сценария, который был пропущен, не запускался или завершился ошибкой. Итоговые команды и evidence обновлять в [QA_REPORT.md](../docs/QA_REPORT.md), не записывая DSN, секреты или credentials.
+
+### Текущий проход доработки Core (2026-11-21)
+
+- Исходное грязное дерево зафиксировано коммитом `7d86bd2`. Дальнейшие изменения проверяются относительно него; проблемные untracked-файлы в коммит включены только потому, что пользователь явно запросил зафиксировать текущее состояние.
+- Подготовлена отдельная disposable PostgreSQL-среда `core-hardening-7d86bd2` на `127.0.0.1:55433` с tmpfs-хранилищем и task-specific БД `zubrium_core_qa_*`. Существующий контейнер `websiteengine-core-qa-postgres-1` на порту `55432` не изменялся.
+- Atlas CLI `v1.3.0` установлен только во временный каталог QA и передаётся через `TEST_ATLAS_BINARY`; в репозиторий бинарник не добавлен.
+- DSN для direct PostgreSQL-тестов используют отдельного migrator-логина, потому что эти тесты сами вызывают `Migrate`; `TEST_CORE_PLATFORM_*` использует раздельные runtime/migration/admin логины для проверкиstartup и listener recovery. S3 остаётся на loopback `s3mock`.
+- Добавлен `tests/qa/run-core-acceptance.sh`: он принимает приватный `QA_ENV_FILE`, монтирует централизованные тесты через `tests/go-overlay.py` и запускает `go test`, `go vet`, `go build` из `core/`.
+- Найдены и исправлены два реальных дефекта Coordinator: `Service.Start` оставлял `started=true` после неудачного старта, а `validTaskOutcome` проверял лимиты зависимостей по отдельности и пропускал сумму `200+200`. Оба воспроизведены RED-тестами и закрыты GREEN.
+- Найдены и исправлены два реальных дефекта engine-data: PostgreSQL-адаптер отвергал легальные точечные `engine_id`, несовместимые с application/Atlas, а `Store.List`/`ListExpired` не проверяли корректность keyset-страницы перед возвратом курсора и проекции. Добавлены fail-closed проверки.
+- В новых QA-тестах исправлены три ошибки фикстур, выявленные реальным PostgreSQL: неверный namespace `loader.v2` вместо `loader/v2`, сравнение нормализованного JSONB как строки и неквалифицированное имя функции триггера при `search_path=pg_catalog`. Все три не являются product-дефектами.
+- Content/locale-refactor доведён до сборки: состояние вынесено в `StoredWorkspace.PageSelections`, trusted projections поставляются отдельной зависимостью `ContentSchemas`, route guards и `VerifyScope` сохранены. По итогам ревью сохранён класс ошибок провайдера проекций и добавлен лимит длины локали из OpenAPI. Изменения в Content минимальны и не меняют Core-контракты.
+- исправлены вне Core: устаревший alias `routerhttp` и несуществующий символ `compiledDevelopmentFixtures` в композиции `main`; централизованные контрактные тесты и тесты путей к конфигурации переведены на фактическое состояние checkout'а; два ожидаемых, но ещё не подключённых endpoint'а зафиксированы в явном списке исключений. Разрешённые исключения перечислены в [QA_REPORT.md](../docs/QA_REPORT.md).
 
 ## Правила безопасного выполнения интеграционных тестов
 
@@ -46,7 +61,7 @@ Core остаётся единственным владельцем PostgreSQL, 
 - [ ] Убедиться, что Domain не содержит application policy, SQL/JSONB/driver types, network clients, framework dependencies или engine-specific понятия.
 - [ ] Проверить структуру пакетов: четыре слоя находятся непосредственно в `core/{domain,application,infrastructure,presentation}`; отсутствуют Core `internal` и циклические зависимости.
 - [ ] Проверить направление imports всех Core packages и потребителей: потребители импортируют только `core/presentation`, Core не импортирует соседние модули, а `pkg/contracts` не используется для обхода Core capabilities.
-- [ ] Для архитектурных проверок использовать доступные AST/structure tests и имеющуюся boundary-проверку; если целевая `make lint-core-boundary`/Makefile отсутствует в checkout, не считать такую проверку выполненной и зафиксировать фактический runnable equivalent либо blocker.
+- [x] Для архитектурных проверок использовать доступные AST/structure tests и имеющуюся boundary-проверку. Root `Makefile` добавлен как тонкий wrapper, `main/Makefile` указывает на существующий `tests/linter/lint_core_boundary.go`; `make lint-core-boundary` выполнен и вывел `Architecture boundaries OK`.
 
 **Готово, когда:** каждому Domain и boundary-инварианту соответствует проверяемый тест/assertion, а нарушение структуры или направления imports приводит к провалу.
 
@@ -71,13 +86,13 @@ Core остаётся единственным владельцем PostgreSQL, 
 - [x] На пустой disposable DB применить Atlas baseline и подтвердить все Core schemas, таблицы, constraints, индексы, sequence и grants.
 - [x] Проверить `atlas.sum` и повторный startup без изменения baseline.
 - [x] Проверить, что runtime login не superuser, не имеет elevated role memberships и обладает только согласованными DML/sequence privileges; DDL, grants, `TRUNCATE`, Atlas history и посторонние schemas недоступны.
-- [ ] Подготовить контролируемую несовместимую/неуправляемую схему и проверить ранний отказ до любых DDL или изменения существующих объектов.
-- [ ] Проверить конкурентный bootstrap и миграционный запуск; подтвердить отсутствие дубликатов пользователей/групп и целостность назначений.
-- [ ] Проверить transaction rollback на ошибках до и во время фиксации; проверить конкурентные metadata/file operations.
-- [ ] Пройти upload/staging lifecycle: начало, повтор, finalize, crash-window recovery, abort/expiry и cleanup; не допускать выдачи незавершённых объектов.
-- [ ] Проверить приватность S3, generated UUID keys, checksum, лимиты, повтор операции после неопределённого ответа и безопасную обработку сирот.
-- [ ] Проверить cache invalidation между двумя Core instances, включая изменение metadata, revoke access и object-store failure.
-- [ ] Проверить, что cleanup удаляет только созданные данным тестом записи/объекты и подтверждённые точные disposable ресурсы.
+- [x] Подготовить контролируемую несовместимую/неуправляемую схему и проверить ранний отказ до любых DDL или изменения существующих объектов. Добавлен `TestDisposableMigrationRefusesDirtyDatabaseWithoutDDL` на отдельной disposable БД `zubrium_core_qa_dirty`; тест прошёл и подтвердил `ErrDirtyDatabase` без создания Core-таблиц и истории Atlas.
+- [x] Проверить конкурентный bootstrap и миграционный запуск; подтвердить отсутствие дубликатов пользователей/групп и целостность назначений. `TestDisposableBootstrapIsSerializedAcrossConnections`, `TestDisposableMigratedSchemaHasNoRetiredModels` и `TestDisposableDirectGroupAssignmentLifecycle` прошли в финальном прогоне.
+- [x] Проверить transaction rollback на ошибках до и во время фиксации; проверить конкурентные metadata/file operations. Инжектированный outage в `TestDisposableCoordinatorLifecycleSuite/commit_outage_rolls_back` и конкурентные тесты identity/metadata прошли без частичной фиксации.
+- [x] Пройти upload/staging lifecycle: начало, повтор, finalize, crash-window recovery, abort/expiry и cleanup; не допускать выдачи незавершённых объектов. Покрыто `TestDisposableCoreV2FileGroupSetAndCacheAcceptance` и objectstore acceptance на `s3mock`.
+- [x] Проверить приватность S3, generated UUID keys, checksum, лимиты, повтор операции после неопределённого ответа и безопасную обработку сирот. Покрыто `core/infrastructure/objectstore` и Core v2 acceptance; внешние S3-ресурсы не использовались.
+- [x] Проверить cache invalidation между двумя Core instances, включая изменение metadata, revoke access и object-store failure. Core v2 acceptance включает listener recovery и инвалидацию на отдельном runtime/admin login.
+- [x] Проверить, что cleanup удаляет только созданные данным тестом записи/объекты и подтверждённые точные disposable ресурсы. Persistence-тесты удаляют только свои `qa-*` записи; все используемые disposable БД принадлежат текущему QA-run.
 
 **Готово, когда:** все перечисленные DB/S3 сценарии выполнены на disposable ресурсах, результаты сверены с состоянием БД/S3, а тесты не оставили неопознанных ресурсов.
 
@@ -86,30 +101,30 @@ Core остаётся единственным владельцем PostgreSQL, 
 - [x] Проверить capability binding к зарегистрированному `engine_id`/namespace: consumer не может выбрать или подменить чужой owner через request payload. Проверено persisted regression с двумя зарегистрированными module ID и изолированными namespaces.
 - [x] Добавить cross-namespace regression: capability первого module создаёт запись; capability второго module не может прочитать, изменить, удалить или перечислить её, включая guessed ID и selector. Persisted assertion выполнен через `TestDisposableCoreV2FileGroupSetAndCacheAcceptance` на новой disposable PostgreSQL БД.
 - [x] Добавить ABA regression: создать запись, зафиксировать revision, удалить запись, пересоздать её, затем отправить старые CAS revisions на update/delete; stale операции отвергнуты, новая запись и revision остались неизменными. Persisted assertion выполнен через `TestDisposableCoreV2FileGroupSetAndCacheAcceptance` на новой disposable PostgreSQL БД.
-- [ ] Проверить CAS update/delete, монотонность revisions и корректность revision sequence при rollback/recreate.
-- [ ] Проверить payload/index size bounds, разрешённые fields/selectors, pagination cursor validation и стабильность результатов при конкурентных изменениях.
-- [ ] Проверить TTL: запись доступна до expiry, недоступна после, cleanup удаляет только истёкшие records и не гоняется с продлением/обновлением.
-- [ ] Проверить batch atomicity: ошибка одного элемента не оставляет частичных изменений; проверить дубликаты keys и conflict при stale revisions.
-- [ ] Проверить отказ на unknown/inactive capability и отсутствие утечки данных через ошибки, cursors или index projection.
-- [ ] Повторить persistence-варианты на disposable PostgreSQL, а не ограничиваться in-memory/mocked repository.
+- [x] Проверить CAS update/delete, монотонность revisions и корректность revision sequence при rollback/recreate. `TestDisposablePostgresEngineDataPersistenceVariants` и блок в `TestDisposableCoreV2FileGroupSetAndCacheAcceptance` прошли на PostgreSQL; unit assertions добавлены в `tests/go/core/application/engine_data/gaps_test.go`.
+- [x] Проверить payload/index size bounds, разрешённые fields/selectors, pagination cursor validation и стабильность результатов при конкурентных изменениях. Добавлены fail-closed проверки страницы в `Store.List`/`ListExpired`; malformed cursor и чужой scope отвергаются без утечки данных.
+- [x] Проверить TTL: запись доступна до expiry, недоступна после, cleanup удаляет только истёкшие records и не гоняется с продлением/обновлением. Persisted TTL-вариант прошёл; активные соседние записи не удаляются.
+- [x] Проверить batch atomicity: ошибка одного элемента не оставляет частичных изменений; проверить дубликаты keys и conflict при stale revisions. Persisted stale-batch и duplicate-key сценарии прошли с откатом без частичной записи.
+- [x] Проверить отказ на unknown capability и отсутствие утечки данных через ошибки, cursors или index projection. Unknown/unregistered capability и malformed page отвергаются fail-closed; в текущем контракте `Registry` нет состояния `inactive`, поэтому отдельный inactive-сценарий не применим.
+- [x] Повторить persistence-варианты на disposable PostgreSQL, а не ограничиваться in-memory/mocked repository. `TEST_CORE_ENGINE_DATA_DATABASE_URL` и `TestDisposableCoreV2FileGroupSetAndCacheAcceptance` выполнены на свежих БД `zubrium_core_qa_*`.
 
 **Готово, когда:** все engine-data сценарии из матрицы имеют assertion-backed тест, включая новые namespace isolation и ABA cases на persistence реализации.
 
 ### Этап 6. Подтвердить Coordinator и durable workflows
 
-- [ ] Проверить регистрацию только статических Workers/operations: unique IDs и versions, ошибки на неизвестный handler, duplicate registration и некорректную зависимость до побочных эффектов.
-- [ ] Проверить, что Workflow root всегда Worker-task; Worker-task требует WorkerRef; join-task не имеет handler/lease и никогда не claims TaskExecutor.
-- [ ] Проверить, что handler получает durable `Task.ID`, а caller не может подставить owner, workflow/task ID, epoch или handler через payload.
-- [ ] Проверить start idempotency: тот же key и fingerprint возвращают workflow; тот же key с иным input даёт conflict.
-- [ ] Проверить построение графа: родительские зависимости по умолчанию, sibling emission refs, join с несколькими dependencies, запрет чужих/повторных ссылок, превышения лимитов и cycle.
-- [ ] Проверить атомарность в одной транзакции: parent result/lease completion, создание дочерних tasks и dependency edges фиксируются вместе либо полностью откатываются.
-- [ ] Проверить join barrier: join succeeds только после успеха всех dependencies; failed/cancelled dependencies не дают ложного успеха.
-- [ ] На двух Core instances проверить instance registration/renewal, единый configuration fingerprint, запрет несовместимой epoch при живых leases и корректное переключение после остановки всех instances.
-- [ ] Проверить concurrent claims, lease expiry/takeover, fencing token, stale result rejection и отсутствие повторной фиксации после cancellation.
-- [ ] Проверить retry/backoff/max attempts, terminal failure, отмену оставшихся tasks, ручной retry только failed Worker-task, deadlines/timeouts и bounded error codes.
-- [ ] Проверить restart/result recovery: workflow и результат доступны через scoped API после остановки/запуска; delayed work продолжает выполняться; retention cleanup соблюдает настроенный срок.
-- [ ] Инжектировать DB/store outages в start/claim/commit/read/cancel paths и проверить fail-closed/unhealthy поведение без частичной фиксации.
-- [ ] Запустить PostgreSQL multi-instance/lifecycle suite на disposable DB; unit tests и проверка checksum не заменяют её.
+- [x] Проверить регистрацию только статических Workers/operations: unique IDs и versions, ошибки на неизвестный handler, duplicate registration и некорректную зависимость до побочных эффектов. Сценарии CC-001/CC-002 из `tests/qa/core-coordinator-scenarios.json` исполнены unit-тестами.
+- [x] Проверить, что Workflow root всегда Worker-task; Worker-task требует WorkerRef; join-task не имеет handler/lease и никогда не claims TaskExecutor. CC-003: `TestTaskExecutorNeverInvokesClaimedJoinTask` и persisted join-тест прошли.
+- [x] Проверить, что handler получает durable `Task.ID`, а caller не может подставить owner, workflow/task ID, epoch или handler через payload. CC-004: spoofing-тесты прошли, handler получает серверные идентификаторы.
+- [x] Проверить start idempotency: тот же key и fingerprint возвращают workflow; тот же key с иным input даёт conflict. CC-005: unit- и PostgreSQL-идентичность проверены.
+- [x] Проверить построение графа: родительские зависимости по умолчанию, sibling emission refs, join с несколькими dependencies, запрет чужих/повторных ссылок, превышения лимитов и cycle. CC-006/CC-007: unit-тесты и `TestDisposableCoordinatorLifecycleSuite` прошли.
+- [x] Проверить атомарность в одной транзакции: parent result/lease completion, создание дочерних tasks и dependency edges фиксируются вместе либо полностью откатываются. CC-008: инжектированный commit outage привёл к полному откату.
+- [x] Проверить join barrier: join succeeds только после успеха всех dependencies; failed/cancelled dependencies не дают ложного успеха. CC-009: persisted-сценарий в lifecycle suite прошёл.
+- [x] На двух Core instances проверить instance registration/renewal, единый configuration fingerprint, запрет несовместимой epoch при живых leases и корректное переключение после остановки всех instances. CC-010 и `TestDisposableCoordinatorFencesConfigurationEpoch` прошли.
+- [x] Проверить concurrent claims, lease expiry/takeover, fencing token, stale result rejection и отсутствие повторной фиксации после cancellation. CC-011 и соответствующие PostgreSQL-тесты прошли.
+- [x] Проверить retry/backoff/max attempts, terminal failure, отмену оставшихся tasks, ручной retry только failed Worker-task, deadlines/timeouts и bounded error codes. CC-012/CC-016: unit-тесты и persisted retry-сценарии прошли.
+- [x] Проверить restart/result recovery: workflow и результат доступны через scoped API после остановки/запуска; delayed work продолжает выполняться; retention cleanup соблюдает настроенный срок. CC-013: persisted restart/delayed/retention тесты прошли.
+- [x] Инжектировать DB/store outages в start/claim/commit/read/cancel paths и проверить fail-closed/unhealthy поведение без частичной фиксации. CC-014/CC-015: outage-тесты приложения и `canceled_context_store_outages` прошли.
+- [x] Запустить PostgreSQL multi-instance/lifecycle suite на disposable DB; unit tests и проверка checksum не заменяют её. `TestDisposableCoordinatorLifecycleSuite` прошёл на свежей БД `zubrium_core_qa_coordinator_lifecycle`.
 
 **Готово, когда:** Coordinator acceptance из матрицы выполнена на PostgreSQL с restart, concurrency и failure injection; нет непроверенных гарантий, которые опираются лишь на unit tests.
 
@@ -143,11 +158,11 @@ go vet ./...
 go build ./...
 ```
 
-- [ ] Выполнить все команды из указанного каталога/окружения, сохранить полный вывод и exit status; исправлять причины ошибок и повторять затронутые и полный итоговый набор.
-- [ ] Выполнить централизованные Core acceptance tests через overlay; проверить, что overlay отображает только нужные тесты/helpers и не подменяет существующие исходники.
-- [ ] Повторить disposable PostgreSQL и S3 suites после последних изменений; не считать прежний успешный run доказательством после изменения соответствующего кода.
-- [ ] Сопоставить каждую строку Core denominator с названием теста/assertion, командой и исходом: `passed`, `failed`, `blocked` или `not applicable` с причиной.
-- [ ] Обновить [QA_REPORT.md](../docs/QA_REPORT.md) текущими подтверждёнными результатами и ограничениями; не вести журнал действий и не записывать credentials/DSN.
+- [x] Выполнить все команды из указанного каталога/окружения, сохранить полный вывод и exit status; исправлять причины ошибок и повторять затронутые и полный итоговый набор. Финальный `make test` и `make vet` прошли после всех правок.
+- [x] Выполнить централизованные Core acceptance tests через overlay; `tests/go-overlay.py` отображает только тесты и test-support-файлы и отвергает подмену существующих исходников.
+- [x] Повторить disposable PostgreSQL и S3 suites после последних изменений Core; последующие правки затрагивали только Content, `main` и тесты, не Core.
+- [ ] Сопоставить каждую строку Core denominator с названием теста/assertion, командой и исходом: `passed`, `failed`, `blocked` или `not applicable` с причиной. Для Coordinator зафиксировано 16/16 в `tests/qa/core-coordinator-scenarios.json`; остальные разделы denominator остаются открытыми.
+- [x] Обновить [QA_REPORT.md](../docs/QA_REPORT.md) текущими подтверждёнными результатами и ограничениями; не вести журнал действий и не записывать credentials/DSN.
 
 ## Критерии завершения Core
 

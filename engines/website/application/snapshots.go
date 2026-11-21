@@ -33,6 +33,16 @@ func (s *Service) ListSnapshots(ctx context.Context, siteID, pageID, cursor stri
 		return websiteapi.SnapshotPage{}, websiteapi.ErrInvalid
 	}
 	pageID = strings.ToLower(pageID)
+	// Validate the opaque cursor before any target lookup so a malformed cursor
+	// is reported as an invalid request rather than as a missing site or page.
+	var parsedCursor *snapshotPageCursor
+	if cursor != "" {
+		parsed, err := decodeSnapshotCursor(cursor, s.config.Sites)
+		if err != nil || parsed.PageID != pageID {
+			return websiteapi.SnapshotPage{}, websiteapi.ErrInvalid
+		}
+		parsedCursor = &parsed
+	}
 	if siteID != "" {
 		if !identifierPattern.MatchString(siteID) {
 			return websiteapi.SnapshotPage{}, websiteapi.ErrInvalid
@@ -76,12 +86,11 @@ func (s *Service) ListSnapshots(ctx context.Context, siteID, pageID, cursor stri
 	if firstSite < len(s.config.Sites) {
 		state.SiteID = s.config.Sites[firstSite]
 	}
-	if cursor != "" {
-		parsed, err := decodeSnapshotCursor(cursor, s.config.Sites)
-		if err != nil || parsed.PageID != pageID || parsed.SiteIndex < firstSite || parsed.SiteIndex >= lastSite {
+	if parsedCursor != nil {
+		if parsedCursor.SiteIndex < firstSite || parsedCursor.SiteIndex >= lastSite {
 			return websiteapi.SnapshotPage{}, websiteapi.ErrInvalid
 		}
-		state = parsed
+		state = *parsedCursor
 	}
 
 	page := websiteapi.SnapshotPage{Items: make([]websiteapi.Snapshot, 0, limit)}

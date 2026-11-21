@@ -263,6 +263,7 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 	}
 	if fixtureAPIs != nil {
 		dependencies.Website, dependencies.Content, dependencies.Forms = fixtureAPIs.website, fixtureAPIs.content, fixtureAPIs.forms
+		dependencies.ContentSchemas = fixtureAPIs.content
 	} else {
 		if c.websiteAdminEnabled && c.websiteEngine != nil {
 			dependencies.Website = c.websiteEngine.service

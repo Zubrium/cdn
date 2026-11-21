@@ -147,7 +147,7 @@ components:
         default_locale: { type: string, minLength: 2, maxLength: 64, description: Must be present in locales. }
     Workspace:
       type: object
-      required: [snapshot_id, site_id, page_snapshot_id, locale, locale_catalog_revision, model_revision, model_digest, page_revision, page_digest, data_model, revision, published_revision, records, selections, placements]
+      required: [snapshot_id, site_id, page_snapshot_id, locale, locale_catalog_revision, model_revision, model_digest, page_revision, page_digest, data_model, revision, selection_revision, published_revision, records, selections, placements]
       properties:
         snapshot_id: { type: string, description: Selected page snapshot context. }
         site_id: { type: string, description: Site-wide records and publication scope. }
@@ -160,6 +160,7 @@ components:
         page_digest: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
         data_model: { type: [object, 'null'], description: Website-owned read-only `config.dataModel`. }
         revision: { type: integer, minimum: 0 }
+        selection_revision: { type: integer, minimum: 0 }
         published_revision: { type: integer, minimum: 0 }
         records: { type: array, items: { $ref: '#/components/schemas/Record' } }
         selections: { type: array, items: { $ref: '#/components/schemas/Selection' } }
@@ -225,9 +226,10 @@ components:
     SaveWorkspaceDraft:
       type: object
       additionalProperties: false
-      required: [expected_revision, records, selections]
+      required: [expected_revision, expected_selection_revision, records, selections]
       properties:
         expected_revision: { type: integer, minimum: 0 }
+        expected_selection_revision: { type: integer, minimum: 0 }
         records: { type: array, items: { $ref: '#/components/schemas/RecordInput' } }
         selections: { type: array, items: { $ref: '#/components/schemas/Selection' } }
     HistoryItem:
@@ -248,9 +250,10 @@ components:
     RevisionCommand:
       type: object
       additionalProperties: false
-      required: [expected_revision]
+      required: [expected_revision, expected_selection_revision]
       properties:
         expected_revision: { type: integer, minimum: 0 }
+        expected_selection_revision: { type: integer, minimum: 0 }
     Error:
       type: object
       required: [error]

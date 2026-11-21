@@ -44,6 +44,14 @@ type API interface {
 	RestoreHistory(context.Context, Projections, RestoreHistoryRequest) (Workspace, error)
 	ReadPublishedContent(context.Context, Projections) (PublishedContent, error)
 	CopySnapshotContent(context.Context, CopySnapshotContentRequest) (CopySnapshotContentResult, error)
+	GetContentProjections(context.Context, string) (Projections, error)
+}
+
+// ProjectionsProvider is the trusted outer-Presentation capability that maps
+// Website-owned snapshots into Content's read-only projections. Content never
+// builds these values from request data.
+type ProjectionsProvider interface {
+	GetContentProjections(context.Context, string) (Projections, error)
 }
 
 const ProjectionVersion = 1
@@ -122,8 +130,9 @@ func (projection PagePlacementProjection) VerifyDigest() bool {
 }
 
 type Projections struct {
-	Site SiteContentSchema       `json:"site_content_schema"`
-	Page PagePlacementProjection `json:"page_placement_projection"`
+	Site   SiteContentSchema       `json:"site_content_schema"`
+	Page   PagePlacementProjection `json:"page_placement_projection"`
+	Locale string                  `json:"locale"`
 }
 
 func (projections Projections) VerifyScope(pageSnapshotID string) bool {
@@ -162,38 +171,42 @@ type PlacementInputLookup struct {
 // Workspace combines Website's read-only schema with Content-owned mutable
 // draft/publication state. SnapshotID identifies the selected Website scope.
 type Workspace struct {
-	SnapshotID        string            `json:"snapshot_id"`
-	SiteID            string            `json:"site_id"`
-	PageSnapshotID    string            `json:"page_snapshot_id"`
-	ModelRevision     int64             `json:"model_revision"`
-	ModelDigest       string            `json:"model_digest"`
-	PageRevision      int64             `json:"page_revision"`
-	PageDigest        string            `json:"page_digest"`
-	DataModel         json.RawMessage   `json:"data_model"`
-	Revision          int64             `json:"revision"`
-	SelectionRevision int64             `json:"selection_revision"`
-	PublishedRevision int64             `json:"published_revision"`
-	Records           []Record          `json:"records"`
-	Selections        []Selection       `json:"selections"`
-	Placements        []Placement       `json:"placements"`
-	ClientRecordIDs   map[string]string `json:"client_record_ids,omitempty"`
+	SnapshotID             string            `json:"snapshot_id"`
+	SiteID                  string            `json:"site_id"`
+	PageSnapshotID          string            `json:"page_snapshot_id"`
+	Locale                  string            `json:"locale"`
+	LocaleCatalogRevision   int64             `json:"locale_catalog_revision"`
+	ModelRevision           int64             `json:"model_revision"`
+	ModelDigest             string            `json:"model_digest"`
+	PageRevision            int64             `json:"page_revision"`
+	PageDigest              string            `json:"page_digest"`
+	DataModel               json.RawMessage   `json:"data_model"`
+	Revision                int64             `json:"revision"`
+	SelectionRevision       int64             `json:"selection_revision"`
+	PublishedRevision       int64             `json:"published_revision"`
+	Records                 []Record          `json:"records"`
+	Selections              []Selection       `json:"selections"`
+	Placements              []Placement       `json:"placements"`
+	ClientRecordIDs         map[string]string `json:"client_record_ids,omitempty"`
+	ClientTranslationIDs    map[string]string `json:"client_translation_ids,omitempty"`
 }
 
 type Record struct {
-	ID        string         `json:"id"`
-	EntityID  string         `json:"entity_id"`
-	SortOrder int            `json:"sort_order"`
-	Values    map[string]any `json:"values"`
+	ID            string         `json:"id"`
+	TranslationID string         `json:"translation_id"`
+	Locale        string         `json:"locale"`
+	EntityID      string         `json:"entity_id"`
+	SortOrder     int            `json:"sort_order"`
+	Values        map[string]any `json:"values"`
 }
 
 type RecordInput struct {
-	// ID is an ID previously issued by Content. ClientKey correlates a new
-	// request-local row with selections; it is never persisted as the record ID.
-	ID        string         `json:"id,omitempty"`
-	ClientKey string         `json:"client_key,omitempty"`
-	EntityID  string         `json:"entity_id"`
-	SortOrder int            `json:"sort_order"`
-	Values    map[string]any `json:"values"`
+	ID            string         `json:"id,omitempty"`
+	ClientKey     string         `json:"client_key,omitempty"`
+	TranslationID string         `json:"translation_id,omitempty"`
+	EntityID      string         `json:"entity_id"`
+	SortOrder     int            `json:"sort_order"`
+	Values        map[string]any `json:"values"`
 }
 
 type Selection struct {
@@ -242,6 +255,7 @@ type RestoreHistoryRequest struct {
 
 type PublishedContent struct {
 	SnapshotID      string      `json:"snapshot_id"`
+	Locale          string      `json:"locale"`
 	ContentRevision int64       `json:"content_revision"`
 	Records         []Record    `json:"records"`
 	Selections      []Selection `json:"selections"`

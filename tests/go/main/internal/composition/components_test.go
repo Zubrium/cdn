@@ -11,6 +11,10 @@ import (
 	"github.com/google/uuid"
 )
 
+type testApplicationReadiness bool
+
+func (ready testApplicationReadiness) Ready() bool { return bool(ready) }
+
 func TestMergeProfileAccessGroupsUnionsSourcesAndPreservesYAMLLevel(t *testing.T) {
 	groups, err := mergeProfileAccessGroups(map[string]platform.AccessLevel{
 		"router_routes": platform.AccessLevelNone,
@@ -115,6 +119,9 @@ func TestWorkflowControlFailsClosedWithoutCoreRuntimeAndRegistrationStaysScoped(
 	}}
 	resolved.AdminAPI.AllowedOrigins = []string{"http://127.0.0.1:8080"}
 	resolved.Core.AccessGroups = map[string]platform.AccessLevel{"coordinator_jobs": platform.AccessLevelWrite}
+	if err := resolved.ValidateBuildPlan(plan); err != nil {
+		t.Fatalf("configured Coordinator profile is invalid: %v", err)
+	}
 	registry, core, loader, fileAPI, err := registerComponents(resolved, plan)
 	if err != nil {
 		t.Fatalf("register compiled Coordinator composition: %v", err)
@@ -126,8 +133,8 @@ func TestWorkflowControlFailsClosedWithoutCoreRuntimeAndRegistrationStaysScoped(
 	if _, _, _, _, err := registerComponents(resolved, platform.BuildPlan{}); !errors.Is(err, platform.ErrCoordinatorInputInvalid) {
 		t.Fatalf("empty build plan was accepted by component registration: %v", err)
 	}
-	if _, _, _, _, err := registerComponents(appconfig.Resolved{}, plan); err == nil {
-		t.Fatal("Coordinator Admin registered without an authorized group in startup config")
+	if err := (appconfig.Resolved{}).ValidateBuildPlan(plan); err == nil {
+		t.Fatal("Coordinator Admin profile accepted without an authorized group in startup config")
 	}
 }
 

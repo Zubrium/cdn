@@ -2,7 +2,7 @@
 
 ## Целевой ABI
 
-Target ABI называется `static-lifecycle-v2` и указывается в `manifest.json` как `runtime.abi`. `runtime.entry` указывает на локальный ESM entry; `runtime.styles` и `runtime.sharedStyles` задают CSS-ресурсы сборки. Runtime принимает только этот ABI.
+Target ABI называется `static-lifecycle` и указывается в `manifest.json` как `runtime.abi`. `runtime.entry` указывает на локальный ESM entry; `runtime.styles` и `runtime.sharedStyles` задают CSS-ресурсы сборки. Runtime принимает только этот ABI.
 
 Entry экспортирует `render`, `hydrate`, `update` и `dispose`:
 

@@ -20,7 +20,7 @@ var (
 	ErrModuleDataConflict  = engine_data.ErrConflict
 	ErrModuleDataInvalid   = engine_data.ErrInvalid
 	ErrModuleDataLimit     = engine_data.ErrLimit
-	moduleIDPattern        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+	moduleIDPattern        = regexp.MustCompile(`^[a-z][a-z0-9.-]{0,63}$`)
 	moduleNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}(/[a-z][a-z0-9_-]{0,63})*$`)
 	moduleScopePattern     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 )

@@ -106,12 +106,18 @@ def go_body_has_exact_subtest(
     tokens: list[tuple[str, str]], testing_parameters: set[str], scenario_id: str
 ) -> bool:
     shadowed_scopes: list[set[str]] = [set()]
+    control_ends: list[int] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
         if token == ("identifier", "func"):
             index = skip_go_function_literal(tokens, index)
             continue
+        if token[0] == "identifier" and token[1] in {"if", "for", "switch"}:
+            end = go_control_statement_end(tokens, index)
+            if end is not None:
+                shadowed_scopes.append(set())
+                control_ends.append(end)
         if token == ("punctuation", "{"):
             shadowed_scopes.append(set())
             index += 1
@@ -119,19 +125,22 @@ def go_body_has_exact_subtest(
         if token == ("punctuation", "}"):
             if len(shadowed_scopes) > 1:
                 shadowed_scopes.pop()
+            while control_ends and control_ends[-1] == index:
+                control_ends.pop()
+                shadowed_scopes.pop()
             index += 1
             continue
-        if token == ("identifier", "var") and index + 1 < len(tokens):
-            name = tokens[index + 1]
-            if name[0] == "identifier":
-                shadowed_scopes[-1].add(name[1])
-        if (
-            token[0] == "identifier"
-            and index + 2 < len(tokens)
-            and tokens[index + 1] == ("punctuation", ":")
-            and tokens[index + 2] == ("punctuation", "=")
+        if token == ("identifier", "var"):
+            shadowed_scopes[-1].update(go_var_declaration_names(tokens, index))
+        if token == ("punctuation", ":") and index + 1 < len(tokens) and tokens[index + 1] == (
+            "punctuation",
+            "=",
         ):
-            shadowed_scopes[-1].add(token[1])
+            names = go_short_declaration_names(tokens, index)
+            if len(shadowed_scopes) > 1:
+                shadowed_scopes[-1].update(names)
+            else:
+                shadowed_scopes[-1].update(names - testing_parameters)
         if (
             token[0] == "identifier"
             and token[1] in testing_parameters
@@ -145,6 +154,157 @@ def go_body_has_exact_subtest(
             return True
         index += 1
     return False
+
+
+def go_control_statement_end(tokens: list[tuple[str, str]], start: int) -> int | None:
+    """Locate the final body brace, including an if statement's else branches."""
+    index = go_control_body_open(tokens, start + 1)
+    if index is None:
+        return None
+    depth = 0
+    while index < len(tokens):
+        if tokens[index] == ("punctuation", "{"):
+            depth += 1
+        elif tokens[index] == ("punctuation", "}"):
+            depth -= 1
+            if depth == 0:
+                if tokens[start] == ("identifier", "if") and index + 1 < len(tokens) and tokens[index + 1] == ("identifier", "else"):
+                    index += 2
+                    if index < len(tokens) and tokens[index] == ("identifier", "if"):
+                        index += 1
+                    next_body = go_control_body_open(tokens, index)
+                    if next_body is None:
+                        return None
+                    index = next_body
+                    continue
+                return index
+        index += 1
+    return None
+
+
+def go_control_body_open(tokens: list[tuple[str, str]], start: int) -> int | None:
+    """Find a control body without treating header function/composite literals as bodies."""
+    index = start
+    parentheses = brackets = 0
+    segment_start = start
+    while index < len(tokens):
+        token = tokens[index]
+        if token == ("identifier", "func"):
+            index = skip_go_function_literal(tokens, index)
+            continue
+        if token == ("punctuation", "("):
+            parentheses += 1
+        elif token == ("punctuation", ")"):
+            parentheses -= 1
+        elif token == ("punctuation", "["):
+            brackets += 1
+        elif token == ("punctuation", "]"):
+            brackets -= 1
+        elif token == ("punctuation", ";") and not parentheses and not brackets:
+            segment_start = index + 1
+        elif token == ("punctuation", "{") and not parentheses and not brackets:
+            if go_header_composite_literal(tokens, segment_start, index):
+                index = go_matching_brace_end(tokens, index)
+                continue
+            return index
+        index += 1
+    return None
+
+
+def go_matching_brace_end(tokens: list[tuple[str, str]], opening: int) -> int:
+    depth = 0
+    for index in range(opening, len(tokens)):
+        if tokens[index] == ("punctuation", "{"):
+            depth += 1
+        elif tokens[index] == ("punctuation", "}"):
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(tokens)
+
+
+def go_header_composite_literal(tokens: list[tuple[str, str]], start: int, opening: int) -> bool:
+    """Recognize type literals, not an indexed condition followed by its body."""
+    prefix = tokens[start:opening]
+    if tokens[opening - 1][0] == "identifier" or tokens[opening - 1] == ("punctuation", "]"):
+        if any(token == ("identifier", "map") for token in prefix) and any(
+            token == ("punctuation", "]") for token in prefix
+        ):
+            return True
+    if tokens[opening - 1] == ("punctuation", "]") and any(
+        prefix[index : index + 2] == [("punctuation", "["), ("punctuation", "]")]
+        for index in range(len(prefix) - 1)
+    ):
+        return True
+    # A named type in an init expression is ambiguous with a condition name.
+    # Require both the declaration and the separating semicolon after its literal.
+    if tokens[opening - 1][0] == "identifier" and any(
+        prefix[index : index + 2] == [("punctuation", ":"), ("punctuation", "=")]
+        for index in range(len(prefix) - 1)
+    ):
+        end = go_matching_brace_end(tokens, opening)
+        if ("identifier", "range") in prefix:
+            return end < len(tokens) and tokens[end] == ("punctuation", "{")
+        return end < len(tokens) and tokens[end] == ("punctuation", ";")
+    return False
+
+
+def go_var_declaration_names(tokens: list[tuple[str, str]], index: int) -> set[str]:
+    if index + 1 >= len(tokens):
+        return set()
+    if tokens[index + 1] == ("punctuation", "("):
+        return go_parenthesized_var_declaration_names(tokens, index + 1)
+    return go_declaration_name_list(tokens, index + 1)
+
+
+def go_parenthesized_var_declaration_names(tokens: list[tuple[str, str]], opening: int) -> set[str]:
+    names: set[str] = set()
+    index = opening + 1
+    start_of_spec = True
+    depth = 1
+    while index < len(tokens) and depth:
+        token = tokens[index]
+        if token == ("punctuation", "("):
+            depth += 1
+        elif token == ("punctuation", ")"):
+            depth -= 1
+            start_of_spec = depth == 1
+        elif depth == 1 and start_of_spec and token[0] == "identifier":
+            names.update(go_declaration_name_list(tokens, index))
+            start_of_spec = False
+        elif depth == 1 and token == ("punctuation", ";"):
+            start_of_spec = True
+        index += 1
+    return names
+
+
+def go_declaration_name_list(tokens: list[tuple[str, str]], index: int) -> set[str]:
+    names: set[str] = set()
+    while index < len(tokens) and tokens[index][0] == "identifier":
+        names.add(tokens[index][1])
+        if index + 1 >= len(tokens) or tokens[index + 1] != ("punctuation", ","):
+            break
+        index += 2
+    return names
+
+
+def go_short_declaration_names(tokens: list[tuple[str, str]], colon: int) -> set[str]:
+    names: list[str] = []
+    index = colon - 1
+    expect_name = True
+    while index >= 0:
+        token = tokens[index]
+        if expect_name:
+            if token[0] != "identifier":
+                return set()
+            names.append(token[1])
+            expect_name = False
+        elif token == ("punctuation", ","):
+            expect_name = True
+        else:
+            break
+        index -= 1
+    return set(names) if names and not expect_name else set()
 
 
 def skip_go_function_literal(tokens: list[tuple[str, str]], index: int) -> int:

@@ -17,7 +17,7 @@
 - [ ] Завершить Router/Loader production acceptance: exact route binding и artifact delivery, public upload staging/idempotency/authorization, permission revocation, process-per-branch и readiness. Публичный listener доступен только через внешний proxy, который настраивает deployer.
 - [ ] Завершить Admin workflows по актуальным группам и контрактам: Website, Content, Forms, Router, access management, notifications и recovery. Сохранить подтверждения destructive actions, revision checks и защиту несохранённых изменений.
 - [ ] Завершить worker isolation, resource limits, cancellation/retry, cleanup и регистрацию в production profiles для Archive, Media и Prerender; никакие worker-to-engine вызовы не допускаются.
-- [ ] Выполнить согласованные acceptance-сценарии каждого модуля и определить denominator до расчёта целевого функционального покрытия. Описания сценариев и statement coverage не заменяют исполняемую acceptance-проверку.
+- [ ] Выполнить согласованные acceptance-сценарии каждого модуля и определить denominator до расчёта целевого функционального покрытия. Описания сценариев и statement coverage не заменяют исполняемую acceptance-проверку. Хост-side контракты `static-lifecycle` закрыты WEB-023..029; browser/Vitasil acceptance и сценарии WEB-015/WEB-016 остаются открытыми.
 - [ ] После implementation sweep выполнить Go/frontend checks, disposable PostgreSQL/S3 tests, OpenAPI parity и применимую browser/Vitasil QA. Записать команды, результаты и ограничения; не менять рабочие данные.
 
 ## Порядок проверки

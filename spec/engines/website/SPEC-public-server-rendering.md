@@ -6,7 +6,7 @@ Go `html/template` формирует полный публичный HTML docum
 
 `/api/runtime` остаётся отдельным JSON API-контрактом. Начальный document получает разрешённую composition и опубликованные данные через `PageDocument`; browser runtime не обязан повторно загружать ту же composition при первоначальной загрузке. Последующие запросы и навигация используют только явно разрешённые API-контракты.
 
-Feature runtime использует только `static-lifecycle-v2`, описанный в [SPEC-feature-runtime.md](features/SPEC-feature-runtime.md). Неизвестный или неподдерживаемый ABI отклоняется до исполнения. Feature modules не получают credentials или секреты.
+Feature runtime использует только `static-lifecycle`, описанный в [SPEC-feature-runtime.md](features/SPEC-feature-runtime.md). Неизвестный или неподдерживаемый ABI отклоняется до исполнения. Feature modules не получают credentials или секреты.
 
 ## HTML template, escaping и DOM
 

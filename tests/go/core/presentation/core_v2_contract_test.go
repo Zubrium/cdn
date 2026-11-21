@@ -414,6 +414,212 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	if err != nil || decodeErr != nil || unchangedPayload.State != "ready" {
 		t.Fatalf("module-data batch leaked a partial update: payload=%s err=%v decodeErr=%v", unchangedModuleRecord.Payload, err, decodeErr)
 	}
+
+	// Engine-data acceptance gaps on the same disposable PostgreSQL runtime.
+	gapsModuleID := "engine-data-gaps"
+	if err := first.Registry.Register(gapsModuleID, coreV2ContractModule{}); err != nil {
+		t.Fatalf("register engine-data gap module: %v", err)
+	}
+	gapsData, err := first.RegisterDataModule(ModuleDataDescriptor{ModuleID: gapsModuleID, Namespaces: []ModuleDataNamespace{{
+		Name: "records", ScopeTypes: []string{"global"},
+		Fields: map[string]SelectorField{"state": {Type: SelectorString}, "tags": {Type: SelectorStringArray, MaxValues: 4}},
+	}}})
+	if err != nil {
+		t.Fatalf("register engine-data gap capability: %v", err)
+	}
+	gapsValue := func(state string, ttl time.Duration) ModuleDataValue {
+		return ModuleDataValue{Payload: []byte(`{"state":"` + state + `"}`), PayloadVersion: 1,
+			IndexData: []byte(`{"state":"` + state + `","tags":["alpha"]}`), TTL: ttl}
+	}
+	gapsKeys := []ModuleDataKey{
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "bounds"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "ttl-expired"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "ttl-active"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "cas"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "batch"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "batch-stale"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "cursor:a"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "cursor:b"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "cursor:c"},
+		{Namespace: "records", ScopeType: "global", ScopeID: "global", RecordKey: "cursor:0"},
+	}
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		for _, key := range gapsKeys {
+			record, getErr := gapsData.Get(cleanup, key)
+			if errors.Is(getErr, ErrModuleDataNotFound) {
+				record, getErr = gapsData.GetExpired(cleanup, key)
+			}
+			if getErr != nil {
+				continue
+			}
+			if deleteErr := gapsData.Delete(cleanup, key, record.Revision); deleteErr != nil && !errors.Is(deleteErr, ErrModuleDataNotFound) && !errors.Is(deleteErr, ErrModuleDataConflict) {
+				t.Errorf("delete disposable engine-data gap record %s: %v", key.RecordKey, deleteErr)
+			}
+		}
+	})
+	unknownCapability := ModuleDataDescriptor{ModuleID: "unknown-engine-data", Namespaces: []ModuleDataNamespace{{Name: "records", ScopeTypes: []string{"global"}}}}
+	if issued, capErr := first.RegisterDataModule(unknownCapability); !errors.Is(capErr, ErrModuleDataInvalid) || issued != nil {
+		t.Fatalf("unknown engine-data capability was issued: store=%v err=%v", issued, capErr)
+	}
+	oversizedIndex := ModuleDataValue{Payload: []byte(`{"state":"large"}`), PayloadVersion: 1,
+		IndexData: []byte(`{"state":"` + strings.Repeat("x", 1<<16+1) + `"}`)}
+	if _, putErr := gapsData.Put(ctx, gapsKeys[0], oversizedIndex, 0); !errors.Is(putErr, ErrModuleDataLimitExceeded) {
+		t.Fatalf("oversized index projection was accepted: %v", putErr)
+	}
+	undeclaredIndex := ModuleDataValue{Payload: []byte(`{"state":"x"}`), PayloadVersion: 1, IndexData: []byte(`{"secret":"leak"}`)}
+	if _, putErr := gapsData.Put(ctx, gapsKeys[0], undeclaredIndex, 0); !errors.Is(putErr, ErrModuleDataInvalid) {
+		t.Fatalf("undeclared index field was accepted: %v", putErr)
+	}
+	if _, getErr := gapsData.Get(ctx, gapsKeys[0]); !errors.Is(getErr, ErrModuleDataNotFound) {
+		t.Fatalf("rejected writes left a persisted record: %v", getErr)
+	}
+	stateSelector := []ModuleDataSelector{{Field: "state", Operator: SelectorEqual, Values: []any{"cursor"}}}
+	for _, invalid := range []struct {
+		name      string
+		namespace string
+		selectors []ModuleDataSelector
+	}{
+		{"unknown namespace", "foreign", stateSelector},
+		{"undeclared selector", "records", []ModuleDataSelector{{Field: "secret", Operator: SelectorEqual, Values: []any{"x"}}}},
+		{"wrong selector arity", "records", []ModuleDataSelector{{Field: "state", Operator: SelectorEqual, Values: []any{"a", "b"}}}},
+	} {
+		listKeys, listRecords, listCursor, listErr := gapsData.List(ctx, invalid.namespace, "global", "global", "", invalid.selectors, 10)
+		if !errors.Is(listErr, ErrModuleDataInvalid) || len(listKeys) != 0 || len(listRecords) != 0 || listCursor != "" {
+			t.Fatalf("%s leaked a page: keys=%v records=%v cursor=%q err=%v", invalid.name, listKeys, listRecords, listCursor, listErr)
+		}
+	}
+	for _, after := range []string{"bad\x00cursor", strings.Repeat("x", 257)} {
+		listKeys, listRecords, listCursor, listErr := gapsData.List(ctx, "records", "global", "global", after, nil, 10)
+		if !errors.Is(listErr, ErrModuleDataInvalid) || len(listKeys) != 0 || len(listRecords) != 0 || listCursor != "" {
+			t.Fatalf("malformed cursor %q was accepted: keys=%v records=%v cursor=%q err=%v", after, listKeys, listRecords, listCursor, listErr)
+		}
+	}
+	for _, key := range gapsKeys[6:9] {
+		if _, putErr := gapsData.Put(ctx, key, gapsValue("cursor", 0), 0); putErr != nil {
+			t.Fatalf("create cursor stability fixture: %v", putErr)
+		}
+	}
+	firstPageKeys, firstPageRecords, cursorAfterFirst, listErr := gapsData.List(ctx, "records", "global", "global", "", stateSelector, 1)
+	if listErr != nil || len(firstPageKeys) != 1 || len(firstPageRecords) != 1 || cursorAfterFirst == "" || cursorAfterFirst != firstPageKeys[0].RecordKey {
+		t.Fatalf("first keyset page did not return one bounded row: keys=%v records=%d cursor=%q err=%v", firstPageKeys, len(firstPageRecords), cursorAfterFirst, listErr)
+	}
+	if _, putErr := gapsData.Put(ctx, gapsKeys[9], gapsValue("cursor", 0), 0); putErr != nil {
+		t.Fatalf("insert a record before the active cursor: %v", putErr)
+	}
+	seenCursorKeys := map[string]bool{firstPageKeys[0].RecordKey: true}
+	secondPageKeys, _, cursorAfterSecond, listErr := gapsData.List(ctx, "records", "global", "global", cursorAfterFirst, stateSelector, 10)
+	if listErr != nil || cursorAfterSecond != "" {
+		t.Fatalf("second keyset page failed: keys=%v cursor=%q err=%v", secondPageKeys, cursorAfterSecond, listErr)
+	}
+	for _, key := range secondPageKeys {
+		if seenCursorKeys[key.RecordKey] || key.RecordKey == gapsKeys[9].RecordKey {
+			t.Fatalf("keyset page repeated a row or exposed a pre-cursor insert: keys=%v", secondPageKeys)
+		}
+		seenCursorKeys[key.RecordKey] = true
+	}
+	if len(seenCursorKeys) != 3 {
+		t.Fatalf("keyset pagination lost stable rows: seen=%v", seenCursorKeys)
+	}
+	if _, putErr := gapsData.Put(ctx, gapsKeys[1], gapsValue("expired", 50*time.Millisecond), 0); putErr != nil {
+		t.Fatalf("create TTL cleanup fixture: %v", putErr)
+	}
+	if _, putErr := gapsData.Put(ctx, gapsKeys[2], gapsValue("active", 0), 0); putErr != nil {
+		t.Fatalf("create active TTL neighbor: %v", putErr)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if _, getErr := gapsData.Get(ctx, gapsKeys[1]); !errors.Is(getErr, ErrModuleDataNotFound) {
+		t.Fatalf("expired engine record stayed visible: %v", getErr)
+	}
+	expiredGapRecord, getErr := gapsData.GetExpired(ctx, gapsKeys[1])
+	if getErr != nil {
+		t.Fatalf("cleanup could not inspect the expired engine record: %v", getErr)
+	}
+	expiredGapKeys, _, _, listErr := gapsData.ListExpired(ctx, "records", "global", "global", "", 10)
+	if listErr != nil {
+		t.Fatalf("cleanup could not list expired engine records: %v", listErr)
+	}
+	foundExpired := false
+	for _, key := range expiredGapKeys {
+		if key == gapsKeys[2] {
+			t.Fatalf("TTL cleanup listed an active engine record: %v", expiredGapKeys)
+		}
+		if key == gapsKeys[1] {
+			foundExpired = true
+		}
+	}
+	if !foundExpired {
+		t.Fatalf("TTL cleanup did not list the expired engine record: %v", expiredGapKeys)
+	}
+	if deleteErr := gapsData.Delete(ctx, gapsKeys[1], expiredGapRecord.Revision); deleteErr != nil {
+		t.Fatalf("TTL cleanup could not delete the expired revision: %v", deleteErr)
+	}
+	if _, getErr := gapsData.GetExpired(ctx, gapsKeys[1]); !errors.Is(getErr, ErrModuleDataNotFound) {
+		t.Fatalf("TTL cleanup left the expired revision readable: %v", getErr)
+	}
+	if _, getErr := gapsData.Get(ctx, gapsKeys[2]); getErr != nil {
+		t.Fatalf("TTL cleanup removed a live engine record: %v", getErr)
+	}
+	casGapRecord, putErr := gapsData.Put(ctx, gapsKeys[3], gapsValue("cas-1", 0), 0)
+	if putErr != nil {
+		t.Fatalf("create CAS revision fixture: %v", putErr)
+	}
+	var sequenceBefore, sequenceAfter int64
+	if err := first.database.QueryRow(ctx, `SELECT last_value FROM engine_data.revision_seq`).Scan(&sequenceBefore); err != nil {
+		t.Fatal(err)
+	}
+	rolledBackTx, txErr := first.database.Begin(ctx)
+	if txErr != nil {
+		t.Fatal(txErr)
+	}
+	if _, execErr := rolledBackTx.Exec(ctx, `UPDATE engine_data.records SET revision=nextval('engine_data.revision_seq')
+		WHERE engine_id=$1 AND namespace=$2 AND scope_type=$3 AND scope_id=$4 AND record_key=$5 AND revision=$6`,
+		gapsModuleID, "records", "global", "global", gapsKeys[3].RecordKey, casGapRecord.Revision); execErr != nil {
+		_ = rolledBackTx.Rollback(ctx)
+		t.Fatal(execErr)
+	}
+	if rollbackErr := rolledBackTx.Rollback(ctx); rollbackErr != nil {
+		t.Fatal(rollbackErr)
+	}
+	if err := first.database.QueryRow(ctx, `SELECT last_value FROM engine_data.revision_seq`).Scan(&sequenceAfter); err != nil || sequenceAfter <= sequenceBefore {
+		t.Fatalf("rolled-back revision was reused: before=%d after=%d err=%v", sequenceBefore, sequenceAfter, err)
+	}
+	casUpdated, putErr := gapsData.Put(ctx, gapsKeys[3], gapsValue("cas-2", 0), casGapRecord.Revision)
+	if putErr != nil || casUpdated.Revision <= sequenceAfter {
+		t.Fatalf("next successful CAS did not advance past the rolled-back revision: revision=%d sequence=%d err=%v", casUpdated.Revision, sequenceAfter, putErr)
+	}
+	if _, putErr := gapsData.Put(ctx, gapsKeys[3], gapsValue("stale", 0), casGapRecord.Revision); !errors.Is(putErr, ErrModuleDataConflict) {
+		t.Fatalf("stale CAS update after rollback returned %v", putErr)
+	}
+	if deleteErr := gapsData.Delete(ctx, gapsKeys[3], casGapRecord.Revision); !errors.Is(deleteErr, ErrModuleDataConflict) {
+		t.Fatalf("stale CAS delete after rollback returned %v", deleteErr)
+	}
+	batchGapRecord, putErr := gapsData.Put(ctx, gapsKeys[4], gapsValue("before", 0), 0)
+	if putErr != nil {
+		t.Fatalf("create batch atomicity fixture: %v", putErr)
+	}
+	batchChanged := gapsValue("after", 0)
+	if batchErr := gapsData.Batch(ctx, []ModuleDataMutation{
+		{Key: gapsKeys[4], ExpectedRevision: batchGapRecord.Revision, Value: &batchChanged},
+		{Key: gapsKeys[5], ExpectedRevision: 9, Value: &batchChanged},
+	}); !errors.Is(batchErr, ErrModuleDataConflict) {
+		t.Fatalf("stale batch mutation did not conflict atomically: %v", batchErr)
+	}
+	batchCurrent, getErr := gapsData.Get(ctx, gapsKeys[4])
+	var batchPayload struct {
+		State string `json:"state"`
+	}
+	batchDecodeErr := json.Unmarshal(batchCurrent.Payload, &batchPayload)
+	if getErr != nil || batchDecodeErr != nil || batchPayload.State != "before" || batchCurrent.Revision != batchGapRecord.Revision {
+		t.Fatalf("failed batch leaked a partial update: payload=%s revision=%d err=%v decodeErr=%v", batchCurrent.Payload, batchCurrent.Revision, getErr, batchDecodeErr)
+	}
+	if batchErr := gapsData.Batch(ctx, []ModuleDataMutation{
+		{Key: gapsKeys[4], ExpectedRevision: batchCurrent.Revision, Value: &batchChanged},
+		{Key: gapsKeys[4], ExpectedRevision: batchCurrent.Revision, Value: &batchChanged},
+	}); !errors.Is(batchErr, ErrModuleDataInvalid) {
+		t.Fatalf("duplicate batch keys were accepted: %v", batchErr)
+	}
 	managerActor, err := postgres.Authenticate(ctx, first.database, managerSecret)
 	if err != nil {
 		t.Fatal(err)

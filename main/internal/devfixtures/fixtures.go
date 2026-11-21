@@ -162,6 +162,55 @@ func (a *Website) ListConfiguredSites(ctx context.Context) (website.ConfiguredSi
 	return website.ConfiguredSiteList{Items: []website.ConfiguredSite{{SiteID: syntheticSiteID}}}, nil
 }
 
+func (a *Website) ListPages(ctx context.Context, siteID, _ string, _ int) (website.PagePage, error) {
+	if err := a.require(ctx, core.AccessLevelRead); err != nil {
+		return website.PagePage{}, err
+	}
+	if siteID != syntheticSiteID {
+		return website.PagePage{}, website.ErrNotFound
+	}
+	return website.PagePage{Items: []website.Page{demoPage()}}, nil
+}
+func (a *Website) GetPage(ctx context.Context, siteID, pageID string) (website.Page, error) {
+	if err := a.require(ctx, core.AccessLevelRead); err != nil {
+		return website.Page{}, err
+	}
+	if siteID != syntheticSiteID || pageID != syntheticPageID {
+		return website.Page{}, website.ErrNotFound
+	}
+	return demoPage(), nil
+}
+func (a *Website) CreatePage(ctx context.Context, _ website.CreatePageRequest) (website.Page, error) {
+	return website.Page{}, a.writeUnavailable(ctx)
+}
+func (a *Website) ListPageTemplates(ctx context.Context, siteID, _ string, _ int) (website.PageTemplatePage, error) {
+	if err := a.require(ctx, core.AccessLevelRead); err != nil {
+		return website.PageTemplatePage{}, err
+	}
+	if siteID != syntheticSiteID {
+		return website.PageTemplatePage{}, website.ErrNotFound
+	}
+	return website.PageTemplatePage{Items: []website.PageTemplate{}}, nil
+}
+func (a *Website) GetPageTemplate(ctx context.Context, _, _ string) (website.PageTemplate, error) {
+	if err := a.require(ctx, core.AccessLevelRead); err != nil {
+		return website.PageTemplate{}, err
+	}
+	return website.PageTemplate{}, website.ErrNotFound
+}
+func (a *Website) CreatePageTemplate(ctx context.Context, _ website.CreatePageTemplateRequest) (website.PageTemplate, error) {
+	return website.PageTemplate{}, a.writeUnavailable(ctx)
+}
+func (a *Website) UpdatePageTemplate(ctx context.Context, _ website.UpdatePageTemplateRequest) (website.PageTemplate, error) {
+	return website.PageTemplate{}, a.writeUnavailable(ctx)
+}
+func (a *Website) DeletePageTemplate(ctx context.Context, _ website.DeletePageTemplateRequest) error {
+	return a.writeUnavailable(ctx)
+}
+func (a *Website) ApplyPageTemplate(ctx context.Context, _ website.ApplyPageTemplateRequest) (website.Snapshot, error) {
+	return website.Snapshot{}, a.writeUnavailable(ctx)
+}
+
 func (a *Website) ListFeatureCatalog(ctx context.Context, _ string, _ int) (website.FeatureVersionPage, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
 		return website.FeatureVersionPage{}, err
@@ -252,22 +301,48 @@ func (a *Website) DeleteSnapshot(ctx context.Context, _ website.DeleteSnapshotRe
 	return a.writeUnavailable(ctx)
 }
 func (a *Website) BuildSnapshot(ctx context.Context, _ website.BuildSnapshotRequest) (website.BuildJob, error) {
-	return website.BuildWorker{}, a.writeUnavailable(ctx)
+	return website.BuildJob{}, a.writeUnavailable(ctx)
 }
 func (a *Website) GetBuild(ctx context.Context, _ string) (website.BuildJob, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return website.BuildWorker{}, err
+		return website.BuildJob{}, err
 	}
-	return website.BuildWorker{}, website.ErrNotFound
+	return website.BuildJob{}, website.ErrNotFound
 }
 func (a *Website) CreateMediaDerivative(ctx context.Context, _ website.CreateDerivativeRequest) (website.MediaJob, error) {
-	return website.MediaWorker{}, a.writeUnavailable(ctx)
+	return website.MediaJob{}, a.writeUnavailable(ctx)
 }
 func (a *Website) GetMediaJob(ctx context.Context, _ string) (website.MediaJob, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
-		return website.MediaWorker{}, err
+		return website.MediaJob{}, err
 	}
-	return website.MediaWorker{}, website.ErrNotFound
+	return website.MediaJob{}, website.ErrNotFound
+}
+
+func (a *Content) GetContentProjections(ctx context.Context, pageSnapshotID string) (content.Projections, error) {
+	if err := a.require(ctx, core.AccessLevelRead); err != nil {
+		return content.Projections{}, err
+	}
+	if pageSnapshotID != syntheticSnapshotID {
+		return content.Projections{}, content.ErrNotFound
+	}
+	siteSchema := demoSiteContentSchema()
+	pageSchema := demoPagePlacementProjection()
+	projections := content.Projections{
+		Site: content.SiteContentSchema{Version: siteSchema.Version, SiteID: siteSchema.SiteID, ModelRevision: siteSchema.ModelRevision,
+			Digest: siteSchema.Digest, DataModel: siteSchema.DataModel},
+		Page: content.PagePlacementProjection{Version: pageSchema.Version, PageSnapshotID: pageSchema.PageSnapshotID, PageID: pageSchema.PageID,
+			SiteID: pageSchema.SiteID, Revision: pageSchema.Revision, State: pageSchema.State, Placements: []content.Placement{}},
+	}
+	digest, err := projections.Page.ComputeDigest()
+	if err != nil {
+		return content.Projections{}, content.ErrUnavailable
+	}
+	projections.Page.Digest = digest
+	if !projections.VerifyScope(pageSnapshotID) {
+		return content.Projections{}, content.ErrUnavailable
+	}
+	return projections, nil
 }
 
 func (a *Content) GetLocaleConfig(ctx context.Context, _ string) (content.LocaleConfig, error) {
@@ -427,6 +502,11 @@ func (Descriptor) Operations() []core.Operation { return nil }
 var _ core.Module = Descriptor{}
 
 var demoTime = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+
+func demoPage() website.Page {
+	return website.Page{ID: syntheticPageID, SiteID: syntheticSiteID, Name: "Synthetic demo",
+		LatestSnapshotID: syntheticSnapshotID, LatestSnapshotState: "ready", CreatedAt: demoTime}
+}
 
 func demoSnapshot() website.Snapshot {
 	return website.Snapshot{ID: syntheticSnapshotID, SiteID: syntheticSiteID, PageID: syntheticPageID, Name: "Synthetic demo", Sequence: 1, Revision: 1,

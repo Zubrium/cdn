@@ -68,7 +68,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		}
 		operations = append(operations, upload)
 	}
-	registry, err := routerhttp.NewPublicOperationRegistry(operations...)
+	registry, err := router.NewPublicOperationRegistry(operations...)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		return err
 	}
 	identity := routerIdentityAdapter{identity: component.core.runtime.EngineIdentity(), sessions: component.core.runtime.Sessions()}
-	validator, err := routerhttp.NewCoreTargetValidator(component.core.runtime.EngineIdentity(), component.core.runtime.EngineFiles(), settings.ServiceCredential, registry)
+	validator, err := router.NewCoreTargetValidator(component.core.runtime.EngineIdentity(), component.core.runtime.EngineFiles(), settings.ServiceCredential, registry)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	delivery, err := routerhttp.NewCoreDelivery(settings.BranchID, settings.ServiceCredential, component.core.runtime.EngineIdentity(),
+	delivery, err := router.NewCoreDelivery(settings.BranchID, settings.ServiceCredential, component.core.runtime.EngineIdentity(),
 		component.core.runtime.EngineFiles(), routeService, registry)
 	if err != nil {
 		return err

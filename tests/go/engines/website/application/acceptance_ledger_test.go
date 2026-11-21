@@ -40,6 +40,13 @@ var websiteScenarioIDs = map[string]struct{}{
 	"WEB-020": {},
 	"WEB-021": {},
 	"WEB-022": {},
+	"WEB-023": {},
+	"WEB-024": {},
+	"WEB-025": {},
+	"WEB-026": {},
+	"WEB-027": {},
+	"WEB-028": {},
+	"WEB-029": {},
 }
 
 type websiteScenarioLedger struct {

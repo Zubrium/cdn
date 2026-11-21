@@ -63,14 +63,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-func (h *Handler) projections(ctx context.Context, pageSnapshotID string) (engine.Projections, error) {
+func (h *Handler) projections(ctx context.Context, pageSnapshotID, locale string) (engine.Projections, error) {
 	if nilInterface(h.schemas) {
 		return engine.Projections{}, engine.ErrUnavailable
 	}
 	projections, err := h.schemas.GetContentProjections(ctx, pageSnapshotID)
 	if err != nil {
-		return engine.Projections{}, engine.ErrUnavailable
+		// Preserve typed authorization/scope failures; writeEngineError maps
+		// unknown provider errors to 503 without exposing their details.
+		return engine.Projections{}, err
 	}
+	projections.Locale = locale
 	if !projections.VerifyScope(pageSnapshotID) {
 		return engine.Projections{}, engine.ErrUnavailable
 	}
@@ -132,11 +135,12 @@ func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshotID := r.PathValue("snapshotID")
-	if !validID(snapshotID) {
-		writeError(w, http.StatusBadRequest, "invalid_request")
+	query, valid := readQuery(r, "locale")
+	if !valid || query["locale"] == "" || !validID(snapshotID) {
+		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	projection, err := h.projections(ctx, snapshotID)
+	projection, err := h.projections(ctx, snapshotID, query["locale"])
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -169,12 +173,17 @@ func (h *Handler) saveWorkspaceDraft(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_idempotency_key")
 		return
 	}
-	if !validID(request.SnapshotID) || request.ExpectedRevision < 0 || request.Records == nil || request.Selections == nil ||
+	if !validID(request.SnapshotID) || request.ExpectedRevision < 0 || request.ExpectedSelectionRevision < 0 || request.Records == nil || request.Selections == nil ||
 		len(request.Records) > 50000 || len(request.Selections) > 50000 || !validWorkspaceInput(request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	projection, err := h.projections(ctx, request.SnapshotID)
+	query, valid := readQuery(r, "locale")
+	if !valid || query["locale"] == "" {
+		writeError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	projection, err := h.projections(ctx, request.SnapshotID, query["locale"])
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -197,7 +206,8 @@ func (h *Handler) publishWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ExpectedRevision int64 `json:"expected_revision"`
+		ExpectedRevision          int64 `json:"expected_revision"`
+		ExpectedSelectionRevision int64 `json:"expected_selection_revision"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &body); err != nil {
 		writeDecodeError(w, err)
@@ -205,16 +215,21 @@ func (h *Handler) publishWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshotID := r.PathValue("snapshotID")
 	idempotencyKey, valid := readIdempotencyKey(r)
-	if !valid || !validID(snapshotID) || body.ExpectedRevision < 0 {
+	if !valid || !validID(snapshotID) || body.ExpectedRevision < 0 || body.ExpectedSelectionRevision < 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	projection, err := h.projections(ctx, snapshotID)
+	query, valid := readQuery(r, "locale")
+	if !valid || query["locale"] == "" {
+		writeError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	projection, err := h.projections(ctx, snapshotID, query["locale"])
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	workspace, err := h.api.PublishWorkspace(ctx, projection, engine.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
+	workspace, err := h.api.PublishWorkspace(ctx, projection, engine.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision, ExpectedSelectionRevision: body.ExpectedSelectionRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -231,8 +246,8 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "cursor", "limit")
-	if !valid || len(query["cursor"]) > 1024 || !validID(r.PathValue("snapshotID")) {
+	query, valid := readQuery(r, "cursor", "limit", "locale")
+	if !valid || query["locale"] == "" || len(query["cursor"]) > 1024 || !validID(r.PathValue("snapshotID")) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -242,7 +257,7 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshotID := r.PathValue("snapshotID")
-	projection, err := h.projections(ctx, snapshotID)
+	projection, err := h.projections(ctx, snapshotID, query["locale"])
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -264,7 +279,8 @@ func (h *Handler) restoreHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ExpectedRevision int64 `json:"expected_revision"`
+		ExpectedRevision          int64 `json:"expected_revision"`
+		ExpectedSelectionRevision int64 `json:"expected_selection_revision"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &body); err != nil {
 		writeDecodeError(w, err)
@@ -272,16 +288,21 @@ func (h *Handler) restoreHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshotID, historyID := r.PathValue("snapshotID"), r.PathValue("historyID")
 	idempotencyKey, valid := readIdempotencyKey(r)
-	if !valid || !validID(snapshotID) || !validID(historyID) || body.ExpectedRevision < 0 {
+	if !valid || !validID(snapshotID) || !validID(historyID) || body.ExpectedRevision < 0 || body.ExpectedSelectionRevision < 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	projection, err := h.projections(ctx, snapshotID)
+	query, valid := readQuery(r, "locale")
+	if !valid || query["locale"] == "" {
+		writeError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	projection, err := h.projections(ctx, snapshotID, query["locale"])
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	workspace, err := h.api.RestoreHistory(ctx, projection, engine.RestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision})
+	workspace, err := h.api.RestoreHistory(ctx, projection, engine.RestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision, ExpectedSelectionRevision: body.ExpectedSelectionRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return

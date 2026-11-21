@@ -401,7 +401,11 @@ func (s *Store) List(ctx context.Context, namespaceName, scopeType, scopeID, aft
 	if err != nil {
 		return nil, nil, "", moduleDataStoreError(err)
 	}
-	return moduleDataRows(keys), moduleDataRecords(rows), next, nil
+	resultKeys, resultRecords := moduleDataRows(keys), moduleDataRecords(rows)
+	if err := validateModuleDataPage(namespaceName, scopeType, scopeID, resultKeys, resultRecords, next); err != nil {
+		return nil, nil, "", err
+	}
+	return resultKeys, resultRecords, next, nil
 }
 
 func (s *Store) ListExpired(ctx context.Context, namespaceName, scopeType, scopeID, after string, limit int) ([]ModuleDataKey, []ModuleDataRecord, string, error) {
@@ -422,7 +426,11 @@ func (s *Store) ListExpired(ctx context.Context, namespaceName, scopeType, scope
 	if err != nil {
 		return nil, nil, "", moduleDataStoreError(err)
 	}
-	return moduleDataRows(keys), moduleDataRecords(rows), next, nil
+	resultKeys, resultRecords := moduleDataRows(keys), moduleDataRecords(rows)
+	if err := validateModuleDataPage(namespaceName, scopeType, scopeID, resultKeys, resultRecords, next); err != nil {
+		return nil, nil, "", err
+	}
+	return resultKeys, resultRecords, next, nil
 }
 
 func moduleDataRows(source []domainengine.Key) []ModuleDataKey {
@@ -439,6 +447,26 @@ func moduleDataRecords(source []domainengine.Record) []ModuleDataRecord {
 		result[i] = ModuleDataRecord(source[i])
 	}
 	return result
+}
+
+// validateModuleDataPage keeps an opaque cursor and an index projection inside
+// the capability's own scope before either reaches a consumer. A malformed
+// repository page is a storage integrity failure, not data to disclose.
+func validateModuleDataPage(namespaceName, scopeType, scopeID string, keys []ModuleDataKey, records []ModuleDataRecord, next string) error {
+	if len(keys) != len(records) {
+		return ErrModuleDataUnavailable
+	}
+	for _, key := range keys {
+		if key.Namespace != namespaceName || key.ScopeType != scopeType || key.ScopeID != scopeID || !validModuleDataText(key.RecordKey, 256) {
+			return ErrModuleDataUnavailable
+		}
+	}
+	if next != "" {
+		if !validModuleDataText(next, 256) || len(keys) == 0 || next != keys[len(keys)-1].RecordKey {
+			return ErrModuleDataUnavailable
+		}
+	}
+	return nil
 }
 
 func validateModuleDataProjection(namespace moduleDataNamespace, encoded json.RawMessage, maxBytes int) error {

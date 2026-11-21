@@ -1,0 +1,253 @@
+{
+  "purpose": "Coordinator failure-injection and lifecycle denominator after 7d86bd2, executed with disposable PostgreSQL",
+  "sources": [
+    "core/todo.md: Этап 6 (Coordinator и durable workflows)",
+    "tests/ACCEPTANCE-MATRIX.md:19-20"
+  ],
+  "status_legend": {
+    "covered": "содержательный assertion-backed тест исполнен в текущем проходе с disposable PostgreSQL"
+  },
+  "verification": {
+    "overlay": "python3 tests/go-overlay.py > $TMPDIR/coordinator-overlay.json",
+    "red_command": "cd core && go test -vet=off -overlay=$TMPDIR/coordinator-overlay.json ./application/coordination -run 'TestServiceStartFailureIsRetryableAndDoesNotLeakLease|TestTaskOutcomeRejectsCombinedDependencyLimitAndRepeatedRefs' -count=1",
+    "red_exit": 1,
+    "full_core_command": "QA_ENV_FILE=<private> tests/qa/run-core-acceptance.sh run",
+    "full_core_exit": 0,
+    "lifecycle_command": "cd core && go test -count=1 -overlay=$TMPDIR/coordinator-overlay.json ./infrastructure/postgres -run '^TestDisposableCoordinatorLifecycleSuite$' -v",
+    "lifecycle_exit": 0,
+    "lifecycle_result": "PASS: 8/8 subtests on a fresh zubrium_core_qa_coordinator_lifecycle database"
+  },
+  "findings": [
+    {
+      "id": "CC-BUG-001",
+      "root_cause": "Service.Start выставлял started=true до регистрации instance и создания executor; при ошибке registration/executor initialization флаг не откатывался, поэтому повторный Start возвращал ErrTaskExecutorAlreadyStarted.",
+      "fix": "Добавлен Service.abortStart(), вызываемый на обоих failure paths до возврата ошибки.",
+      "tests": [
+        "TestServiceStartFailureIsRetryableAndDoesNotLeakLease",
+        "TestServiceExecutorInitFailureIsRetryable"
+      ]
+    },
+    {
+      "id": "CC-BUG-002",
+      "root_cause": "validTaskOutcome проверял DependsOn и DependsOnEmissions по отдельности (<=256 каждый), но не проверял суммарный bounded edge count; граф с 200+200 ссылками принимался приложением.",
+      "fix": "Добавлена проверка len(DependsOn)+len(DependsOnEmissions) > 256 до вызова store.Complete.",
+      "tests": [
+        "TestTaskOutcomeRejectsCombinedDependencyLimitAndRepeatedRefs"
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "CC-001",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Static WorkerCatalog: unique component/operation/version registration",
+      "tests": [
+        "TestBuildWorkerCatalogUsesOnlyGenericRegisteredComponentIDs",
+        "TestBuildWorkerCatalogRejectsUnselectedAndDuplicateProviders",
+        "TestRuntimeRegistryCompilesAnImmutableSelectedWorkerCatalog",
+        "TestRuntimeRegistryRejectsInvalidOperationContracts"
+      ],
+      "status": "covered",
+      "evidence": "go test ./application/coordination exit=0; duplicate/unselected/invalid version registration rejected before startup"
+    },
+    {
+      "id": "CC-002",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Unknown handler, duplicate registration and bad dependency fail before side effects",
+      "tests": [
+        "TestComposeRejectsInvalidDependencyOrderBeforeSideEffects",
+        "TestTaskExecutorRejectsUnregisteredDynamicChildBeforePersistence",
+        "TestComposeRejectsUnavailableComponentsBeforeStartingAnything"
+      ],
+      "status": "covered",
+      "evidence": "new tests assert zero component factories and zero Complete calls on rejected registration/graph"
+    },
+    {
+      "id": "CC-003",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Workflow root is a Worker task; WorkerRef required; join has no handler/lease and is never claimed",
+      "tests": [
+        "TestTaskExecutorNeverInvokesClaimedJoinTask",
+        "TestTaskOutcomeAcceptsCoreJoinTasksWithDependencies",
+        "TestDisposableWorkflowJoinWaitsForEveryDependency"
+      ],
+      "status": "covered",
+      "evidence": "claimed join fails with invalid_task_kind, no handler invocation and no Complete; PostgreSQL claim assertion прошёл в TestDisposableCoordinatorLifecycleSuite на свежей БД"
+    },
+    {
+      "id": "CC-004",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Handler receives durable Task.ID; caller cannot spoof owner/workflow/task/epoch/handler",
+      "tests": [
+        "TestWorkerHandlerReceivesDurableTaskIdentity",
+        "TestWorkflowStartCannotBeSpoofedByPayloadOrCallerMetadata",
+        "TestCoordinatorServiceLifecycleAndScopedWorkflowCapability"
+      ],
+      "status": "covered",
+      "evidence": "handler receives server-issued Task.ID/WorkflowID; payload metadata does not alter server-derived identity or fingerprint"
+    },
+    {
+      "id": "CC-005",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Start idempotency: same key/fingerprint returns workflow; same key, other input conflicts",
+      "tests": [
+        "TestWorkflowStartCannotBeSpoofedByPayloadOrCallerMetadata",
+        "TestDisposableWorkflowIdempotencyIsScopedAndPayloadBound",
+        "TestDisposableConcurrentWorkflowStartUsesOneIdempotentWorkflow"
+      ],
+      "status": "covered",
+      "evidence": "Unit fingerprint/idempotency assertions executed; persisted start idempotency scenario passed on a fresh disposable database."
+    },
+    {
+      "id": "CC-006",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Graph: parent default dependencies, sibling refs, multi-dependency join",
+      "tests": [
+        "TestDisposableCoordinatorLifecycleSuite/parent_default_and_sibling_refs",
+        "TestDisposableTaskWaitsForItsExplicitDependency",
+        "TestDisposableWorkflowJoinWaitsForEveryDependency"
+      ],
+      "status": "covered",
+      "evidence": "Unit graph composition assertions executed (parent dependencies, sibling refs, cycle and limits); persisted graph scenarios passed in TestDisposableCoordinatorLifecycleSuite."
+    },
+    {
+      "id": "CC-007",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Graph: foreign/repeated refs, limits and cycle rejection",
+      "tests": [
+        "TestTaskOutcomeRejectsCombinedDependencyLimitAndRepeatedRefs",
+        "TestTaskDependencyCycleDetection",
+        "TestDisposableCoordinatorLifecycleSuite/cycle_and_limits_roll_back",
+        "TestDisposableCrossWorkflowDependencyIsRejectedAtomically"
+      ],
+      "status": "covered",
+      "evidence": "Unit combined-limit/repeated-ref assertions executed (bug fixed); persisted dependency scenarios passed on a fresh disposable database."
+    },
+    {
+      "id": "CC-008",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Atomic parent result + child tasks + dependency edges in one transaction",
+      "tests": [
+        "TestDisposableCoordinatorLifecycleSuite/commit_outage_rolls_back",
+        "TestDisposableCrossWorkflowDependencyIsRejectedAtomically"
+      ],
+      "status": "covered",
+      "evidence": "Trigger-based commit outage executed; unit and persisted assertions confirm full rollback without partial dependency edges."
+    },
+    {
+      "id": "CC-009",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Join barrier only after every dependency succeeds",
+      "tests": [
+        "TestDisposableCoordinatorLifecycleSuite/join_barrier_with_failed_dependency",
+        "TestDisposableWorkflowJoinWaitsForEveryDependency"
+      ],
+      "status": "covered",
+      "evidence": "Failed-dependency barrier assertion executed; persisted join scenario passed on a fresh disposable database."
+    },
+    {
+      "id": "CC-010",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Multi-instance registration/renewal, fingerprint/epoch, takeover and fencing",
+      "tests": [
+        "TestDisposableCoordinatorLifecycleSuite/multi_instance_registration_and_renewal",
+        "TestDisposableCoordinatorFencesConfigurationEpoch",
+        "TestDisposableExpiredTaskLeaseCanBeTakenOverWithNewFencingToken"
+      ],
+      "status": "covered",
+      "evidence": "Two-instance fingerprint/renewal/fencing assertions executed on a fresh disposable database."
+    },
+    {
+      "id": "CC-011",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Concurrent claims, stale results and no commit after cancellation",
+      "tests": [
+        "TestDisposableCoordinatorLifecycleSuite/concurrent_claims_single_winner",
+        "TestDisposableWorkflowCancellationRejectsLateFencedCompletion"
+      ],
+      "status": "covered",
+      "evidence": "Concurrent claim race assertion executed on a fresh disposable database."
+    },
+    {
+      "id": "CC-012",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19,20",
+      "name": "Retry/backoff/max attempts, terminal failure, cancellation, retry only failed Worker-task, deadlines, bounded codes",
+      "tests": [
+        "TestRetryDelayIsBoundedAndDeterministic",
+        "TestTaskFailureNormalizesUnboundedErrorCodes",
+        "TestTaskExecutorTimesOutHandlerAndSchedulesRetry",
+        "TestDisposableCoordinatorLifecycleSuite/retry_rejects_join_task",
+        "TestDisposableExpiredTaskAtMaxAttemptsFailsWorkflow"
+      ],
+      "status": "covered",
+      "evidence": "Backoff/bounded-code/deadline unit assertions executed; persisted retry scenarios passed on fresh disposable databases."
+    },
+    {
+      "id": "CC-013",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "Restart/result recovery, delayed work and retention cleanup",
+      "tests": [
+        "TestDisposableCompletedWorkflowResultSurvivesInstanceRestart",
+        "TestDisposableRunningTaskResumesAfterInstanceRestart",
+        "TestDisposableDelayedWorkflowTaskWaitsUntilAvailableAt",
+        "TestDisposableWorkflowRetentionPrunesExpiredResults"
+      ],
+      "status": "covered",
+      "evidence": "Restart, delayed work and retention PostgreSQL scenarios executed with their dedicated fresh disposable databases."
+    },
+    {
+      "id": "CC-014",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "DB/store outage injection in start/claim/commit/read/cancel; fail-closed without partial commit",
+      "tests": [
+        "TestServiceStartFailureIsRetryableAndDoesNotLeakLease",
+        "TestServiceExecutorInitFailureIsRetryable",
+        "TestWorkflowClientPropagatesStoreOutagesForGetCancelAndStart",
+        "TestTaskExecutorFailsClosedWhenDurableStoreIsUnavailable",
+        "TestDisposableCoordinatorLifecycleSuite/canceled_context_store_outages",
+        "TestDisposableCoordinatorLifecycleSuite/commit_outage_rolls_back"
+      ],
+      "status": "covered",
+      "evidence": "Start/read/cancel/claim outage unit assertions executed (startup retry bug fixed); persisted cancellation/outage scenario passed."
+    },
+    {
+      "id": "CC-015",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:19",
+      "name": "PostgreSQL multi-instance/lifecycle suite on disposable DB",
+      "tests": [
+        "TestDisposableCoordinatorLifecycleSuite"
+      ],
+      "status": "covered",
+      "evidence": "TestDisposableCoordinatorLifecycleSuite executed with TEST_COORDINATOR_LIFECYCLE_DATABASE_URL; 8/8 subtests passed."
+    },
+    {
+      "id": "CC-016",
+      "todo": "core/todo.md: Этап 6",
+      "matrix": "tests/ACCEPTANCE-MATRIX.md:20",
+      "name": "Admin Coordinator API: scoped summaries/task graph and retry only failed Worker-task",
+      "tests": [
+        "TestWorkflowControlScopesListDetailAndRetry",
+        "TestWorkflowControlRejectsInvalidQueriesBeforeCore",
+        "TestNewWorkflowControlRejectsInvalidCoordinatorScope",
+        "TestDisposableCoordinatorLifecycleSuite/retry_rejects_join_task"
+      ],
+      "status": "covered",
+      "evidence": "Scoped-list/detail/retry unit assertions executed; persisted scoped scenarios passed on a fresh disposable database."
+    }
+  ]
+}

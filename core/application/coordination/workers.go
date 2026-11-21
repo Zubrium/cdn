@@ -365,7 +365,8 @@ func validTaskOutcome(outcome corecoord.TaskOutcome, maxChildren int) bool {
 	seen := make(map[string]struct{}, len(outcome.Children))
 	for _, child := range outcome.Children {
 		if !validCoordinatorIdempotencyKey(child.EmissionKey) || len(child.DependsOn) > 256 ||
-			len(child.DependsOnEmissions) > 256 || !validAvailableAt(child.AvailableAt) {
+			len(child.DependsOnEmissions) > 256 || len(child.DependsOn)+len(child.DependsOnEmissions) > 256 ||
+			!validAvailableAt(child.AvailableAt) {
 			return false
 		}
 		switch child.Kind {

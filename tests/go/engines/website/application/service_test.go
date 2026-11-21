@@ -584,6 +584,7 @@ func TestCreateSnapshotRejectsStaleOrProvisioningParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialRecordCount := len(store.records)
 	stale := createSnapshotRequest("Stale child", "idempotency-stale-child-001")
 	stale.ParentID, stale.ExpectedRevision, stale.ExpectedContentRevision = snapshotA, 1, 1
 	if _, err := service.CreateSnapshot(ctx, stale); !errors.Is(err, websiteapi.ErrConflict) {
@@ -594,8 +595,8 @@ func TestCreateSnapshotRejectsStaleOrProvisioningParent(t *testing.T) {
 	if _, err := service.CreateSnapshot(ctx, notReady); !errors.Is(err, websiteapi.ErrConflict) {
 		t.Fatalf("provisioning parent error = %v, want conflict", err)
 	}
-	if len(store.records) != 2 {
-		t.Fatalf("rejected child requests wrote %d records", len(store.records)-2)
+	if len(store.records) != initialRecordCount {
+		t.Fatalf("rejected child requests wrote %d records", len(store.records)-initialRecordCount)
 	}
 }
 

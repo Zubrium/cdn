@@ -69,10 +69,8 @@ export function selectedModelRecord(
   return recordsForEntity.find((record) => record.id === recordId) ?? null;
 }
 
-export function createModelRecord(entityId: string, sortOrder: number): ModelContentRecord {
-  // This key is local to the unsaved editor row; it is stripped from PUT so
-  // the service can generate the canonical record UUID.
-  return { id: `local:${crypto.randomUUID()}`, entityId, sortOrder, values: {} };
+export function createModelRecord(entityId: string, sortOrder: number, locale: string): ModelContentRecord {
+  return { id: `local:${crypto.randomUUID()}`, translationId: "", locale, entityId, sortOrder, values: {} };
 }
 
 export function clearModelRecordData(records: ModelContentRecord[], recordId: string): ModelContentRecord[] {
@@ -357,6 +355,7 @@ export function apiModelRecordInput(record: ModelContentRecord): Omit<ModelConte
   if (record.id.startsWith("local:")) {
     return {
       clientKey: record.id,
+      ...(record.translationId ? { translationId: record.translationId } : {}),
       entityId: record.entityId,
       sortOrder: record.sortOrder,
       values: record.values,

@@ -37,10 +37,12 @@ type PlacementInputLookup struct {
 }
 
 type Record struct {
-	ID        string         `json:"id"`
-	EntityID  string         `json:"entity_id"`
-	SortOrder int            `json:"sort_order"`
-	Values    map[string]any `json:"values"`
+	ID            string         `json:"id"`
+	TranslationID string         `json:"translation_id"`
+	Locale        string         `json:"locale"`
+	EntityID      string         `json:"entity_id"`
+	SortOrder     int            `json:"sort_order"`
+	Values        map[string]any `json:"values"`
 }
 
 type Selection struct {
@@ -51,6 +53,7 @@ type Selection struct {
 }
 
 type WorkspaceData struct {
+	Locale     string      `json:"locale"`
 	Records    []Record    `json:"records"`
 	Selections []Selection `json:"selections"`
 }
@@ -75,11 +78,24 @@ func ValidateWorkspace(model DataModel, placements []Placement, data WorkspaceDa
 	}
 	recordMap := make(map[string]Record, len(data.Records))
 	entityCounts := make(map[string]int)
+	translationGroups := make(map[string]string, len(data.Records))
 	uniqueValues := make(map[string]map[string]string)
+	locale, localeErr := CanonicalLocale(data.Locale)
+	if localeErr != nil || locale != data.Locale {
+		return ErrInvalid
+	}
 	for _, record := range data.Records {
-		if !canonicalUUID(record.ID) || !canonicalUUID(record.EntityID) || record.SortOrder < 0 {
+		if !canonicalUUID(record.ID) || !canonicalUUID(record.TranslationID) || record.Locale != locale || !canonicalUUID(record.EntityID) || record.SortOrder < 0 {
 			return ErrInvalid
 		}
+		groupEntity, grouped := translationGroups[record.TranslationID]
+		if grouped && groupEntity != record.EntityID {
+			return ErrInvalid
+		}
+		if grouped {
+			return ErrInvalid
+		}
+		translationGroups[record.TranslationID] = record.EntityID
 		if _, exists := recordMap[record.ID]; exists {
 			return ErrInvalid
 		}

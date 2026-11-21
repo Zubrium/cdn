@@ -33,19 +33,19 @@ type SaveState = ModelContentSaveState;
 type RecoveryDraft = LocalModelDraft & { baseRevision: number; savedAt: string };
 type RevisionConflict = ModelContentRevisionConflict;
 
-export const modelWorkspaceQueryKey = (snapshotId: string) => ["content", "model-workspace", snapshotId] as const;
+export const modelWorkspaceQueryKey = (snapshotId: string, locale: string) => ["content", "model-workspace", snapshotId, locale] as const;
 
 function sameDraft(left: LocalModelDraft, right: LocalModelDraft): boolean {
   return modelRecordsEqual(left.records, right.records) && modelSelectionsEqual(left.selections, right.selections);
 }
 
-function draftStorageKey(snapshotId: string): string {
-  return `website-engine:model-content-draft:${snapshotId}`;
+function draftStorageKey(snapshotId: string, locale: string): string {
+  return `website-engine:model-content-draft:${snapshotId}:${locale}`;
 }
 
-function readRecoveryDraft(snapshotId: string): RecoveryDraft | null {
+function readRecoveryDraft(snapshotId: string, locale: string): RecoveryDraft | null {
   try {
-    const raw = sessionStorage.getItem(draftStorageKey(snapshotId));
+    const raw = sessionStorage.getItem(draftStorageKey(snapshotId, locale));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<RecoveryDraft>;
     if (typeof parsed.baseRevision !== "number" || !Array.isArray(parsed.records) || !Array.isArray(parsed.selections)) return null;
@@ -81,13 +81,14 @@ export function useModelContentEditorController({
   const principal = useAuth().principal;
   const canPublish = canPublishContent(principal);
   const initialServerDraft = useMemo<LocalModelDraft>(() => ({ records: workspace.records, selections: workspace.selections }), [workspace.records, workspace.selections]);
-  const [recoveryDraft] = useState(() => readRecoveryDraft(workspace.snapshot.id));
+  const [recoveryDraft] = useState(() => readRecoveryDraft(workspace.snapshot.id, workspace.locale));
   const initialDraft = recoveryDraft ?? initialServerDraft;
   const [draft, setDraft] = useState<LocalModelDraft>(initialDraft);
   const draftRef = useRef<LocalModelDraft>(initialDraft);
   const [savedDraft, setSavedDraft] = useState<LocalModelDraft>(initialServerDraft);
   const [revision, setRevision] = useState(workspace.revision);
   const revisionRef = useRef(workspace.revision);
+  const selectionRevisionRef = useRef(workspace.selectionRevision);
   const draftBaseRevisionRef = useRef(recoveryDraft?.baseRevision ?? workspace.revision);
   const recoveredConflict = recoveryDraft ? modelDraftHasRevisionConflict(
     recoveryDraft.baseRevision,
@@ -122,8 +123,8 @@ export function useModelContentEditorController({
   const bypassGuard = useRef(false);
   const dirty = !sameDraft(draft, savedDraft);
   const historyQuery = useInfiniteQuery({
-    queryKey: ["content", "model-history", workspace.snapshot.id],
-    queryFn: ({ pageParam, signal }) => api.contentEngine.history(workspace.snapshot.id, pageParam, undefined, signal),
+    queryKey: ["content", "model-history", workspace.snapshot.id, workspace.locale],
+    queryFn: ({ pageParam, signal }) => api.contentEngine.history(workspace.snapshot.id, workspace.locale, pageParam, undefined, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: historyOpen,
@@ -165,13 +166,13 @@ export function useModelContentEditorController({
   useEffect(() => {
     if (dirty) {
       try {
-        sessionStorage.setItem(draftStorageKey(workspace.snapshot.id), JSON.stringify({ ...draft, baseRevision: draftBaseRevisionRef.current, savedAt: new Date().toISOString() } satisfies RecoveryDraft));
+        sessionStorage.setItem(draftStorageKey(workspace.snapshot.id, workspace.locale), JSON.stringify({ ...draft, baseRevision: draftBaseRevisionRef.current, savedAt: new Date().toISOString() } satisfies RecoveryDraft));
       } catch {
         // The editor remains usable when browser storage is unavailable; the UI still warns before navigation.
       }
       return;
     }
-    try { sessionStorage.removeItem(draftStorageKey(workspace.snapshot.id)); } catch { /* storage can be disabled */ }
+    try { sessionStorage.removeItem(draftStorageKey(workspace.snapshot.id, workspace.locale)); } catch { /* storage can be disabled */ }
   }, [dirty, draft, workspace.snapshot.id]);
 
   useEffect(() => {
@@ -202,7 +203,7 @@ export function useModelContentEditorController({
     setRevisionConflict({ local: localRevision, server: serverRevision });
     setSaveState("conflict");
     setSaveError("Локальные изменения сохранены в этой вкладке. Скачайте копию перед загрузкой серверной ревизии.");
-    void queryClient.invalidateQueries({ queryKey: modelWorkspaceQueryKey(workspace.snapshot.id) });
+    void queryClient.invalidateQueries({ queryKey: modelWorkspaceQueryKey(workspace.snapshot.id, workspace.locale) });
   }, [queryClient, workspace.revision, workspace.snapshot.id]);
 
   const saveDraft = useCallback(async (): Promise<ModelContentWorkspace | null> => {
@@ -219,9 +220,10 @@ export function useModelContentEditorController({
     setSaveState("saving");
     setSaveError("");
     try {
-      const saved = await api.contentEngine.saveWorkspaceDraft(workspace.snapshot.id, revisionRef.current, inputs, submitted.selections, idempotencyKey);
+      const saved = await api.contentEngine.saveWorkspaceDraft(workspace.snapshot.id, workspace.locale, revisionRef.current, selectionRevisionRef.current, inputs, submitted.selections, idempotencyKey);
       saveRetry.current = null;
       revisionRef.current = saved.revision;
+      selectionRevisionRef.current = saved.selectionRevision;
       draftBaseRevisionRef.current = saved.revision;
       setRevision(saved.revision);
       const canonical: LocalModelDraft = { records: saved.records, selections: saved.selections };
@@ -237,8 +239,8 @@ export function useModelContentEditorController({
         setSaveState("idle");
       }
       setRevisionConflict(null);
-      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id), saved);
-      void queryClient.invalidateQueries({ queryKey: ["content", "model-history", workspace.snapshot.id] });
+      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id, workspace.locale), saved);
+      void queryClient.invalidateQueries({ queryKey: ["content", "model-history", workspace.snapshot.id, workspace.locale] });
       return saved;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -269,6 +271,7 @@ export function useModelContentEditorController({
       setDraft(current);
       setSavedDraft(current);
       setRevisionValue(workspace.revision);
+      selectionRevisionRef.current = workspace.selectionRevision;
       draftBaseRevisionRef.current = workspace.revision;
       setSaveState("idle");
       setSaveError("");
@@ -285,7 +288,7 @@ export function useModelContentEditorController({
   const addRecord = (): ModelContentRecord | null => {
     if (!selectedEntity || selectedEntity.cardinality === "singleton") return null;
     const nextOrder = recordsForEntity.reduce((max, item) => Math.max(max, item.sortOrder), -1) + 1;
-    const item = createModelRecord(selectedEntity.id, nextOrder);
+    const item = createModelRecord(selectedEntity.id, nextOrder, workspace.locale);
     updateDraft((current) => ({ ...current, records: [...current.records, item] }));
     setRecordId(item.id);
     return item;
@@ -385,19 +388,20 @@ export function useModelContentEditorController({
       const saved = dirty ? await saveDraft() : null;
       if (dirty && !saved) return;
       publishRetry.current ??= `content-publish-${crypto.randomUUID()}`;
-      const published = await api.contentEngine.publishWorkspace(workspace.snapshot.id, saved?.revision ?? revisionRef.current, publishRetry.current);
+      const published = await api.contentEngine.publishWorkspace(workspace.snapshot.id, workspace.locale, saved?.revision ?? revisionRef.current, saved?.selectionRevision ?? selectionRevisionRef.current, publishRetry.current);
       publishRetry.current = null;
       const canonical: LocalModelDraft = { records: published.records, selections: published.selections };
       draftRef.current = canonical;
       setDraft(canonical);
       setSavedDraft(canonical);
       setRevisionValue(published.revision);
+      selectionRevisionRef.current = published.selectionRevision;
       draftBaseRevisionRef.current = published.revision;
       setSaveState("saved");
       setSaveError("");
       setRevisionConflict(null);
-      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id), published);
-      void queryClient.invalidateQueries({ queryKey: ["content", "model-history", workspace.snapshot.id] });
+      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id, workspace.locale), published);
+      void queryClient.invalidateQueries({ queryKey: ["content", "model-history", workspace.snapshot.id, workspace.locale] });
       toast.success("Контент опубликован");
     } catch (error) {
       setSaveState(error instanceof ApiError && error.status === 409 ? "conflict" : "error");
@@ -419,19 +423,20 @@ export function useModelContentEditorController({
       if (!restoreRetry.current || restoreRetry.current.historyID !== publicationId || restoreRetry.current.revision !== revisionRef.current) {
         restoreRetry.current = { historyID: publicationId, revision: revisionRef.current, key: `content-restore-${crypto.randomUUID()}` };
       }
-      const restored = await api.contentEngine.restoreHistory(workspace.snapshot.id, publicationId, revisionRef.current, restoreRetry.current.key);
+      const restored = await api.contentEngine.restoreHistory(workspace.snapshot.id, workspace.locale, publicationId, revisionRef.current, selectionRevisionRef.current, restoreRetry.current.key);
       restoreRetry.current = null;
       const canonical: LocalModelDraft = { records: restored.records, selections: restored.selections };
       draftRef.current = canonical;
       setDraft(canonical);
       setSavedDraft(canonical);
       setRevisionValue(restored.revision);
+      selectionRevisionRef.current = restored.selectionRevision;
       draftBaseRevisionRef.current = restored.revision;
       setSaveState("saved");
       setSaveError("");
       setRevisionConflict(null);
-      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id), restored);
-      void queryClient.invalidateQueries({ queryKey: ["content", "model-history", workspace.snapshot.id] });
+      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id, workspace.locale), restored);
+      void queryClient.invalidateQueries({ queryKey: ["content", "model-history", workspace.snapshot.id, workspace.locale] });
       setHistoryOpen(false);
       toast.success("Создан черновик из публикации");
     } catch (error) {
@@ -452,7 +457,7 @@ export function useModelContentEditorController({
     });
     if (!accepted) return;
     try {
-      const latest = await api.contentEngine.workspace(workspace.snapshot.id);
+      const latest = await api.contentEngine.workspace(workspace.snapshot.id, workspace.locale);
       const canonical: LocalModelDraft = { records: latest.records, selections: latest.selections };
       draftRef.current = canonical;
       setDraft(canonical);
@@ -462,7 +467,7 @@ export function useModelContentEditorController({
       setSaveState("idle");
       setSaveError("");
       setRevisionConflict(null);
-      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id), latest);
+      queryClient.setQueryData(modelWorkspaceQueryKey(workspace.snapshot.id, workspace.locale), latest);
     } catch (error) {
       setSaveError(errorMessage(error));
     }

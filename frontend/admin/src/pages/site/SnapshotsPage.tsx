@@ -31,10 +31,9 @@ export default function SnapshotsPage() {
     if (!trimmedName || busy) return;
     setBusy(true);
     try {
-      const [parent, parentContent] = await Promise.all([
-        api.siteBuilder.snapshot(parentSnapshotId),
-        api.contentEngine.workspace(parentSnapshotId),
-      ]);
+      const parent = await api.siteBuilder.snapshot(parentSnapshotId);
+      const localeConfig = await api.contentEngine.localeConfig(parent.snapshot.siteId);
+      const parentContent = await api.contentEngine.workspace(parentSnapshotId, localeConfig.default_locale);
       if (parent.snapshot.state !== "ready" || parent.snapshot.revision === undefined ||
         !Number.isSafeInteger(parentContent.revision) || parentContent.revision < 0) {
         throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");

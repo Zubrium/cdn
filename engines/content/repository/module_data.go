@@ -170,11 +170,12 @@ func localeConfigKey(siteID string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: siteID, RecordKey: "locale-catalog"}
 }
 
-func (repo *Repository) Get(ctx context.Context, snapshotID string) (domain.StoredWorkspace, error) {
-	if repo == nil || repo.store == nil {
-		return domain.StoredWorkspace{}, domain.ErrUnavailable
+func (repo *Repository) Get(ctx context.Context, snapshotID, locale string) (domain.StoredWorkspace, error) {
+	canonical, localeErr := domain.CanonicalLocale(locale)
+	if repo == nil || repo.store == nil || !domain.ValidID(snapshotID) || localeErr != nil || canonical != locale {
+		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	key := workspaceKey(snapshotID)
+	key := workspaceKey(snapshotID, locale)
 	record, err := repo.store.Get(ctx, key)
 	if err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
@@ -183,58 +184,59 @@ func (repo *Repository) Get(ctx context.Context, snapshotID string) (domain.Stor
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	pageIDs, err := repo.listPageSelectionIDs(ctx, snapshotID)
+	if aggregate.Locale != locale {
+		return domain.StoredWorkspace{}, domain.ErrUnavailable
+	}
+	pageIDs, err := repo.listPageSelectionIDs(ctx, snapshotID, locale)
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	aggregate.PageSelectionIDs = pageIDs
-	aggregate.PageSelections = make(map[string][]domain.Selection, len(pageIDs))
-	aggregate.PublishedPageSelections = make(map[string][]domain.Selection, len(pageIDs))
-	aggregate.PageSelectionRevisions = make(map[string]int64, len(pageIDs))
-	aggregate.PageMutationReceipts = make(map[string]*domain.MutationReceipt, len(pageIDs))
+	stored := domain.StoredWorkspace{
+		Aggregate:      aggregate,
+		StoreRevision:  record.Revision,
+		PageSelections: make(map[string]domain.StoredPageSelections, len(pageIDs)),
+	}
 	for _, pageID := range pageIDs {
-		selectionRecord, getErr := repo.store.Get(ctx, pageSelectionKey(snapshotID, pageID))
+		selectionRecord, getErr := repo.store.Get(ctx, pageSelectionKey(snapshotID, pageID, locale))
 		if getErr != nil {
 			return domain.StoredWorkspace{}, mapStoreError(getErr)
 		}
-		draft, published, receipt, decodeErr := decodePageSelections(pageID, selectionRecord)
+		draft, published, receipt, decodeErr := decodePageSelections(pageID, locale, selectionRecord)
 		if decodeErr != nil {
 			return domain.StoredWorkspace{}, decodeErr
 		}
-		aggregate.PageSelections[pageID] = draft
-		aggregate.PublishedPageSelections[pageID] = published
-		aggregate.PageSelectionRevisions[pageID] = selectionRecord.Revision
-		aggregate.PageMutationReceipts[pageID] = receipt
+		stored.PageSelections[pageID] = domain.StoredPageSelections{
+			Draft: draft, Published: published, StoreRevision: selectionRecord.Revision, LastMutation: receipt,
+		}
 	}
-	return domain.StoredWorkspace{Aggregate: aggregate, StoreRevision: record.Revision}, nil
+	return stored, nil
 }
 
-func (repo *Repository) Create(ctx context.Context, snapshotID string, aggregate domain.Aggregate) (domain.StoredWorkspace, error) {
-	if aggregate.SnapshotID != snapshotID || !validAggregate(aggregate) {
+func (repo *Repository) Create(ctx context.Context, snapshotID string, stored domain.StoredWorkspace) (domain.StoredWorkspace, error) {
+	if stored.Aggregate.SnapshotID != snapshotID || !validAggregate(stored.Aggregate) {
 		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	aggregate.PageSelectionIDs = pageSelectionIDs(aggregate.PageSelections, aggregate.PublishedPageSelections)
-	if !validPageSelectionIDs(aggregate.PageSelectionIDs) {
+	pageIDs := storedPageIDs(stored)
+	if !validPageSelectionIDs(pageIDs) {
 		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	if len(aggregate.PageSelectionIDs)+1 > repo.store.MaxBatchSize() {
+	if len(pageIDs)*2+1 > repo.store.MaxBatchSize() {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
 	}
-	aggregate.PageSelectionRevisions = make(map[string]int64, len(aggregate.PageSelectionIDs))
-	aggregate.PageMutationReceipts = make(map[string]*domain.MutationReceipt, len(aggregate.PageSelectionIDs))
-	value, err := encodeAggregate(aggregate)
+	value, err := encodeAggregate(stored.Aggregate)
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	mutations := []core.ModuleDataMutation{{Key: workspaceKey(snapshotID), ExpectedRevision: 0, Value: &value}}
-	for _, pageID := range aggregate.PageSelectionIDs {
-		selectionValue, encodeErr := encodePageSelections(pageID, aggregate.PageSelections[pageID], aggregate.PublishedPageSelections[pageID], nil)
+	mutations := []core.ModuleDataMutation{{Key: workspaceKey(snapshotID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: &value}}
+	for _, pageID := range pageIDs {
+		page := stored.PageSelections[pageID]
+		selectionValue, encodeErr := encodePageSelections(pageID, stored.Aggregate.Locale, page.Draft, page.Published, page.LastMutation)
 		if encodeErr != nil {
 			return domain.StoredWorkspace{}, encodeErr
 		}
 		mutations = append(mutations,
-			core.ModuleDataMutation{Key: pageSelectionKey(snapshotID, pageID), ExpectedRevision: 0, Value: &selectionValue},
-			core.ModuleDataMutation{Key: pageIndexKey(snapshotID, pageID), ExpectedRevision: 0, Value: pageIndexValue(pageID)})
+			core.ModuleDataMutation{Key: pageSelectionKey(snapshotID, pageID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: &selectionValue},
+			core.ModuleDataMutation{Key: pageIndexKey(snapshotID, pageID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: pageIndexValue(pageID, stored.Aggregate.Locale)})
 	}
 	if len(mutations) > repo.store.MaxBatchSize() {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
@@ -242,36 +244,43 @@ func (repo *Repository) Create(ctx context.Context, snapshotID string, aggregate
 	if err := repo.store.Batch(ctx, mutations); err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
 	}
-	for _, pageID := range aggregate.PageSelectionIDs {
-		aggregate.PageSelectionRevisions[pageID] = 1
+	created := domain.StoredWorkspace{
+		Aggregate:      stored.Aggregate,
+		StoreRevision:  1,
+		PageSelections: make(map[string]domain.StoredPageSelections, len(pageIDs)),
 	}
-	return domain.StoredWorkspace{Aggregate: aggregate, StoreRevision: 1}, nil
+	for _, pageID := range pageIDs {
+		page := stored.PageSelections[pageID]
+		page.StoreRevision = 1
+		created.PageSelections[pageID] = page
+	}
+	return created, nil
 }
 
 // Commit atomically replaces the current workspace and, when publishing, adds
 // its immutable history item in the same snapshot scope.
-func (repo *Repository) Commit(ctx context.Context, snapshotID string, expectedStoreRevision int64, aggregate domain.Aggregate, publication *domain.Publication) (domain.StoredWorkspace, error) {
-	if aggregate.SnapshotID != snapshotID || expectedStoreRevision < 1 || !validAggregate(aggregate) {
+func (repo *Repository) Commit(ctx context.Context, snapshotID string, expectedStoreRevision int64, stored domain.StoredWorkspace, publication *domain.Publication) (domain.StoredWorkspace, error) {
+	if stored.Aggregate.SnapshotID != snapshotID || expectedStoreRevision < 1 || !validAggregate(stored.Aggregate) {
 		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	aggregate.PageSelectionIDs = pageSelectionIDs(aggregate.PageSelections, aggregate.PublishedPageSelections)
-	if !validPageSelectionIDs(aggregate.PageSelectionIDs) {
+	if !validPageSelectionIDs(storedPageIDs(stored)) {
 		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	value, err := encodeAggregate(aggregate)
+	value, err := encodeAggregate(stored.Aggregate)
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	mutations := []core.ModuleDataMutation{{Key: workspaceKey(snapshotID), ExpectedRevision: expectedStoreRevision, Value: &value}}
-	changedIDs := aggregate.ChangedPageSelectionIDs
+	mutations := []core.ModuleDataMutation{{Key: workspaceKey(snapshotID, stored.Aggregate.Locale), ExpectedRevision: expectedStoreRevision, Value: &value}}
+	changedIDs := stored.ChangedPageSelectionIDs
 	if changedIDs == nil {
-		changedIDs = aggregate.PageSelectionIDs
+		changedIDs = storedPageIDs(stored)
 	}
 	changedIDs = append([]string(nil), changedIDs...)
 	sort.Strings(changedIDs)
 	if len(changedIDs) > repo.store.MaxBatchSize()-len(mutations) {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
 	}
+	updatedPages := make(map[string]domain.StoredPageSelections, len(changedIDs))
 	seenChanged := make(map[string]struct{}, len(changedIDs))
 	for _, pageID := range changedIDs {
 		if !domain.ValidID(pageID) {
@@ -281,37 +290,34 @@ func (repo *Repository) Commit(ctx context.Context, snapshotID string, expectedS
 			return domain.StoredWorkspace{}, domain.ErrInvalid
 		}
 		seenChanged[pageID] = struct{}{}
-		selectionKey := pageSelectionKey(snapshotID, pageID)
-		expected := aggregate.PageSelectionRevisions[pageID]
-		draft, draftExists := aggregate.PageSelections[pageID]
-		published, publishedExists := aggregate.PublishedPageSelections[pageID]
-		if !draftExists || !publishedExists {
+		page, exists := stored.PageSelections[pageID]
+		if !exists || page.StoreRevision < 0 {
 			return domain.StoredWorkspace{}, domain.ErrInvalid
 		}
-		receipt := aggregate.PageMutationReceipts[pageID]
-		selectionValue, encodeErr := encodePageSelections(pageID, draft, published, receipt)
+		selectionValue, encodeErr := encodePageSelections(pageID, stored.Aggregate.Locale, page.Draft, page.Published, page.LastMutation)
 		if encodeErr != nil {
 			return domain.StoredWorkspace{}, encodeErr
 		}
-		mutations = append(mutations, core.ModuleDataMutation{Key: selectionKey, ExpectedRevision: expected, Value: &selectionValue})
-		indexKey := pageIndexKey(snapshotID, pageID)
+		mutations = append(mutations, core.ModuleDataMutation{Key: pageSelectionKey(snapshotID, pageID, stored.Aggregate.Locale), ExpectedRevision: page.StoreRevision, Value: &selectionValue})
+		indexKey := pageIndexKey(snapshotID, pageID, stored.Aggregate.Locale)
 		_, indexErr := repo.store.Get(ctx, indexKey)
 		if errors.Is(indexErr, core.ErrModuleDataNotFound) {
-			mutations = append(mutations, core.ModuleDataMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID)})
+			mutations = append(mutations, core.ModuleDataMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID, stored.Aggregate.Locale)})
 		} else if indexErr != nil {
 			return domain.StoredWorkspace{}, mapStoreError(indexErr)
 		}
-		aggregate.PageSelectionRevisions[pageID] = expected + 1
+		page.StoreRevision++
+		updatedPages[pageID] = page
 	}
 	if publication != nil {
-		if publication.ContentRevision != aggregate.PublishedRevision || publication.ID == "" || publication.ContentRevision < 1 || publication.DraftRevision < 0 {
+		if publication.ContentRevision != stored.Aggregate.PublishedRevision || publication.ID == "" || publication.ContentRevision < 1 || publication.DraftRevision < 0 {
 			return domain.StoredWorkspace{}, domain.ErrInvalid
 		}
 		historyValue, err := encodePublication(*publication)
 		if err != nil {
 			return domain.StoredWorkspace{}, err
 		}
-		mutations = append(mutations, core.ModuleDataMutation{Key: historyKeyForRevision(snapshotID, publication.ContentRevision), ExpectedRevision: 0, Value: &historyValue})
+		mutations = append(mutations, core.ModuleDataMutation{Key: historyKeyForRevision(snapshotID, publication.Locale, publication.ContentRevision), ExpectedRevision: 0, Value: &historyValue})
 	}
 	if len(mutations) > repo.store.MaxBatchSize() {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
@@ -319,22 +325,34 @@ func (repo *Repository) Commit(ctx context.Context, snapshotID string, expectedS
 	if err := repo.store.Batch(ctx, mutations); err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
 	}
-	return domain.StoredWorkspace{Aggregate: aggregate, StoreRevision: expectedStoreRevision + 1}, nil
+	committed := domain.StoredWorkspace{
+		Aggregate:      stored.Aggregate,
+		StoreRevision:  expectedStoreRevision + 1,
+		PageSelections: make(map[string]domain.StoredPageSelections, len(stored.PageSelections)),
+	}
+	for pageID, page := range stored.PageSelections {
+		if updated, exists := updatedPages[pageID]; exists {
+			page = updated
+		}
+		committed.PageSelections[pageID] = page
+	}
+	return committed, nil
 }
 
-func (repo *Repository) CommitPageSelections(ctx context.Context, siteID, pageID string, expectedRevision int64, draft, published []domain.Selection, receipt *domain.MutationReceipt) (domain.StoredPageSelections, error) {
-	if !domain.ValidID(siteID) || !domain.ValidID(pageID) || expectedRevision < 0 {
+func (repo *Repository) CommitPageSelections(ctx context.Context, siteID, pageID, locale string, expectedRevision int64, draft, published []domain.Selection, receipt *domain.MutationReceipt) (domain.StoredPageSelections, error) {
+	canonicalLocale, localeErr := domain.CanonicalLocale(locale)
+	if !domain.ValidID(siteID) || !domain.ValidID(pageID) || expectedRevision < 0 || localeErr != nil || canonicalLocale != locale || expectedRevision == int64(^uint64(0)>>1) {
 		return domain.StoredPageSelections{}, domain.ErrInvalid
 	}
-	value, err := encodePageSelections(pageID, draft, published, receipt)
+	value, err := encodePageSelections(pageID, locale, draft, published, receipt)
 	if err != nil {
 		return domain.StoredPageSelections{}, err
 	}
-	mutations := []core.ModuleDataMutation{{Key: pageSelectionKey(siteID, pageID), ExpectedRevision: expectedRevision, Value: &value}}
-	indexKey := pageIndexKey(siteID, pageID)
+	mutations := []core.ModuleDataMutation{{Key: pageSelectionKey(siteID, pageID, locale), ExpectedRevision: expectedRevision, Value: &value}}
+	indexKey := pageIndexKey(siteID, pageID, locale)
 	_, indexErr := repo.store.Get(ctx, indexKey)
 	if errors.Is(indexErr, core.ErrModuleDataNotFound) {
-		mutations = append(mutations, core.ModuleDataMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID)})
+		mutations = append(mutations, core.ModuleDataMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID, locale)})
 	} else if indexErr != nil {
 		return domain.StoredPageSelections{}, mapStoreError(indexErr)
 	}
@@ -347,10 +365,10 @@ func (repo *Repository) CommitPageSelections(ctx context.Context, siteID, pageID
 	return domain.StoredPageSelections{Draft: draft, Published: published, StoreRevision: expectedRevision + 1, LastMutation: receipt}, nil
 }
 
-func (repo *Repository) GetHistoryByID(ctx context.Context, snapshotID, historyID string) (domain.Publication, error) {
+func (repo *Repository) GetHistoryByID(ctx context.Context, snapshotID, locale, historyID string) (domain.Publication, error) {
 	after := ""
 	for {
-		items, next, err := repo.ListHistory(ctx, snapshotID, after, repo.MaxPageSize())
+		items, next, err := repo.ListHistory(ctx, snapshotID, locale, after, repo.MaxPageSize())
 		if err != nil {
 			return domain.Publication{}, err
 		}
@@ -369,17 +387,17 @@ func (repo *Repository) GetHistoryByID(ctx context.Context, snapshotID, historyI
 	}
 }
 
-func (repo *Repository) GetHistoryByContentRevision(ctx context.Context, snapshotID string, revision int64) (domain.Publication, error) {
+func (repo *Repository) GetHistoryByContentRevision(ctx context.Context, snapshotID, locale string, revision int64) (domain.Publication, error) {
 	if revision < 1 {
 		return domain.Publication{}, domain.ErrInvalid
 	}
-	key := historyKeyForRevision(snapshotID, revision)
+	key := historyKeyForRevision(snapshotID, locale, revision)
 	record, err := repo.store.Get(ctx, key)
 	if err != nil {
 		return domain.Publication{}, mapStoreError(err)
 	}
 	var index recordIndex
-	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "history" || index.ContentRevision != revision {
+	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "history" || index.ContentRevision != revision || index.Locale != locale {
 		return domain.Publication{}, domain.ErrUnavailable
 	}
 	var publication domain.Publication
@@ -389,11 +407,11 @@ func (repo *Repository) GetHistoryByContentRevision(ctx context.Context, snapsho
 	return decodePublication(publication.ID, record)
 }
 
-func (repo *Repository) ListHistory(ctx context.Context, snapshotID, after string, limit int) ([]domain.Publication, string, error) {
+func (repo *Repository) ListHistory(ctx context.Context, snapshotID, locale, after string, limit int) ([]domain.Publication, string, error) {
 	if limit < 1 || limit > repo.MaxPageSize() || (after != "" && !validAfterCursor(after)) {
 		return nil, "", domain.ErrInvalid
 	}
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"history"}}}
+	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"history"}}, {Field: "locale", Operator: core.SelectorEqual, Values: []any{locale}}}
 	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, snapshotID, after, selectors, limit)
 	if err != nil {
 		return nil, "", mapStoreError(err)
@@ -410,7 +428,7 @@ func (repo *Repository) ListHistory(ctx context.Context, snapshotID, after strin
 		if err := decodeStrict(record.Payload, &payload); err != nil {
 			return nil, "", domain.ErrUnavailable
 		}
-		if keys[index].RecordKey != historyKeyForRevision(snapshotID, payload.ContentRevision).RecordKey {
+		if keys[index].RecordKey != historyKeyForRevision(snapshotID, locale, payload.ContentRevision).RecordKey {
 			return nil, "", domain.ErrUnavailable
 		}
 		items[index], err = decodePublication(payload.ID, record)
@@ -452,7 +470,7 @@ func (repo *Repository) BeginCopy(ctx context.Context, snapshotID string, marker
 }
 
 func (repo *Repository) PutCopiedHistory(ctx context.Context, snapshotID string, publication domain.Publication) error {
-	key := historyKeyForRevision(snapshotID, publication.ContentRevision)
+	key := historyKeyForRevision(snapshotID, publication.Locale, publication.ContentRevision)
 	expected, err := encodePublication(publication)
 	if err != nil {
 		return err
@@ -490,11 +508,11 @@ func (repo *Repository) PutCopiedHistory(ctx context.Context, snapshotID string,
 	return nil
 }
 
-func (repo *Repository) CompleteCopy(ctx context.Context, snapshotID string, markerRevision int64, aggregate domain.Aggregate, marker domain.CopyMarker) (domain.StoredWorkspace, error) {
-	if aggregate.SnapshotID != snapshotID || marker.TargetSnapshotID != snapshotID || marker.State != "complete" || marker.Result == nil || markerRevision < 1 || !validAggregate(aggregate) {
+func (repo *Repository) CompleteCopy(ctx context.Context, snapshotID string, markerRevision int64, stored domain.StoredWorkspace, marker domain.CopyMarker) (domain.StoredWorkspace, error) {
+	if stored.Aggregate.SnapshotID != snapshotID || marker.TargetSnapshotID != snapshotID || marker.State != "complete" || marker.Result == nil || markerRevision < 1 || !validAggregate(stored.Aggregate) {
 		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	workspaceValue, err := encodeAggregate(aggregate)
+	workspaceValue, err := encodeAggregate(stored.Aggregate)
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
@@ -503,35 +521,37 @@ func (repo *Repository) CompleteCopy(ctx context.Context, snapshotID string, mar
 		return domain.StoredWorkspace{}, err
 	}
 	if err := repo.store.Batch(ctx, []core.ModuleDataMutation{
-		{Key: workspaceKey(snapshotID), ExpectedRevision: 0, Value: &workspaceValue},
+		{Key: workspaceKey(snapshotID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: &workspaceValue},
 		{Key: markerKey(snapshotID), ExpectedRevision: markerRevision, Value: &markerValue},
 	}); err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
 	}
-	return domain.StoredWorkspace{Aggregate: aggregate, StoreRevision: 1}, nil
+	stored.StoreRevision = 1
+	return stored, nil
 }
 
-func workspaceKey(snapshotID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: snapshotID, RecordKey: rootKey}
+func workspaceKey(snapshotID, locale string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: snapshotID, RecordKey: "workspace/" + locale}
 }
-func pageSelectionKey(_ string, pageSnapshotID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: pageScopeType, ScopeID: pageSnapshotID, RecordKey: "page-selections"}
+func pageSelectionKey(_ string, pageSnapshotID, locale string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: namespace, ScopeType: pageScopeType, ScopeID: pageSnapshotID, RecordKey: "page-selections/" + locale}
 }
-func pageIndexKey(siteID, pageSnapshotID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: siteID, RecordKey: "page-index/" + pageSnapshotID}
+func pageIndexKey(siteID, pageSnapshotID, locale string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: siteID, RecordKey: "page-index/" + locale + "/" + pageSnapshotID}
 }
-func pageIndexValue(pageSnapshotID string) *core.ModuleDataValue {
+func pageIndexValue(pageSnapshotID, locale string) *core.ModuleDataValue {
 	value, _ := encodePayload(struct {
 		PageSnapshotID string `json:"page_snapshot_id"`
-	}{pageSnapshotID}, map[string]any{"record_type": "page-index", "content_revision": 0})
+		Locale string `json:"locale"`
+	}{pageSnapshotID, locale}, map[string]any{"record_type": "page-index", "content_revision": 0, "locale": locale})
 	return &value
 }
-func (repo *Repository) listPageSelectionIDs(ctx context.Context, siteID string) ([]string, error) {
+func (repo *Repository) listPageSelectionIDs(ctx context.Context, siteID, locale string) ([]string, error) {
 	ids := []string{}
 	after := ""
 	for {
 		keys, records, next, err := repo.store.List(ctx, namespace, scopeType, siteID, after,
-			[]core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"page-index"}}}, repo.MaxPageSize())
+			[]core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"page-index"}}, {Field: "locale", Operator: core.SelectorEqual, Values: []any{locale}}}, repo.MaxPageSize())
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
@@ -539,7 +559,7 @@ func (repo *Repository) listPageSelectionIDs(ctx context.Context, siteID string)
 			return nil, domain.ErrUnavailable
 		}
 		for i, key := range keys {
-			const prefix = "page-index/"
+			const prefix = "page-index/" + locale + "/"
 			if len(key.RecordKey) <= len(prefix) || key.RecordKey[:len(prefix)] != prefix {
 				return nil, domain.ErrUnavailable
 			}
@@ -549,7 +569,7 @@ func (repo *Repository) listPageSelectionIDs(ctx context.Context, siteID string)
 			}
 			var index recordIndex
 			if !domain.ValidID(pageID) || decodeStrict(records[i].Payload, &payload) != nil || payload.PageSnapshotID != pageID ||
-				json.Unmarshal(records[i].IndexData, &index) != nil || index.RecordType != "page-index" || index.ContentRevision != 0 {
+				json.Unmarshal(records[i].IndexData, &index) != nil || index.RecordType != "page-index" || index.ContentRevision != 0 || index.Locale != locale {
 				return nil, domain.ErrUnavailable
 			}
 			ids = append(ids, pageID)
@@ -565,22 +585,15 @@ func (repo *Repository) listPageSelectionIDs(ctx context.Context, siteID string)
 	sort.Strings(ids)
 	return ids, nil
 }
-func pageSelectionIDs(draft, published map[string][]domain.Selection) []string {
-	set := make(map[string]struct{}, len(draft)+len(published))
-	for id := range draft {
-		set[id] = struct{}{}
-	}
-	for id := range published {
-		set[id] = struct{}{}
-	}
-	ids := make([]string, 0, len(set))
-	for id := range set {
-		ids = append(ids, id)
+func storedPageIDs(stored domain.StoredWorkspace) []string {
+	ids := make([]string, 0, len(stored.PageSelections))
+	for pageID := range stored.PageSelections {
+		ids = append(ids, pageID)
 	}
 	sort.Strings(ids)
 	return ids
 }
-func encodePageSelections(pageSnapshotID string, draft, published []domain.Selection, receipt *domain.MutationReceipt) (core.ModuleDataValue, error) {
+func encodePageSelections(pageSnapshotID, locale string, draft, published []domain.Selection, receipt *domain.MutationReceipt) (core.ModuleDataValue, error) {
 	if draft == nil {
 		draft = []domain.Selection{}
 	}
@@ -591,9 +604,9 @@ func encodePageSelections(pageSnapshotID string, draft, published []domain.Selec
 		Draft        []domain.Selection      `json:"draft"`
 		Published    []domain.Selection      `json:"published"`
 		LastMutation *domain.MutationReceipt `json:"last_mutation,omitempty"`
-	}{draft, published, receipt}, map[string]any{"record_type": "page-selections", "content_revision": 0, "page_snapshot_id": pageSnapshotID})
+	}{draft, published, receipt}, map[string]any{"record_type": "page-selections", "content_revision": 0, "page_snapshot_id": pageSnapshotID, "locale": locale})
 }
-func decodePageSelections(pageSnapshotID string, record core.ModuleDataRecord) ([]domain.Selection, []domain.Selection, *domain.MutationReceipt, error) {
+func decodePageSelections(pageSnapshotID, locale string, record core.ModuleDataRecord) ([]domain.Selection, []domain.Selection, *domain.MutationReceipt, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return nil, nil, nil, domain.ErrUnavailable
 	}
@@ -609,8 +622,9 @@ func decodePageSelections(pageSnapshotID string, record core.ModuleDataRecord) (
 		RecordType      string `json:"record_type"`
 		ContentRevision int64  `json:"content_revision"`
 		PageSnapshotID  string `json:"page_snapshot_id"`
+			Locale          string `json:"locale"`
 	}
-	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "page-selections" || index.ContentRevision != 0 || index.PageSnapshotID != pageSnapshotID {
+	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "page-selections" || index.ContentRevision != 0 || index.PageSnapshotID != pageSnapshotID || index.Locale != locale {
 		return nil, nil, nil, domain.ErrUnavailable
 	}
 	return payload.Draft, payload.Published, payload.LastMutation, nil
@@ -618,43 +632,51 @@ func decodePageSelections(pageSnapshotID string, record core.ModuleDataRecord) (
 func markerKey(snapshotID string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: snapshotID, RecordKey: copyKey}
 }
-func historyKeyForRevision(snapshotID string, revision int64) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: snapshotID, RecordKey: fmt.Sprintf("history/%020d", revision)}
+func historyKeyForRevision(snapshotID, locale string, revision int64) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: snapshotID, RecordKey: fmt.Sprintf("history/%s/%020d", locale, revision)}
 }
 
 func encodeAggregate(aggregate domain.Aggregate) (core.ModuleDataValue, error) {
 	if !validAggregate(aggregate) {
 		return core.ModuleDataValue{}, domain.ErrInvalid
 	}
-	stored := aggregate
-	stored.Selections = []domain.Selection{}
-	stored.PageSelections = nil
-	if stored.PageSelectionIDs == nil {
-		stored.PageSelectionIDs = []string{}
-	}
-	return encodePayload(stored, map[string]any{"record_type": "workspace", "content_revision": aggregate.PublishedRevision})
+	return encodePayload(aggregate, map[string]any{"record_type": "workspace", "content_revision": aggregate.PublishedRevision, "locale": aggregate.Locale})
 }
 
 func decodeAggregate(snapshotID string, record core.ModuleDataRecord) (domain.Aggregate, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return domain.Aggregate{}, domain.ErrUnavailable
 	}
-	var aggregate domain.Aggregate
-	if err := decodeStrict(record.Payload, &aggregate); err != nil || !validAggregate(aggregate) || aggregate.SnapshotID != snapshotID || !validPageSelectionIDs(aggregate.PageSelectionIDs) {
+	// Legacy workspace payloads also carried page-scoped fields. They are
+	// intentionally ignored here: those values now live in dedicated records.
+	var payload struct {
+		domain.Aggregate
+		Selections              json.RawMessage `json:"selections,omitempty"`
+		PageSelections          json.RawMessage `json:"page_selections,omitempty"`
+		PublishedPageSelections json.RawMessage `json:"published_page_selections,omitempty"`
+		PageSelectionIDs        json.RawMessage `json:"page_selection_ids,omitempty"`
+	}
+	if err := decodeStrict(record.Payload, &payload); err != nil || !validAggregate(payload.Aggregate) || payload.SnapshotID != snapshotID {
 		return domain.Aggregate{}, domain.ErrUnavailable
 	}
 	var index recordIndex
-	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "workspace" || index.ContentRevision != aggregate.PublishedRevision {
+	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "workspace" || index.ContentRevision != payload.PublishedRevision || index.Locale != payload.Locale {
 		return domain.Aggregate{}, domain.ErrUnavailable
 	}
-	return aggregate, nil
+	return payload.Aggregate, nil
 }
 
 func encodePublication(publication domain.Publication) (core.ModuleDataValue, error) {
-	if publication.ID == "" || publication.DraftRevision < 0 || publication.ContentRevision < 1 || publication.CreatedAt.IsZero() || publication.Records == nil || publication.Selections == nil {
+	locale, localeErr := domain.CanonicalLocale(publication.Locale)
+	if localeErr != nil || locale != publication.Locale || publication.ID == "" || publication.DraftRevision < 0 || publication.ContentRevision < 1 || publication.CreatedAt.IsZero() || publication.Records == nil || publication.Selections == nil {
 		return core.ModuleDataValue{}, domain.ErrInvalid
 	}
-	return encodePayload(publication, map[string]any{"record_type": "history", "content_revision": publication.ContentRevision})
+	for _, record := range publication.Records {
+		if record.Locale != locale {
+			return core.ModuleDataValue{}, domain.ErrInvalid
+		}
+	}
+	return encodePayload(publication, map[string]any{"record_type": "history", "content_revision": publication.ContentRevision, "locale": publication.Locale})
 }
 
 func decodePublication(id string, record core.ModuleDataRecord) (domain.Publication, error) {
@@ -665,8 +687,17 @@ func decodePublication(id string, record core.ModuleDataRecord) (domain.Publicat
 	if err := decodeStrict(record.Payload, &publication); err != nil || publication.ID != id || publication.ContentRevision < 1 || publication.CreatedAt.IsZero() || publication.Records == nil || publication.Selections == nil {
 		return domain.Publication{}, domain.ErrUnavailable
 	}
+	locale, localeErr := domain.CanonicalLocale(publication.Locale)
+	if localeErr != nil || locale != publication.Locale {
+		return domain.Publication{}, domain.ErrUnavailable
+	}
+	for _, contentRecord := range publication.Records {
+		if contentRecord.Locale != locale {
+			return domain.Publication{}, domain.ErrUnavailable
+		}
+	}
 	var index recordIndex
-	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "history" || index.ContentRevision != publication.ContentRevision {
+	if err := json.Unmarshal(record.IndexData, &index); err != nil || index.RecordType != "history" || index.ContentRevision != publication.ContentRevision || index.Locale != locale {
 		return domain.Publication{}, domain.ErrUnavailable
 	}
 	return publication, nil
@@ -729,6 +760,7 @@ func decodeStrict(raw []byte, target any) error {
 type recordIndex struct {
 	RecordType      string `json:"record_type"`
 	ContentRevision int64  `json:"content_revision"`
+	Locale          string `json:"locale,omitempty"`
 }
 
 func validPageSelectionIDs(ids []string) bool {
@@ -746,13 +778,35 @@ func validPageSelectionIDs(ids []string) bool {
 }
 
 func validAggregate(aggregate domain.Aggregate) bool {
+	locale, err := domain.CanonicalLocale(aggregate.Locale)
+	if err != nil || locale != aggregate.Locale {
+		return false
+	}
+	for _, record := range aggregate.Records {
+		if record.Locale != locale {
+			return false
+		}
+	}
 	return aggregate.SnapshotID != "" && aggregate.Revision >= 0 && aggregate.PublishedRevision >= 0 &&
-		aggregate.Records != nil && aggregate.Selections != nil && (aggregate.LastMutation == nil ||
+		aggregate.Records != nil && (aggregate.LastMutation == nil ||
 		(aggregate.LastMutation.Operation != "" && aggregate.LastMutation.KeyHash != "" && aggregate.LastMutation.Fingerprint != ""))
 }
 
 func validHistoryKey(value string) bool {
-	return len(value) > len("history/") && value[:len("history/")] == "history/"
+	parts := strings.Split(value, "/")
+	if len(parts) != 3 || parts[0] != "history" {
+		return false
+	}
+	locale, err := domain.CanonicalLocale(parts[1])
+	if err != nil || locale != parts[1] || len(parts[2]) != 20 {
+		return false
+	}
+	for _, digit := range parts[2] {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 func validAfterCursor(value string) bool { return len(value) <= 256 && !stringsContainsControl(value) }
 func stringsContainsControl(value string) bool {

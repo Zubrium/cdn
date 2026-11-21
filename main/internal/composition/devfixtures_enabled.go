@@ -11,7 +11,7 @@ import (
 )
 
 func createDevelopmentFixtures(runtime *platform.Runtime, config appconfig.Resolved) (*developmentFixtureAPIs, error) {
-	if runtime == nil || !compiledDevelopmentFixtures() {
+	if runtime == nil || !DevelopmentFixturesEnabled() {
 		return nil, errors.New("development fixtures are unavailable in this build profile")
 	}
 	fixtures, err := devfixtures.New(runtime, devfixtures.Config{ConfiguredGroups: config.Core.AccessGroups})

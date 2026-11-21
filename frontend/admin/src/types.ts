@@ -627,6 +627,8 @@ export interface ModelContentPlacement {
 
 export interface ModelContentRecord {
   id: string;
+  translationId: string;
+  locale: string;
   entityId: string;
   sortOrder: number;
   values: JsonObject;
@@ -635,6 +637,7 @@ export interface ModelContentRecord {
 export interface ModelContentRecordInput {
   id?: string;
   clientKey?: string;
+  translationId?: string;
   entityId: string;
   sortOrder: number;
   values: JsonObject;
@@ -652,17 +655,21 @@ export interface ModelContentWorkspace {
   siteId: string;
   pageSnapshotId: string;
   pageId: string;
+  locale: string;
+  localeCatalogRevision: number;
   modelRevision: number;
   modelDigest: string;
   pageRevision: number;
   pageDigest: string;
   dataModel: DataModel | null;
   revision: number;
+  selectionRevision: number;
   publishedRevision: number;
   records: ModelContentRecord[];
   selections: ModelContentSelection[];
   placements: ModelContentPlacement[];
   clientRecordIDs?: Record<string, string>;
+  clientTranslationIDs?: Record<string, string>;
 }
 
 export interface ContentLocaleConfig {

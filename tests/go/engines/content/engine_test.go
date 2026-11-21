@@ -33,7 +33,8 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 	putsBeforeDeniedWrite := store.putCount
 	_, err = engine.SaveWorkspaceDraft(ctx, projection, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: engineSnapshotID, IdempotencyKey: "save-key", ExpectedRevision: 0,
-		Records: []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
+		ExpectedSelectionRevision: workspace.SelectionRevision,
+		Records:                   []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
 	})
 	if !errors.Is(err, contentapi.ErrForbidden) || store.putCount != putsBeforeDeniedWrite {
 		t.Fatalf("read-only principal write error = %v, Put count %d", err, store.putCount)
@@ -41,9 +42,10 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 	access.level = core.AccessLevelWrite
 	saved, err := engine.SaveWorkspaceDraft(ctx, projection, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: engineSnapshotID, IdempotencyKey: "save-key", ExpectedRevision: 0,
-		Records: []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
+		ExpectedSelectionRevision: workspace.SelectionRevision,
+		Records:                   []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
 	})
-	if err != nil || saved.Revision != 1 || access.required != core.AccessLevelWrite {
+	if err != nil || saved.SelectionRevision != workspace.SelectionRevision+1 || access.required != core.AccessLevelWrite {
 		t.Fatalf("write authorized SaveWorkspaceDraft() = %#v, err %v", saved, err)
 	}
 }
@@ -88,7 +90,7 @@ func newTestEngine(t *testing.T, authorization *testAuthorization, store *testDa
 	sessions := testSessions{principal: principal}
 	engine, err := content.New(content.Dependencies{
 		Identity: identity, Sessions: sessions, Authorization: authorization,
-		Files: testFiles{}, Data: store,
+		Files: testFiles{}, Data: store, Projections: testProjectionsProvider{},
 	})
 	if err != nil {
 		t.Fatalf("content.New() error = %v", err)
@@ -134,6 +136,15 @@ type testFiles struct{}
 
 func (testFiles) StatFile(context.Context, core.Session, string) (core.File, error) {
 	return core.File{}, core.ErrFileNotFound
+}
+
+type testProjectionsProvider struct{}
+
+func (testProjectionsProvider) GetContentProjections(_ context.Context, pageSnapshotID string) (contentapi.Projections, error) {
+	if pageSnapshotID != engineSnapshotID {
+		return contentapi.Projections{}, contentapi.ErrNotFound
+	}
+	return schemaSnapshot("ready"), nil
 }
 
 func schemaSnapshot(state string) contentapi.Projections {
@@ -228,12 +239,13 @@ func (store *testDataStore) Batch(_ context.Context, mutations []core.ModuleData
 	}
 	return nil
 }
-func (store *testDataStore) List(_ context.Context, namespace, scopeType, scopeID, after string, _ []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
+func (store *testDataStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
 	keys := make([]core.ModuleDataKey, 0)
-	for key := range store.rows {
-		if key.Namespace == namespace && key.ScopeType == scopeType && key.ScopeID == scopeID && key.RecordKey > after {
-			keys = append(keys, key)
+	for key, record := range store.rows {
+		if key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matchesSelectors(record, selectors) {
+			continue
 		}
+		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].RecordKey < keys[j].RecordKey })
 	more := len(keys) > limit
@@ -254,6 +266,33 @@ func (*testDataStore) MaxBatchSize() int    { return 256 }
 func (*testDataStore) MaxPayloadBytes() int { return 1 << 20 }
 func (*testDataStore) MaxIndexBytes() int   { return 1 << 16 }
 func (*testDataStore) MaxBatchBytes() int   { return 2 << 20 }
+
+func matchesSelectors(record core.ModuleDataRecord, selectors []core.ModuleDataSelector) bool {
+	for _, selector := range selectors {
+		if selector.Operator != core.SelectorEqual {
+			return false
+		}
+		var index map[string]any
+		if json.Unmarshal(record.IndexData, &index) != nil {
+			return false
+		}
+		value, ok := index[selector.Field].(string)
+		if !ok {
+			return false
+		}
+		matched := false
+		for _, expected := range selector.Values {
+			if expectedValue, ok := expected.(string); ok && value == expectedValue {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
 
 func cloneEngineRecord(record core.ModuleDataRecord) core.ModuleDataRecord {
 	record.Payload = append(json.RawMessage(nil), record.Payload...)

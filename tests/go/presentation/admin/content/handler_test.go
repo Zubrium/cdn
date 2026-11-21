@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Zubrium/cdn/engines/content/domain"
 	engine "github.com/Zubrium/cdn/engines/content/presentation"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
@@ -28,6 +29,10 @@ type fakeContentAPI struct {
 	historyLimit    int
 	restoreCalled   bool
 	restoreRequest  engine.RestoreHistoryRequest
+	localeConfig    domain.LocaleConfig
+	localeRequest   domain.ReplaceLocaleConfigRequest
+	localeRead      bool
+	localeReplaced  bool
 }
 
 func (f *fakeContentAPI) Authenticate(_ context.Context, credential string) (context.Context, error) {
@@ -97,6 +102,21 @@ func (fakeSchemaSnapshots) GetContentProjections(_ context.Context, pageSnapshot
 	return engine.Projections{Site: site, Page: page}, nil
 }
 
+func (f *fakeContentAPI) GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error) {
+	f.localeRead = true
+	return f.localeConfig, nil
+}
+
+func (f *fakeContentAPI) ReplaceLocaleConfig(_ context.Context, _ string, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
+	f.localeReplaced, f.localeRequest = true, request
+	config, err := domain.NormalizeLocaleConfig(request, request.ExpectedRevision+1)
+	if err != nil {
+		return domain.LocaleConfig{}, err
+	}
+	f.localeConfig = config
+	return config, nil
+}
+
 func (f *fakeContentAPI) GetContentProjections(ctx context.Context, pageSnapshotID string) (engine.Projections, error) {
 	if f.schemaErr != nil {
 		return engine.Projections{}, f.schemaErr
@@ -123,6 +143,32 @@ func TestContentHandlerFailsClosedWhenTrustedSchemaProjectionIsUnavailable(t *te
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || api.getCalled {
 		t.Fatalf("workspace without trusted schema projection status=%d content-called=%t body=%s", response.Code, api.getCalled, response.Body.String())
+	}
+}
+
+func TestContentHandlerPreservesTrustedSchemaProjectionErrorClass(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"unauthorized", engine.ErrUnauthorized, http.StatusUnauthorized},
+		{"forbidden", engine.ErrForbidden, http.StatusForbidden},
+		{"not_found", engine.ErrNotFound, http.StatusNotFound},
+		{"invalid", engine.ErrInvalid, http.StatusBadRequest},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			api := &fakeContentAPI{schemaErr: test.err}
+			handler := newHandler(t, api)
+			request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace", nil)
+			request.Header.Set("Authorization", "Bearer service-key")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || api.getCalled {
+				t.Fatalf("workspace status=%d want %d content-called=%t body=%s", response.Code, test.status, api.getCalled, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -277,6 +323,53 @@ func TestContentHandlerRestoresHistoryWithCASAndIdempotency(t *testing.T) {
 	if response.Code != http.StatusOK || !api.restoreCalled || api.restoreRequest.SnapshotID != "snap-1" ||
 		api.restoreRequest.HistoryID != "history-1" || api.restoreRequest.ExpectedRevision != 4 || api.restoreRequest.IdempotencyKey != "restore-1" {
 		t.Fatalf("restore status=%d called=%t request=%+v body=%s", response.Code, api.restoreCalled, api.restoreRequest, response.Body.String())
+	}
+}
+
+func TestContentHandlerServesLocaleCatalogWithETagAndIdempotency(t *testing.T) {
+	const siteID = "11111111-1111-4111-8111-111111111111"
+	api := &fakeContentAPI{localeConfig: domain.LocaleConfig{Revision: 3, Locales: []string{"en-US", "fr"}, DefaultLocale: "en-US"}}
+	handler := newHandler(t, api)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/"+siteID+"/content/locales", nil)
+	request.Header.Set("Authorization", "Bearer service-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !api.localeRead || response.Header().Get("ETag") != `"3"` {
+		t.Fatalf("locale GET status=%d read=%t etag=%q body=%s", response.Code, api.localeRead, response.Header().Get("ETag"), response.Body.String())
+	}
+
+	body := `{"expected_revision":3,"locales":["EN-us","fr"],"default_locale":"en-us"}`
+	request = httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/content/locales", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer service-key")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "locale-catalog-1")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !api.localeReplaced || api.localeRequest.IdempotencyKey != "locale-catalog-1" ||
+		api.localeRequest.ExpectedRevision != 3 || response.Header().Get("ETag") != `"4"` {
+		t.Fatalf("locale PUT status=%d replaced=%t request=%+v etag=%q body=%s", response.Code, api.localeReplaced, api.localeRequest, response.Header().Get("ETag"), response.Body.String())
+	}
+	var config domain.LocaleConfig
+	if err := json.Unmarshal(response.Body.Bytes(), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Revision != 4 || config.DefaultLocale != "en-US" || len(config.Locales) != 2 || config.Locales[0] != "en-US" {
+		t.Fatalf("locale PUT body = %#v", config)
+	}
+}
+
+func TestContentHandlerRejectsLocaleCatalogWriteWithoutIdempotencyKey(t *testing.T) {
+	const siteID = "11111111-1111-4111-8111-111111111111"
+	api := &fakeContentAPI{}
+	handler := newHandler(t, api)
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/content/locales", strings.NewReader(`{"expected_revision":0,"locales":["en"],"default_locale":"en"}`))
+	request.Header.Set("Authorization", "Bearer service-key")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || api.localeReplaced {
+		t.Fatalf("locale PUT without idempotency key status=%d replaced=%t", response.Code, api.localeReplaced)
 	}
 }
 

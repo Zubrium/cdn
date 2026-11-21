@@ -289,7 +289,8 @@ export default function PageTemplatesPage() {
       if (detail.snapshot.siteId !== siteID || detail.snapshot.pageId !== page.id || detail.snapshot.state !== "ready" || detail.snapshot.revision === undefined) {
         throw new Error("Последний снапшот изменился или ещё не готов. Обновите список страниц.");
       }
-      const content = await api.contentEngine.workspace(detail.snapshot.id);
+      const localeConfig = await api.contentEngine.localeConfig(detail.snapshot.siteId);
+      const content = await api.contentEngine.workspace(detail.snapshot.id, localeConfig.default_locale);
       if (content.pageSnapshotId !== detail.snapshot.id || !Number.isSafeInteger(content.revision) || content.revision < 0) {
         throw new Error("Не удалось проверить текущую ревизию контента. Повторите подготовку применения.");
       }

@@ -204,7 +204,7 @@ func manifestZIPFixture(t *testing.T, manifest string) []byte {
 }
 
 func TestHandlerValidatesThenStoresAndReconcilesIdempotently(t *testing.T) {
-	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js","styles":[]}}`
+	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js","styles":[]}}`
 	archiveBytes := manifestZIPFixture(t, manifest)
 	files := &fakeCoreFiles{}
 	handler := testHandler(t, files, archiveBytes)
@@ -233,7 +233,7 @@ func TestHandlerValidatesThenStoresAndReconcilesIdempotently(t *testing.T) {
 }
 
 func TestHandlerResumesSourceCleanupWithoutRereadingArchive(t *testing.T) {
-	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js","styles":[]}}`
+	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js","styles":[]}}`
 	files := &fakeCoreFiles{deleteFailures: 1}
 	handler := testHandler(t, files, manifestZIPFixture(t, manifest))
 	request := Request{TaskID: "task-cleanup", SourceFileID: "source-cleanup"}
@@ -275,7 +275,7 @@ func TestHandlerResumesSourceCleanupWithoutRereadingArchive(t *testing.T) {
 }
 
 func TestWorkerHandlerDispatchesOnlyRegisteredArchiveOperation(t *testing.T) {
-	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js","styles":[]}}`
+	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js","styles":[]}}`
 	files := &fakeCoreFiles{}
 	handler := testHandler(t, files, manifestZIPFixture(t, manifest))
 	task := core.Task{ID: uuid.New(), Kind: core.TaskKindWorker, Worker: &core.WorkerRef{
@@ -325,11 +325,20 @@ func TestHandlerRejectsUnsupportedManifestBeforeAnyWrite(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsRetiredVersionedABIBeforeAnyWrite(t *testing.T) {
+	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js"}}`
+	files := &fakeCoreFiles{}
+	_, err := testHandler(t, files, manifestZIPFixture(t, manifest)).Import(context.Background(), Request{TaskID: "task-retired-abi", SourceFileID: "source-1"})
+	if err == nil || files.creates != 0 {
+		t.Fatalf("retired versioned ABI accepted or wrote outputs: err=%v creates=%d", err, files.creates)
+	}
+}
+
 func TestHandlerRejectsUnknownManifestFieldsBeforeAnyWrite(t *testing.T) {
 	cases := []string{
-		`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js"},"unexpected":true}`,
-		`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[{"key":"x","kind":"record","unknown":true}],"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js"}}`,
-		`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"form":{"submissionSchema":{"type":"object"},"unknown":true},"runtime":{"abi":"static-lifecycle-v2","entry":"assets/app.js"}}`,
+		`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js"},"unexpected":true}`,
+		`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[{"key":"x","kind":"record","unknown":true}],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js"}}`,
+		`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"form":{"submissionSchema":{"type":"object"},"unknown":true},"runtime":{"abi":"static-lifecycle","entry":"assets/app.js"}}`,
 	}
 	for _, manifest := range cases {
 		files := &fakeCoreFiles{}

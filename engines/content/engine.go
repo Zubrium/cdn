@@ -36,6 +36,7 @@ type Dependencies struct {
 	Authorization core.GroupAuthorizationCapability
 	Files         FileOperations
 	Data          DataStore
+	Projections   contentapi.ProjectionsProvider
 }
 
 type Engine struct {
@@ -43,6 +44,7 @@ type Engine struct {
 	identity      core.EngineIdentityCapability
 	sessions      core.SessionCapability
 	authorization core.GroupAuthorizationCapability
+	projections   contentapi.ProjectionsProvider
 	service       *contentapp.Service
 }
 
@@ -56,7 +58,7 @@ type authenticatedState struct {
 
 func New(dependencies Dependencies) (*Engine, error) {
 	if nilCapability(dependencies.Identity) || nilCapability(dependencies.Sessions) || nilCapability(dependencies.Authorization) ||
-		nilCapability(dependencies.Files) || nilCapability(dependencies.Data) {
+		nilCapability(dependencies.Files) || nilCapability(dependencies.Data) || nilCapability(dependencies.Projections) {
 		return nil, contentapi.ErrUnavailable
 	}
 	repo, err := repository.New(dependencies.Data)
@@ -69,7 +71,7 @@ func New(dependencies Dependencies) (*Engine, error) {
 	}
 	return &Engine{
 		identity: dependencies.Identity, sessions: dependencies.Sessions, authorization: dependencies.Authorization,
-		service: service,
+		projections: dependencies.Projections, service: service,
 	}, nil
 }
 
@@ -117,6 +119,23 @@ func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) 
 	return state, nil
 }
 
+func (engine *Engine) GetContentProjections(ctx context.Context, pageSnapshotID string) (contentapi.Projections, error) {
+	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+		return contentapi.Projections{}, err
+	}
+	if nilCapability(engine.projections) {
+		return contentapi.Projections{}, contentapi.ErrUnavailable
+	}
+	projections, err := engine.projections.GetContentProjections(ctx, pageSnapshotID)
+	if err != nil {
+		return contentapi.Projections{}, mapError(err)
+	}
+	if !projections.VerifyScope(pageSnapshotID) {
+		return contentapi.Projections{}, contentapi.ErrUnavailable
+	}
+	return projections, nil
+}
+
 func (engine *Engine) GetLocaleConfig(ctx context.Context, siteID string) (domain.LocaleConfig, error) {
 	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
 		return domain.LocaleConfig{}, err
@@ -144,7 +163,7 @@ func (engine *Engine) GetWorkspace(ctx context.Context, projection contentapi.Pr
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(projection, projection.Page.PageSnapshotID, false)
+	schema, err := engine.resolveSchema(ctx, projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -160,7 +179,7 @@ func (engine *Engine) SaveWorkspaceDraft(ctx context.Context, projection content
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(projection, request.SnapshotID, false)
+	schema, err := engine.resolveSchema(ctx, projection, request.SnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -176,7 +195,7 @@ func (engine *Engine) PublishWorkspace(ctx context.Context, projection contentap
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(projection, request.SnapshotID, false)
+	schema, err := engine.resolveSchema(ctx, projection, request.SnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -191,7 +210,7 @@ func (engine *Engine) ListHistory(ctx context.Context, projection contentapi.Pro
 	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
 		return contentapi.HistoryPage{}, err
 	}
-	schema, err := engine.resolveSchema(projection, projection.Page.PageSnapshotID, false)
+	schema, err := engine.resolveSchema(ctx, projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
 		return contentapi.HistoryPage{}, err
 	}
@@ -214,7 +233,7 @@ func (engine *Engine) RestoreHistory(ctx context.Context, projection contentapi.
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
-	schema, err := engine.resolveSchema(projection, request.SnapshotID, false)
+	schema, err := engine.resolveSchema(ctx, projection, request.SnapshotID, false)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -228,7 +247,7 @@ func (engine *Engine) RestoreHistory(ctx context.Context, projection contentapi.
 // ReadPublishedContent is an in-process projection for trusted runtime
 // composition. Anonymous HTTP delivery is owned by Router and its route table.
 func (engine *Engine) ReadPublishedContent(ctx context.Context, projection contentapi.Projections) (contentapi.PublishedContent, error) {
-	schema, err := engine.resolveSchema(projection, projection.Page.PageSnapshotID, false)
+	schema, err := engine.resolveSchema(ctx, projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
 		return contentapi.PublishedContent{}, err
 	}
@@ -237,7 +256,7 @@ func (engine *Engine) ReadPublishedContent(ctx context.Context, projection conte
 		return contentapi.PublishedContent{}, mapError(err)
 	}
 	return contentapi.PublishedContent{
-		SnapshotID: content.SnapshotID, ContentRevision: content.ContentRevision,
+		SnapshotID: content.SnapshotID, Locale: content.Locale, ContentRevision: content.ContentRevision,
 		Records: toAPIRecords(content.Records), Selections: toAPISelections(content.Selections),
 	}, nil
 }
@@ -254,11 +273,11 @@ func (engine *Engine) CopySnapshotContent(ctx context.Context, request contentap
 		request.SourceSchema.Page.PageSnapshotID != request.SourceSnapshotID || request.TargetSchema.Page.PageSnapshotID != request.TargetSnapshotID {
 		return contentapi.CopySnapshotContentResult{}, contentapi.ErrInvalid
 	}
-	source, err := engine.resolveSchema(request.SourceSchema, request.SourceSnapshotID, false)
+	source, err := engine.resolveSchema(ctx, request.SourceSchema, request.SourceSnapshotID, false)
 	if err != nil {
 		return contentapi.CopySnapshotContentResult{}, err
 	}
-	target, err := engine.resolveSchema(request.TargetSchema, request.TargetSnapshotID, true)
+	target, err := engine.resolveSchema(ctx, request.TargetSchema, request.TargetSnapshotID, true)
 	if err != nil {
 		return contentapi.CopySnapshotContentResult{}, err
 	}
@@ -272,13 +291,31 @@ func (engine *Engine) CopySnapshotContent(ctx context.Context, request contentap
 	}, nil
 }
 
-func (engine *Engine) resolveSchema(projections contentapi.Projections, pageSnapshotID string, allowProvisioning bool) (domain.Schema, error) {
+func (engine *Engine) resolveSchema(ctx context.Context, projections contentapi.Projections, pageSnapshotID string, allowProvisioning bool) (domain.Schema, error) {
 	page := projections.Page
 	if engine == nil || !domain.ValidID(pageSnapshotID) || !projections.VerifyScope(pageSnapshotID) {
 		return domain.Schema{}, contentapi.ErrInvalid
 	}
 	if page.State != "ready" && !(allowProvisioning && page.State == "provisioning") {
 		return domain.Schema{}, contentapi.ErrNotFound
+	}
+	locale, localeErr := domain.CanonicalLocale(projections.Locale)
+	if localeErr != nil || locale != projections.Locale {
+		return domain.Schema{}, contentapi.ErrInvalid
+	}
+	localeConfig, err := engine.service.GetLocaleConfig(ctx, projections.Site.SiteID)
+	if err != nil {
+		return domain.Schema{}, mapError(err)
+	}
+	localeConfigured := false
+	for _, configured := range localeConfig.Locales {
+		if configured == locale {
+			localeConfigured = true
+			break
+		}
+	}
+	if !localeConfigured {
+		return domain.Schema{}, contentapi.ErrInvalid
 	}
 	dataModel := append([]byte(nil), projections.Site.DataModel...)
 	model, err := domain.ParseDataModel(dataModel)
@@ -301,7 +338,7 @@ func (engine *Engine) resolveSchema(projections contentapi.Projections, pageSnap
 		}
 		placements[index] = domain.PlacementView{ID: placement.ID, PageID: placement.PageID, FeatureKey: placement.FeatureKey, FeatureName: placement.FeatureName, Version: placement.Version, Inputs: inputs}
 	}
-	return domain.Schema{State: page.State, SiteID: projections.Site.SiteID, PageSnapshotID: pageSnapshotID,
+	return domain.Schema{State: page.State, SiteID: projections.Site.SiteID, PageSnapshotID: pageSnapshotID, Locale: locale, LocaleCatalogRevision: localeConfig.Revision,
 		ModelRevision: projections.Site.ModelRevision, ModelDigest: projections.Site.Digest,
 		PageRevision: page.Revision, PageDigest: page.Digest, DataModel: dataModel, Model: model, Placements: placements}, nil
 }
@@ -327,12 +364,12 @@ func toAPIWorkspace(workspace domain.WorkspaceView) contentapi.Workspace {
 		}
 	}
 	return contentapi.Workspace{
-		SnapshotID: workspace.SnapshotID, SiteID: workspace.SiteID, PageSnapshotID: workspace.PageSnapshotID,
+		SnapshotID: workspace.SnapshotID, SiteID: workspace.SiteID, PageSnapshotID: workspace.PageSnapshotID, Locale: workspace.Locale, LocaleCatalogRevision: workspace.LocaleCatalogRevision,
 		ModelRevision: workspace.ModelRevision, ModelDigest: workspace.ModelDigest, PageRevision: workspace.PageRevision, PageDigest: workspace.PageDigest,
 		DataModel: append([]byte(nil), workspace.DataModel...),
 		Revision:  workspace.Revision, SelectionRevision: workspace.SelectionRevision, PublishedRevision: workspace.PublishedRevision,
 		Records: toAPIRecords(workspace.Records), Selections: toAPISelections(workspace.Selections),
-		Placements: placements, ClientRecordIDs: cloneStringMap(workspace.ClientRecordIDs),
+		Placements: placements, ClientRecordIDs: cloneStringMap(workspace.ClientRecordIDs), ClientTranslationIDs: cloneStringMap(workspace.ClientTranslationIDs),
 	}
 }
 
@@ -343,7 +380,7 @@ func toAPIRecords(records []domain.Record) []contentapi.Record {
 		for key, value := range record.Values {
 			values[key] = value
 		}
-		result[index] = contentapi.Record{ID: record.ID, EntityID: record.EntityID, SortOrder: record.SortOrder, Values: values}
+		result[index] = contentapi.Record{ID: record.ID, TranslationID: record.TranslationID, Locale: record.Locale, EntityID: record.EntityID, SortOrder: record.SortOrder, Values: values}
 	}
 	return result
 }

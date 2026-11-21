@@ -22,10 +22,21 @@ import (
 )
 
 var (
-	ErrManifestMissing  = errors.New("archive root manifest missing")
-	requestKeyNamespace = [16]byte{0x5f, 0xe6, 0x21, 0xc9, 0x2a, 0x7b, 0x5d, 0x42, 0x92, 0x39, 0x8a, 0x43, 0x27, 0xf9, 0x10, 0x6c}
-	semverPattern       = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	ErrManifestMissing   = errors.New("archive root manifest missing")
+	requestKeyNamespace  = [16]byte{0x5f, 0xe6, 0x21, 0xc9, 0x2a, 0x7b, 0x5d, 0x42, 0x92, 0x39, 0x8a, 0x43, 0x27, 0xf9, 0x10, 0x6c}
+	semverPattern        = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	featureOriginPattern = regexp.MustCompile(`^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$`)
+	ipLiteralPattern     = regexp.MustCompile(`^[0-9.]+$`)
 )
+
+func validFeatureOrigin(value string) bool {
+	if !featureOriginPattern.MatchString(value) {
+		return false
+	}
+	host := strings.TrimPrefix(value, "https://")
+	host, _, _ = strings.Cut(host, ":")
+	return host != "localhost" && !ipLiteralPattern.MatchString(host)
+}
 
 // CoreFiles is the smallest Core file capability needed by Archive. FileSet
 // operations are indexes, never ACLs.
@@ -578,12 +589,24 @@ func validateManifest(data []byte, files []File) error {
 		Entry        string   `json:"entry"`
 		Styles       []string `json:"styles"`
 		SharedStyles []string `json:"sharedStyles"`
+		Origins      []string `json:"origins"`
+		SDK          []string `json:"sdk"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(base.Runtime))
 	decoder.DisallowUnknownFields()
-	if len(base.Runtime) == 0 || string(base.Runtime) == "null" || decoder.Decode(&runtime) != nil || runtime.ABI != "static-lifecycle-v2" ||
+	if len(base.Runtime) == 0 || string(base.Runtime) == "null" || decoder.Decode(&runtime) != nil || runtime.ABI != "static-lifecycle" ||
 		!validPath(runtime.Entry) || (path.Ext(runtime.Entry) != ".js" && path.Ext(runtime.Entry) != ".mjs") {
-		return errors.New("manifest runtime must use static-lifecycle-v2 and a local ESM entry")
+		return errors.New("manifest runtime must use static-lifecycle and a local ESM entry")
+	}
+	for _, origin := range runtime.Origins {
+		if !validFeatureOrigin(origin) {
+			return errors.New("manifest runtime declares an unsafe origin")
+		}
+	}
+	for _, name := range runtime.SDK {
+		if name == "" || strings.TrimSpace(name) != name {
+			return errors.New("invalid manifest runtime SDK export")
+		}
 	}
 	available := make(map[string]struct{}, len(files))
 	for _, file := range files {

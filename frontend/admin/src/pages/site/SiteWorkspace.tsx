@@ -337,7 +337,8 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     try {
 	  let parentSnapshotRequest: { parentSnapshotId: string; expectedParentRevision: number; expectedParentContentRevision: number } | undefined;
 	  if (snapshot) {
-	    const contentWorkspace = await api.contentEngine.workspace(snapshot.id);
+	    const localeConfig = await api.contentEngine.localeConfig(snapshot.siteId);
+	    const contentWorkspace = await api.contentEngine.workspace(snapshot.id, localeConfig.default_locale);
 	    if (snapshot.revision === undefined || !Number.isSafeInteger(contentWorkspace.revision) || contentWorkspace.revision < 0) {
 	      throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
 	    }

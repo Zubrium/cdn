@@ -13,13 +13,13 @@ import (
 	core "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content/presentation"
 	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
-	websiteengine "github.com/Zubrium/cdn/engines/website/presentation"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
-	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
+	websiteengine "github.com/Zubrium/cdn/engines/website/presentation"
 	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
+	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
+	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
 	formsadmin "github.com/Zubrium/cdn/presentation/admin/forms"
 	adminrouter "github.com/Zubrium/cdn/presentation/admin/router"
-	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
 	"github.com/Zubrium/cdn/presentation/fileapi"
 	routerhttp "github.com/Zubrium/cdn/presentation/router"
 	sitesapi "github.com/Zubrium/cdn/presentation/sitesapi"
@@ -39,36 +39,37 @@ type ServerConfig struct {
 }
 
 type AdminConfig struct {
-	Server                 ServerConfig
-	FileAPI                fileapi.Config
-	AllowedOrigins         []string
-	MaxJSONBytes           int64
-	DefaultPageSize        int
-	MaxPageSize            int
-	SessionCookieSecure    bool
+	Server                   ServerConfig
+	FileAPI                  fileapi.Config
+	AllowedOrigins           []string
+	MaxJSONBytes             int64
+	DefaultPageSize          int
+	MaxPageSize              int
+	SessionCookieSecure      bool
 	FormsExportMaxConcurrent int
-	FormsExportMaxRows     int
-	FormsExportMaxBytes    int64
-	WorkflowAccessGroup    string
-	WorkflowPageDefault    int
-	WorkflowPageMaximum    int
-	AccessGroups           []string
-	RouterAdminEnabled     bool
-	Router                 routerhttp.Config
-	SyntheticData          bool
-	IdentityEnabled        bool
+	FormsExportMaxRows       int
+	FormsExportMaxBytes      int64
+	WorkflowAccessGroup      string
+	WorkflowPageDefault      int
+	WorkflowPageMaximum      int
+	AccessGroups             []string
+	RouterAdminEnabled       bool
+	Router                   routerhttp.Config
+	SyntheticData            bool
+	IdentityEnabled          bool
 }
 
 type AdminDependencies struct {
-	Core                     *core.Runtime
-	Files                    fileapi.Loader
-	WorkflowControl          coordinatoradmin.WorkflowControl
-	Website                  websiteengine.API
-	Content                  contentengine.API
-	Forms                    formsengine.API
-	Router                   *routerenginepresentation.APIAdapter
-	RouterOperations         *routerhttp.PublicOperationRegistry
-	Notifications            *adminapi.NotificationHub
+	Core             *core.Runtime
+	Files            fileapi.Loader
+	WorkflowControl  coordinatoradmin.WorkflowControl
+	Website          websiteengine.API
+	Content          contentengine.API
+	ContentSchemas   contentadmin.SchemaSnapshots
+	Forms            formsengine.API
+	Router           *routerenginepresentation.APIAdapter
+	RouterOperations *routerhttp.PublicOperationRegistry
+	Notifications    *adminapi.NotificationHub
 }
 
 type Readiness interface {
@@ -155,7 +156,7 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		}
 		handler, err := coordinatoradmin.NewHandler(s.deps.WorkflowControl, authorize, coordinatoradmin.Config{
 			DefaultPageSize: s.config.WorkflowPageDefault, MaxPageSize: s.config.WorkflowPageMaximum,
-			AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
+			AllowedOrigins:   append([]string(nil), s.config.AllowedOrigins...),
 			SessionAuthorize: s.coordinatorSessionAuthorize,
 		})
 		if err != nil {
@@ -172,8 +173,8 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		handler, err := adminapi.NewHandlerWithSessions(coreAdapter, coreAdapter, adminapi.Config{
 			MaxJSONBytes: s.config.MaxJSONBytes, SessionCookieSecure: s.config.SessionCookieSecure,
 			AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-			GroupAccess: runtimeGroupAccess{s.deps.Core, append([]string(nil), s.config.AccessGroups...)},
-			Notifications: s.deps.Notifications,
+			GroupAccess:    runtimeGroupAccess{s.deps.Core, append([]string(nil), s.config.AccessGroups...)},
+			Notifications:  s.deps.Notifications,
 		})
 		if err != nil {
 			return nil, err
@@ -201,7 +202,7 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		mux.Handle("/api/admin/sites/", wrapped)
 	}
 	if s.deps.Content != nil {
-		handler, err := contentadmin.NewHandler(s.deps.Content, s.deps.Content, contentadmin.Config{
+		handler, err := contentadmin.NewHandler(s.deps.Content, s.deps.ContentSchemas, contentadmin.Config{
 			MaxJSONBytes: s.config.MaxJSONBytes, DefaultPageSize: s.config.DefaultPageSize,
 			MaxPageSize: s.config.MaxPageSize, AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
 		})
@@ -358,15 +359,15 @@ type PublicConfig struct {
 }
 
 type PublicServer struct {
-	config  PublicConfig
-	api     *routerenginepresentation.APIAdapter
-	readyFn func() bool
-	mu      sync.RWMutex
-	server  *http.Server
+	config   PublicConfig
+	api      *routerenginepresentation.APIAdapter
+	readyFn  func() bool
+	mu       sync.RWMutex
+	server   *http.Server
 	listener net.Listener
-	done    chan struct{}
+	done     chan struct{}
 	failures chan error
-	ready   bool
+	ready    bool
 }
 
 func NewPublicServer(config PublicConfig, api *routerenginepresentation.APIAdapter, ready func() bool) (*PublicServer, error) {

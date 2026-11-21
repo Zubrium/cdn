@@ -21,8 +21,15 @@ func TestCoreProfileDoesNotEnableEngines(t *testing.T) {
 	if err := RegisterProfile(r); err != nil {
 		t.Fatal(err)
 	}
-	if descriptors := r.ComponentDescriptors(); len(descriptors) != 0 {
-		t.Fatalf("minimal profile unexpectedly declares engine access groups: %#v", descriptors)
+	// The minimal profile registers Loader for the File API, but it must not
+	// declare any static access groups of its own.
+	for _, descriptor := range r.ComponentDescriptors() {
+		if descriptor.ID != "engine.loader" {
+			t.Errorf("minimal profile unexpectedly declares component %q", descriptor.ID)
+		}
+		if len(descriptor.AccessGroups) != 0 {
+			t.Errorf("component %q unexpectedly declares access groups: %v", descriptor.ID, descriptor.AccessGroups)
+		}
 	}
 	for _, name := range []string{"router", "website", "content", "forms"} {
 		if _, err := r.Lookup(name); !errors.Is(err, platform.ErrUnavailable) {
