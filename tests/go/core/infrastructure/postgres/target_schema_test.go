@@ -84,6 +84,9 @@ func TestAtlasEnvironmentKeepsDatabaseAndMigrationDirectorySeparate(t *testing.T
 }
 
 func TestCoreSchemaRelationInventoryIncludesEngineRevisionSequence(t *testing.T) {
+	if !containsString(coreSchemaRelations, "access.sessions") || !containsString(coreSchemaTables, "access.sessions") {
+		t.Fatal("Core schema relation inventory omits credential-bound sessions")
+	}
 	if !containsString(coreSchemaRelations, "engine_data.revision_seq") {
 		t.Fatal("Core schema relation allowlist omits the engine-record revision sequence")
 	}

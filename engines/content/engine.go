@@ -117,6 +117,28 @@ func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) 
 	return state, nil
 }
 
+func (engine *Engine) GetLocaleConfig(ctx context.Context, siteID string) (domain.LocaleConfig, error) {
+	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+		return domain.LocaleConfig{}, err
+	}
+	config, err := engine.service.GetLocaleConfig(ctx, siteID)
+	if err != nil {
+		return domain.LocaleConfig{}, mapError(err)
+	}
+	return config, nil
+}
+
+func (engine *Engine) ReplaceLocaleConfig(ctx context.Context, siteID string, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
+	if _, err := engine.authorize(ctx, core.AccessLevelWrite); err != nil {
+		return domain.LocaleConfig{}, err
+	}
+	config, err := engine.service.ReplaceLocaleConfig(ctx, siteID, request)
+	if err != nil {
+		return domain.LocaleConfig{}, mapError(err)
+	}
+	return config, nil
+}
+
 func (engine *Engine) GetWorkspace(ctx context.Context, projection contentapi.Projections) (contentapi.Workspace, error) {
 	state, err := engine.authorize(ctx, core.AccessLevelRead)
 	if err != nil {

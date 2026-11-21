@@ -85,9 +85,6 @@ func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, t
 	if len(manifest.assets) > 0 && match != model.MatchPrefix {
 		return engine.ErrInvalidTarget
 	}
-	if target.FallbackEnabled && manifest.fallback == nil {
-		return engine.ErrInvalidTarget
-	}
 	return validateArtifactFiles(ctx, validator.files, session, target.FileID, manifest)
 }
 
@@ -453,6 +450,8 @@ func validateArtifactFile(entry artifactFile, manifestID string, document bool) 
 			len(parameters) == 1 && parameters["charset"] != "utf-8" {
 			return engine.ErrInvalidTarget
 		}
+	} else if mediaType, _, _ := mime.ParseMediaType(contentType); mediaType == "text/html" {
+		return engine.ErrInvalidTarget
 	}
 	entry.ContentType = contentType
 	return nil

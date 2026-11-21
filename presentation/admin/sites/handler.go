@@ -53,30 +53,18 @@ func NewHandler(api website.API, cfg Config) (*Handler, error) {
 	h := &Handler{website: api, cfg: cfg, auth: auth, mux: http.NewServeMux()}
 	h.mux.HandleFunc("GET "+apiPrefix, h.listConfiguredSites)
 	h.mux.HandleFunc("POST "+importPath, h.beginImport)
-	h.mux.HandleFunc("GET "+importPath+"/{id}", h.getImport)
+	h.mux.HandleFunc("GET "+apiPrefix+"/{path...}", h.getResource)
 	h.mux.HandleFunc("GET "+apiPrefix+"/features", h.listFeatureCatalog)
-	h.mux.HandleFunc("GET "+apiPrefix+"/features/{featureID}/versions", h.listFeatureVersions)
-	h.mux.HandleFunc("GET "+apiPrefix+"/features/{featureID}/versions/{version}", h.getFeatureVersion)
-	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots", h.listSnapshots)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{siteID}/pages", h.listPages)
 	h.mux.HandleFunc("POST "+apiPrefix+"/{siteID}/pages", h.createPage)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{siteID}/pages/{pageID}", h.getPage)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{siteID}/templates", h.listPageTemplates)
 	h.mux.HandleFunc("POST "+apiPrefix+"/{siteID}/templates", h.createPageTemplate)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{siteID}/templates/{templateID}", h.getPageTemplate)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/{siteID}/templates/{templateID}", h.updatePageTemplate)
 	h.mux.HandleFunc("DELETE "+apiPrefix+"/{siteID}/templates/{templateID}", h.deletePageTemplate)
 	h.mux.HandleFunc("POST "+apiPrefix+"/{siteID}/pages/{pageID}/template-applications", h.applyPageTemplate)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{siteID}/model", h.getSiteContentSchema)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/{siteID}/model", h.saveSiteModel)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{siteID}/pages/{pageID}/snapshots/{snapshotID}/content-projection", h.getPagePlacementProjection)
-	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}", h.getSnapshot)
 	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots", h.createSnapshot)
 	h.mux.HandleFunc("DELETE "+apiPrefix+"/snapshots/{snapshotID}", h.deleteSnapshot)
 	h.mux.HandleFunc("POST "+apiPrefix+"/builds", h.buildSnapshot)
-	h.mux.HandleFunc("GET "+apiPrefix+"/builds/{jobID}", h.getBuild)
 	h.mux.HandleFunc("POST "+apiPrefix+"/media/derivatives", h.createMediaDerivative)
-	h.mux.HandleFunc("GET "+apiPrefix+"/media/jobs/{jobID}", h.getMediaJob)
 	return h, nil
 }
 
@@ -122,6 +110,80 @@ func (h *Handler) beginImport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", importPath+"/"+job.ID)
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (h *Handler) getResource(w http.ResponseWriter, r *http.Request) {
+	segments := strings.Split(r.PathValue("path"), "/")
+	set := func(name, value string) { r.SetPathValue(name, value) }
+	switch len(segments) {
+	case 1:
+		if segments[0] == "snapshots" {
+			h.listSnapshots(w, r)
+			return
+		}
+		writeError(w, http.StatusNotFound, "not_found")
+	case 2:
+		switch {
+		case segments[0] == "snapshots":
+			set("snapshotID", segments[1])
+			h.getSnapshot(w, r)
+		case segments[0] == "builds":
+			set("jobID", segments[1])
+			h.getBuild(w, r)
+		case segments[0] == "feature-imports":
+			set("id", segments[1])
+			h.getImport(w, r)
+		case segments[1] == "pages":
+			set("siteID", segments[0])
+			h.listPages(w, r)
+		case segments[1] == "templates":
+			set("siteID", segments[0])
+			h.listPageTemplates(w, r)
+		case segments[1] == "model":
+			set("siteID", segments[0])
+			h.getSiteContentSchema(w, r)
+		default:
+			writeError(w, http.StatusNotFound, "not_found")
+		}
+	case 3:
+		switch {
+		case segments[0] == "features" && segments[2] == "versions":
+			set("featureID", segments[1])
+			h.listFeatureVersions(w, r)
+		case segments[1] == "pages":
+			set("siteID", segments[0])
+			set("pageID", segments[2])
+			h.getPage(w, r)
+		case segments[1] == "templates":
+			set("siteID", segments[0])
+			set("templateID", segments[2])
+			h.getPageTemplate(w, r)
+		case segments[0] == "media" && segments[1] == "jobs":
+			set("jobID", segments[2])
+			h.getMediaJob(w, r)
+		default:
+			writeError(w, http.StatusNotFound, "not_found")
+		}
+	case 4:
+		if segments[0] == "features" && segments[2] == "versions" {
+			set("featureID", segments[1])
+			set("version", segments[3])
+			h.getFeatureVersion(w, r)
+			return
+		}
+		writeError(w, http.StatusNotFound, "not_found")
+	case 6:
+		if segments[1] == "pages" && segments[3] == "snapshots" && segments[5] == "content-projection" {
+			set("siteID", segments[0])
+			set("pageID", segments[2])
+			set("snapshotID", segments[4])
+			h.getPagePlacementProjection(w, r)
+			return
+		}
+		writeError(w, http.StatusNotFound, "not_found")
+	default:
+		writeError(w, http.StatusNotFound, "not_found")
+	}
 }
 
 func (h *Handler) getImport(w http.ResponseWriter, r *http.Request) {

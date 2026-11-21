@@ -665,6 +665,18 @@ export interface ModelContentWorkspace {
   clientRecordIDs?: Record<string, string>;
 }
 
+export interface ContentLocaleConfig {
+  revision: number;
+  locales: string[];
+  default_locale: string;
+}
+
+export interface ReplaceContentLocaleConfig {
+  expected_revision: number;
+  locales: string[];
+  default_locale: string;
+}
+
 export interface ModelContentHistoryItem {
   id: string;
   draftRevision: number;

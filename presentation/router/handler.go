@@ -150,7 +150,8 @@ func (h *Handler) adminNotFound(w http.ResponseWriter, _ *http.Request) {
 }
 
 func reservedAdminPath(path string) bool {
-	return path == "/api/admin" || strings.HasPrefix(path, "/api/admin/")
+	return path == "/api/admin" || strings.HasPrefix(path, "/api/admin/") ||
+		path == "/api/v2/admin" || strings.HasPrefix(path, "/api/v2/admin/")
 }
 
 func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {

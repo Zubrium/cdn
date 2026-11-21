@@ -231,6 +231,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   access.users,
   access.bootstrap,
   access.credentials,
+  access.sessions,
   access.groups,
   access.grants,
   files.objects,

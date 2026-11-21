@@ -1,0 +1,384 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "WEB-001",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии; tests/ACCEPTANCE-MATRIX.md Website criterion: разрешённый site listing",
+      "level": "unit",
+      "preconditions": [
+        "Сайт находится в статической конфигурации Website.",
+        "У credential есть либо отсутствует прямой Website read grant."
+      ],
+      "input": "Запрос списка configured sites от credential с read grant и без него.",
+      "action": "Вызвать site-listing operation Website.",
+      "expected_result": "Read grant получает стабильный отсортированный site listing; отсутствие grant получает typed forbidden result.",
+      "expected_state": "Операция не создаёт Website records и не раскрывает неразрешённые sites.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-001",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-002",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraph 2; SPEC-site-editor-workspace.md §Target: dynamic pages and template library, paragraph 1",
+      "level": "unit",
+      "preconditions": [
+        "Для configured site есть Website write grant.",
+        "Новая страница ещё не имеет page identity."
+      ],
+      "input": "Create-page request без template и с Idempotency-Key; повтор того же request; caller-supplied page identity там, где контракт её не принимает.",
+      "action": "Создать страницу через Website application contract.",
+      "expected_result": "Server generates stable UUID, synchronously returns exactly one ready root snapshot, and idempotent replay returns the same result; caller cannot select or reuse page identity.",
+      "expected_state": "Failure leaves no partially visible page or root snapshot and does not create a Router route.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-002",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-003",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraphs 1 and 3; SPEC-branches-snapshots.md §Проверяемые требования, items 1-2",
+      "level": "unit",
+      "preconditions": [
+        "В одном site существуют две страницы с root snapshots.",
+        "Parent snapshot готов и принадлежит первой странице."
+      ],
+      "input": "Create-child snapshot requests for the owner page, another page, another site, an unknown page, and a direct root request.",
+      "action": "Создать immutable snapshot child через Website.",
+      "expected_result": "Only a child of the exact existing (site_id, page_id) ready parent is accepted; root creation outside page creation and cross-tree parents are rejected.",
+      "expected_state": "Каждое page tree остаётся независимым; rejected request не меняет sequence, parent или snapshot state.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-003",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-004",
+      "source": "spec/engines/website/SPEC-branches-snapshots.md §Сохранение и согласованность, paragraphs 2-3; SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraph 3",
+      "level": "unit",
+      "preconditions": [
+        "Есть ready parent snapshot с известной revision и дочернее structural state."
+      ],
+      "input": "Structural save/fork с актуальной и stale expected revision, включая concurrent change.",
+      "action": "Сохранить structural change и попытаться повторить stale request.",
+      "expected_result": "Актуальная операция создаёт child; stale revision yields controlled conflict without overwrite; parent remains immutable.",
+      "expected_state": "Rejected conflict не создаёт partial snapshot и не меняет Content values, publication или Router target.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-004",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-005",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraphs 4-6; SPEC-data-model.md §§Product decisions, Persistence and runtime",
+      "level": "unit",
+      "preconditions": [
+        "У сайта есть revisioned site model и snapshots нескольких страниц."
+      ],
+      "input": "Model PUT с expected revision, stale revision и binding, который становится incompatible; content-projection requests с exact и cross-site/page/snapshot tuple.",
+      "action": "Сохранить site model и прочитать typed model/projection DTOs.",
+      "expected_result": "Model is site-scoped CAS state; invalidating change is rejected; projection is returned only for the exact (site_id, page_id, snapshot_id) tuple.",
+      "expected_state": "Model revision не хранится в snapshot namespace; rejected mutation leaves model and bindings unchanged.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-005",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-006",
+      "source": "spec/engines/website/SPEC-site-editor-workspace.md §§Ownership, Model and placement editing, Acceptance criteria items 3-4; SPEC-data-model.md §Feature data contract and bindings",
+      "level": "unit",
+      "preconditions": [
+        "Snapshot pins a manifest-conformant feature build and the site model contains direct fields."
+      ],
+      "input": "Configure scalar, record and collection dataInputs plus valid/invalid arguments, unknown fields, relationIds and incompatible ports.",
+      "action": "Save structural placement bindings from /site.",
+      "expected_result": "Only direct typed bindings compatible with the pinned manifest are accepted; relation traversal and unknown/invalid bindings are rejected.",
+      "expected_state": "Rejected save creates no partial structural snapshot; editorial values and selections remain owned by /content.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-006",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-007",
+      "source": "spec/engines/website/SPEC-data-model.md §Model structure, paragraphs 3-5; SPEC-site-editor-workspace.md §Record editing and publication, paragraphs 1-2",
+      "level": "unit",
+      "preconditions": [
+        "A locale-scoped content workspace exists for a model with drafts and publication state."
+      ],
+      "input": "Create a singleton, clear its record, publish explicitly, and attempt many-to-singleton change with more than one draft or published record.",
+      "action": "Apply data-model cardinality operations through the authoritative contract.",
+      "expected_result": "New singleton gets exactly one empty draft, never auto-publishes, clear preserves record ID, and lossy cardinality change is rejected.",
+      "expected_state": "Rejected change preserves existing records, draft/publication revisions and locale isolation.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-007",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-008",
+      "source": "spec/engines/website/SPEC-website-engine.md §Библиотека шаблонов страниц, paragraphs 2-5; SPEC-site-editor-workspace.md §Target: dynamic pages and template library, paragraphs 2-3",
+      "level": "unit",
+      "preconditions": [
+        "Site-scoped template exists with a known revision, digest and valid feature lock."
+      ],
+      "input": "Create/update/delete template with current and stale expected revision; create page from exact template revision; use a template from another site.",
+      "action": "Perform template-library operations and page materialization.",
+      "expected_result": "Template is site-scoped CAS state; create pins and materializes the exact revision; stale, foreign or invalid template is refused with a machine-readable error.",
+      "expected_state": "Template edits/deletion do not mutate already materialized pages or their snapshots; rejected calls create no page/snapshot.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-008",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-009",
+      "source": "spec/engines/website/SPEC-website-engine.md §Библиотека шаблонов страниц, paragraphs 6-9; SPEC-site-editor-workspace.md §Target: dynamic pages and template library, paragraphs 3-4",
+      "level": "unit",
+      "preconditions": [
+        "Existing page has a ready snapshot, Router binding and Content values; a newer valid template revision exists."
+      ],
+      "input": "Apply template with/without confirmation, correct/stale page and template revision, and a concurrent incompatible change.",
+      "action": "Run explicit structural replacement.",
+      "expected_result": "Confirmed operation creates a child in the same page tree and replaces only declared structure; unconfirmed/stale/invalid operation conflicts without partial state.",
+      "expected_state": "Parent, page ID, other trees, Router binding, site model and Content values remain unchanged; only old-placement selections reset in the new child.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-009",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-010",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Target Sites API: страницы и их версии, Страничные snapshots и сборка; SPEC-branches-snapshots.md §§Границы, Публичная выдача",
+      "level": "unit",
+      "preconditions": [
+        "A Website snapshot and a Router route target have independent configured identities."
+      ],
+      "input": "Create/save a snapshot payload containing route, URL, branch assignment or site-wide record data; separately inspect accepted snapshot/build DTOs.",
+      "action": "Validate Website structural input and build result boundaries.",
+      "expected_result": "Website accepts no route/URL/branch assignment or record values in snapshot input and does not activate Router targets itself.",
+      "expected_state": "Structural mutation preserves prior public artifact; Router selection remains an explicit outer orchestration/CAS action.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-010",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-011",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Контракт feature ZIP, Проверка ZIP и отказоустойчивость; SPEC-feature-runtime.md §§Целевой ABI, Проверяемые требования items 1 and 5",
+      "level": "unit",
+      "preconditions": [
+        "A ZIP validator receives untrusted feature package bytes under configured limits."
+      ],
+      "input": "Malformed ZIP, traversal including Windows paths, symlink, normalized duplicate path, archive bomb/oversized entry, invalid manifest and unsupported ABI.",
+      "action": "Run feature-import preflight before any output file creation.",
+      "expected_result": "Each unsafe or invalid package is rejected deterministically before a version becomes ready; only static-lifecycle-v2 with declared files is accepted.",
+      "expected_state": "No partial feature catalog record, FileSet membership or extracted file is visible after rejection.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-011",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-012",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Импорт фичи из файла, Состояния и повтор, Проверка ZIP и отказоустойчивость; tests/ACCEPTANCE-MATRIX.md Website criterion: feature ZIP preflight/import/recovery",
+      "level": "integration",
+      "preconditions": [
+        "A dedicated disposable PostgreSQL database and object-storage bucket are configured for this run.",
+        "A Core capability test fixture can create, read and delete only run-owned files and module-data records."
+      ],
+      "input": "Import an authorized source_file_id, replay same/different idempotency fingerprint, simulate crash after each Core operation and source-cleanup failure.",
+      "action": "Run the durable feature import workflow against disposable Core storage.",
+      "expected_result": "Same fingerprint resumes or returns one job, conflicting fingerprint is rejected, and recovery preserves exact progress without duplicate outputs.",
+      "expected_state": "Feature version becomes ready only after verified outputs and source cleanup; failures expose no partial ready version.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-012",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Для этого запуска не заданы подтверждённые disposable PostgreSQL DSN, S3 endpoint/bucket и изолированные credentials; live Core storage использовать запрещено."
+    },
+    {
+      "id": "WEB-013",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Зависимости и tokens, Страничные snapshots и сборка; SPEC-feature-runtime.md §Целевой ABI, paragraphs 5-6",
+      "level": "unit",
+      "preconditions": [
+        "Catalog contains exact feature versions with manifests and declared public APIs."
+      ],
+      "input": "Resolve compatible and incompatible SemVer ranges, dependency cycle, ambiguous candidates and changed imported dependency after snapshot lock.",
+      "action": "Create/validate a snapshot dependency lock and build digest.",
+      "expected_result": "Resolver has one deterministic compatible closure or rejects the request; lock retains exact versions, hashes and API versions.",
+      "expected_state": "A later import does not alter an existing snapshot or its build digest; invalid closure creates no ready snapshot.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-013",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-014",
+      "source": "spec/engines/website/SPEC-static-site-artifact.md §§2. Manifest schema, 3. Правила путей и содержимого, 4. Построение, проверка и жизненный цикл; SPEC-website-engine.md §Prerender, paragraphs 1-3; tests/ACCEPTANCE-MATRIX.md Website criterion: deterministic artifact validation",
+      "level": "contract",
+      "preconditions": [
+        "A Website build produces a candidate static-page-artifact/v1 manifest and immutable files."
+      ],
+      "input": "Valid artifact plus invalid/missing document metadata, unknown/missing asset, illegal asset path and MIME mismatch.",
+      "action": "Validate artifact before it is returned for trusted Router activation.",
+      "expected_result": "Only a complete deterministic one-page artifact with valid document and assets is accepted; visitor-selected identifiers never participate.",
+      "expected_state": "Rejected artifact is not made active and leaves the prior Router target untouched.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-014",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-015",
+      "source": "spec/engines/website/features/SPEC-feature-runtime.md §§Целевой ABI, Проверяемые требования items 2-3; SPEC-public-server-rendering.md §§HTML template, escaping и DOM, Prerender worker, Acceptance criteria; SPEC-seo.md §§Metadata и индексация, Sitemap и detail metadata, Acceptance criteria; SPEC-system-pages.md §§Core response contract, Acceptance criteria",
+      "level": "contract",
+      "preconditions": [
+        "A page uses valid static-lifecycle-v2 features and locale-specific trusted projections."
+      ],
+      "input": "Render initial markup, hydrate it, isolate a placement error, render locale SEO/system pages, and exercise empty/missing optional data.",
+      "action": "Run the server-rendering and runtime contract checks.",
+      "expected_result": "Hydration preserves server markup, each placement has one lifecycle root, and output supplies only the declared locale-specific SEO/system-page behavior.",
+      "expected_state": "No secret/private context enters public HTML; one placement failure does not corrupt sibling output or activate a partial artifact.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-015",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-016",
+      "source": "spec/engines/website/features/SPEC-feature-runtime.md §§Целевой ABI, Media declarations, Проверяемые требования items 3 and 5; SPEC-design-tokens.md §§Публичная выдача CSS, Сравнение с родительским снапшотом, API и публичная тема",
+      "level": "contract",
+      "preconditions": [
+        "Pinned manifest declares lifecycle, public APIs, exact HTTPS origins and feature-owned token schema."
+      ],
+      "input": "Concurrent update/cancellation/dispose; wildcard or undeclared origin; invalid response; credentials in context; invalid or incomplete light/dark token values.",
+      "action": "Validate feature runtime context, network policy and graphical design token state.",
+      "expected_result": "Runtime uses only declared HTTPS origins and typed contracts, propagates cancellation, excludes credentials, and accepts only complete accessible token values.",
+      "expected_state": "Cancelled work cannot mutate DOM; invalid request/token state is rejected without partial saved design change or broader CSP/CORS permission.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-016",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-017",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Target Sites API: страницы и их версии, Безопасность и проверяемые инварианты; tests/ACCEPTANCE-MATRIX.md HTTP Presentation and Website criteria",
+      "level": "contract",
+      "preconditions": [
+        "Admin Website HTTP adapter and its OpenAPI contract are mounted in a test composition."
+      ],
+      "input": "Valid and invalid page/snapshot/template requests, missing revision/idempotency headers, unsupported body fields, unauthorized group levels and route fields in Website DTOs.",
+      "action": "Exercise mounted /api/... Website handlers and compare their OpenAPI schemas.",
+      "expected_result": "Routes are unversioned /api paths with strict bounded decode, typed errors, required headers and group checks; request/response schema excludes Router assignment fields.",
+      "expected_state": "Invalid/unauthorized HTTP request produces no structural mutation and no existence disclosure for foreign resources.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-017",
+      "coverage_status": "gap",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "WEB-018",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Данные Website, Безопасность и проверяемые инварианты, Приёмочные проверки items 10-11; tests/ACCEPTANCE-MATRIX.md Website criterion: typed trusted projections",
+      "level": "integration",
+      "preconditions": [
+        "A dedicated disposable PostgreSQL database and object-storage bucket are configured for this run.",
+        "Website uses only Core presentation capabilities under its scoped module identity."
+      ],
+      "input": "Persist pages, snapshots, templates and projections for multiple sites; race CAS/retry; revoke access; try foreign namespace/scope and direct engine-to-engine boundary paths.",
+      "action": "Run persistence and boundary scenarios against the disposable composition.",
+      "expected_result": "Records remain immutable and scope-isolated, CAS/retry is atomic, revocation fails closed, and Website uses no SQL/S3/direct Router or Content call.",
+      "expected_state": "No cross-site/namespace record or partial artifact becomes observable after failed persistence operations.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-018",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Для этого запуска не заданы подтверждённые disposable PostgreSQL DSN, S3 endpoint/bucket и изолированные credentials; live persistence проверять запрещено."
+    },
+    {
+      "id": "WEB-019",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Декларативные media-профили и производные файлы, Приёмочные проверки item 9; SPEC-feature-runtime.md §Media declarations",
+      "level": "integration",
+      "preconditions": [
+        "A disposable Core file store and supervised worker.media fixture are configured with explicit resource limits."
+      ],
+      "input": "Invalid source/profile, client profile override, MIME/size/checksum failure, timeout/cancellation/retry and profile or processor-version change.",
+      "action": "Launch the manifest-pinned media derivative workflow.",
+      "expected_result": "Website accepts only the pinned x-media profile and updates the field only after all outputs validate; retry identity includes source checksum/profile/processor.",
+      "expected_state": "Original and prior field value survive failure/cancellation; derivatives are immutable, inherit groups/FileSets and partial outputs are not ready.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-019",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Нет явно заданных disposable Core file storage и supervised worker.media fixture с лимитами; запуск against shared или live media resources запрещён."
+    },
+    {
+      "id": "WEB-020",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Страничные snapshots и сборка, Prerender, Приёмочные проверки items 7-8; SPEC-feature-runtime.md paragraphs 46-48",
+      "level": "integration",
+      "preconditions": [
+        "A disposable worker.prerender sandbox, Core artifact store and explicit network policy fixture are configured."
+      ],
+      "input": "render-plan/v1 with changed locale/catalog/content revision, invalid plan, loopback/private/link-local/metadata request, timeout/cancellation/restart and stale result.",
+      "action": "Run locale-bound prerender and artifact verification workflow.",
+      "expected_result": "Build identity contains trusted revisions/digests; sandbox rejects forbidden network and stale result; only verified artifact is ready for outer orchestration.",
+      "expected_state": "Prior active artifact survives failure; worker writes only through Core and no partial artifact is activated.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-020",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Нет явно заданных disposable prerender sandbox, Core artifact storage и network-policy fixture; production browser/worker infrastructure использовать запрещено."
+    },
+    {
+      "id": "WEB-021",
+      "source": "spec/engines/website/SPEC-website-engine.md §Страничные snapshots и сборка, paragraphs 4-5; SPEC-branches-snapshots.md §Публичная выдача, paragraphs 2-3; tests/ACCEPTANCE-MATRIX.md Website criterion: rebuild fan-out/retry/stale-result protection",
+      "level": "integration",
+      "preconditions": [
+        "Disposable Website, Content projection and Router target-CAS capabilities are connected through trusted outer orchestration."
+      ],
+      "input": "Publish changed model/content locale across several affected route/locale targets, fail one build/CAS, retry, then advance input revision before old result activates.",
+      "action": "Run durable rebuild fan-out and per-target activation.",
+      "expected_result": "Every (route, locale) target uses independent CAS; successes remain, failed target retains prior artifact, retry is safe, and stale output is discarded.",
+      "expected_state": "Website never selects visitor target or performs direct Router call; partial failure has no rollback of independent successful targets.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-021",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Нет изолированной disposable outer-orchestration composition с Router target CAS и locale Content projections; live routes и artifacts трогать запрещено."
+    },
+    {
+      "id": "WEB-022",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraph 2; tests/ACCEPTANCE-MATRIX.md Page retirement criterion",
+      "level": "integration",
+      "preconditions": [
+        "Disposable page has registered Router route targets, snapshots, Content history, Forms resources and Core files."
+      ],
+      "input": "Start retirement with If-Match and Idempotency-Key, fail one withdrawal, retry and attempt page-ID reuse.",
+      "action": "Run the durable retirement workflow through trusted orchestration.",
+      "expected_result": "Each route target is withdrawn independently; page becomes retired only after all complete; retry is idempotent and reused page ID is refused.",
+      "expected_state": "Snapshots/page identity, Content drafts/history, Forms resources and Core files remain; only separate checked cleanup may delete files.",
+      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
+      "test_symbol": "TestWebsiteScenarioLedger/WEB-022",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Нет изолированного disposable workflow fixture с route targets, Content, Forms и Core resources; destructive retirement against a non-disposable system запрещён."
+    }
+  ]
+}

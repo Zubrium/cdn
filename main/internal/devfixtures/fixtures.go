@@ -270,6 +270,16 @@ func (a *Website) GetMediaJob(ctx context.Context, _ string) (website.MediaJob, 
 	return website.MediaWorker{}, website.ErrNotFound
 }
 
+func (a *Content) GetLocaleConfig(ctx context.Context, _ string) (content.LocaleConfig, error) {
+	if err := a.require(ctx, core.AccessLevelRead); err != nil {
+		return content.LocaleConfig{}, err
+	}
+	return content.LocaleConfig{Revision: 1, Locales: []string{"en-US"}, DefaultLocale: "en-US"}, nil
+}
+func (a *Content) ReplaceLocaleConfig(ctx context.Context, _ string, _ content.ReplaceLocaleConfigRequest) (content.LocaleConfig, error) {
+	return content.LocaleConfig{}, a.writeUnavailable(ctx)
+}
+
 func (a *Content) GetWorkspace(ctx context.Context, projections content.Projections) (content.Workspace, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
 		return content.Workspace{}, err

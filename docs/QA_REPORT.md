@@ -1,5 +1,15 @@
 # QA-отчёт
 
+## Аудит Core и интеграционных границ — 2026-11-20
+
+- Core централизованные Go-тесты прошли по всем физическим пакетам через `tests/go-overlay.py` (`go test -vet=off -overlay=... -count=1`) в ARM64 Linux-контейнере с Go 1.26.4; migration tests использовали Atlas v1.3.0. Отдельно из `core/` прошли `go vet ./...` и `go build ./...`. S3 acceptance прошёл через изолированный локальный `s3mock`.
+- Disposable PostgreSQL acceptance прошёл на созданных для QA `zubrium_core_qa_*` базах в tmpfs-контейнере: Atlas baseline/checksum и повторный startup, runtime grants/role restrictions, Core v2 session/file/access сценарии и существующая Coordinator PostgreSQL lifecycle suite. Значения DSN и credentials не сохранялись.
+- Router delivery `go test`, `go vet ./...` и `go build ./...` прошли после исправлений: удалена ссылка на несуществующее поле fallback, запрещён `text/html` для artifact assets и encoded `/api/v2/admin` не направляется в публичный delivery.
+- Admin Sites API `go test`, `go vet ./...` и `go build ./...` прошли. GET-маршруты сведены в явный path dispatcher, чтобы избежать неоднозначных `ServeMux` patterns; публичные URL не изменялись. Acceptance fixtures исправлены там, где они не соответствовали требуемому `page_id` UUID.
+- Persisted engine-data regressions добавлены в `TestDisposableCoreV2FileGroupSetAndCacheAcceptance`: вторая зарегистрированная module capability не может выполнить guessed-key get/put/delete или list с чужим namespace/selector; после delete/recreate stale CAS update/delete конфликтуют и не меняют новую запись. Свежая PostgreSQL acceptance-команда `go test -vet=off -overlay=/tmp/go-overlay.json -run '^TestDisposableCoreV2FileGroupSetAndCacheAcceptance$' ./presentation` прошла на отдельной disposable БД. Остаются остальные engine-data acceptance gaps (revision/batch/TTL/cursor/concurrency и полный ledger).
+- Coordinator PostgreSQL lifecycle suite выполнена успешно, но denominator и полноту всех перечисленных в Core TODO failure-injection сценариев ещё требуется свести к отдельному scenario ledger.
+- Широкий overlay-прогон обнаружил отдельные незакрытые сбои вне Core: Website snapshot tests (cursor error mapping и side effects), Content tests (dependency/revision conflicts), а `presentation/admin/base/transport` не собирается из-за отсутствующего `GetContentProjections` у Website/Core composition boundary. Они не учитываются как пройденные проверки Core.
+
 ## Проверки текущего состояния
 
 - Runtime bus получил JSON envelope, статический allowlist и strict typed payload decoding. После исправления конструктора `NewAllowlisted` прошли `gofmt`, `go test ./...` и `go vet ./...` в `pkg`, а также `go test ./internal/bus` и `go vet ./internal/bus` в `main`. Тестовый файл bus находится вне модуля; штатный `tests/go-overlay.py` не запускается из-за отсутствующего каталога `presentation/admin/httpauth`, поэтому сценарии из `tests/go/main/internal/bus/dispatcher_test.go` после последнего изменения не перепроверены. В composition зарегистрирован и используется только `core.readiness`; прямые связи между runtime-компонентами ещё остаются.

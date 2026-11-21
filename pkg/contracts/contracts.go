@@ -15,6 +15,7 @@ var (
 	ErrResponseTypeMismatch  = errors.New("operation response type mismatch")
 	ErrDispatcherUnavailable = errors.New("operation dispatcher unavailable")
 	ErrMalformedEnvelope     = errors.New("malformed operation envelope")
+	ErrStreamUnavailable     = errors.New("stream capability unavailable")
 )
 
 type Envelope struct {

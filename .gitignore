@@ -1,6 +1,7 @@
 .env
 .codegraph/
 *.log
+.env.core-qa
 .DS_Store
 .gocache/
 frontend/**/node_modules/

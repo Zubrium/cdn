@@ -250,13 +250,24 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register scoped module-data capability: %v", err)
 	}
+	if err := first.Registry.Register("media-contract-test", coreV2ContractModule{}); err != nil {
+		t.Fatalf("register second module-data consumer: %v", err)
+	}
+	mediaData, err := first.RegisterDataModule(ModuleDataDescriptor{ModuleID: "media-contract-test", Namespaces: []ModuleDataNamespace{{
+		Name: "media", ScopeTypes: []string{"global"}, Fields: map[string]SelectorField{"state": {Type: SelectorString}},
+	}}})
+	if err != nil {
+		t.Fatalf("register second scoped module-data capability: %v", err)
+	}
 	if _, err := first.RegisterDataModule(ModuleDataDescriptor{ModuleID: "core-contract-test", Namespaces: []ModuleDataNamespace{{
 		Name: "uploads", ScopeTypes: []string{"global"},
 	}}}); err == nil {
 		t.Fatal("Core issued the same module-data capability twice")
 	}
 	moduleKey := ModuleDataKey{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "contract"}
+	ownerKey := ModuleDataKey{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "owner"}
 	rollbackKey := ModuleDataKey{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "rollback"}
+	abaKey := ModuleDataKey{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "aba"}
 	pageKeys := []ModuleDataKey{
 		{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "page:01"},
 		{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "page:02"},
@@ -264,7 +275,7 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stop()
-		for _, key := range append([]ModuleDataKey{moduleKey, rollbackKey}, pageKeys...) {
+		for _, key := range append([]ModuleDataKey{moduleKey, ownerKey, rollbackKey, abaKey}, pageKeys...) {
 			record, err := moduleData.Get(cleanup, key)
 			if err == nil {
 				if err := moduleData.Delete(cleanup, key, record.Revision); err != nil && !errors.Is(err, ErrModuleDataNotFound) {
@@ -276,6 +287,55 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	moduleValue := func(state string, ttl time.Duration) ModuleDataValue {
 		return ModuleDataValue{Payload: []byte(`{"state":"` + state + `"}`), PayloadVersion: 1,
 			IndexData: []byte(`{"state":"` + state + `"}`), TTL: ttl}
+	}
+	if _, err := moduleData.Put(ctx, ownerKey, moduleValue("owner-a", 0), 0); err != nil {
+		t.Fatalf("create module-data record owned by first capability: %v", err)
+	}
+	if _, err := mediaData.Get(ctx, ownerKey); !errors.Is(err, ErrModuleDataInvalid) {
+		t.Fatalf("second capability read a guessed record in another module namespace: %v", err)
+	}
+	if _, err := mediaData.Put(ctx, ownerKey, moduleValue("forbidden", 0), 0); !errors.Is(err, ErrModuleDataInvalid) {
+		t.Fatalf("second capability wrote into another module namespace: %v", err)
+	}
+	if err := mediaData.Delete(ctx, ownerKey, 1); !errors.Is(err, ErrModuleDataInvalid) {
+		t.Fatalf("second capability deleted a guessed record in another module namespace: %v", err)
+	}
+	foreignSelector := []ModuleDataSelector{{Field: "state", Operator: SelectorEqual, Values: []any{"owner-a"}}}
+	if _, _, _, err := mediaData.List(ctx, "uploads", "global", "global", "", foreignSelector, 10); !errors.Is(err, ErrModuleDataInvalid) {
+		t.Fatalf("second capability listed another module namespace: %v", err)
+	}
+	ownedRecord, err := moduleData.Get(ctx, ownerKey)
+	var ownerPayload struct {
+		State string `json:"state"`
+	}
+	decodeOwnerErr := json.Unmarshal(ownedRecord.Payload, &ownerPayload)
+	if err != nil || decodeOwnerErr != nil || ownerPayload.State != "owner-a" {
+		t.Fatalf("foreign capability changed owner record: payload=%s err=%v decodeErr=%v", ownedRecord.Payload, err, decodeOwnerErr)
+	}
+	staleRecord, err := moduleData.Put(ctx, abaKey, moduleValue("before-delete", 0), 0)
+	if err != nil {
+		t.Fatalf("create ABA fixture: %v", err)
+	}
+	if err := moduleData.Delete(ctx, abaKey, staleRecord.Revision); err != nil {
+		t.Fatalf("delete ABA fixture: %v", err)
+	}
+	recreatedRecord, err := moduleData.Put(ctx, abaKey, moduleValue("after-recreate", 0), 0)
+	if err != nil || recreatedRecord.Revision <= staleRecord.Revision {
+		t.Fatalf("recreate did not receive a fresh revision: old=%d new=%d err=%v", staleRecord.Revision, recreatedRecord.Revision, err)
+	}
+	if _, err := moduleData.Put(ctx, abaKey, moduleValue("stale-write", 0), staleRecord.Revision); !errors.Is(err, ErrModuleDataConflict) {
+		t.Fatalf("stale CAS write after delete/recreate returned %v", err)
+	}
+	if err := moduleData.Delete(ctx, abaKey, staleRecord.Revision); !errors.Is(err, ErrModuleDataConflict) {
+		t.Fatalf("stale CAS delete after delete/recreate returned %v", err)
+	}
+	currentABARecord, err := moduleData.Get(ctx, abaKey)
+	var currentABAPayload struct {
+		State string `json:"state"`
+	}
+	decodeABAErr := json.Unmarshal(currentABARecord.Payload, &currentABAPayload)
+	if err != nil || decodeABAErr != nil || currentABARecord.Revision != recreatedRecord.Revision || currentABAPayload.State != "after-recreate" {
+		t.Fatalf("stale ABA operation changed recreated record: record=%+v err=%v decodeErr=%v", currentABARecord, err, decodeABAErr)
 	}
 	createdModuleRecord, err := moduleData.Put(ctx, moduleKey, moduleValue("pending", time.Second), 0)
 	if err != nil {

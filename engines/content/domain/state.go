@@ -7,19 +7,15 @@ import (
 
 const PayloadVersion = 1
 
+// Aggregate holds the site-wide mutable state for exactly one configured locale.
+// Page-scoped selections are stored separately by (page snapshot, locale).
 type Aggregate struct {
-	SnapshotID        string                    `json:"snapshot_id"`
-	Revision          int64                     `json:"revision"`
-	PublishedRevision int64                     `json:"published_revision"`
-	Records           []Record                  `json:"records"`
-	Selections        []Selection               `json:"selections,omitempty"`
-	PageSelections          map[string][]Selection `json:"page_selections,omitempty"`
-	PublishedPageSelections map[string][]Selection `json:"published_page_selections,omitempty"`
-	PageSelectionIDs        []string               `json:"page_selection_ids,omitempty"`
-	PageSelectionRevisions map[string]int64        `json:"-"`
-	PageMutationReceipts    map[string]*MutationReceipt `json:"-"`
-	ChangedPageSelectionIDs []string               `json:"-"`
-	LastMutation       *MutationReceipt        `json:"last_mutation,omitempty"`
+	SnapshotID        string           `json:"snapshot_id"`
+	Locale            string           `json:"locale"`
+	Revision          int64            `json:"revision"`
+	PublishedRevision int64            `json:"published_revision"`
+	Records           []Record         `json:"records"`
+	LastMutation      *MutationReceipt `json:"last_mutation,omitempty"`
 }
 
 type StoredWorkspace struct {

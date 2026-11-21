@@ -167,12 +167,16 @@ func Assignments(ctx context.Context, pool *pgxpool.Pool, principalID string) ([
 	defer rows.Close()
 	assignments := make([]access.GroupAssignment, 0)
 	for rows.Next() {
-		var assignment access.GroupAssignment
+		var group string
+		var active bool
 		var level int16
-		if err := rows.Scan(&assignment.Group, &level, &assignment.Active); err != nil {
+		if err := rows.Scan(&group, &level, &active); err != nil {
 			return nil, err
 		}
-		assignment.Level = access.Level(level)
+		assignment, err := access.NewGroupAssignment(group, access.Level(level), active)
+		if err != nil {
+			return nil, fmt.Errorf("invalid persisted group assignment: %w", err)
+		}
 		assignments = append(assignments, assignment)
 	}
 	return assignments, rows.Err()

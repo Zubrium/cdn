@@ -12,6 +12,7 @@ import (
 	"time"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/engines/content/domain"
 )
 
 var (
@@ -34,6 +35,8 @@ type Contract interface {
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
+	GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error)
+	ReplaceLocaleConfig(context.Context, string, domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error)
 	GetWorkspace(context.Context, Projections) (Workspace, error)
 	SaveWorkspaceDraft(context.Context, Projections, SaveWorkspaceDraftRequest) (Workspace, error)
 	PublishWorkspace(context.Context, Projections, PublishWorkspaceRequest) (Workspace, error)
@@ -44,6 +47,9 @@ type API interface {
 }
 
 const ProjectionVersion = 1
+
+type LocaleConfig = domain.LocaleConfig
+type ReplaceLocaleConfigRequest = domain.ReplaceLocaleConfigRequest
 
 // SiteContentSchema contains the immutable site-wide model projection.
 type SiteContentSchema struct {
@@ -278,6 +284,8 @@ func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
 
 func (Descriptor) Operations() []platform.Operation {
 	return []platform.Operation{
+		{Name: "locales.read", Action: platform.AccessActionRead, ResourceType: "content-locales"},
+		{Name: "locales.write", Action: platform.AccessActionWrite, ResourceType: "content-locales"},
 		{Name: "workspace.read", Action: platform.AccessActionRead, ResourceType: "content-workspace"},
 		{Name: "workspace.write", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
 		{Name: "workspace.publish", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},

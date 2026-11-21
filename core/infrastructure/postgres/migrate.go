@@ -32,7 +32,7 @@ const baselineVersion = "20261117000000"
 var coreSchemas = []string{"access", "files", "uploads", "file_index", "engine_data", "coordination"}
 
 var coreSchemaTables = []string{
-	"access.users", "access.bootstrap", "access.credentials", "access.groups", "access.grants",
+	"access.users", "access.bootstrap", "access.credentials", "access.sessions", "access.groups", "access.grants",
 	"files.objects", "files.memberships",
 	"uploads.requests", "uploads.staged",
 	"file_index.sets", "file_index.members",

@@ -87,14 +87,14 @@ func ValidateRuntimeAccess(ctx context.Context, pool *pgxpool.Pool) error {
 				OR has_table_privilege(current_user,c.oid,'UPDATE')
 				OR has_table_privilege(current_user,c.oid,'DELETE'))
 			AND NOT (n.nspname||'.'||c.relname = ANY(ARRAY[
-				'access.users','access.bootstrap','access.credentials','access.groups','access.grants',
+				'access.users','access.bootstrap','access.credentials','access.sessions','access.groups','access.grants',
 				'files.objects','files.memberships','uploads.requests','uploads.staged',
 				'file_index.sets','file_index.members','engine_data.records',
 				'engine_data.revision_seq',
 				'coordination.runtime','coordination.instances','coordination.workflows','coordination.tasks','coordination.dependencies']::text[])))
 		AND NOT EXISTS (
 			SELECT 1 FROM unnest(ARRAY[
-				'access.users','access.bootstrap','access.credentials','access.groups','access.grants',
+				'access.users','access.bootstrap','access.credentials','access.sessions','access.groups','access.grants',
 				'files.objects','files.memberships','uploads.requests','uploads.staged',
 				'file_index.sets','file_index.members','engine_data.records',
 				'coordination.runtime','coordination.instances','coordination.workflows','coordination.tasks','coordination.dependencies']::text[]) AS t(relation_name)

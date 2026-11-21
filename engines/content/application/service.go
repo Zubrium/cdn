@@ -25,6 +25,8 @@ type Files interface {
 }
 
 type Repository interface {
+	GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error)
+	ReplaceLocaleConfig(context.Context, string, domain.ReplaceLocaleConfigRequest, string, string) (domain.LocaleConfig, error)
 	Get(context.Context, string) (domain.StoredWorkspace, error)
 	Create(context.Context, string, domain.Aggregate) (domain.StoredWorkspace, error)
 	Commit(context.Context, string, int64, domain.Aggregate, *domain.Publication) (domain.StoredWorkspace, error)
@@ -52,6 +54,34 @@ func New(repository Repository, files Files) (*Service, error) {
 		return nil, domain.ErrUnavailable
 	}
 	return &Service{repository: repository, files: files, maxPage: repository.MaxPageSize(), maxPayload: repository.MaxPayloadBytes()}, nil
+}
+
+func (service *Service) GetLocaleConfig(ctx context.Context, siteID string) (domain.LocaleConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.LocaleConfig{}, err
+	}
+	if !domain.ValidID(siteID) {
+		return domain.LocaleConfig{}, domain.ErrInvalid
+	}
+	return service.repository.GetLocaleConfig(ctx, siteID)
+}
+
+func (service *Service) ReplaceLocaleConfig(ctx context.Context, siteID string, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.LocaleConfig{}, err
+	}
+	if !domain.ValidID(siteID) {
+		return domain.LocaleConfig{}, domain.ErrInvalid
+	}
+	keyHash, fingerprint, err := mutationIdentity("locale-config", request.IdempotencyKey, struct {
+		ExpectedRevision int64    `json:"expected_revision"`
+		Locales          []string `json:"locales"`
+		DefaultLocale    string   `json:"default_locale"`
+	}{request.ExpectedRevision, request.Locales, request.DefaultLocale}, service.maxPayload)
+	if err != nil {
+		return domain.LocaleConfig{}, err
+	}
+	return service.repository.ReplaceLocaleConfig(ctx, siteID, request, keyHash, fingerprint)
 }
 
 func (service *Service) GetWorkspace(ctx context.Context, session core.Session, schema domain.Schema, snapshotID string) (domain.WorkspaceView, error) {

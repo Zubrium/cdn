@@ -103,7 +103,7 @@ func TestCoreDoesNotDependOnConcreteEnginesOrWorkers(t *testing.T) {
 
 func TestExternalPackagesUseOnlyPublicCoreFacade(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, relative := range []string{"cmd", "engines", "workers", "presentation"} {
+	for _, relative := range []string{"main", "engines", "workers", "presentation"} {
 		base := filepath.Join(root, relative)
 		err := filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -158,6 +158,64 @@ func TestCoreLayersLiveDirectlyUnderModuleRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect Core layer paths: %v", err)
 	}
+}
+
+func TestCoreLayerImportsFollowDependencyDirection(t *testing.T) {
+	coreRoot := filepath.Join(repositoryRoot(t), "core")
+	modulePath := "github.com/Zubrium/cdn/core/"
+	err := filepath.WalkDir(coreRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(coreRoot, path)
+		if err != nil {
+			return err
+		}
+		from := strings.SplitN(filepath.ToSlash(relative), "/", 2)[0]
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imported := range file.Imports {
+			value := strings.Trim(imported.Path.Value, "\\\"")
+			if !strings.HasPrefix(value, modulePath) {
+				continue
+			}
+			to := strings.SplitN(strings.TrimPrefix(value, modulePath), "/", 2)[0]
+			if !coreLayerImportAllowed(from, to) {
+				t.Errorf("Core %s package %s imports outward layer %s", from, path, to)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect Core layer imports: %v", err)
+	}
+}
+
+func TestCoreLayerImportPolicyRejectsOutwardDependencies(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"domain", "application"},
+		{"application", "infrastructure"},
+		{"infrastructure", "presentation"},
+	} {
+		if coreLayerImportAllowed(pair[0], pair[1]) {
+			t.Errorf("Core import %s -> %s must be rejected", pair[0], pair[1])
+		}
+	}
+}
+
+func coreLayerImportAllowed(from, to string) bool {
+	allowed := map[string]map[string]bool{
+		"domain":         {"domain": true},
+		"application":    {"domain": true, "application": true},
+		"infrastructure": {"domain": true, "application": true, "infrastructure": true},
+		"presentation":   {"domain": true, "application": true, "infrastructure": true, "presentation": true},
+	}
+	return allowed[from][to]
 }
 
 func repositoryRoot(t *testing.T) string {

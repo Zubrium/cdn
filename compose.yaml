@@ -1,0 +1,21 @@
+services:
+  core-qa-postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: core_qa_admin
+      POSTGRES_PASSWORD: ${CORE_QA_POSTGRES_PASSWORD:?set CORE_QA_POSTGRES_PASSWORD}
+      CORE_QA_RUNTIME_PASSWORD: ${CORE_QA_RUNTIME_PASSWORD:?set CORE_QA_RUNTIME_PASSWORD}
+      CORE_QA_MIGRATION_PASSWORD: ${CORE_QA_MIGRATION_PASSWORD:?set CORE_QA_MIGRATION_PASSWORD}
+      CORE_QA_ELEVATED_PASSWORD: ${CORE_QA_ELEVATED_PASSWORD:?set CORE_QA_ELEVATED_PASSWORD}
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./tests/qa/postgres-init.sh:/docker-entrypoint-initdb.d/10-core-qa.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U core_qa_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

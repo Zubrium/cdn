@@ -592,7 +592,7 @@ func TestListSnapshotsUsesValidatedSiteFilterAndConfiguredPagination(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/snapshots?site_id=11111111-1111-4111-8111-111111111111&page_id=home&cursor=next-page", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/snapshots?site_id=11111111-1111-4111-8111-111111111111&page_id=22222222-2222-4222-8222-222222222222&cursor=next-page", nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -638,7 +638,7 @@ func TestCreateSnapshotRequiresIdempotencyAndCopiesExplicitPayload(t *testing.T)
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || api.createSnapshotCalls != 1 || api.createSnapshotInput.SiteID != "33333333-3333-4333-8333-333333333333" || api.createSnapshotInput.PageID != "22222222-2222-4222-8222-222222222222" ||
 		api.createSnapshotInput.Name != "Main" || api.createSnapshotInput.ExpectedRevision != 0 || api.createSnapshotInput.ExpectedContentRevision != 0 || api.createSnapshotInput.IdempotencyKey != "create-snapshot-request-0001" ||
-		len(api.createSnapshotInput.Payload.Config) == 0 || len(api.createSnapshotInput.Payload.Metadata) == 0 || api.createSnapshotInput.PageID != "22222222-2222-4222-8222-222222222222" {
+		len(api.createSnapshotInput.Payload.Config) == 0 || len(api.createSnapshotInput.Payload.Metadata) == 0 {
 		t.Fatalf("status=%d calls=%d input=%+v body=%s", response.Code, api.createSnapshotCalls, api.createSnapshotInput, response.Body.String())
 	}
 	if response.Header().Get("Location") != "/api/admin/sites/snapshots/22222222-2222-4222-8222-222222222222" {
@@ -697,7 +697,7 @@ func TestCreateChildSnapshotFailsClosedWithoutWorkflowBeforePersisting(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := `{"site_id":"33333333-3333-4333-8333-333333333333","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","expected_revision":4,"expected_content_revision":8,"payload":{"config":{},"metadata":{}}}`
+	body := `{"site_id":"33333333-3333-4333-8333-333333333333","page_id":"22222222-2222-4222-8222-222222222222","parent_id":"11111111-1111-4111-8111-111111111111","name":"Child","expected_revision":4,"expected_content_revision":8,"payload":{"config":{},"metadata":{}}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/admin/sites/snapshots", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
@@ -751,7 +751,7 @@ func TestPagePlacementProjectionIsReadOnlyAndBoundToPathScope(t *testing.T) {
 	}
 	siteID := "33333333-3333-4333-8333-333333333333"
 	snapshotID := "22222222-2222-4222-8222-222222222222"
-	path := "/api/admin/sites/" + siteID + "/pages/home/snapshots/" + snapshotID + "/content-projection"
+	path := "/api/admin/sites/" + siteID + "/pages/22222222-2222-4222-8222-222222222222/snapshots/" + snapshotID + "/content-projection"
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request.Header.Set("Authorization", "Bearer user-secret")
 	response := httptest.NewRecorder()

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Zubrium/cdn/engines/content/domain"
 	engine "github.com/Zubrium/cdn/engines/content/presentation"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
@@ -46,6 +47,8 @@ func NewHandler(api engine.API, schemas SchemaSnapshots, config Config) (*Handle
 		return nil, err
 	}
 	h := &Handler{api: api, schemas: schemas, cfg: config, transport: transport, mux: http.NewServeMux()}
+	h.mux.HandleFunc("GET /api/admin/sites/{siteID}/content/locales", h.getLocaleConfig)
+	h.mux.HandleFunc("PUT /api/admin/sites/{siteID}/content/locales", h.replaceLocaleConfig)
 	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.getWorkspace)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.saveWorkspaceDraft)
 	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots/{snapshotID}/workspace/publish", h.publishWorkspace)
@@ -72,6 +75,55 @@ func (h *Handler) projections(ctx context.Context, pageSnapshotID string) (engin
 		return engine.Projections{}, engine.ErrUnavailable
 	}
 	return projections, nil
+}
+
+func (h *Handler) getLocaleConfig(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	siteID := r.PathValue("siteID")
+	if !validID(siteID) {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	config, err := h.api.GetLocaleConfig(ctx, siteID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	w.Header().Set("ETag", `"`+strconv.FormatInt(config.Revision, 10)+`"`)
+	writeJSON(w, http.StatusOK, config)
+}
+
+func (h *Handler) replaceLocaleConfig(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	siteID := r.PathValue("siteID")
+	idempotencyKey, valid := readIdempotencyKey(r)
+	if !valid || !validID(siteID) {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	var request domain.ReplaceLocaleConfigRequest
+	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	if request.ExpectedRevision < 0 || request.Locales == nil || len(request.Locales) > 128 || request.DefaultLocale == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	request.IdempotencyKey = idempotencyKey
+	config, err := h.api.ReplaceLocaleConfig(ctx, siteID, request)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	w.Header().Set("ETag", `"`+strconv.FormatInt(config.Revision, 10)+`"`)
+	writeJSON(w, http.StatusOK, config)
 }
 
 func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) {

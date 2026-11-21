@@ -39,6 +39,8 @@ import type {
   ModelContentSelection,
   ModelContentWorkspace,
   ModelContentHistoryItem,
+  ContentLocaleConfig,
+  ReplaceContentLocaleConfig,
   ModelContentPlacement,
   DataModelFieldType,
   DataModel,
@@ -565,6 +567,16 @@ function parseContentWorkspace(value: unknown, snapshotID: string): ModelContent
   };
 }
 
+function parseContentLocaleConfig(value: unknown): ContentLocaleConfig {
+  if (!isRecord(value) || !Number.isSafeInteger(value.revision) || Number(value.revision) < 1 ||
+    !Array.isArray(value.locales) || value.locales.length < 1 || value.locales.some((locale) => typeof locale !== "string" || !locale) ||
+    new Set(value.locales).size !== value.locales.length || typeof value.default_locale !== "string" ||
+    !value.locales.includes(value.default_locale)) {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректный каталог локалей контента");
+  }
+  return { revision: Number(value.revision), locales: value.locales as string[], default_locale: value.default_locale };
+}
+
 function parseContentHistory(value: unknown): ModelContentHistoryResponse {
   if (!isRecord(value) || !Array.isArray(value.items) ||
     (value.next_cursor !== undefined && (typeof value.next_cursor !== "string" || value.next_cursor.length > 1024))) {
@@ -992,6 +1004,15 @@ export const api = {
   },
 
   contentEngine: {
+    localeConfig(siteID: string, signal?: AbortSignal): Promise<ContentLocaleConfig> {
+      return request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/content/locales`, { signal })
+        .then(parseContentLocaleConfig);
+    },
+    replaceLocaleConfig(siteID: string, input: ReplaceContentLocaleConfig, idempotencyKey: string): Promise<ContentLocaleConfig> {
+      return request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/content/locales`, {
+        method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body: input,
+      }).then(parseContentLocaleConfig);
+    },
     workspace(snapshotID: string, signal?: AbortSignal): Promise<ModelContentWorkspace> {
       return request<unknown>(`${ADMIN_ROOT}/content/snapshots/${encoded(snapshotID)}/workspace`, { signal })
         .then((value) => parseContentWorkspace(value, snapshotID));
