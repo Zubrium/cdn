@@ -16,15 +16,15 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 			{Name: "features/imports", ScopeTypes: []string{"job"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "source_file_id": {Type: core.SelectorString}, "feature_id": {Type: core.SelectorString},
 			}},
-			{Name: "website/site-models", ScopeTypes: []string{"site"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "site_id": {Type: core.SelectorString},
-				"revision": {Type: core.SelectorNumber}, "digest": {Type: core.SelectorString},
+			{Name: "website/content-models", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
+				"record_type": {Type: core.SelectorString},
+				"revision":    {Type: core.SelectorNumber}, "digest": {Type: core.SelectorString},
 			}},
-			{Name: "website/snapshots", ScopeTypes: []string{"site"}, Fields: map[string]core.SelectorField{
+			{Name: "website/snapshots", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "revision": {Type: core.SelectorNumber},
 				"parent_id": {Type: core.SelectorString}, "page_id": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString}, "action": {Type: core.SelectorString},
 			}},
-			{Name: "website/page-templates", ScopeTypes: []string{"site"}, Fields: map[string]core.SelectorField{
+			{Name: "website/page-templates", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "template_id": {Type: core.SelectorString},
 				"revision": {Type: core.SelectorNumber}, "digest": {Type: core.SelectorString},
 			}},

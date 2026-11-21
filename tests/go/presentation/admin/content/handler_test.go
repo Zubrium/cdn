@@ -95,19 +95,19 @@ func (f *fakeContentAPI) CopySnapshotContent(context.Context, engine.CopySnapsho
 type fakeSchemaSnapshots struct{}
 
 func (fakeSchemaSnapshots) GetContentProjections(_ context.Context, pageSnapshotID string) (engine.Projections, error) {
-	site := engine.SiteContentSchema{Version: engine.ProjectionVersion, SiteID: "site-1", ModelRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
-	site.Digest, _ = site.ComputeDigest()
-	page := engine.PagePlacementProjection{Version: engine.ProjectionVersion, PageSnapshotID: pageSnapshotID, PageID: "page-1", SiteID: site.SiteID, Revision: 1, State: "ready", Placements: []engine.Placement{}}
+	model := engine.ContentModelProjection{Version: engine.ProjectionVersion, ModelRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
+	model.Digest, _ = model.ComputeDigest()
+	page := engine.PagePlacementProjection{Version: engine.ProjectionVersion, PageSnapshotID: pageSnapshotID, PageID: "page-1", Revision: 1, State: "ready", Placements: []engine.Placement{}}
 	page.Digest, _ = page.ComputeDigest()
-	return engine.Projections{Site: site, Page: page}, nil
+	return engine.Projections{ContentModel: model, Page: page, Locale: "en-US"}, nil
 }
 
-func (f *fakeContentAPI) GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error) {
+func (f *fakeContentAPI) GetLocaleConfig(context.Context) (domain.LocaleConfig, error) {
 	f.localeRead = true
 	return f.localeConfig, nil
 }
 
-func (f *fakeContentAPI) ReplaceLocaleConfig(_ context.Context, _ string, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
+func (f *fakeContentAPI) ReplaceLocaleConfig(_ context.Context, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
 	f.localeReplaced, f.localeRequest = true, request
 	config, err := domain.NormalizeLocaleConfig(request, request.ExpectedRevision+1)
 	if err != nil {
@@ -137,7 +137,7 @@ func newHandler(t *testing.T, api *fakeContentAPI) http.Handler {
 func TestContentHandlerFailsClosedWhenTrustedSchemaProjectionIsUnavailable(t *testing.T) {
 	api := &fakeContentAPI{schemaErr: engine.ErrUnavailable}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace?locale=en-US", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -161,7 +161,7 @@ func TestContentHandlerPreservesTrustedSchemaProjectionErrorClass(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			api := &fakeContentAPI{schemaErr: test.err}
 			handler := newHandler(t, api)
-			request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace", nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace?locale=en-US", nil)
 			request.Header.Set("Authorization", "Bearer service-key")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
@@ -183,7 +183,7 @@ func TestContentHandlerRequiresExplicitSchemaProvider(t *testing.T) {
 func TestContentHandlerReadsWorkspaceAndSetsNoStoreHeaders(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/workspace?locale=en-US", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -199,7 +199,7 @@ func TestContentHandlerRequiresCookieCSRFOriginAndIdempotencyForDraftWrite(t *te
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
 	body := `{"expected_revision":0,"records":[],"selections":[]}`
-	path := "/api/admin/content/snapshots/snap-1/workspace"
+	path := "/api/admin/content/snapshots/snap-1/workspace?locale=en-US"
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.AddCookie(&http.Cookie{Name: adminhttpauth.SessionCookieName, Value: "ss_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))})
@@ -228,7 +228,7 @@ func TestContentHandlerRequiresCookieCSRFOriginAndIdempotencyForDraftWrite(t *te
 func TestContentHandlerPaginatesHistoryAndRejectsDuplicateQueryValues(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/history?cursor=next&limit=7", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/history?cursor=next&limit=7&locale=en-US", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -236,7 +236,7 @@ func TestContentHandlerPaginatesHistoryAndRejectsDuplicateQueryValues(t *testing
 		t.Fatalf("history status=%d called=%t snapshot=%q cursor=%q limit=%d body=%s", response.Code, api.historyCalled, api.historySnapshot, api.historyCursor, api.historyLimit, response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/history?limit=2&limit=3", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/content/snapshots/snap-1/history?limit=2&limit=3&locale=en-US", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -248,7 +248,7 @@ func TestContentHandlerPaginatesHistoryAndRejectsDuplicateQueryValues(t *testing
 func TestContentHandlerRejectsUnknownDuplicateAndInvalidWorkspaceJSON(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	path := "/api/admin/content/snapshots/snap-1/workspace"
+	path := "/api/admin/content/snapshots/snap-1/workspace?locale=en-US"
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"expected_revision":0,"records":[],"selections":[],"ignored":true}`))
 	request.Header.Set("Authorization", "Bearer service-key")
 	request.Header.Set("Content-Type", "application/json")
@@ -283,7 +283,7 @@ func TestContentHandlerRejectsUnknownDuplicateAndInvalidWorkspaceJSON(t *testing
 func TestContentHandlerRejectsDuplicateContentTypeAndInvalidUTF8(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	path := "/api/admin/content/snapshots/snap-1/workspace"
+	path := "/api/admin/content/snapshots/snap-1/workspace?locale=en-US"
 	validBody := `{"expected_revision":0,"records":[],"selections":[]}`
 
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(validBody))
@@ -314,7 +314,7 @@ func TestContentHandlerRejectsDuplicateContentTypeAndInvalidUTF8(t *testing.T) {
 func TestContentHandlerRestoresHistoryWithCASAndIdempotency(t *testing.T) {
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodPost, "/api/admin/content/snapshots/snap-1/history/history-1/restore", strings.NewReader(`{"expected_revision":4}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/content/snapshots/snap-1/history/history-1/restore?locale=en-US", strings.NewReader(`{"expected_revision":4}`))
 	request.Header.Set("Authorization", "Bearer service-key")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "restore-1")
@@ -327,11 +327,10 @@ func TestContentHandlerRestoresHistoryWithCASAndIdempotency(t *testing.T) {
 }
 
 func TestContentHandlerServesLocaleCatalogWithETagAndIdempotency(t *testing.T) {
-	const siteID = "11111111-1111-4111-8111-111111111111"
 	api := &fakeContentAPI{localeConfig: domain.LocaleConfig{Revision: 3, Locales: []string{"en-US", "fr"}, DefaultLocale: "en-US"}}
 	handler := newHandler(t, api)
 
-	request := httptest.NewRequest(http.MethodGet, "/api/admin/sites/"+siteID+"/content/locales", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/content/locales", nil)
 	request.Header.Set("Authorization", "Bearer service-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -340,7 +339,7 @@ func TestContentHandlerServesLocaleCatalogWithETagAndIdempotency(t *testing.T) {
 	}
 
 	body := `{"expected_revision":3,"locales":["EN-us","fr"],"default_locale":"en-us"}`
-	request = httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/content/locales", strings.NewReader(body))
+	request = httptest.NewRequest(http.MethodPut, "/api/admin/content/locales", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer service-key")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "locale-catalog-1")
@@ -360,10 +359,9 @@ func TestContentHandlerServesLocaleCatalogWithETagAndIdempotency(t *testing.T) {
 }
 
 func TestContentHandlerRejectsLocaleCatalogWriteWithoutIdempotencyKey(t *testing.T) {
-	const siteID = "11111111-1111-4111-8111-111111111111"
 	api := &fakeContentAPI{}
 	handler := newHandler(t, api)
-	request := httptest.NewRequest(http.MethodPut, "/api/admin/sites/"+siteID+"/content/locales", strings.NewReader(`{"expected_revision":0,"locales":["en"],"default_locale":"en"}`))
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/content/locales", strings.NewReader(`{"expected_revision":0,"locales":["en"],"default_locale":"en"}`))
 	request.Header.Set("Authorization", "Bearer service-key")
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()

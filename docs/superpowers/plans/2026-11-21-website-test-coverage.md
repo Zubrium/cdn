@@ -17,7 +17,7 @@
 - Persistence/storage доступны только через Core presentation capabilities; не добавлять Website-owned SQL schemas, migrations, DSN или прямые runtime-вызовы Router/Content/Forms.
 - Контракт артефакта — `static-page-artifact/v1`; Router binding/activation выполняется отдельно.
 - Acceptance-red tests запускаются отдельными командами, не входящими в обычный CI, пока целевое поведение намеренно красное. Блокер остаётся в знаменателе и не покрыт; содержательный failing test считается покрытым сценарием и отдельно проваленным. Отчёт показывает denominator и долю покрытия относительно порога не менее 60% для каждого модуля; statement coverage — отдельная метрика.
-- Использовать только уникальные disposable resources; не отправлять write-запросы в live API/database/bucket или общий Vitasil stack. Удалять только ресурсы, созданные данным прогоном.
+- Использовать только уникальные disposable resources; не отправлять write-запросы в live API/database/bucket. Удалять только ресурсы, созданные данным прогоном.
 
 ## Основные риски для проверки
 
@@ -55,6 +55,7 @@
 ### Task 1: Создать Website ledger и отдельный red runner
 
 **Файлы:**
+
 - Создать: `tests/qa/website-scenarios.json`
 - Создать: `tests/qa/run-website-red.sh`
 - Создать: `tests/qa/scenario-ledger.py`
@@ -71,6 +72,7 @@
 ### Task 2: Сначала добавить Website unit и Admin UI scenarios
 
 **Файлы:**
+
 - Создать: `tests/go/engines/website/application/acceptance_rules_test.go`
 - Создать: `tests/go/engines/website/repository/acceptance_keys_test.go`
 - Изменить: `tests/qa/website-scenarios.json`
@@ -79,7 +81,7 @@
 - [ ] Добавить `TestWebsiteScenarioSnapshotCAS`: structural edits, stale CAS conflict, отсутствие мутации при conflict, сохранение parent snapshot и отсутствие неявных изменений route/Content values.
 - [ ] Добавить `TestWebsiteScenarioSiteEditorBindings`: typed structural bindings, допустимые arguments/data inputs, invalid/unknown binding и точная state после отказа.
 - [ ] Добавить `TestWebsiteScenarioPageDeletion`: удаление/retirement через нормативный workflow удаляет только route delivery targets, сохраняет snapshots и связанные Content/Forms/Core resources и историю; retry безопасен.
-- [ ] Добавить `TestWebsiteScenarioLocaleProjection`: trusted projection ограничена site/entity/locale и catalog revision; неверная или устаревшая projection отклоняется без fallback на другую locale.
+- [ ] Добавить `TestWebsiteScenarioLocaleProjection`: trusted projection ограничена entity/locale и catalog revision; неверная или устаревшая projection отклоняется без fallback на другую locale.
 - [ ] Добавить `TestWebsiteScenarioDataModelCardinality`: `many`/`singleton`, одна пустая draft-запись нового singleton без auto-publication, очистка с сохранением record ID и отказ cardinality change, теряющего records.
 - [ ] Добавить `TestWebsiteScenarioFeatureRuntime`: только manifest-declared HTTPS origins и typed contracts, отсутствие секретов в public context, cancellation/disposal запросов и ограничения CSP/CORS/network из runtime spec.
 - [ ] Добавить `TestWebsiteScenarioTemplateMaterialization`: immutable materialization, revision CAS, invalid template и сохранение выбранного template при ошибке.
@@ -92,6 +94,7 @@
 ### Task 3: Добавить Website contract и persistence integration scenarios
 
 **Файлы:**
+
 - Создать: `tests/go/engines/website/presentation/acceptance_contract_test.go`
 - Создать: `tests/go/engines/website/repository/acceptance_integration_test.go`
 - Изменить: `tests/qa/website-scenarios.json`, `tests/ACCEPTANCE-MATRIX.md`, `docs/QA_REPORT.md`
@@ -105,6 +108,7 @@
 ### Task 4: Проверить durable Worker workflows и границы Website
 
 **Файлы:**
+
 - Создать: `tests/go/engines/website/application/acceptance_workflows_test.go`
 - Создать: `tests/go/workers/archive/acceptance_website_test.go`
 - Создать: `tests/go/workers/media/acceptance_website_test.go`
@@ -122,6 +126,7 @@
 ### Task 5: Зафиксировать полный red baseline, затем исправить Website gaps
 
 **Файлы:**
+
 - Изменить: только Website implementation files, на которые указывают проваленные scenarios
 - Изменить: `tests/qa/website-scenarios.json`, `docs/QA_REPORT.md`, `docs/TODO-admin-snapshots-content-files.md`
 

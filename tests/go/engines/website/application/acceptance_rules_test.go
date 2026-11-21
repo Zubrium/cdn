@@ -24,14 +24,14 @@ import (
 func TestWebsiteScenarioPageRootCreation(t *testing.T) {
 	t.Run("WEB-002", func(t *testing.T) {
 		store, service, ctx := newWebsiteScenarioService(t)
-		first := createScenarioPage(t, service, ctx, siteA, "Home", "scenario-page-root-home-001")
-		second := createScenarioPage(t, service, ctx, siteA, "About", "scenario-page-root-about-001")
+		first := createScenarioPage(t, service, ctx, "Home", "scenario-page-root-home-001")
+		second := createScenarioPage(t, service, ctx, "About", "scenario-page-root-about-001")
 
 		if !scenarioUUID(first.ID) || !scenarioUUID(first.LatestSnapshotID) || first.ID == second.ID || first.LatestSnapshotID == second.LatestSnapshotID {
 			t.Fatalf("page/root identities must be distinct server-generated UUIDs: first=%#v second=%#v", first, second)
 		}
 		for _, page := range []websiteapi.Page{first, second} {
-			items, err := service.ListSnapshots(ctx, siteA, page.ID, "", 10)
+			items, err := service.ListSnapshots(ctx, page.ID, "", 10)
 			if err != nil {
 				t.Fatalf("list roots for %s: %v", page.ID, err)
 			}
@@ -52,14 +52,14 @@ func TestWebsiteScenarioPageRootCreation(t *testing.T) {
 
 	t.Run("WEB-003", func(t *testing.T) {
 		store, service, ctx := newWebsiteScenarioService(t)
-		first := createScenarioPage(t, service, ctx, siteA, "Home", "scenario-page-tree-home-001")
-		second := createScenarioPage(t, service, ctx, siteA, "About", "scenario-page-tree-about-001")
+		first := createScenarioPage(t, service, ctx, "Home", "scenario-page-tree-home-001")
+		second := createScenarioPage(t, service, ctx, "About", "scenario-page-tree-about-001")
 		root, err := service.GetSnapshot(ctx, first.LatestSnapshotID)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		childRequest := scenarioSnapshotRequest(t, siteA, first.ID, root.ID, root.Revision, "Home child", "scenario-child-tree-home-001", scenarioPagePayload(t, first.ID, "Home child", nil))
+		childRequest := scenarioSnapshotRequest(t, first.ID, root.ID, root.Revision, "Home child", "scenario-child-tree-home-001", scenarioPagePayload(t, first.ID, "Home child", nil))
 		child, err := service.CreateSnapshot(ctx, childRequest)
 		if err != nil {
 			t.Fatal(err)
@@ -90,13 +90,13 @@ func TestWebsiteScenarioPageRootCreation(t *testing.T) {
 func TestWebsiteScenarioSnapshotCAS(t *testing.T) {
 	t.Run("WEB-004", func(t *testing.T) {
 		store, service, ctx := newWebsiteScenarioService(t)
-		page := createScenarioPage(t, service, ctx, siteA, "Home", "scenario-snapshot-cas-page-001")
+		page := createScenarioPage(t, service, ctx, "Home", "scenario-snapshot-cas-page-001")
 		parent, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		parentConfig := append([]byte(nil), parent.Payload.Config...)
-		request := scenarioSnapshotRequest(t, siteA, page.ID, parent.ID, parent.Revision, "Changed structure", "scenario-snapshot-cas-current-001", scenarioPagePayload(t, page.ID, "Changed structure", []any{map[string]any{"id": "hero-1", "build": map[string]any{"featureKey": "hero", "version": "1.2.0"}}}))
+		request := scenarioSnapshotRequest(t, page.ID, parent.ID, parent.Revision, "Changed structure", "scenario-snapshot-cas-current-001", scenarioPagePayload(t, page.ID, "Changed structure", []any{map[string]any{"id": "hero-1", "build": map[string]any{"featureKey": "hero", "version": "1.2.0"}}}))
 		if _, err := service.CreateSnapshot(ctx, request); err != nil {
 			t.Fatalf("current structural save: %v", err)
 		}
@@ -132,7 +132,7 @@ func TestWebsiteScenarioSnapshotCAS(t *testing.T) {
 func TestWebsiteScenarioSiteEditorBindings(t *testing.T) {
 	t.Run("WEB-006", func(t *testing.T) {
 		store, service, ctx := newWebsiteScenarioService(t)
-		page := createScenarioPage(t, service, ctx, siteA, "Catalog", "scenario-bindings-page-001")
+		page := createScenarioPage(t, service, ctx, "Catalog", "scenario-bindings-page-001")
 		parent, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
 		if err != nil {
 			t.Fatal(err)
@@ -140,7 +140,7 @@ func TestWebsiteScenarioSiteEditorBindings(t *testing.T) {
 		const entityID = "11111111-1111-4111-8111-111111111111"
 		const fieldID = "22222222-2222-4222-8222-222222222222"
 		model := json.RawMessage(`{"formatVersion":1,"entities":[{"id":"11111111-1111-4111-8111-111111111111","key":"product","name":"Product","cardinality":"many","fields":[{"id":"22222222-2222-4222-8222-222222222222","key":"title","name":"Title","type":"text"}]}]}`)
-		if _, err := service.SaveSiteModel(ctx, websiteapi.SaveSiteModelRequest{SiteID: siteA, ExpectedRevision: 0, DataModel: model}); err != nil {
+		if _, err := service.SaveContentModel(ctx, websiteapi.SaveContentModelRequest{ExpectedRevision: 0, DataModel: model}); err != nil {
 			t.Fatalf("save direct-binding model: %v", err)
 		}
 		validPayload := scenarioPagePayload(t, page.ID, "Catalog", []any{map[string]any{
@@ -148,12 +148,12 @@ func TestWebsiteScenarioSiteEditorBindings(t *testing.T) {
 			"arguments":    map[string]any{"label": "Products"},
 			"dataBindings": []any{map[string]any{"inputKey": "items", "entityId": entityID, "fields": []any{map[string]any{"inputPath": "title", "fieldId": fieldID}}}},
 		}})
-		valid := scenarioSnapshotRequest(t, siteA, page.ID, parent.ID, parent.Revision, "Catalog", "scenario-bindings-valid-001", validPayload)
+		valid := scenarioSnapshotRequest(t, page.ID, parent.ID, parent.Revision, "Catalog", "scenario-bindings-valid-001", validPayload)
 		if _, err := service.CreateSnapshot(ctx, valid); err != nil {
 			t.Fatalf("valid direct data binding: %v", err)
 		}
 
-		invalidPage := createScenarioPage(t, service, ctx, siteA, "Invalid catalog", "scenario-bindings-invalid-page-001")
+		invalidPage := createScenarioPage(t, service, ctx, "Invalid catalog", "scenario-bindings-invalid-page-001")
 		invalidParent, err := service.GetSnapshot(ctx, invalidPage.LatestSnapshotID)
 		if err != nil {
 			t.Fatal(err)
@@ -166,7 +166,7 @@ func TestWebsiteScenarioSiteEditorBindings(t *testing.T) {
 			}},
 		}})
 		before := len(store.records)
-		invalid := scenarioSnapshotRequest(t, siteA, invalidPage.ID, invalidParent.ID, invalidParent.Revision, "Invalid catalog", "scenario-bindings-invalid-001", invalidPayload)
+		invalid := scenarioSnapshotRequest(t, invalidPage.ID, invalidParent.ID, invalidParent.Revision, "Invalid catalog", "scenario-bindings-invalid-001", invalidPayload)
 		if _, err := service.CreateSnapshot(ctx, invalid); !errors.Is(err, websiteapi.ErrInvalid) {
 			t.Fatalf("relation traversal binding = %v, want invalid", err)
 		}
@@ -209,11 +209,11 @@ func TestWebsiteScenarioTemplateMaterialization(t *testing.T) {
 			PlacementSlots: []websiteapi.PlacementSlot{},
 			Payload:        scenarioPagePayload(t, "", "Template title", nil),
 		}
-		template, err := service.CreatePageTemplate(ctx, websiteapi.CreatePageTemplateRequest{SiteID: siteA, Name: "Landing", Description: "Initial template", Configuration: configuration, IdempotencyKey: "scenario-template-create-001"})
+		template, err := service.CreatePageTemplate(ctx, websiteapi.CreatePageTemplateRequest{Name: "Landing", Description: "Initial template", Configuration: configuration, IdempotencyKey: "scenario-template-create-001"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		page := createScenarioPageFromTemplate(t, service, ctx, siteA, "Materialized page", template.ID, template.Revision, "scenario-template-page-001")
+		page := createScenarioPageFromTemplate(t, service, ctx, "Materialized page", template.ID, template.Revision, "scenario-template-page-001")
 		root, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
 		if err != nil {
 			t.Fatal(err)
@@ -221,7 +221,7 @@ func TestWebsiteScenarioTemplateMaterialization(t *testing.T) {
 		rootConfig := append([]byte(nil), root.Payload.Config...)
 
 		configuration.Payload = scenarioPagePayload(t, "", "Updated template", nil)
-		updated, err := service.UpdatePageTemplate(ctx, websiteapi.UpdatePageTemplateRequest{SiteID: siteA, TemplateID: template.ID, ExpectedRevision: template.Revision, Name: "Landing v2", Description: "Updated template", Configuration: configuration})
+		updated, err := service.UpdatePageTemplate(ctx, websiteapi.UpdatePageTemplateRequest{TemplateID: template.ID, ExpectedRevision: template.Revision, Name: "Landing v2", Description: "Updated template", Configuration: configuration})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -239,13 +239,13 @@ func TestWebsiteScenarioTemplateMaterialization(t *testing.T) {
 		invalidConfig := configuration
 		invalidConfig.Payload.Config = json.RawMessage(`{"format_version":3,"route":"/must-not-enter-template","page":{"name":"Invalid","placements":[]}}`)
 		before := len(store.records)
-		if _, err := service.CreatePageTemplate(ctx, websiteapi.CreatePageTemplateRequest{SiteID: siteA, Name: "Invalid", Description: "Must fail", Configuration: invalidConfig, IdempotencyKey: "scenario-template-invalid-001"}); !errors.Is(err, websiteapi.ErrInvalid) {
+		if _, err := service.CreatePageTemplate(ctx, websiteapi.CreatePageTemplateRequest{Name: "Invalid", Description: "Must fail", Configuration: invalidConfig, IdempotencyKey: "scenario-template-invalid-001"}); !errors.Is(err, websiteapi.ErrInvalid) {
 			t.Fatalf("template with route contract field = %v, want invalid", err)
 		}
 		if len(store.records) != before {
 			t.Fatalf("invalid template wrote records: before=%d after=%d", before, len(store.records))
 		}
-		selected, err := service.GetPageTemplate(ctx, siteA, template.ID)
+		selected, err := service.GetPageTemplate(ctx, template.ID)
 		if err != nil || selected.ID != template.ID || selected.Revision != updated.Revision {
 			t.Fatalf("invalid template changed selected template: %#v, %v", selected, err)
 		}
@@ -323,7 +323,7 @@ func TestWebsiteScenarioRenderAndSEO(t *testing.T) {
 
 func TestWebsiteScenarioDesignTokens(t *testing.T) {
 	t.Run("WEB-016", func(t *testing.T) {
-		t.Skip("gap: target runtime forbids site-level token overrides and exposes no light/dark token persistence contract")
+		t.Skip("gap: target runtime forbids per-page token overrides and exposes no light/dark token persistence contract")
 	})
 }
 
@@ -331,11 +331,11 @@ func newWebsiteScenarioService(t *testing.T) (*memoryStore, interface {
 	CreatePage(context.Context, websiteapi.CreatePageRequest) (websiteapi.Page, error)
 	CreateSnapshot(context.Context, websiteapi.CreateSnapshotRequest) (websiteapi.Snapshot, error)
 	GetSnapshot(context.Context, string) (websiteapi.Snapshot, error)
-	ListSnapshots(context.Context, string, string, string, int) (websiteapi.SnapshotPage, error)
-	SaveSiteModel(context.Context, websiteapi.SaveSiteModelRequest) (websiteapi.SiteContentSchema, error)
+	ListSnapshots(context.Context, string, string, int) (websiteapi.SnapshotPage, error)
+	SaveContentModel(context.Context, websiteapi.SaveContentModelRequest) (websiteapi.ContentModel, error)
 	CreatePageTemplate(context.Context, websiteapi.CreatePageTemplateRequest) (websiteapi.PageTemplate, error)
 	UpdatePageTemplate(context.Context, websiteapi.UpdatePageTemplateRequest) (websiteapi.PageTemplate, error)
-	GetPageTemplate(context.Context, string, string) (websiteapi.PageTemplate, error)
+	GetPageTemplate(context.Context, string) (websiteapi.PageTemplate, error)
 }, context.Context) {
 	t.Helper()
 	store := newMemoryStore()
@@ -349,9 +349,9 @@ func newWebsiteScenarioService(t *testing.T) (*memoryStore, interface {
 
 func createScenarioPage(t *testing.T, service interface {
 	CreatePage(context.Context, websiteapi.CreatePageRequest) (websiteapi.Page, error)
-}, ctx context.Context, siteID, name, idempotencyKey string) websiteapi.Page {
+}, ctx context.Context, name, idempotencyKey string) websiteapi.Page {
 	t.Helper()
-	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{SiteID: siteID, Name: name, IdempotencyKey: idempotencyKey})
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{Name: name, IdempotencyKey: idempotencyKey})
 	if err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
@@ -360,18 +360,18 @@ func createScenarioPage(t *testing.T, service interface {
 
 func createScenarioPageFromTemplate(t *testing.T, service interface {
 	CreatePage(context.Context, websiteapi.CreatePageRequest) (websiteapi.Page, error)
-}, ctx context.Context, siteID, name, templateID string, templateRevision int64, idempotencyKey string) websiteapi.Page {
+}, ctx context.Context, name, templateID string, templateRevision int64, idempotencyKey string) websiteapi.Page {
 	t.Helper()
-	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{SiteID: siteID, Name: name, TemplateID: templateID, TemplateRevision: templateRevision, IdempotencyKey: idempotencyKey})
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{Name: name, TemplateID: templateID, TemplateRevision: templateRevision, IdempotencyKey: idempotencyKey})
 	if err != nil {
 		t.Fatalf("create template page: %v", err)
 	}
 	return page
 }
 
-func scenarioSnapshotRequest(t *testing.T, siteID, pageID, parentID string, revision int64, name, idempotencyKey string, payload websiteapi.SnapshotPayload) websiteapi.CreateSnapshotRequest {
+func scenarioSnapshotRequest(t *testing.T, pageID, parentID string, revision int64, name, idempotencyKey string, payload websiteapi.SnapshotPayload) websiteapi.CreateSnapshotRequest {
 	t.Helper()
-	return websiteapi.CreateSnapshotRequest{SiteID: siteID, PageID: pageID, ParentID: parentID, ExpectedRevision: revision, ExpectedContentRevision: 0, Name: name, IdempotencyKey: idempotencyKey, Payload: payload}
+	return websiteapi.CreateSnapshotRequest{PageID: pageID, ParentID: parentID, ExpectedRevision: revision, ExpectedContentRevision: 0, Name: name, IdempotencyKey: idempotencyKey, Payload: payload}
 }
 
 func scenarioPagePayload(t *testing.T, pageID, name string, placements []any) websiteapi.SnapshotPayload {

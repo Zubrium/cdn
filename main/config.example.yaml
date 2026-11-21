@@ -118,11 +118,6 @@ forms_api:
   export_max_rows: 10000
   export_max_bytes: 33554432
 
-website:
-  # Replace this example with the stable IDs of the sites served by Website.
-  site_ids:
-    - example-site
-
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s

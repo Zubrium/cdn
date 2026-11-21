@@ -2,7 +2,7 @@
 
 ## Metadata и индексация
 
-Metadata сайта и страниц хранится в payload snapshot. Поддерживаются canonical origin, language, `noIndex`, title, description, Open Graph media и page-level overrides. Canonical принимает только HTTP(S) origin без path, query или userinfo и не строится из `Host` запроса. Пустой canonical разрешён до настройки; sitemap в этом случае пустой.
+Системные и страничные metadata хранятся в payload snapshot. Поддерживаются canonical origin, language, `noIndex`, title, description, Open Graph media и page-level overrides. Canonical принимает только HTTP(S) origin без path, query или userinfo и не строится из `Host` запроса. Пустой canonical разрешён до настройки; sitemap в этом случае пустой.
 
 Назначенный snapshot — источник metadata публичного runtime для статической branch. Индексация разрешена только при согласии branch policy и metadata сайта/страницы. Preview не является контролем доступа: приватный preview закрывается gateway/auth.
 
@@ -16,7 +16,7 @@ Sitemap содержит только индексируемые и реальн
 
 Detail route lookup использует уникальное поле из `dataInputs` binding. Для `record` input можно задать один `detailSEO` mapping: `titleFieldId`, `descriptionFieldId`, `ogTitleFieldId`, `ogDescriptionFieldId` и `ogImageFieldId`. Текстовые значения используют поля `text` или `longText`, изображение — `media`. Mapping настраивается в `/site`; значения редактируются в `/content`.
 
-Runtime строит detail metadata только из опубликованных значений выбранной записи. Пустые или отсутствующие значения наследуют page/site SEO. Если отдельные OG title/description не заданы, они следуют за динамическими title/description. OG image публикуется только при доступности публичного файла и выводится относительно canonical origin. Устаревший `fieldId` блокирует structural save; неизвестный detail lookup возвращает 404. Draft values, submissions и private media не попадают в public HTML или cache.
+Runtime строит detail metadata только из опубликованных значений выбранной записи. Пустые или отсутствующие значения наследуют page/system SEO. Если отдельные OG title/description не заданы, они следуют за динамическими title/description. OG image публикуется только при доступности публичного файла и выводится относительно canonical origin. Устаревший `fieldId` блокирует structural save; неизвестный detail lookup возвращает 404. Draft values, submissions и private media не попадают в public HTML или cache.
 
 Browser prerender и `/api/runtime` используют одинаковую итоговую `RuntimeComposition.Metadata`. Metadata и разрешённое содержимое placements входят в document cache identity. Draft save не меняет публичное представление; публикация и restore обновляют `contentRevision`.
 
@@ -56,5 +56,4 @@ Worker failure diagnostics ограничены безопасными кода�
 - Проверить HTTP validators, HEAD, 304, ошибки/no-store и отсутствие validators у failed prerender fallback.
 - Проверить worker sandbox, сетевые и method ограничения, queue/timeouts, отказ/восстановление, coalescing и отсутствие чувствительных данных в diagnostics.
 - На disposable среде проверить актуальные feature ZIP, prerender HTML, гидратацию, no-JS содержимое и отсутствие browser errors для главной, каталога, detail, формы и system pages.
-- Lighthouse target для Vitasil `/`, `/catalog` и `/catalog/{slug}` — Performance median 100 на стандартных mobile и desktop профилях. Выполнить пять повторов каждой комбинации маршрута, профиля и cold/warm Engine HTML cache; browser cache очищать перед каждым запуском, сохранять все scores и HTTP status. Performance score не является гарантией для произвольных устройств/сетей и не заменяет field Core Web Vitals.
 - Проверки запускать только на изолированных disposable ресурсах. Результаты, ограничения и незакрытые сценарии фиксировать в [QA_REPORT.md](../../../docs/QA_REPORT.md) и [TODO](../../../docs/TODO-admin-snapshots-content-files.md); этот документ сам по себе не подтверждает прохождение acceptance.

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,19 +24,19 @@ type Files interface {
 }
 
 type Repository interface {
-	GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error)
-	ReplaceLocaleConfig(context.Context, string, domain.ReplaceLocaleConfigRequest, string, string) (domain.LocaleConfig, error)
-	Get(context.Context, string, string) (domain.StoredWorkspace, error)
-	Create(context.Context, string, domain.StoredWorkspace) (domain.StoredWorkspace, error)
-	Commit(context.Context, string, int64, domain.StoredWorkspace, *domain.Publication) (domain.StoredWorkspace, error)
-	CommitPageSelections(context.Context, string, string, string, int64, []domain.Selection, []domain.Selection, *domain.MutationReceipt) (domain.StoredPageSelections, error)
-	GetHistoryByID(context.Context, string, string, string) (domain.Publication, error)
-	GetHistoryByContentRevision(context.Context, string, string, int64) (domain.Publication, error)
-	ListHistory(context.Context, string, string, string, int) ([]domain.Publication, string, error)
-	GetCopyMarker(context.Context, string) (domain.StoredCopyMarker, error)
-	BeginCopy(context.Context, string, domain.CopyMarker) (domain.StoredCopyMarker, error)
-	PutCopiedHistory(context.Context, string, domain.Publication) error
-	CompleteCopy(context.Context, string, int64, domain.StoredWorkspace, domain.CopyMarker) (domain.StoredWorkspace, error)
+	GetLocaleConfig(context.Context) (domain.LocaleConfig, error)
+	ReplaceLocaleConfig(context.Context, domain.ReplaceLocaleConfigRequest, string, string) (domain.LocaleConfig, error)
+	Get(context.Context, string) (domain.StoredWorkspace, error)
+	Create(context.Context, domain.StoredWorkspace) (domain.StoredWorkspace, error)
+	Commit(context.Context, int64, domain.StoredWorkspace, *domain.Publication) (domain.StoredWorkspace, error)
+	CommitPageSelections(context.Context, string, string, int64, []domain.Selection, []domain.Selection, *domain.MutationReceipt) (domain.StoredPageSelections, error)
+	GetHistoryByID(context.Context, string, string) (domain.Publication, error)
+	GetHistoryByContentRevision(context.Context, string, int64) (domain.Publication, error)
+	ListHistory(context.Context, string, string, int) ([]domain.Publication, string, error)
+	GetCopyMarker(context.Context) (domain.StoredCopyMarker, error)
+	BeginCopy(context.Context, domain.CopyMarker) (domain.StoredCopyMarker, error)
+	PutCopiedHistory(context.Context, domain.Publication) error
+	CompleteCopy(context.Context, int64, domain.StoredWorkspace, domain.CopyMarker) (domain.StoredWorkspace, error)
 	MaxPageSize() int
 	MaxPayloadBytes() int
 }
@@ -56,22 +55,16 @@ func New(repository Repository, files Files) (*Service, error) {
 	return &Service{repository: repository, files: files, maxPage: repository.MaxPageSize(), maxPayload: repository.MaxPayloadBytes()}, nil
 }
 
-func (service *Service) GetLocaleConfig(ctx context.Context, siteID string) (domain.LocaleConfig, error) {
+func (service *Service) GetLocaleConfig(ctx context.Context) (domain.LocaleConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.LocaleConfig{}, err
 	}
-	if !domain.ValidID(siteID) {
-		return domain.LocaleConfig{}, domain.ErrInvalid
-	}
-	return service.repository.GetLocaleConfig(ctx, siteID)
+	return service.repository.GetLocaleConfig(ctx)
 }
 
-func (service *Service) ReplaceLocaleConfig(ctx context.Context, siteID string, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
+func (service *Service) ReplaceLocaleConfig(ctx context.Context, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.LocaleConfig{}, err
-	}
-	if !domain.ValidID(siteID) {
-		return domain.LocaleConfig{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("locale-config", request.IdempotencyKey, struct {
 		ExpectedRevision int64    `json:"expected_revision"`
@@ -81,7 +74,7 @@ func (service *Service) ReplaceLocaleConfig(ctx context.Context, siteID string, 
 	if err != nil {
 		return domain.LocaleConfig{}, err
 	}
-	return service.repository.ReplaceLocaleConfig(ctx, siteID, request, keyHash, fingerprint)
+	return service.repository.ReplaceLocaleConfig(ctx, request, keyHash, fingerprint)
 }
 
 func (service *Service) GetWorkspace(ctx context.Context, session core.Session, schema domain.Schema, snapshotID string) (domain.WorkspaceView, error) {
@@ -116,13 +109,12 @@ func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Ses
 		return domain.WorkspaceView{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("save", request.IdempotencyKey, struct {
-		SiteID                    string                   `json:"site_id"`
 		PageSnapshotID            string                   `json:"page_snapshot_id"`
 		ExpectedRevision          int64                    `json:"expected_revision"`
 		ExpectedSelectionRevision int64                    `json:"expected_selection_revision"`
 		Records                   []contentapi.RecordInput `json:"records"`
 		Selections                []contentapi.Selection   `json:"selections"`
-	}{schema.SiteID, schema.PageSnapshotID, request.ExpectedRevision, request.ExpectedSelectionRevision, request.Records, request.Selections}, service.maxPayload)
+	}{schema.PageSnapshotID, request.ExpectedRevision, request.ExpectedSelectionRevision, request.Records, request.Selections}, service.maxPayload)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -140,7 +132,7 @@ func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Ses
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
-	if err := service.validateTranslationGroups(ctx, schema.SiteID, schema.Locale, data.Records); err != nil {
+	if err := service.validateTranslationGroups(ctx, schema.Locale, data.Records); err != nil {
 		return domain.WorkspaceView{}, err
 	}
 	previous := workspaceData(stored, schema.PageSnapshotID)
@@ -167,9 +159,9 @@ func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Ses
 	next.PageSelections[schema.PageSnapshotID] = page
 	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
 	next.Aggregate.LastMutation = receipt
-	committed, err := service.repository.Commit(ctx, schema.SiteID, stored.StoreRevision, next, nil)
+	committed, err := service.repository.Commit(ctx, stored.StoreRevision, next, nil)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "save", keyHash, fingerprint)
+		return service.replayAfterConflict(ctx, session, schema, "save", keyHash, fingerprint)
 	}
 	if err != nil {
 		return domain.WorkspaceView{}, err
@@ -188,11 +180,10 @@ func (service *Service) PublishWorkspace(ctx context.Context, session core.Sessi
 		return domain.WorkspaceView{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("publish", request.IdempotencyKey, struct {
-		SiteID                    string `json:"site_id"`
 		PageSnapshotID            string `json:"page_snapshot_id"`
 		ExpectedRevision          int64  `json:"expected_revision"`
 		ExpectedSelectionRevision int64  `json:"expected_selection_revision"`
-	}{schema.SiteID, schema.PageSnapshotID, request.ExpectedRevision, request.ExpectedSelectionRevision}, service.maxPayload)
+	}{schema.PageSnapshotID, request.ExpectedRevision, request.ExpectedSelectionRevision}, service.maxPayload)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -238,9 +229,9 @@ func (service *Service) PublishWorkspace(ctx context.Context, session core.Sessi
 	next.PageSelections[schema.PageSnapshotID] = page
 	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
 	next.Aggregate.LastMutation = receipt
-	committed, err := service.repository.Commit(ctx, schema.SiteID, stored.StoreRevision, next, &publication)
+	committed, err := service.repository.Commit(ctx, stored.StoreRevision, next, &publication)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "publish", keyHash, fingerprint)
+		return service.replayAfterConflict(ctx, session, schema, "publish", keyHash, fingerprint)
 	}
 	if err != nil {
 		return domain.WorkspaceView{}, err
@@ -262,7 +253,7 @@ func (service *Service) ListHistory(ctx context.Context, schema domain.Schema, s
 	if err != nil {
 		return domain.HistoryPage{}, domain.ErrInvalid
 	}
-	items, next, err := service.repository.ListHistory(ctx, schema.SiteID, schema.Locale, after, limit)
+	items, next, err := service.repository.ListHistory(ctx, schema.Locale, after, limit)
 	if err != nil {
 		return domain.HistoryPage{}, err
 	}
@@ -290,12 +281,11 @@ func (service *Service) RestoreHistory(ctx context.Context, session core.Session
 		return domain.WorkspaceView{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("restore", request.IdempotencyKey, struct {
-		SiteID                    string `json:"site_id"`
 		PageSnapshotID            string `json:"page_snapshot_id"`
 		HistoryID                 string `json:"history_id"`
 		ExpectedRevision          int64  `json:"expected_revision"`
 		ExpectedSelectionRevision int64  `json:"expected_selection_revision"`
-	}{schema.SiteID, schema.PageSnapshotID, request.HistoryID, request.ExpectedRevision, request.ExpectedSelectionRevision}, service.maxPayload)
+	}{schema.PageSnapshotID, request.HistoryID, request.ExpectedRevision, request.ExpectedSelectionRevision}, service.maxPayload)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -312,7 +302,7 @@ func (service *Service) RestoreHistory(ctx context.Context, session core.Session
 	if stored.Aggregate.Revision != request.ExpectedRevision {
 		return domain.WorkspaceView{}, domain.ErrConflict
 	}
-	publication, err := service.repository.GetHistoryByID(ctx, schema.SiteID, schema.Locale, request.HistoryID)
+	publication, err := service.repository.GetHistoryByID(ctx, schema.Locale, request.HistoryID)
 	if err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -336,9 +326,9 @@ func (service *Service) RestoreHistory(ctx context.Context, session core.Session
 	next.PageSelections[schema.PageSnapshotID] = page
 	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
 	next.Aggregate.LastMutation = receipt
-	committed, err := service.repository.Commit(ctx, schema.SiteID, stored.StoreRevision, next, nil)
+	committed, err := service.repository.Commit(ctx, stored.StoreRevision, next, nil)
 	if errors.Is(err, domain.ErrConflict) {
-		return service.replayAfterConflict(ctx, session, schema.SiteID, schema, "restore", keyHash, fingerprint)
+		return service.replayAfterConflict(ctx, session, schema, "restore", keyHash, fingerprint)
 	}
 	if err != nil {
 		return domain.WorkspaceView{}, err
@@ -353,7 +343,7 @@ func (service *Service) ReadPublishedContent(ctx context.Context, schema domain.
 	if err := service.validateSchema(schema, snapshotID, "ready"); err != nil {
 		return domain.PublishedContent{}, err
 	}
-	stored, err := service.repository.Get(ctx, schema.SiteID, schema.Locale)
+	stored, err := service.repository.Get(ctx, schema.Locale)
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.PublishedContent{SnapshotID: schema.PageSnapshotID, Locale: schema.Locale, Records: []domain.Record{}, Selections: []domain.Selection{}}, nil
 	}
@@ -363,7 +353,7 @@ func (service *Service) ReadPublishedContent(ctx context.Context, schema domain.
 	if stored.Aggregate.PublishedRevision == 0 {
 		return domain.PublishedContent{SnapshotID: schema.PageSnapshotID, Locale: schema.Locale, Records: []domain.Record{}, Selections: []domain.Selection{}}, nil
 	}
-	publication, err := service.repository.GetHistoryByContentRevision(ctx, schema.SiteID, schema.Locale, stored.Aggregate.PublishedRevision)
+	publication, err := service.repository.GetHistoryByContentRevision(ctx, schema.Locale, stored.Aggregate.PublishedRevision)
 	if err != nil || publication.ContentRevision != stored.Aggregate.PublishedRevision {
 		return domain.PublishedContent{}, domain.ErrUnavailable
 	}
@@ -386,7 +376,7 @@ func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session,
 	if err := validateCopyTargetSchema(targetSchema, request.TargetSnapshotID); err != nil {
 		return domain.CopyReceipt{}, err
 	}
-	if sourceSchema.SiteID != targetSchema.SiteID || request.SourceSnapshotID == request.TargetSnapshotID || request.ExpectedSourceRevision < 0 || request.ExpectedSourceSelectionRevision < 0 {
+	if request.SourceSnapshotID == request.TargetSnapshotID || request.ExpectedSourceRevision < 0 || request.ExpectedSourceSelectionRevision < 0 {
 		return domain.CopyReceipt{}, domain.ErrInvalid
 	}
 	keyHash, fingerprint, err := mutationIdentity("copy", request.IdempotencyKey, struct {
@@ -420,10 +410,10 @@ func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session,
 		draftSelections = cloneSelections(pageState(source, request.SourceSnapshotID).Draft)
 		publishedSelections = cloneSelections(pageState(source, request.SourceSnapshotID).Published)
 	}
-	copied, err := service.repository.CommitPageSelections(ctx, sourceSchema.SiteID, request.TargetSnapshotID, sourceSchema.Locale, targetRevision,
+	copied, err := service.repository.CommitPageSelections(ctx, request.TargetSnapshotID, sourceSchema.Locale, targetRevision,
 		draftSelections, publishedSelections, receipt)
 	if errors.Is(err, domain.ErrConflict) {
-		latest, getErr := service.repository.Get(ctx, sourceSchema.SiteID, sourceSchema.Locale)
+		latest, getErr := service.repository.Get(ctx, sourceSchema.Locale)
 		latestReceipt := pageState(latest, request.TargetSnapshotID).LastMutation
 		if getErr == nil && latestReceipt != nil && latestReceipt.KeyHash == keyHash && latestReceipt.Fingerprint == fingerprint {
 			return domain.CopyReceipt{TargetSnapshotID: request.TargetSnapshotID, SourceRevision: request.ExpectedSourceRevision}, nil
@@ -437,7 +427,7 @@ func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session,
 }
 
 func (service *Service) validateSchema(schema domain.Schema, snapshotID string, requiredState string) error {
-	if !domain.ValidID(snapshotID) || snapshotID != schema.PageSnapshotID || !domain.ValidID(schema.SiteID) ||
+	if !domain.ValidID(snapshotID) || snapshotID != schema.PageSnapshotID ||
 		schema.ModelRevision < 1 || schema.PageRevision < 1 || schema.ModelDigest == "" || schema.PageDigest == "" || schema.LocaleCatalogRevision < 1 || !canonicalLocale(schema.Locale) {
 		return domain.ErrNotFound
 	}
@@ -456,7 +446,7 @@ func canonicalLocale(value string) bool {
 }
 
 func validateCopyTargetSchema(schema domain.Schema, snapshotID string) error {
-	if !domain.ValidID(snapshotID) || snapshotID != schema.PageSnapshotID || !domain.ValidID(schema.SiteID) ||
+	if !domain.ValidID(snapshotID) || snapshotID != schema.PageSnapshotID ||
 		(schema.State != "provisioning" && schema.State != "ready") || schema.ModelRevision < 1 || schema.PageRevision < 1 ||
 		schema.ModelDigest == "" || schema.PageDigest == "" || schema.LocaleCatalogRevision < 1 || !canonicalLocale(schema.Locale) || schema.Model.Validate() != nil {
 		return domain.ErrNotFound
@@ -465,15 +455,15 @@ func validateCopyTargetSchema(schema domain.Schema, snapshotID string) error {
 }
 
 func (service *Service) loadOrInitialize(ctx context.Context, schema domain.Schema, pageSnapshotID string) (domain.StoredWorkspace, error) {
-	if pageSnapshotID != schema.PageSnapshotID || !domain.ValidID(schema.SiteID) || !domain.ValidID(schema.PageSnapshotID) {
+	if pageSnapshotID != schema.PageSnapshotID || !domain.ValidID(schema.PageSnapshotID) {
 		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
-	stored, err := service.repository.Get(ctx, schema.SiteID, schema.Locale)
+	stored, err := service.repository.Get(ctx, schema.Locale)
 	if err == nil {
-		if stored.Aggregate.SnapshotID != schema.SiteID {
+		if stored.Aggregate.SnapshotID != domain.GlobalScopeID {
 			return domain.StoredWorkspace{}, domain.ErrUnavailable
 		}
-		stored, err = service.ensurePageSelections(ctx, stored, schema.SiteID, pageSnapshotID, schema.Locale)
+		stored, err = service.ensurePageSelections(ctx, stored, pageSnapshotID, schema.Locale)
 		if err != nil {
 			return domain.StoredWorkspace{}, err
 		}
@@ -487,35 +477,35 @@ func (service *Service) loadOrInitialize(ctx context.Context, schema domain.Sche
 		return domain.StoredWorkspace{}, err
 	}
 	initial := domain.StoredWorkspace{
-		Aggregate: domain.Aggregate{SnapshotID: schema.SiteID, Locale: schema.Locale, Revision: 0, PublishedRevision: 0, Records: records},
+		Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: schema.Locale, Revision: 0, PublishedRevision: 0, Records: records},
 		PageSelections: map[string]domain.StoredPageSelections{
 			pageSnapshotID: {Draft: []domain.Selection{}, Published: []domain.Selection{}},
 		},
 	}
-	created, err := service.repository.Create(ctx, schema.SiteID, initial)
+	created, err := service.repository.Create(ctx, initial)
 	if errors.Is(err, domain.ErrConflict) {
-		created, err = service.repository.Get(ctx, schema.SiteID, schema.Locale)
+		created, err = service.repository.Get(ctx, schema.Locale)
 	}
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	created, err = service.ensurePageSelections(ctx, created, schema.SiteID, pageSnapshotID, schema.Locale)
+	created, err = service.ensurePageSelections(ctx, created, pageSnapshotID, schema.Locale)
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
 	return created, nil
 }
 
-func (service *Service) ensurePageSelections(ctx context.Context, stored domain.StoredWorkspace, siteID, pageID, locale string) (domain.StoredWorkspace, error) {
+func (service *Service) ensurePageSelections(ctx context.Context, stored domain.StoredWorkspace, pageID, locale string) (domain.StoredWorkspace, error) {
 	if stored.PageSelections == nil {
 		stored.PageSelections = map[string]domain.StoredPageSelections{}
 	}
 	if pageState(stored, pageID).StoreRevision > 0 {
 		return stored, nil
 	}
-	created, err := service.repository.CommitPageSelections(ctx, siteID, pageID, locale, 0, []domain.Selection{}, []domain.Selection{}, nil)
+	created, err := service.repository.CommitPageSelections(ctx, pageID, locale, 0, []domain.Selection{}, []domain.Selection{}, nil)
 	if errors.Is(err, domain.ErrConflict) {
-		stored, err = service.repository.Get(ctx, siteID, locale)
+		stored, err = service.repository.Get(ctx, locale)
 		if err != nil {
 			return domain.StoredWorkspace{}, err
 		}
@@ -645,8 +635,8 @@ func normalizeDraftRequest(request contentapi.SaveWorkspaceDraftRequest, current
 	return domain.WorkspaceData{Locale: locale, Records: records, Selections: selections}, clientIDs, nil
 }
 
-func (service *Service) validateTranslationGroups(ctx context.Context, siteID, currentLocale string, records []domain.Record) error {
-	catalog, err := service.repository.GetLocaleConfig(ctx, siteID)
+func (service *Service) validateTranslationGroups(ctx context.Context, currentLocale string, records []domain.Record) error {
+	catalog, err := service.repository.GetLocaleConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -664,7 +654,7 @@ func (service *Service) validateTranslationGroups(ctx context.Context, siteID, c
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		other, getErr := service.repository.Get(ctx, siteID, locale)
+		other, getErr := service.repository.Get(ctx, locale)
 		if errors.Is(getErr, domain.ErrNotFound) {
 			continue
 		}
@@ -786,8 +776,8 @@ func (service *Service) replay(ctx context.Context, session core.Session, stored
 	return view(stored, schema, receipt.ClientRecordIDs), true, nil
 }
 
-func (service *Service) replayAfterConflict(ctx context.Context, session core.Session, snapshotID string, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, error) {
-	current, err := service.repository.Get(ctx, snapshotID, schema.Locale)
+func (service *Service) replayAfterConflict(ctx context.Context, session core.Session, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, error) {
+	current, err := service.repository.Get(ctx, schema.Locale)
 	if err != nil {
 		return domain.WorkspaceView{}, domain.ErrConflict
 	}
@@ -856,7 +846,7 @@ func view(stored domain.StoredWorkspace, schema domain.Schema, clientIDs map[str
 		}
 	}
 	return domain.WorkspaceView{
-		SnapshotID: schema.PageSnapshotID, SiteID: schema.SiteID, PageSnapshotID: schema.PageSnapshotID,
+		SnapshotID: schema.PageSnapshotID, PageSnapshotID: schema.PageSnapshotID,
 		Locale: schema.Locale, LocaleCatalogRevision: schema.LocaleCatalogRevision,
 		ModelRevision: schema.ModelRevision, ModelDigest: schema.ModelDigest, PageRevision: schema.PageRevision, PageDigest: schema.PageDigest,
 		DataModel: dataModel, Revision: stored.Aggregate.Revision, SelectionRevision: pageSelectionRevision(stored, schema.PageSnapshotID), PublishedRevision: stored.Aggregate.PublishedRevision,

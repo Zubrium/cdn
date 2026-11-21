@@ -1,20 +1,20 @@
 # Snapshot-scoped flat data model and feature bindings
 
 
-Status: target site-wide model/content and page-scoped placements, agreed 19 November 2026. Model-to-model relations and record-to-record relations are retired. This contract supersedes historical snapshot-scoped statements below.
+Status: target system-wide model/content and page-scoped placements, agreed 19 November 2026. Model-to-model relations and record-to-record relations are retired. This contract supersedes historical snapshot-scoped statements below.
 
 ## Product decisions
 
-- Each configured site owns one revisioned `dataModel`, shared by all of its pages.
-- Content records, drafts, publication pointers and history are site-scoped and locale-specific; each record has a locale-specific ID. Translations are separate records linked by a stable translation ID. Pages share those records for a locale.
-- Each page has an independent Website snapshot tree. A snapshot is exactly one immutable page version, identified by `site_id + page_id`; its payload has page structure, metadata, placements, typed bindings and feature dependency lock, but no route or URL.
-- Structural model changes update the site-wide model revision, not page snapshots. Page structure/placement changes create a child snapshot only in that page's tree.
-- `/site` owns page placements, feature arguments and direct typed `dataInputs` bindings. Site-level model structure is shared. `/content` owns the Admin-managed site locale catalog/default locale, locale-specific record values, drafts, publication/history, and locale-specific page-snapshot editorial selections/order for placements.
+- One logical system owns one revisioned `dataModel`, shared by all pages.
+- Content records, drafts, publication pointers and history are system-scoped and locale-specific; each record has a locale-specific ID. Translations are separate records linked by a stable translation ID. Pages share those records for a locale.
+- Each page has an independent Website snapshot tree. A snapshot is exactly one immutable page version, identified by `page_id`; its payload has page structure, metadata, placements, typed bindings and feature dependency lock, but no route or URL.
+- Structural model changes update the system-wide model revision, not page snapshots. Page structure/placement changes create a child snapshot only in that page's tree.
+- `/site` owns page placements, feature arguments and direct typed `dataInputs` bindings. System-level model structure is shared. `/content` owns the Admin-managed system locale catalog/default locale, locale-specific record values, drafts, publication/history, and locale-specific page-snapshot editorial selections/order for placements.
 - Public routes and route-to-artifact assignment belong exclusively to Router. A route has locale-specific artifact targets selected from the negotiated visitor locale; it receives completed single-page artifacts after prerender.
 
 ## Locale catalog and translated records
 
-Content Admin manages the locale catalog per site through a revisioned CAS operation. The catalog contains a non-empty set of canonical BCP 47 locale tags and exactly one `default_locale` from that set. Duplicate canonical tags and a default outside the set are invalid. The catalog revision participates in the content workspace and public build projections. A locale cannot be removed while it has draft/published records, page selections, or an active Router target; those references must first be explicitly unpublished or removed.
+Content Admin manages the system locale catalog through a revisioned CAS operation. The catalog contains a non-empty set of canonical BCP 47 locale tags and exactly one `default_locale` from that set. Duplicate canonical tags and a default outside the set are invalid. The catalog revision participates in the content workspace and public build projections. A locale cannot be removed while it has draft/published records, page selections, or an active Router target; those references must first be explicitly unpublished or removed.
 
 Each editorial record belongs to exactly one supported locale and has a server-generated record ID. A translation group uses a server-generated `translation_id`; it contains at most one record for each locale and cannot cross entity boundaries. A record without other locale translations is still an ordinary record in a translation group. Model cardinality, unique field validation, draft revision, publication pointer and history are evaluated per locale. Publishing one locale does not publish, unpublish, or mutate another locale.
 
@@ -61,7 +61,7 @@ For a collection input, `/content` chooses all published records or an ordered s
 
 Runtime resolves only published records and selected placement order for the negotiated locale. It does not follow record graphs. A feature receives scalar values, record objects, or ordered collection arrays assembled from direct fields of one model and that locale. Missing optional values are omitted or represented by empty records/arrays according to the input kind; values from another locale are never used.
 
-Site-wide model revisions and records are shared by all page snapshots for the same site. Content drafts, locale-specific publication histories and published pointers use a `(site_id, locale)` scope; editorial selections/order use `(page_snapshot_id, locale, placement_id, input_key)`, while referenced locale-specific record IDs remain site-wide. Child page snapshots do not fork records or publication history. A model/schema or locale-catalog change validates all affected page bindings and locale references before commit; incompatible bindings block the change rather than silently changing a page. Cache/build identity includes page snapshot digest, site-model revision/digest, locale-catalog revision, locale-specific published Content revision and page-scoped selection revision.
+System-wide model revisions and records are shared by all page snapshots in the system. Content drafts, locale-specific publication histories and published pointers use a system-wide locale scope; editorial selections/order use `(page_snapshot_id, locale, placement_id, input_key)`, while referenced locale-specific record IDs remain system-wide. Child page snapshots do not fork records or publication history. A model/schema or locale-catalog change validates all affected page bindings and locale references before commit; incompatible bindings block the change rather than silently changing a page. Cache/build identity includes page snapshot digest, system-model revision/digest, locale-catalog revision, locale-specific published Content revision and page-scoped selection revision.
 
 ## Permissions and failure behavior
 

@@ -18,11 +18,11 @@ describe("Website pagination API", () => {
   it("loads every snapshot page without repeating or guessing cursors", async () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        items: [{ id: "snapshot-1", site_id: "site-1", page_id: "home", name: "One", sequence: 1, revision: 1, feature_pins: {}, state: "ready" }],
+        items: [{ id: "snapshot-1", page_id: "home", name: "One", sequence: 1, revision: 1, feature_pins: {}, state: "ready" }],
         next_cursor: "cursor-2",
       }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        items: [{ id: "snapshot-2", site_id: "site-1", page_id: "home", name: "Two", sequence: 2, revision: 1, feature_pins: {}, state: "ready" }],
+        items: [{ id: "snapshot-2", page_id: "home", name: "Two", sequence: 2, revision: 1, feature_pins: {}, state: "ready" }],
         next_cursor: null,
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("window", {
@@ -390,7 +390,7 @@ describe("Website feature catalog API", () => {
     expect(result.items[0]?.manifest.key).toBe("header");
     const [firstInput, firstInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const [secondInput, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(new URL(firstInput, "http://localhost").pathname).toBe("/api/admin/sites/features");
+    expect(new URL(firstInput, "http://localhost").pathname).toBe("/api/admin/features");
     expect(new URL(firstInput, "http://localhost").searchParams.has("limit")).toBe(false);
     expect(new URL(secondInput, "http://localhost").searchParams.get("cursor")).toBe("cursor-2");
     expect(new Headers(firstInit.headers).get("Authorization")).toBeNull();
@@ -412,7 +412,7 @@ describe("Website feature catalog API", () => {
     await api.website.beginFeatureImport("file-1", "feature-import:request-0001", "c".repeat(64));
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/admin/sites/feature-imports");
+    expect(input).toBe("/api/admin/feature-imports");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
@@ -435,7 +435,7 @@ describe("Website feature catalog API", () => {
     await api.website.featureImport("11111111-1111-4111-8111-111111111111");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/admin/sites/feature-imports/11111111-1111-4111-8111-111111111111");
+    expect(input).toBe("/api/admin/feature-imports/11111111-1111-4111-8111-111111111111");
     expect(init.method).toBe("GET");
     expect(init.credentials).toBe("same-origin");
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
@@ -450,13 +450,15 @@ describe("Content workspace API", () => {
     const fieldID = "22222222-2222-4222-8222-222222222222";
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       snapshot_id: snapshotID,
-      site_id: "33333333-3333-4333-8333-333333333333",
       page_snapshot_id: snapshotID,
       page_id: "home",
       model_revision: 1,
       model_digest: "a".repeat(64),
       page_revision: 1,
       page_digest: "b".repeat(64),
+      locale: "ru",
+      locale_catalog_revision: 1,
+      selection_revision: 0,
       data_model: { formatVersion: 1, entities: [{
         id: "33333333-3333-4333-8333-333333333333", key: "article", name: "Article", cardinality: "many",
         fields: [{ id: fieldID, key: "image", name: "Image", type: "media" }],
@@ -468,7 +470,7 @@ describe("Content workspace API", () => {
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubAdminBrowser(fetchMock);
 
-    const workspace = await api.contentEngine.workspace(snapshotID);
+    const workspace = await api.contentEngine.workspace(snapshotID, "ru");
 
     expect(workspace.placements[0]?.inputs[0]?.fields[0]?.type).toBe("media");
   });
@@ -484,11 +486,12 @@ describe("Content workspace API", () => {
     vi.stubGlobal("window", { location: { origin: "http://localhost" }, dispatchEvent: () => true });
     vi.stubGlobal("fetch", fetchMock);
 
-    const page = await api.contentEngine.history("11111111-1111-4111-8111-111111111111", "before", 25);
+    const page = await api.contentEngine.history("11111111-1111-4111-8111-111111111111", "ru", "before", 25);
 
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
     expect(url.pathname).toBe("/api/admin/content/snapshots/11111111-1111-4111-8111-111111111111/history");
+    expect(url.searchParams.get("locale")).toBe("ru");
     expect(url.searchParams.get("cursor")).toBe("before");
     expect(url.searchParams.get("limit")).toBe("25");
     expect(page.nextCursor).toBe("opaque-history-cursor");
@@ -507,17 +510,16 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("lists Website snapshots through the typed, paginated API contract", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", page_id: "home", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" }],
+      items: [{ id: "22222222-2222-4222-8222-222222222222", page_id: "home", name: "Homepage", sequence: 1, revision: 3, feature_pins: {}, state: "ready" }],
       next_cursor: "next-page",
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubApi(fetchMock);
 
-    const page = await api.website.snapshots("33333333-3333-4333-8333-333333333333", "home", "first-page", 20);
+    const page = await api.website.snapshots("home", "first-page", 20);
 
     const [input] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = new URL(input, "http://localhost");
-    expect(url.pathname).toBe("/api/admin/sites/snapshots");
-    expect(url.searchParams.get("site_id")).toBe("33333333-3333-4333-8333-333333333333");
+    expect(url.pathname).toBe("/api/admin/snapshots");
     expect(url.searchParams.get("page_id")).toBe("home");
     expect(url.searchParams.get("cursor")).toBe("first-page");
     expect(url.searchParams.get("limit")).toBe("20");
@@ -527,7 +529,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("preserves lifecycle state in the site editor snapshot choices", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      items: [{ id: "22222222-2222-4222-8222-222222222222", site_id: "33333333-3333-4333-8333-333333333333", page_id: "home", name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning" }],
+      items: [{ id: "22222222-2222-4222-8222-222222222222", page_id: "home", name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning" }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubApi(fetchMock);
 
@@ -539,7 +541,6 @@ describe("modular Website, Content, Forms and Router clients", () => {
   it("rejects snapshot lifecycle states outside the Website contract", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       id: "22222222-2222-4222-8222-222222222222",
-      site_id: "33333333-3333-4333-8333-333333333333",
       name: "Homepage",
       sequence: 1,
       revision: 1,
@@ -556,14 +557,13 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const snapshotID = "22222222-2222-4222-8222-222222222222";
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-      id: snapshotID, site_id: "33333333-3333-4333-8333-333333333333", page_id: "homepage", parent_id: "11111111-1111-4111-8111-111111111111",
+      id: snapshotID, page_id: "homepage", parent_id: "11111111-1111-4111-8111-111111111111",
         name: "Child", sequence: 2, revision: 1, feature_pins: {}, state: "provisioning",
       }), { status: 202, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
     stubApi(fetchMock);
 
     await api.website.createSnapshot({
-      site_id: "33333333-3333-4333-8333-333333333333",
       page_id: "homepage",
       parent_id: "11111111-1111-4111-8111-111111111111",
       name: "Child",
@@ -582,7 +582,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     await api.website.deleteSnapshot(snapshotID, 7);
 
     const [createInput, createInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(createInput).toBe("/api/admin/sites/snapshots");
+    expect(createInput).toBe("/api/admin/snapshots");
     expect(createInit.method).toBe("POST");
     const createBody = JSON.parse(String(createInit.body));
     expect(createBody).toMatchObject({
@@ -597,7 +597,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     expect(new Headers(createInit.headers).get("Idempotency-Key")).toBe("create-snapshot:request-0001");
     expect(new Headers(createInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
     const [deleteInput, deleteInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect(deleteInput).toBe(`/api/admin/sites/snapshots/${snapshotID}`);
+    expect(deleteInput).toBe(`/api/admin/snapshots/${snapshotID}`);
     expect(deleteInit.method).toBe("DELETE");
     expect(new Headers(deleteInit.headers).get("If-Match")).toBe('"7"');
     expect(new Headers(deleteInit.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
@@ -613,7 +613,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
     await api.website.buildSnapshot("snapshot-1", "website-build:request-0001");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(input).toBe("/api/admin/sites/builds");
+    expect(input).toBe("/api/admin/builds");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ snapshot_id: "snapshot-1" });
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("website-build:request-0001");
@@ -626,29 +626,34 @@ describe("modular Website, Content, Forms and Router clients", () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
         snapshot_id: "snapshot-1",
-        site_id: "site-1",
         page_snapshot_id: "snapshot-1",
         page_id: "home",
         model_revision: 1,
         model_digest: "a".repeat(64),
         page_revision: 1,
         page_digest: "b".repeat(64),
+        locale: "ru",
+        locale_catalog_revision: 1,
+        selection_revision: 0,
         data_model: null,
         revision: 3, published_revision: 2, records: [], selections: [], placements: [],
       }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }));
     stubApi(fetchMock);
 
-    await api.contentEngine.saveWorkspaceDraft("snapshot-1", 2, [
+    await api.contentEngine.saveWorkspaceDraft("snapshot-1", "ru", 2, 5, [
       { clientKey: "draft-row-1", entityId: "model-1", sortOrder: 0, values: { title: "Draft" } },
     ], [], "content-save:request-0001");
     await api.formsEngine.deleteSubmission("snapshot-1", "submission-1", 7);
 
     const [contentInput, contentInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(contentInput).toBe("/api/admin/content/snapshots/snapshot-1/workspace");
+    const contentURL = new URL(contentInput, "http://localhost");
+    expect(contentURL.pathname).toBe("/api/admin/content/snapshots/snapshot-1/workspace");
+    expect(contentURL.searchParams.get("locale")).toBe("ru");
     expect(contentInit.method).toBe("PUT");
     expect(JSON.parse(String(contentInit.body))).toEqual({
       expected_revision: 2,
+      expected_selection_revision: 5,
       records: [{ client_key: "draft-row-1", entity_id: "model-1", sort_order: 0, values: { title: "Draft" } }],
       selections: [],
     });

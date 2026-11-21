@@ -136,22 +136,22 @@ func (engine *Engine) GetContentProjections(ctx context.Context, pageSnapshotID 
 	return projections, nil
 }
 
-func (engine *Engine) GetLocaleConfig(ctx context.Context, siteID string) (domain.LocaleConfig, error) {
+func (engine *Engine) GetLocaleConfig(ctx context.Context) (domain.LocaleConfig, error) {
 	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
 		return domain.LocaleConfig{}, err
 	}
-	config, err := engine.service.GetLocaleConfig(ctx, siteID)
+	config, err := engine.service.GetLocaleConfig(ctx)
 	if err != nil {
 		return domain.LocaleConfig{}, mapError(err)
 	}
 	return config, nil
 }
 
-func (engine *Engine) ReplaceLocaleConfig(ctx context.Context, siteID string, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
+func (engine *Engine) ReplaceLocaleConfig(ctx context.Context, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
 	if _, err := engine.authorize(ctx, core.AccessLevelWrite); err != nil {
 		return domain.LocaleConfig{}, err
 	}
-	config, err := engine.service.ReplaceLocaleConfig(ctx, siteID, request)
+	config, err := engine.service.ReplaceLocaleConfig(ctx, request)
 	if err != nil {
 		return domain.LocaleConfig{}, mapError(err)
 	}
@@ -303,7 +303,7 @@ func (engine *Engine) resolveSchema(ctx context.Context, projections contentapi.
 	if localeErr != nil || locale != projections.Locale {
 		return domain.Schema{}, contentapi.ErrInvalid
 	}
-	localeConfig, err := engine.service.GetLocaleConfig(ctx, projections.Site.SiteID)
+	localeConfig, err := engine.service.GetLocaleConfig(ctx)
 	if err != nil {
 		return domain.Schema{}, mapError(err)
 	}
@@ -317,7 +317,7 @@ func (engine *Engine) resolveSchema(ctx context.Context, projections contentapi.
 	if !localeConfigured {
 		return domain.Schema{}, contentapi.ErrInvalid
 	}
-	dataModel := append([]byte(nil), projections.Site.DataModel...)
+	dataModel := append([]byte(nil), projections.ContentModel.DataModel...)
 	model, err := domain.ParseDataModel(dataModel)
 	if err != nil {
 		return domain.Schema{}, contentapi.ErrInvalid
@@ -338,8 +338,8 @@ func (engine *Engine) resolveSchema(ctx context.Context, projections contentapi.
 		}
 		placements[index] = domain.PlacementView{ID: placement.ID, PageID: placement.PageID, FeatureKey: placement.FeatureKey, FeatureName: placement.FeatureName, Version: placement.Version, Inputs: inputs}
 	}
-	return domain.Schema{State: page.State, SiteID: projections.Site.SiteID, PageSnapshotID: pageSnapshotID, Locale: locale, LocaleCatalogRevision: localeConfig.Revision,
-		ModelRevision: projections.Site.ModelRevision, ModelDigest: projections.Site.Digest,
+	return domain.Schema{State: page.State, PageSnapshotID: pageSnapshotID, Locale: locale, LocaleCatalogRevision: localeConfig.Revision,
+		ModelRevision: projections.ContentModel.ModelRevision, ModelDigest: projections.ContentModel.Digest,
 		PageRevision: page.Revision, PageDigest: page.Digest, DataModel: dataModel, Model: model, Placements: placements}, nil
 }
 
@@ -364,7 +364,7 @@ func toAPIWorkspace(workspace domain.WorkspaceView) contentapi.Workspace {
 		}
 	}
 	return contentapi.Workspace{
-		SnapshotID: workspace.SnapshotID, SiteID: workspace.SiteID, PageSnapshotID: workspace.PageSnapshotID, Locale: workspace.Locale, LocaleCatalogRevision: workspace.LocaleCatalogRevision,
+		SnapshotID: workspace.SnapshotID, PageSnapshotID: workspace.PageSnapshotID, Locale: workspace.Locale, LocaleCatalogRevision: workspace.LocaleCatalogRevision,
 		ModelRevision: workspace.ModelRevision, ModelDigest: workspace.ModelDigest, PageRevision: workspace.PageRevision, PageDigest: workspace.PageDigest,
 		DataModel: append([]byte(nil), workspace.DataModel...),
 		Revision:  workspace.Revision, SelectionRevision: workspace.SelectionRevision, PublishedRevision: workspace.PublishedRevision,

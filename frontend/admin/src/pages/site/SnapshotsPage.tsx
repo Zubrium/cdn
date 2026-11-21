@@ -15,15 +15,14 @@ export default function SnapshotsPage() {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [params] = useSearchParams();
-  const siteID = params.get("site_id") ?? "";
   const pageID = params.get("page_id") ?? "";
   const [name, setName] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const createAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const snapshots = useQuery({
-    queryKey: ["site", "snapshot-choices", siteID, pageID],
-    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, pageID || undefined, siteID || undefined),
+    queryKey: ["site", "snapshot-choices", pageID],
+    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, pageID || undefined),
   });
 
   const create = async (parentSnapshotId: string) => {
@@ -32,14 +31,13 @@ export default function SnapshotsPage() {
     setBusy(true);
     try {
       const parent = await api.siteBuilder.snapshot(parentSnapshotId);
-      const localeConfig = await api.contentEngine.localeConfig(parent.snapshot.siteId);
+      const localeConfig = await api.contentEngine.localeConfig();
       const parentContent = await api.contentEngine.workspace(parentSnapshotId, localeConfig.default_locale);
       if (parent.snapshot.state !== "ready" || parent.snapshot.revision === undefined ||
         !Number.isSafeInteger(parentContent.revision) || parentContent.revision < 0) {
         throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
       }
       const input = {
-        siteID: parent.snapshot.siteId,
         pageID: parent.snapshot.pageId,
         name: trimmedName,
         parentSnapshotId,
@@ -95,9 +93,8 @@ export default function SnapshotsPage() {
 
   return (
     <div className="page-grid">
-      <PageHeader title="Дерево снапшотов" description="Снапшоты изолированы по паре site_id и page_id. Назначения веток здесь не управляются." />
+      <PageHeader title="Дерево снапшотов" description="Снапшоты изолированы по странице. Назначения веток здесь не управляются." />
       <div className="flex justify-end"><Button type="button" variant="outline" onClick={() => void snapshots.refetch()} loading={snapshots.isFetching}>Обновить состояние</Button></div>
-      {siteID && <p className="text-sm text-muted-foreground">Фильтр site_id: <code>{siteID}</code></p>}
       {pageID && <p className="text-sm text-muted-foreground">Фильтр page_id: <code>{pageID}</code></p>}
       <div className="flex flex-wrap items-end gap-2">
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-sm">
@@ -105,7 +102,7 @@ export default function SnapshotsPage() {
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Изменение главной" aria-label="Название дочернего снапшота" maxLength={120} />
         </label>
       </div>
-      <p className="text-sm text-muted-foreground">Корневые снапшоты требуют настроенные site_id и page_id. Текущий Admin API не предоставляет их источник, поэтому создание корня здесь отключено; потомка можно создать у выбранного снапшота.</p>
+      <p className="text-sm text-muted-foreground">Корневые снапшоты создаются вместе со страницами. Здесь можно добавить дочерний снапшот к выбранному.</p>
       <label className="relative block max-w-xl">
         <span className="sr-only">Поиск снапшотов</span>
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -124,7 +121,7 @@ export default function SnapshotsPage() {
         ))}
       </ul>
       {snapshots.data?.items.length !== 0 && visibleSnapshots.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">Снапшоты не найдены.</p>}
-      {snapshots.data?.items.length === 0 && <p className="text-sm text-muted-foreground">Снапшотов нет. Добавьте конфигурацию site_id и page_id в доступный API, чтобы создать корневой снапшот.</p>}
+      {snapshots.data?.items.length === 0 && <p className="text-sm text-muted-foreground">Снапшотов нет. Создайте страницу, чтобы получить корневой снапшот.</p>}
     </div>
   );
 }

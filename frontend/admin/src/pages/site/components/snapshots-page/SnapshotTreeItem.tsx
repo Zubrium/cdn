@@ -15,7 +15,7 @@ interface SnapshotTreeItemProps {
 
 export function SnapshotTreeItem({ snapshot, canCreate, busy, onCreateChild, onDelete }: SnapshotTreeItemProps) {
   const ready = snapshot.state === "ready";
-  const context = `snapshot=${encodeURIComponent(snapshot.id)}&site_id=${encodeURIComponent(snapshot.siteId)}&page_id=${encodeURIComponent(snapshot.pageId)}`;
+  const context = `snapshot=${encodeURIComponent(snapshot.id)}&page_id=${encodeURIComponent(snapshot.pageId)}`;
   const parentLabel = snapshot.parentSnapshotId
     ? snapshot.parentSequence && snapshot.parentName
       ? `Родитель: #${snapshot.parentSequence} · ${snapshot.parentName}`
@@ -29,7 +29,7 @@ export function SnapshotTreeItem({ snapshot, canCreate, busy, onCreateChild, onD
           <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium">#{snapshot.sequence} · {snapshot.name}</span>
-            <span className="mt-0.5 block truncate text-xs text-muted-foreground">{parentLabel} · site_id {snapshot.siteId} · page_id {snapshot.pageId} · {formatSnapshotDate(snapshot.createdAt)}</span>
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">{parentLabel} · page_id {snapshot.pageId} · {formatSnapshotDate(snapshot.createdAt)}</span>
           </span>
           {snapshot.state === "provisioning" && <Badge variant="warning">Готовится</Badge>}
           {snapshot.state === "failed" && <Badge variant="destructive">Ошибка подготовки</Badge>}

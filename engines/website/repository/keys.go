@@ -17,20 +17,20 @@ const (
 	TemplateNamespace = "website/page-templates"
 )
 
-func PageKey(siteID, pageID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: SnapshotNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "page/" + strings.ToLower(pageID)}
+func PageKey(pageID string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: SnapshotNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "page/" + strings.ToLower(pageID)}
 }
 
-func PageCreateReceiptKey(siteID, idempotencyKey string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: SnapshotNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "page-idempotency/" + digestKey(idempotencyKey)}
+func PageCreateReceiptKey(idempotencyKey string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: SnapshotNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "page-idempotency/" + digestKey(idempotencyKey)}
 }
 
-func PageTemplateKey(siteID, templateID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: TemplateNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "template/" + strings.ToLower(templateID)}
+func PageTemplateKey(templateID string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: TemplateNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "template/" + strings.ToLower(templateID)}
 }
 
-func PageTemplateCreateReceiptKey(siteID, idempotencyKey string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: TemplateNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "idempotency/" + digestKey(idempotencyKey)}
+func PageTemplateCreateReceiptKey(idempotencyKey string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: TemplateNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "idempotency/" + digestKey(idempotencyKey)}
 }
 
 func digestKey(value string) string {

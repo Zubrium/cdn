@@ -7,7 +7,11 @@ import (
 
 const PayloadVersion = 1
 
-// Aggregate holds the site-wide mutable state for exactly one configured locale.
+// GlobalScopeID is the canonical ScopeID for system-wide Content records.
+// Page-scoped selections use page snapshot IDs as their ScopeID instead.
+const GlobalScopeID = "global"
+
+// Aggregate holds the system-wide mutable state for exactly one configured locale.
 // Locale identifies the catalog entry this aggregate belongs to. Records written
 // before locale-scoped storage was introduced can carry an empty locale; its
 // presence is not used as a compatibility gate on reads.
@@ -20,7 +24,7 @@ type Aggregate struct {
 	LastMutation      *MutationReceipt `json:"last_mutation,omitempty"`
 }
 
-// StoredWorkspace is the repository-level unit of work. Site-wide aggregate
+// StoredWorkspace is the repository-level unit of work. System-wide aggregate
 // state and page-scoped selections live in separate Core records; both are
 // hydrated together so callers never need to know the storage layout.
 type StoredWorkspace struct {
@@ -80,24 +84,23 @@ type CopyReceipt struct {
 }
 
 type WorkspaceView struct {
-	SnapshotID             string            `json:"snapshot_id"`
-	SiteID                  string            `json:"site_id"`
-	PageSnapshotID          string            `json:"page_snapshot_id"`
-	Locale                  string            `json:"locale"`
-	LocaleCatalogRevision   int64             `json:"locale_catalog_revision"`
-	ModelRevision           int64             `json:"model_revision"`
-	ModelDigest             string            `json:"model_digest"`
-	PageRevision            int64             `json:"page_revision"`
-	PageDigest              string            `json:"page_digest"`
-	DataModel               json.RawMessage   `json:"data_model"`
-	Revision                int64             `json:"revision"`
-	SelectionRevision       int64             `json:"selection_revision"`
-	PublishedRevision       int64             `json:"published_revision"`
-	Records                 []Record          `json:"records"`
-	Selections              []Selection       `json:"selections"`
-	Placements              []PlacementView   `json:"placements"`
-	ClientRecordIDs         map[string]string `json:"client_record_ids,omitempty"`
-	ClientTranslationIDs    map[string]string `json:"client_translation_ids,omitempty"`
+	SnapshotID            string            `json:"snapshot_id"`
+	PageSnapshotID        string            `json:"page_snapshot_id"`
+	Locale                string            `json:"locale"`
+	LocaleCatalogRevision int64             `json:"locale_catalog_revision"`
+	ModelRevision         int64             `json:"model_revision"`
+	ModelDigest           string            `json:"model_digest"`
+	PageRevision          int64             `json:"page_revision"`
+	PageDigest            string            `json:"page_digest"`
+	DataModel             json.RawMessage   `json:"data_model"`
+	Revision              int64             `json:"revision"`
+	SelectionRevision     int64             `json:"selection_revision"`
+	PublishedRevision     int64             `json:"published_revision"`
+	Records               []Record          `json:"records"`
+	Selections            []Selection       `json:"selections"`
+	Placements            []PlacementView   `json:"placements"`
+	ClientRecordIDs       map[string]string `json:"client_record_ids,omitempty"`
+	ClientTranslationIDs  map[string]string `json:"client_translation_ids,omitempty"`
 }
 
 type PlacementView struct {
@@ -112,17 +115,16 @@ type PlacementView struct {
 
 type Schema struct {
 	State                 string
-	SiteID                string
 	PageSnapshotID        string
 	Locale                string
 	LocaleCatalogRevision int64
 	ModelRevision         int64
-	ModelDigest    string
-	PageRevision   int64
-	PageDigest     string
-	DataModel      json.RawMessage
-	Model          DataModel
-	Placements     []PlacementView
+	ModelDigest           string
+	PageRevision          int64
+	PageDigest            string
+	DataModel             json.RawMessage
+	Model                 DataModel
+	Placements            []PlacementView
 }
 
 type HistorySummary struct {

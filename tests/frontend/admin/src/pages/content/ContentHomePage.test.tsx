@@ -7,7 +7,10 @@ import { ConfirmProvider } from "../../../../../../frontend/admin/src/components
 
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
-  api: { website: { allSnapshots: vi.fn() }, contentEngine: { workspace: vi.fn() } },
+  api: {
+    website: { allSnapshots: vi.fn() },
+    contentEngine: { localeConfig: vi.fn(), workspace: vi.fn() },
+  },
 }));
 
 vi.mock("@/api", () => ({ api: mocks.api }));
@@ -17,14 +20,14 @@ vi.mock("@/domains/media/MediaPickerDialog", () => ({ MediaPickerDialog: () => n
 import ContentHomePage from "../../../../../../frontend/admin/src/pages/content/ContentHomePage";
 
 const snapshotID = "11111111-1111-4111-8111-111111111111";
-const siteID = "22222222-2222-4222-8222-222222222222";
 const entityID = "33333333-3333-4333-8333-333333333333";
 const fieldID = "44444444-4444-4444-8444-444444444444";
 const recordID = "55555555-5555-4555-8555-555555555555";
+const pageID = "home";
 
 const snapshot = {
   id: snapshotID,
-  site_id: siteID,
+  page_id: pageID,
   name: "Homepage",
   sequence: 1,
   revision: 2,
@@ -32,8 +35,10 @@ const snapshot = {
   state: "ready" as "ready" | "provisioning" | "failed",
 };
 
+const localeConfig = { default_locale: "ru", locales: ["ru"] };
+
 const workspace = {
-  snapshot: { id: snapshotID },
+  snapshot: { id: snapshotID, page_id: pageID },
   dataModel: {
     formatVersion: 1,
     entities: [{
@@ -53,8 +58,9 @@ const workspace = {
 
 function renderPage(contentLevel: 1 | 2, selectedSnapshot = snapshot) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(["website", "snapshots", "content", "", ""], [selectedSnapshot]);
-  client.setQueryData(["content", "model-workspace", snapshotID], workspace);
+  client.setQueryData(["website", "snapshots", "content", ""], [selectedSnapshot]);
+  client.setQueryData(["content", "locales"], localeConfig);
+  client.setQueryData(["content", "model-workspace", snapshotID, "ru"], workspace);
   mocks.useAuth.mockReturnValue({ principal: { group_access: { content: contentLevel } } });
   const router = createMemoryRouter([{ path: "*", element: createElement(ContentHomePage) }], { initialEntries: [`/content?snapshot=${snapshotID}`] });
 
@@ -69,6 +75,7 @@ function renderPage(contentLevel: 1 | 2, selectedSnapshot = snapshot) {
 describe("Content workspace page", () => {
   beforeEach(() => {
     mocks.api.website.allSnapshots.mockResolvedValue([snapshot]);
+    mocks.api.contentEngine.localeConfig.mockResolvedValue(localeConfig);
     mocks.api.contentEngine.workspace.mockResolvedValue(workspace);
   });
 

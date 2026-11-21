@@ -47,8 +47,8 @@ func NewHandler(api engine.API, schemas SchemaSnapshots, config Config) (*Handle
 		return nil, err
 	}
 	h := &Handler{api: api, schemas: schemas, cfg: config, transport: transport, mux: http.NewServeMux()}
-	h.mux.HandleFunc("GET /api/admin/sites/{siteID}/content/locales", h.getLocaleConfig)
-	h.mux.HandleFunc("PUT /api/admin/sites/{siteID}/content/locales", h.replaceLocaleConfig)
+	h.mux.HandleFunc("GET "+apiPrefix+"/locales", h.getLocaleConfig)
+	h.mux.HandleFunc("PUT "+apiPrefix+"/locales", h.replaceLocaleConfig)
 	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.getWorkspace)
 	h.mux.HandleFunc("PUT "+apiPrefix+"/snapshots/{snapshotID}/workspace", h.saveWorkspaceDraft)
 	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots/{snapshotID}/workspace/publish", h.publishWorkspace)
@@ -85,12 +85,7 @@ func (h *Handler) getLocaleConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID := r.PathValue("siteID")
-	if !validID(siteID) {
-		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	config, err := h.api.GetLocaleConfig(ctx, siteID)
+	config, err := h.api.GetLocaleConfig(ctx)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -104,9 +99,8 @@ func (h *Handler) replaceLocaleConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID := r.PathValue("siteID")
 	idempotencyKey, valid := readIdempotencyKey(r)
-	if !valid || !validID(siteID) {
+	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -120,7 +114,7 @@ func (h *Handler) replaceLocaleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.IdempotencyKey = idempotencyKey
-	config, err := h.api.ReplaceLocaleConfig(ctx, siteID, request)
+	config, err := h.api.ReplaceLocaleConfig(ctx, request)
 	if err != nil {
 		writeEngineError(w, err)
 		return

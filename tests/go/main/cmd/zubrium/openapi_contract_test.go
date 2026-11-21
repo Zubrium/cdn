@@ -66,7 +66,7 @@ type openAPISecurityScheme struct {
 
 func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 	for _, name := range []string{
-		"admin-identity.yaml", "content.yaml", "coordinator.yaml", "files.yaml", "forms.yaml", "router.yaml", "sites.yaml",
+		"admin-identity.yaml", "content.yaml", "coordinator.yaml", "files.yaml", "forms.yaml", "router.yaml", "website.yaml",
 	} {
 		t.Run(name, func(t *testing.T) {
 			contract := loadOpenAPIContract(t, name)
@@ -108,8 +108,8 @@ func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 // Spec-required endpoints that are documented but not yet wired in this
 // checkout. Keep the list explicit so new drift still fails this check.
 var pendingOperations = map[string]string{
-	"POST /api/locale-preference":                     "Router locale preference operation is not compiled into the profile",
-	"DELETE /api/admin/sites/{siteID}/pages/{pageID}": "durable page retirement workflow is not wired into the Sites API",
+	"POST /api/locale-preference":      "Router locale preference operation is not compiled into the profile",
+	"DELETE /api/admin/pages/{pageID}": "durable page retirement workflow is not wired into the Website API",
 }
 
 func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
@@ -123,7 +123,7 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 		{name: "files.yaml", src: "presentation/admin/files/handler.go"},
 		{name: "forms.yaml", src: "presentation/admin/forms/handler.go"},
 		{name: "router.yaml", src: "presentation/router/handler.go"},
-		{name: "sites.yaml", src: "presentation/admin/sites/handler.go"},
+		{name: "website.yaml", src: "presentation/admin/sites/handler.go"},
 	}
 
 	// One handler file can serve several contracts (for example identity and

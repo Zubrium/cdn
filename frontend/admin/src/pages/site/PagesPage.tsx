@@ -20,8 +20,8 @@ const TEMPLATE_LIST_LIMIT = 100;
 
 type CreateAttempt = { fingerprint: string; key: string };
 
-function pageDetailURL(siteID: string, pageID: string, snapshotID: string): string {
-  return `/site/pages/${encodeURIComponent(pageID)}${siteContextQuery(snapshotID, pageID, siteID)}`;
+function pageDetailURL(pageID: string, snapshotID: string): string {
+  return `/site/pages/${encodeURIComponent(pageID)}${siteContextQuery(snapshotID, pageID)}`;
 }
 
 export default function PagesPage() {
@@ -31,7 +31,6 @@ export default function PagesPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const siteID = searchParams.get("site_id") || snapshot?.siteId || "";
   const canEdit = hasGroupAccess(auth.principal, "features", 2);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -41,26 +40,25 @@ export default function PagesPage() {
   const createAttempt = useRef<CreateAttempt | null>(null);
 
   const pages = useInfiniteQuery({
-    queryKey: ["site", "website-pages", siteID],
-    queryFn: ({ pageParam, signal }) => api.website.pages(siteID, pageParam ?? undefined, PAGE_LIST_LIMIT, signal),
+    queryKey: ["site", "website-pages"],
+    queryFn: ({ pageParam, signal }) => api.website.pages(pageParam ?? undefined, PAGE_LIST_LIMIT, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
-    enabled: Boolean(siteID),
   });
   const templates = useInfiniteQuery({
-    queryKey: ["site", "website-page-templates", siteID],
-    queryFn: ({ pageParam, signal }) => api.website.pageTemplates(siteID, pageParam ?? undefined, TEMPLATE_LIST_LIMIT, signal),
+    queryKey: ["site", "website-page-templates"],
+    queryFn: ({ pageParam, signal }) => api.website.pageTemplates(pageParam ?? undefined, TEMPLATE_LIST_LIMIT, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
-    enabled: Boolean(siteID && createOpen),
+    enabled: createOpen,
   });
 
   const allPages = useMemo(() => pages.data?.pages.flatMap((page) => page.items) ?? [], [pages.data]);
   const allTemplates = useMemo(() => templates.data?.pages.flatMap((page) => page.items) ?? [], [templates.data]);
   const selectedTemplateQuery = useQuery({
-    queryKey: ["site", "website-page-template", siteID, templateID],
-    queryFn: ({ signal }) => api.website.pageTemplate(siteID, templateID, signal),
-    enabled: Boolean(siteID && createOpen && templateID && !allTemplates.some((item) => item.id === templateID)),
+    queryKey: ["site", "website-page-template", templateID],
+    queryFn: () => api.website.pageTemplate(templateID),
+    enabled: Boolean(createOpen && templateID && !allTemplates.some((item) => item.id === templateID)),
   });
   const visiblePages = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("ru-RU");
@@ -100,50 +98,40 @@ export default function PagesPage() {
   const createPage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const cleanName = name.trim();
-    if (!siteID || !cleanName || creating) return;
+    if (!cleanName || creating) return;
     const selectedTemplate = allTemplates.find((item) => item.id === templateID) ?? selectedTemplateQuery.data;
     if (templateID && !selectedTemplate) {
       toast.error(selectedTemplateQuery.error ? errorMessage(selectedTemplateQuery.error) : "Шаблон ещё загружается. Повторите создание через мгновение.");
       return;
     }
-    const fingerprint = `${siteID}\u0000${cleanName}\u0000${selectedTemplate?.id ?? ""}\u0000${selectedTemplate?.revision ?? 0}`;
+    const fingerprint = `${cleanName}\u0000${selectedTemplate?.id ?? ""}\u0000${selectedTemplate?.revision ?? 0}`;
     if (createAttempt.current?.fingerprint !== fingerprint) {
       createAttempt.current = { fingerprint, key: `page-create-${crypto.randomUUID()}` };
     }
     setCreating(true);
     try {
-      const page = await api.website.createPage(siteID, {
+      const page = await api.website.createPage({
         name: cleanName,
         ...(selectedTemplate ? { template_id: selectedTemplate.id, template_revision: selectedTemplate.revision } : {}),
       }, createAttempt.current.key);
-      if (page.site_id !== siteID || page.latest_snapshot_state !== "ready") {
+      if (page.latest_snapshot_state !== "ready") {
         throw new Error("Сервер не подтвердил готовность корневого снапшота страницы.");
       }
       createAttempt.current = null;
       setCreateOpen(false);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["site", "website-pages", siteID] }),
-        queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates", siteID] }),
+        queryClient.invalidateQueries({ queryKey: ["site", "website-pages"] }),
+        queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates"] }),
         queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
       ]);
       toast.success("Страница создана");
-      navigate(pageDetailURL(siteID, page.id, page.latest_snapshot_id));
+      navigate(pageDetailURL(page.id, page.latest_snapshot_id));
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
       setCreating(false);
     }
   };
-
-  if (!siteID) {
-    return <section className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-7" aria-labelledby="pages-title">
-      <header className="border-b border-border pb-5"><h1 id="pages-title" className="text-2xl font-semibold tracking-tight">Страницы</h1><p className="mt-1 text-sm text-muted-foreground">Страницы сайта создаются отдельно от публичных маршрутов.</p></header>
-      <div className="py-12">
-        <h2 className="font-medium">Не удалось определить сайт</h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Откройте редактор из выбранного снапшота. Если сайт ещё не имеет страниц, текущий Admin API не предоставляет список настроенных site ID, поэтому создать первую страницу пока невозможно.</p>
-      </div>
-    </section>;
-  }
 
   if (pages.error) return <ErrorState error={pages.error} title="Не удалось загрузить страницы сайта" onRetry={() => void pages.refetch()} />;
 
@@ -154,9 +142,9 @@ export default function PagesPage() {
   return <div className="h-full min-h-0 overflow-y-auto bg-background">
     <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-7 sm:py-7">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-5">
-        <div className="min-w-0"><h1 className="text-2xl font-semibold tracking-tight">Страницы</h1><p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">Страницы принадлежат сайту. URL и публичные привязки настраиваются отдельно в Router.</p></div>
+        <div className="min-w-0"><h1 className="text-2xl font-semibold tracking-tight">Страницы</h1><p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">Страницы создаются отдельно от публичных маршрутов. URL и привязки настраиваются в Router.</p></div>
         <div className="flex flex-wrap gap-2">
-          <Button asChild type="button" variant="outline" className="min-h-11"><Link to={`/site/templates${siteContextQuery(snapshot?.id ?? "", snapshot?.pageId, siteID)}`}><LayoutTemplate />Шаблоны</Link></Button>
+          <Button asChild type="button" variant="outline" className="min-h-11"><Link to={`/site/templates${siteContextQuery(snapshot?.id ?? "", snapshot?.pageId)}`}><LayoutTemplate />Шаблоны</Link></Button>
           {canEdit && <Button type="button" className="min-h-11" onClick={() => openCreate()}><Plus />Новая страница</Button>}
         </div>
       </header>
@@ -182,7 +170,7 @@ export default function PagesPage() {
             {canEdit && <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
           </div>;
           return <article key={page.id} className="border-b border-border/70 last:border-0">
-            {canEdit ? <Link to={pageDetailURL(siteID, page.id, page.latest_snapshot_id)} className="block rounded-sm hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row}</Link> : row}
+            {canEdit ? <Link to={pageDetailURL(page.id, page.latest_snapshot_id)} className="block rounded-sm hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row}</Link> : row}
           </article>;
         })}
         {pages.hasNextPage && <div className="py-4 text-center"><Button type="button" variant="outline" className="min-h-11" loading={pages.isFetchingNextPage} onClick={() => void pages.fetchNextPage()}>Загрузить ещё</Button></div>}

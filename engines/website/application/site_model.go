@@ -15,134 +15,128 @@ import (
 )
 
 const (
-	siteModelsNamespace = "website/site-models"
-	snapshotsNamespace  = websiterepo.SnapshotNamespace
+	contentModelsNamespace = "website/content-models"
+	snapshotsNamespace     = websiterepo.SnapshotNamespace
 )
 
-type siteModelRecord struct {
-	SiteID    string          `json:"site_id"`
+type contentModelRecord struct {
 	DataModel json.RawMessage `json:"data_model"`
 	Digest    string          `json:"digest"`
 }
 
-func (s *Service) GetSiteContentSchema(ctx context.Context, siteID string) (websiteapi.SiteContentSchema, error) {
+func (s *Service) GetContentModel(ctx context.Context) (websiteapi.ContentModel, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
-		return websiteapi.SiteContentSchema{}, err
+		return websiteapi.ContentModel{}, err
 	}
-	if _, exists := s.sites[siteID]; !exists || !identifierPattern.MatchString(siteID) {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrNotFound
-	}
-	return s.readSiteContentSchema(ctx, siteID)
+	return s.readContentModel(ctx)
 }
 
-func (s *Service) SaveSiteModel(ctx context.Context, request websiteapi.SaveSiteModelRequest) (websiteapi.SiteContentSchema, error) {
+func (s *Service) SaveContentModel(ctx context.Context, request websiteapi.SaveContentModelRequest) (websiteapi.ContentModel, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return websiteapi.SiteContentSchema{}, err
+		return websiteapi.ContentModel{}, err
 	}
-	if _, exists := s.sites[request.SiteID]; !exists || !identifierPattern.MatchString(request.SiteID) || request.ExpectedRevision < 0 {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrInvalid
+	if request.ExpectedRevision < 0 {
+		return websiteapi.ContentModel{}, websiteapi.ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
-		return websiteapi.SiteContentSchema{}, err
+		return websiteapi.ContentModel{}, err
 	}
 	model, err := canonicalJSONObject(request.DataModel)
 	if err != nil || validateDataModel(model) != nil {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrInvalid
+		return websiteapi.ContentModel{}, websiteapi.ErrInvalid
 	}
 	if len(model) > 1<<20 || len(model) > s.store.MaxPayloadBytes() {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrTooLarge
+		return websiteapi.ContentModel{}, websiteapi.ErrTooLarge
 	}
-	current, readErr := s.store.Get(ctx, siteModelKey(request.SiteID))
+	current, readErr := s.store.Get(ctx, contentModelKey())
 	if readErr != nil && !errors.Is(readErr, core.ErrModuleDataNotFound) {
-		return websiteapi.SiteContentSchema{}, mapCoreError(readErr)
+		return websiteapi.ContentModel{}, mapCoreError(readErr)
 	}
 	currentRevision := int64(0)
 	if readErr == nil {
-		if _, err := decodeSiteModelRecord(request.SiteID, current); err != nil {
-			return websiteapi.SiteContentSchema{}, err
+		if _, err := decodeContentModelRecord(current); err != nil {
+			return websiteapi.ContentModel{}, err
 		}
 		currentRevision = current.Revision
 	}
 	if request.ExpectedRevision != currentRevision {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrConflict
+		return websiteapi.ContentModel{}, websiteapi.ErrConflict
 	}
 	if currentRevision == math.MaxInt64 {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrUnavailable
+		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
-	if err := s.validateModelBindings(ctx, request.SiteID, model); err != nil {
-		return websiteapi.SiteContentSchema{}, err
+	if err := s.validateModelBindings(ctx, model); err != nil {
+		return websiteapi.ContentModel{}, err
 	}
-	schema := websiteapi.SiteContentSchema{Version: websiteapi.ContentProjectionVersion, SiteID: request.SiteID, ModelRevision: currentRevision + 1, DataModel: model}
-	schema.Digest, err = siteModelDigest(schema)
+	schema := websiteapi.ContentModel{Version: websiteapi.ContentProjectionVersion, ModelRevision: currentRevision + 1, DataModel: model}
+	schema.Digest, err = contentModelDigest(schema)
 	if err != nil {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrUnavailable
+		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
-	payload, err := json.Marshal(siteModelRecord{SiteID: schema.SiteID, DataModel: schema.DataModel, Digest: schema.Digest})
+	payload, err := json.Marshal(contentModelRecord{DataModel: schema.DataModel, Digest: schema.Digest})
 	if err != nil {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrUnavailable
+		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
 	if len(payload) > s.store.MaxPayloadBytes() {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrTooLarge
+		return websiteapi.ContentModel{}, websiteapi.ErrTooLarge
 	}
-	index, err := json.Marshal(map[string]any{"record_type": "site_model", "site_id": schema.SiteID, "revision": schema.ModelRevision, "digest": schema.Digest})
+	index, err := json.Marshal(map[string]any{"record_type": "content_model", "revision": schema.ModelRevision, "digest": schema.Digest})
 	if err != nil {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrUnavailable
+		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
 	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{
-		Key: siteModelKey(request.SiteID), ExpectedRevision: currentRevision,
+		Key: contentModelKey(), ExpectedRevision: currentRevision,
 		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: 1, IndexData: index},
 	}}); err != nil {
-		return websiteapi.SiteContentSchema{}, mapCoreError(err)
+		return websiteapi.ContentModel{}, mapCoreError(err)
 	}
 	return schema, nil
 }
 
-func (s *Service) readSiteContentSchema(ctx context.Context, siteID string) (websiteapi.SiteContentSchema, error) {
-	record, err := s.store.Get(ctx, siteModelKey(siteID))
+func (s *Service) readContentModel(ctx context.Context) (websiteapi.ContentModel, error) {
+	record, err := s.store.Get(ctx, contentModelKey())
 	if err != nil {
-		return websiteapi.SiteContentSchema{}, mapCoreError(err)
+		return websiteapi.ContentModel{}, mapCoreError(err)
 	}
-	value, err := decodeSiteModelRecord(siteID, record)
+	value, err := decodeContentModelRecord(record)
 	if err != nil {
-		return websiteapi.SiteContentSchema{}, err
+		return websiteapi.ContentModel{}, err
 	}
 	return value, nil
 }
 
-func decodeSiteModelRecord(siteID string, record core.ModuleDataRecord) (websiteapi.SiteContentSchema, error) {
-	var stored siteModelRecord
+func decodeContentModelRecord(record core.ModuleDataRecord) (websiteapi.ContentModel, error) {
+	var stored contentModelRecord
 	var index struct {
 		RecordType string `json:"record_type"`
-		SiteID     string `json:"site_id"`
 		Revision   int64  `json:"revision"`
 		Digest     string `json:"digest"`
 	}
 	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &stored) != nil ||
-		json.Unmarshal(record.IndexData, &index) != nil || stored.SiteID != siteID || index.RecordType != "site_model" ||
-		index.SiteID != siteID || index.Revision != record.Revision || !sha256HexPattern.MatchString(index.Digest) || index.Digest != stored.Digest ||
+		json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "content_model" ||
+		index.Revision != record.Revision || !sha256HexPattern.MatchString(index.Digest) || index.Digest != stored.Digest ||
 		!validJSONObject(stored.DataModel) || validateDataModel(stored.DataModel) != nil {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrUnavailable
+		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
-	schema := websiteapi.SiteContentSchema{Version: websiteapi.ContentProjectionVersion, SiteID: siteID, ModelRevision: record.Revision,
+	schema := websiteapi.ContentModel{Version: websiteapi.ContentProjectionVersion, ModelRevision: record.Revision,
 		Digest: stored.Digest, DataModel: stored.DataModel}
-	expectedDigest, err := siteModelDigest(schema)
+	expectedDigest, err := contentModelDigest(schema)
 	if err != nil || expectedDigest != schema.Digest {
-		return websiteapi.SiteContentSchema{}, websiteapi.ErrUnavailable
+		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
 	return schema, nil
 }
 
-func siteModelKey(siteID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: siteModelsNamespace, ScopeType: "site", ScopeID: siteID, RecordKey: "model"}
+func contentModelKey() core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: contentModelsNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "model"}
 }
 
-func siteModelDigest(schema websiteapi.SiteContentSchema) (string, error) {
+func contentModelDigest(schema websiteapi.ContentModel) (string, error) {
 	payload, err := json.Marshal(struct {
 		Version       int             `json:"version"`
-		SiteID        string          `json:"site_id"`
 		ModelRevision int64           `json:"model_revision"`
 		DataModel     json.RawMessage `json:"data_model"`
-	}{schema.Version, schema.SiteID, schema.ModelRevision, schema.DataModel})
+	}{schema.Version, schema.ModelRevision, schema.DataModel})
 	if err != nil {
 		return "", err
 	}
@@ -150,21 +144,21 @@ func siteModelDigest(schema websiteapi.SiteContentSchema) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func (s *Service) GetPagePlacementProjection(ctx context.Context, siteID, pageID, snapshotID string) (websiteapi.PagePlacementProjection, error) {
+func (s *Service) GetPagePlacementProjection(ctx context.Context, pageID, snapshotID string) (websiteapi.PagePlacementProjection, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
 		return websiteapi.PagePlacementProjection{}, err
 	}
-	if _, exists := s.sites[siteID]; !exists || !identifierPattern.MatchString(siteID) || !snapshotIDPattern.MatchString(pageID) || !snapshotIDPattern.MatchString(snapshotID) {
+	if !snapshotIDPattern.MatchString(pageID) || !snapshotIDPattern.MatchString(snapshotID) {
 		return websiteapi.PagePlacementProjection{}, websiteapi.ErrNotFound
 	}
-	if _, _, err := s.loadPage(ctx, siteID, pageID); err != nil {
+	if _, _, err := s.loadPage(ctx, pageID); err != nil {
 		return websiteapi.PagePlacementProjection{}, err
 	}
-	snapshot, record, err := s.snapshotInPage(ctx, siteID, pageID, snapshotID)
+	snapshot, record, err := s.snapshotInPage(ctx, pageID, snapshotID)
 	if err != nil {
 		return websiteapi.PagePlacementProjection{}, err
 	}
-	schema, err := s.readSiteContentSchema(ctx, siteID)
+	schema, err := s.readContentModel(ctx)
 	if err != nil {
 		return websiteapi.PagePlacementProjection{}, err
 	}
@@ -177,7 +171,7 @@ func (s *Service) GetPagePlacementProjection(ctx context.Context, siteID, pageID
 		return websiteapi.PagePlacementProjection{}, websiteapi.ErrUnavailable
 	}
 	projection := websiteapi.PagePlacementProjection{
-		Version: websiteapi.ContentProjectionVersion, SiteID: siteID, PageID: pageID, PageSnapshotID: snapshotID,
+		Version: websiteapi.ContentProjectionVersion, PageID: pageID, PageSnapshotID: snapshotID,
 		Revision: record.Revision, State: snapshot.State, Placements: make([]websiteapi.PagePlacement, 0, len(page.Placements)),
 	}
 	pageName := page.Name
@@ -212,13 +206,12 @@ func (s *Service) GetPagePlacementProjection(ctx context.Context, siteID, pageID
 func pagePlacementDigest(projection websiteapi.PagePlacementProjection) (string, error) {
 	payload, err := json.Marshal(struct {
 		Version        int                        `json:"version"`
-		SiteID         string                     `json:"site_id"`
 		PageID         string                     `json:"page_id"`
 		PageSnapshotID string                     `json:"page_snapshot_id"`
 		Revision       int64                      `json:"revision"`
 		State          string                     `json:"state"`
 		Placements     []websiteapi.PagePlacement `json:"placements"`
-	}{projection.Version, projection.SiteID, projection.PageID, projection.PageSnapshotID, projection.Revision, projection.State, projection.Placements})
+	}{projection.Version, projection.PageID, projection.PageSnapshotID, projection.Revision, projection.State, projection.Placements})
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +291,7 @@ var inputPathPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A
 
 func validInputPath(value string) bool { return inputPathPattern.MatchString(value) }
 
-func (s *Service) validateModelBindings(ctx context.Context, siteID string, raw json.RawMessage) error {
+func (s *Service) validateModelBindings(ctx context.Context, raw json.RawMessage) error {
 	entities, err := dataModelIndex(raw)
 	if err != nil {
 		return websiteapi.ErrInvalid
@@ -309,7 +302,7 @@ func (s *Service) validateModelBindings(ctx context.Context, siteID string, raw 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "site", siteID, after, selectors, s.store.MaxPageSize())
+		keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "global", "global", after, selectors, s.store.MaxPageSize())
 		if err != nil {
 			return mapCoreError(err)
 		}
@@ -317,11 +310,11 @@ func (s *Service) validateModelBindings(ctx context.Context, siteID string, raw 
 			return websiteapi.ErrUnavailable
 		}
 		for index, record := range records {
-			snapshot, err := decodeSnapshotRecord(siteID, keys[index], record)
+			snapshot, err := decodeSnapshotRecord(keys[index], record)
 			if err != nil {
 				return websiteapi.ErrUnavailable
 			}
-			if _, _, err := s.loadPage(ctx, siteID, snapshot.PageID); err != nil {
+			if _, _, err := s.loadPage(ctx, snapshot.PageID); err != nil {
 				if errors.Is(err, websiteapi.ErrNotFound) {
 					return websiteapi.ErrUnavailable
 				}
@@ -349,5 +342,5 @@ func (s *Service) validateModelBindings(ctx context.Context, siteID string, raw 
 	}
 }
 
-var _ websiteapi.SiteContentProjectionAPI = (*Service)(nil)
-var _ websiteapi.SiteModelWriteAPI = (*Service)(nil)
+var _ websiteapi.ContentModelAPI = (*Service)(nil)
+var _ websiteapi.ContentModelWriteAPI = (*Service)(nil)

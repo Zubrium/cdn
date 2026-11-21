@@ -25,12 +25,12 @@ describe("modular admin dashboard", () => {
 
     expect(rendered).toContain("Контент");
     expect(rendered).toContain("Файлы");
-    expect(rendered).toContain("Сайт");
+    expect(rendered).toContain("Редактор страниц");
     expect(rendered).not.toContain("Заявки");
     expect(rendered).not.toContain("Активность");
   });
 
-  it("offers read-only runtime configuration to users with site read access", () => {
+  it("offers read-only runtime configuration to users with Website read access", () => {
     const rendered = renderPage({
       group_access: { features: 1 },
       can_manage_administrators: false,

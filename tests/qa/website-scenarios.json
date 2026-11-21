@@ -3,16 +3,16 @@
   "scenarios": [
     {
       "id": "WEB-001",
-      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии; tests/ACCEPTANCE-MATRIX.md Website criterion: разрешённый site listing",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: системная модель; tests/ACCEPTANCE-MATRIX.md Website criterion: системный DTO по group grant",
       "level": "unit",
       "preconditions": [
-        "Сайт находится в статической конфигурации Website.",
+        "Одна логическая система без дополнительных уровней изоляции.",
         "У credential есть либо отсутствует прямой Website read grant."
       ],
-      "input": "Запрос списка configured sites от credential с read grant и без него.",
-      "action": "Вызвать site-listing operation Website.",
-      "expected_result": "Read grant получает стабильный отсортированный site listing; отсутствие grant получает typed forbidden result.",
-      "expected_state": "Операция не создаёт Website records и не раскрывает неразрешённые sites.",
+      "input": "Запрос системной модели ContentModel через Website application contract от credential с read grant и без него.",
+      "action": "Вызвать operation чтения системной модели Website с проверкой group grant.",
+      "expected_result": "Read grant получает стабильный системный ContentModel; отсутствие grant получает typed forbidden result.",
+      "expected_state": "Операция не создаёт Website records и не раскрывает данные за пределами grants.",
       "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
       "test_symbol": "TestWebsiteScenarioLedger/WEB-001",
       "coverage_status": "gap",
@@ -21,10 +21,10 @@
     },
     {
       "id": "WEB-002",
-      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraph 2; SPEC-site-editor-workspace.md §Target: dynamic pages and template library, paragraph 1",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraph 2; SPEC-site-editor-workspace.md §Target: dynamic pages and template library, paragraph 1",
       "level": "unit",
       "preconditions": [
-        "Для configured site есть Website write grant.",
+        "В единственной логической системе есть Website write grant.",
         "Новая страница ещё не имеет page identity."
       ],
       "input": "Create-page request без template и с Idempotency-Key; повтор того же request; caller-supplied page identity там, где контракт её не принимает.",
@@ -39,15 +39,15 @@
     },
     {
       "id": "WEB-003",
-      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraphs 1 and 3; SPEC-branches-snapshots.md §Проверяемые требования, items 1-2",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraphs 1 and 3; SPEC-branches-snapshots.md §Проверяемые требования, items 1-2",
       "level": "unit",
       "preconditions": [
-        "В одном site существуют две страницы с root snapshots.",
+        "В системе существуют две страницы с root snapshots.",
         "Parent snapshot готов и принадлежит первой странице."
       ],
-      "input": "Create-child snapshot requests for the owner page, another page, another site, an unknown page, and a direct root request.",
+      "input": "Create-child snapshot requests for the owner page, another page, an unknown page, a foreign namespace/scope, and a direct root request.",
       "action": "Создать immutable snapshot child через Website.",
-      "expected_result": "Only a child of the exact existing (site_id, page_id) ready parent is accepted; root creation outside page creation and cross-tree parents are rejected.",
+      "expected_result": "Only a child of the exact existing page_id ready parent in that page tree is accepted; root creation outside page creation, cross-tree parents and foreign-scope parents are rejected.",
       "expected_state": "Каждое page tree остаётся независимым; rejected request не меняет sequence, parent или snapshot state.",
       "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
       "test_symbol": "TestWebsiteScenarioPageRootCreation/WEB-003",
@@ -57,7 +57,7 @@
     },
     {
       "id": "WEB-004",
-      "source": "spec/engines/website/SPEC-branches-snapshots.md §Сохранение и согласованность, paragraphs 2-3; SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraph 3",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraph 3",
       "level": "unit",
       "preconditions": [
         "Есть ready parent snapshot с известной revision и дочернее structural state."
@@ -74,14 +74,14 @@
     },
     {
       "id": "WEB-005",
-      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraphs 4-6; SPEC-data-model.md §§Product decisions, Persistence and runtime",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraphs 4-6; SPEC-data-model.md §§Product decisions, Persistence and runtime",
       "level": "unit",
       "preconditions": [
-        "У сайта есть revisioned site model и snapshots нескольких страниц."
+        "В системе есть revisioned системная модель и snapshots нескольких страниц."
       ],
-      "input": "Model PUT с expected revision, stale revision и binding, который становится incompatible; content-projection requests с exact и cross-site/page/snapshot tuple.",
-      "action": "Сохранить site model и прочитать typed model/projection DTOs.",
-      "expected_result": "Model is site-scoped CAS state; invalidating change is rejected; projection is returned only for the exact (site_id, page_id, snapshot_id) tuple.",
+      "input": "Model PUT с expected revision, stale revision и binding, который становится incompatible; content-projection requests с exact и несовпадающими page/snapshot tuple.",
+      "action": "Сохранить системную модель и прочитать typed model/projection DTOs.",
+      "expected_result": "Model is system-scoped CAS state; invalidating change is rejected; projection is returned only for the exact (page_id, snapshot_id) tuple.",
       "expected_state": "Model revision не хранится в snapshot namespace; rejected mutation leaves model and bindings unchanged.",
       "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
       "test_symbol": "TestWebsiteScenarioLocaleProjection/WEB-005",
@@ -94,7 +94,7 @@
       "source": "spec/engines/website/SPEC-site-editor-workspace.md §§Ownership, Model and placement editing, Acceptance criteria items 3-4; SPEC-data-model.md §Feature data contract and bindings",
       "level": "unit",
       "preconditions": [
-        "Snapshot pins a manifest-conformant feature build and the site model contains direct fields."
+        "Snapshot pins a manifest-conformant feature build and the system model contains direct fields."
       ],
       "input": "Configure scalar, record and collection dataInputs plus valid/invalid arguments, unknown fields, relationIds and incompatible ports.",
       "action": "Save structural placement bindings from /site.",
@@ -128,11 +128,11 @@
       "source": "spec/engines/website/SPEC-website-engine.md §Библиотека шаблонов страниц, paragraphs 2-5; SPEC-site-editor-workspace.md §Target: dynamic pages and template library, paragraphs 2-3",
       "level": "unit",
       "preconditions": [
-        "Site-scoped template exists with a known revision, digest and valid feature lock."
+        "System-scoped template exists with a known revision, digest and valid feature lock."
       ],
-      "input": "Create/update/delete template with current and stale expected revision; create page from exact template revision; use a template from another site.",
+      "input": "Create/update/delete template with current and stale expected revision; create page from exact template revision; use an unknown or foreign-namespace template ID.",
       "action": "Perform template-library operations and page materialization.",
-      "expected_result": "Template is site-scoped CAS state; create pins and materializes the exact revision; stale, foreign or invalid template is refused with a machine-readable error.",
+      "expected_result": "Template is system-scoped CAS state; create pins and materializes the exact revision; stale, unknown or foreign-namespace template is refused with a machine-readable error.",
       "expected_state": "Template edits/deletion do not mutate already materialized pages or their snapshots; rejected calls create no page/snapshot.",
       "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
       "test_symbol": "TestWebsiteScenarioTemplateMaterialization/WEB-008",
@@ -150,7 +150,7 @@
       "input": "Apply template with/without confirmation, correct/stale page and template revision, and a concurrent incompatible change.",
       "action": "Run explicit structural replacement.",
       "expected_result": "Confirmed operation creates a child in the same page tree and replaces only declared structure; unconfirmed/stale/invalid operation conflicts without partial state.",
-      "expected_state": "Parent, page ID, other trees, Router binding, site model and Content values remain unchanged; only old-placement selections reset in the new child.",
+      "expected_state": "Parent, page ID, other trees, Router binding, system model and Content values remain unchanged; only old-placement selections reset in the new child.",
       "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
       "test_symbol": "TestWebsiteScenarioLedger/WEB-009",
       "coverage_status": "gap",
@@ -159,12 +159,12 @@
     },
     {
       "id": "WEB-010",
-      "source": "spec/engines/website/SPEC-website-engine.md §§Target Sites API: страницы и их версии, Страничные snapshots и сборка; SPEC-branches-snapshots.md §§Границы, Публичная выдача",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Target Website API: страницы и их версии, Страничные snapshots и сборка; SPEC-branches-snapshots.md §§Границы, Публичная выдача",
       "level": "unit",
       "preconditions": [
         "A Website snapshot and a Router route target have independent configured identities."
       ],
-      "input": "Create/save a snapshot payload containing route, URL, branch assignment or site-wide record data; separately inspect accepted snapshot/build DTOs.",
+      "input": "Create/save a snapshot payload containing route, URL, branch assignment or system-wide record data; separately inspect accepted snapshot/build DTOs.",
       "action": "Validate Website structural input and build result boundaries.",
       "expected_result": "Website accepts no route/URL/branch assignment or record values in snapshot input and does not activate Router targets itself.",
       "expected_state": "Structural mutation preserves prior public artifact; Router selection remains an explicit outer orchestration/CAS action.",
@@ -279,14 +279,14 @@
     },
     {
       "id": "WEB-017",
-      "source": "spec/engines/website/SPEC-website-engine.md §§Target Sites API: страницы и их версии, Безопасность и проверяемые инварианты; tests/ACCEPTANCE-MATRIX.md HTTP Presentation and Website criteria",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Target Website API: страницы и их версии, Безопасность и проверяемые инварианты; tests/ACCEPTANCE-MATRIX.md HTTP Presentation and Website criteria",
       "level": "contract",
       "preconditions": [
         "Admin Website HTTP adapter and its OpenAPI contract are mounted in a test composition."
       ],
-      "input": "Valid and invalid page/snapshot/template requests, missing revision/idempotency headers, unsupported body fields, unauthorized group levels and route fields in Website DTOs.",
-      "action": "Exercise mounted /api/... Website handlers and compare their OpenAPI schemas.",
-      "expected_result": "Routes are unversioned /api paths with strict bounded decode, typed errors, required headers and group checks; request/response schema excludes Router assignment fields.",
+      "input": "Valid and invalid page/snapshot/template requests against flat /api/admin/... paths, missing revision/idempotency headers, unsupported body fields, unauthorized group levels and route fields in Website DTOs.",
+      "action": "Exercise mounted unversioned /api/... Website handlers and compare their OpenAPI schemas.",
+      "expected_result": "Routes are flat unversioned /api paths with strict bounded decode, typed errors, required headers and group checks; request/response schema excludes Router assignment fields and extra scope identifiers.",
       "expected_state": "Invalid/unauthorized HTTP request produces no structural mutation and no existence disclosure for foreign resources.",
       "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
       "test_symbol": "TestWebsiteScenarioLedger/WEB-017",
@@ -302,10 +302,10 @@
         "A dedicated disposable PostgreSQL database and object-storage bucket are configured for this run.",
         "Website uses only Core presentation capabilities under its scoped module identity."
       ],
-      "input": "Persist pages, snapshots, templates and projections for multiple sites; race CAS/retry; revoke access; try foreign namespace/scope and direct engine-to-engine boundary paths.",
+      "input": "Persist pages, snapshots, templates and projections in the single implicit scope; race CAS/retry; revoke access; try foreign namespace/scope and direct engine-to-engine boundary paths.",
       "action": "Run persistence and boundary scenarios against the disposable composition.",
       "expected_result": "Records remain immutable and scope-isolated, CAS/retry is atomic, revocation fails closed, and Website uses no SQL/S3/direct Router or Content call.",
-      "expected_state": "No cross-site/namespace record or partial artifact becomes observable after failed persistence operations.",
+      "expected_state": "No cross-namespace/scope record or partial artifact becomes observable after failed persistence operations.",
       "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
       "test_symbol": "TestWebsiteScenarioLedger/WEB-018",
       "coverage_status": "blocked",
@@ -365,7 +365,7 @@
     },
     {
       "id": "WEB-022",
-      "source": "spec/engines/website/SPEC-website-engine.md §Target Sites API: страницы и их версии, paragraph 2; tests/ACCEPTANCE-MATRIX.md Page retirement criterion",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraph 2; tests/ACCEPTANCE-MATRIX.md Page retirement criterion",
       "level": "integration",
       "preconditions": [
         "Disposable page has registered Router route targets, snapshots, Content history, Forms resources and Core files."
@@ -394,7 +394,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-023",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -411,7 +411,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-024",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -428,7 +428,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-025",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -445,7 +445,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-026",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -462,7 +462,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-027",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -479,7 +479,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-028",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -496,7 +496,7 @@
       "test_file": "tests/go/engines/website/features/runtime/acceptance_test.go",
       "test_symbol": "TestWebsiteRuntimeAcceptance/WEB-029",
       "coverage_status": "covered",
-      "execution_status": "executed",
+      "execution_status": "pass",
       "blocker": null
     }
   ]

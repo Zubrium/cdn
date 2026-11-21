@@ -19,7 +19,7 @@ export function displayNodeType(node: RouteTreeNode) {
     case "param": return "Параметр пути";
     case "regex": return "Regex-сегмент";
     case "catchAll": return "Catch-all";
-    case "site": return "Сайт";
+    case "site": return "Корень";
   }
 }
 

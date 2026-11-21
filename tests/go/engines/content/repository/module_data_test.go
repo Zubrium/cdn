@@ -21,8 +21,8 @@ func TestCommitStoresPublicationWithWorkspaceRevisionAtomically(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	ctx := context.Background()
-	initial := domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: "11111111-1111-4111-8111-111111111111", Revision: 0, PublishedRevision: 0, Records: []domain.Record{}}}
-	created, err := repo.Create(ctx, initial.Aggregate.SnapshotID, initial)
+	initial := domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Revision: 0, PublishedRevision: 0, Records: []domain.Record{}}}
+	created, err := repo.Create(ctx, initial)
 	if err != nil || created.StoreRevision != 1 {
 		t.Fatalf("Create() = revision %d, err %v", created.StoreRevision, err)
 	}
@@ -31,41 +31,40 @@ func TestCommitStoresPublicationWithWorkspaceRevisionAtomically(t *testing.T) {
 	next.Aggregate.Revision = 1
 	next.Aggregate.PublishedRevision = 1
 	publication := domain.Publication{
-		ID: "22222222-2222-4222-8222-222222222222", DraftRevision: 0, ContentRevision: 1,
+		ID: "22222222-2222-4222-8222-222222222222", Locale: "en-US", DraftRevision: 0, ContentRevision: 1,
 		CreatedAt:  time.Date(2026, time.November, 18, 10, 0, 0, 0, time.UTC),
-		Records:    []domain.Record{{ID: "33333333-3333-4333-8333-333333333333", EntityID: "44444444-4444-4444-8444-444444444444", Values: map[string]any{"title": "Published"}}},
+		Records:    []domain.Record{{ID: "33333333-3333-4333-8333-333333333333", Locale: "en-US", EntityID: "44444444-4444-4444-8444-444444444444", Values: map[string]any{"title": "Published"}}},
 		Selections: []domain.Selection{},
 	}
-	committed, err := repo.Commit(ctx, created.Aggregate.SnapshotID, created.StoreRevision, next, &publication)
+	committed, err := repo.Commit(ctx, created.StoreRevision, next, &publication)
 	if err != nil || committed.StoreRevision != 2 {
 		t.Fatalf("Commit() = revision %d, err %v", committed.StoreRevision, err)
 	}
-	history, err := repo.GetHistoryByID(ctx, created.Aggregate.SnapshotID, publication.ID)
+	history, err := repo.GetHistoryByID(ctx, "en-US", publication.ID)
 	if err != nil || history.ContentRevision != 1 || history.Records[0].Values["title"] != "Published" {
 		t.Fatalf("GetHistoryByID() = %#v, err %v", history, err)
 	}
 
 	stale := cloneRepositoryStored(committed)
 	stale.Aggregate.Revision++
-	if _, err := repo.Commit(ctx, created.Aggregate.SnapshotID, created.StoreRevision, stale, nil); !errors.Is(err, domain.ErrConflict) {
+	if _, err := repo.Commit(ctx, created.StoreRevision, stale, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale Commit() error = %v, want ErrConflict", err)
 	}
-	current, err := repo.Get(ctx, created.Aggregate.SnapshotID)
+	current, err := repo.Get(ctx, "en-US")
 	if err != nil || current.Aggregate.Revision != 1 || current.Aggregate.PublishedRevision != 1 {
 		t.Fatalf("stale commit changed workspace: %#v, err %v", current, err)
 	}
 }
 
-func TestSiteWorkspaceAndPageSelectionsUseDistinctCoreScopes(t *testing.T) {
+func TestGlobalWorkspaceAndPageSelectionsUseDistinctCoreScopes(t *testing.T) {
 	store := newMemoryStore()
 	repo, err := repository.New(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	siteID := "11111111-1111-4111-8111-111111111111"
 	pageID := "22222222-2222-4222-8222-222222222222"
-	_, err = repo.Create(context.Background(), siteID, domain.StoredWorkspace{
-		Aggregate: domain.Aggregate{SnapshotID: siteID, Records: []domain.Record{}},
+	_, err = repo.Create(context.Background(), domain.StoredWorkspace{
+		Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}},
 		PageSelections: map[string]domain.StoredPageSelections{
 			pageID: {Draft: []domain.Selection{}, Published: []domain.Selection{}},
 		},
@@ -73,54 +72,53 @@ func TestSiteWorkspaceAndPageSelectionsUseDistinctCoreScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	siteKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "site", ScopeID: siteID, RecordKey: "workspace"}
-	pageKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageID, RecordKey: "page-selections"}
-	if _, ok := store.rows[siteKey]; !ok {
-		t.Fatal("missing site-scoped workspace record")
+	globalKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "global", ScopeID: domain.GlobalScopeID, RecordKey: "workspace/en-US"}
+	pageKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageID, RecordKey: "page-selections/en-US"}
+	if _, ok := store.rows[globalKey]; !ok {
+		t.Fatal("missing globally scoped workspace record")
 	}
 	if _, ok := store.rows[pageKey]; !ok {
 		t.Fatal("missing page-snapshot-scoped selections record")
 	}
-	stored, err := repo.Get(context.Background(), siteID)
+	stored, err := repo.Get(context.Background(), "en-US")
 	pageState, exists := stored.PageSelections[pageID]
 	if err != nil || !exists || pageState.Draft == nil || pageState.Published == nil || pageState.StoreRevision != 1 {
 		t.Fatalf("Get() did not hydrate page-scoped selections: %#v, err %v", stored, err)
 	}
 }
 
-func TestIndependentPageSelectionCASDoesNotAdvanceSiteWorkspaceRevision(t *testing.T) {
+func TestIndependentPageSelectionCASDoesNotAdvanceGlobalWorkspaceRevision(t *testing.T) {
 	store := newMemoryStore()
 	repo, err := repository.New(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	siteID := "11111111-1111-4111-8111-111111111111"
 	pageA := "22222222-2222-4222-8222-222222222222"
 	pageB := "33333333-3333-4333-8333-333333333333"
-	created, err := repo.Create(ctx, siteID, domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: siteID, Records: []domain.Record{}}})
+	created, err := repo.Create(ctx, domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	selectionA := []domain.Selection{{PlacementID: "44444444-4444-4444-8444-444444444444", InputKey: "items", Mode: "all"}}
-	if _, err := repo.CommitPageSelections(ctx, siteID, pageA, 0, selectionA, []domain.Selection{}, nil); err != nil {
+	if _, err := repo.CommitPageSelections(ctx, pageA, "en-US", 0, selectionA, []domain.Selection{}, nil); err != nil {
 		t.Fatalf("write page A: %v", err)
 	}
 	selectionB := []domain.Selection{{PlacementID: "55555555-5555-4555-8555-555555555555", InputKey: "items", Mode: "all"}}
-	if _, err := repo.CommitPageSelections(ctx, siteID, pageB, 0, selectionB, []domain.Selection{}, nil); err != nil {
+	if _, err := repo.CommitPageSelections(ctx, pageB, "en-US", 0, selectionB, []domain.Selection{}, nil); err != nil {
 		t.Fatalf("unrelated page B write conflicted: %v", err)
 	}
-	latest, err := repo.Get(ctx, siteID)
+	latest, err := repo.Get(ctx, "en-US")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if latest.StoreRevision != created.StoreRevision {
-		t.Fatalf("page selection writes advanced site workspace revision: %d -> %d", created.StoreRevision, latest.StoreRevision)
+		t.Fatalf("page selection writes advanced global workspace revision: %d -> %d", created.StoreRevision, latest.StoreRevision)
 	}
 	if latest.PageSelections[pageA].StoreRevision != 1 || latest.PageSelections[pageB].StoreRevision != 1 {
 		t.Fatalf("page-scoped revisions = %#v, want both 1", latest.PageSelections)
 	}
-	if _, err := repo.CommitPageSelections(ctx, siteID, pageA, 0, []domain.Selection{}, []domain.Selection{}, nil); !errors.Is(err, domain.ErrConflict) {
+	if _, err := repo.CommitPageSelections(ctx, pageA, "en-US", 0, []domain.Selection{}, []domain.Selection{}, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale same-page write error = %v, want conflict", err)
 	}
 }
@@ -132,11 +130,10 @@ func TestCommitUpdatesOnlyChangedPageSelectionRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	siteID := "11111111-1111-4111-8111-111111111111"
 	pageA := "22222222-2222-4222-8222-222222222222"
 	pageB := "33333333-3333-4333-8333-333333333333"
-	created, err := repo.Create(ctx, siteID, domain.StoredWorkspace{
-		Aggregate: domain.Aggregate{SnapshotID: siteID, Records: []domain.Record{}},
+	created, err := repo.Create(ctx, domain.StoredWorkspace{
+		Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}},
 		PageSelections: map[string]domain.StoredPageSelections{
 			pageA: {Draft: []domain.Selection{}, Published: []domain.Selection{}},
 			pageB: {Draft: []domain.Selection{}, Published: []domain.Selection{}},
@@ -151,7 +148,7 @@ func TestCommitUpdatesOnlyChangedPageSelectionRecords(t *testing.T) {
 	changedDraft := []domain.Selection{{PlacementID: "44444444-4444-4444-8444-444444444444", InputKey: "items", Mode: "all"}}
 	changed.PageSelections[pageA] = domain.StoredPageSelections{Draft: changedDraft, Published: []domain.Selection{}, StoreRevision: 1}
 
-	committed, err := repo.Commit(ctx, siteID, created.StoreRevision, changed, nil)
+	committed, err := repo.Commit(ctx, created.StoreRevision, changed, nil)
 	if err != nil || committed.StoreRevision != created.StoreRevision+1 {
 		t.Fatalf("Commit() = %#v, err %v", committed, err)
 	}
@@ -161,7 +158,7 @@ func TestCommitUpdatesOnlyChangedPageSelectionRecords(t *testing.T) {
 	if committed.PageSelections[pageB].StoreRevision != 1 {
 		t.Fatalf("unchanged page revision = %d, want 1", committed.PageSelections[pageB].StoreRevision)
 	}
-	pageRecord, err := store.Get(ctx, core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageB, RecordKey: "page-selections"})
+	pageRecord, err := store.Get(ctx, core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageB, RecordKey: "page-selections/en-US"})
 	if err != nil || pageRecord.Revision != 1 {
 		t.Fatalf("unchanged page record = %#v, err %v", pageRecord, err)
 	}
@@ -169,7 +166,7 @@ func TestCommitUpdatesOnlyChangedPageSelectionRecords(t *testing.T) {
 	stale.Aggregate.Revision++
 	stale.ChangedPageSelectionIDs = []string{pageA}
 	stale.PageSelections[pageA] = domain.StoredPageSelections{Draft: changedDraft, Published: []domain.Selection{}, StoreRevision: 1}
-	if _, err := repo.Commit(ctx, siteID, created.StoreRevision, stale, nil); !errors.Is(err, domain.ErrConflict) {
+	if _, err := repo.Commit(ctx, created.StoreRevision, stale, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale page CAS error = %v, want conflict", err)
 	}
 }
@@ -181,31 +178,30 @@ func TestReplaceLocaleConfigCanonicalizesAndGuardsCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	siteID := "11111111-1111-4111-8111-111111111111"
-	if _, err := repo.GetLocaleConfig(ctx, siteID); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := repo.GetLocaleConfig(ctx); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("GetLocaleConfig() before initialization error = %v, want not found", err)
 	}
 	request := domain.ReplaceLocaleConfigRequest{ExpectedRevision: 0, Locales: []string{"EN-us", "fr"}, DefaultLocale: "en-us"}
-	config, err := repo.ReplaceLocaleConfig(ctx, siteID, request, "key-one", "fingerprint-one")
+	config, err := repo.ReplaceLocaleConfig(ctx, request, "key-one", "fingerprint-one")
 	if err != nil || config.Revision != 1 || !reflect.DeepEqual(config.Locales, []string{"en-US", "fr"}) || config.DefaultLocale != "en-US" {
 		t.Fatalf("ReplaceLocaleConfig() = %#v, err %v", config, err)
 	}
-	replayed, err := repo.ReplaceLocaleConfig(ctx, siteID, request, "key-one", "fingerprint-one")
+	replayed, err := repo.ReplaceLocaleConfig(ctx, request, "key-one", "fingerprint-one")
 	if err != nil || !reflect.DeepEqual(replayed, config) {
 		t.Fatalf("idempotent ReplaceLocaleConfig() = %#v, err %v", replayed, err)
 	}
-	if _, err := repo.ReplaceLocaleConfig(ctx, siteID, request, "key-one", "fingerprint-two"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := repo.ReplaceLocaleConfig(ctx, request, "key-one", "fingerprint-two"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("same key with changed payload error = %v, want conflict", err)
 	}
 	duplicate := domain.ReplaceLocaleConfigRequest{ExpectedRevision: 1, Locales: []string{"en-US", "EN-us"}, DefaultLocale: "en"}
-	if _, err := repo.ReplaceLocaleConfig(ctx, siteID, duplicate, "key-two", "fingerprint-two"); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := repo.ReplaceLocaleConfig(ctx, duplicate, "key-two", "fingerprint-two"); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("duplicate canonical locale error = %v, want invalid", err)
 	}
 	shrink := domain.ReplaceLocaleConfigRequest{ExpectedRevision: 1, Locales: []string{"en-US"}, DefaultLocale: "en-US"}
-	if _, err := repo.ReplaceLocaleConfig(ctx, siteID, shrink, "key-three", "fingerprint-three"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := repo.ReplaceLocaleConfig(ctx, shrink, "key-three", "fingerprint-three"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("shrinking catalog error = %v, want conflict", err)
 	}
-	loaded, err := repo.GetLocaleConfig(ctx, siteID)
+	loaded, err := repo.GetLocaleConfig(ctx)
 	if err != nil || !reflect.DeepEqual(loaded, config) {
 		t.Fatalf("GetLocaleConfig() = %#v, err %v", loaded, err)
 	}
@@ -218,31 +214,30 @@ func TestHistoryListUsesBoundedCursorAndReturnsImmutableRecords(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	ctx := context.Background()
-	snapshotID := "11111111-1111-4111-8111-111111111111"
-	created, err := repo.Create(ctx, snapshotID, domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: snapshotID, Records: []domain.Record{}}})
+	created, err := repo.Create(ctx, domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}}})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	for revision, id := range []string{"22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"} {
-		publication := domain.Publication{ID: id, DraftRevision: int64(revision + 1), ContentRevision: int64(revision + 1), CreatedAt: time.Date(2026, time.November, 18, 10, revision, 0, 0, time.UTC), Records: []domain.Record{}, Selections: []domain.Selection{}}
+		publication := domain.Publication{ID: id, Locale: "en-US", DraftRevision: int64(revision + 1), ContentRevision: int64(revision + 1), CreatedAt: time.Date(2026, time.November, 18, 10, revision, 0, 0, time.UTC), Records: []domain.Record{}, Selections: []domain.Selection{}}
 		next := cloneRepositoryStored(created)
 		next.Aggregate.Revision = int64(revision + 1)
 		next.Aggregate.PublishedRevision = int64(revision + 1)
-		created, err = repo.Commit(ctx, snapshotID, created.StoreRevision, next, &publication)
+		created, err = repo.Commit(ctx, created.StoreRevision, next, &publication)
 		if err != nil {
 			t.Fatalf("Commit(%d) error = %v", revision, err)
 		}
 	}
-	first, next, err := repo.ListHistory(ctx, snapshotID, "", 2)
+	first, next, err := repo.ListHistory(ctx, "en-US", "", 2)
 	if err != nil || len(first) != 2 || next == "" {
 		t.Fatalf("first ListHistory() = %d items, cursor %q, err %v", len(first), next, err)
 	}
-	second, terminal, err := repo.ListHistory(ctx, snapshotID, next, 2)
+	second, terminal, err := repo.ListHistory(ctx, "en-US", next, 2)
 	if err != nil || len(second) != 1 || terminal != "" {
 		t.Fatalf("second ListHistory() = %d items, cursor %q, err %v", len(second), terminal, err)
 	}
 	for _, item := range append(first, second...) {
-		loaded, err := repo.GetHistoryByContentRevision(ctx, snapshotID, item.ContentRevision)
+		loaded, err := repo.GetHistoryByContentRevision(ctx, "en-US", item.ContentRevision)
 		if err != nil || loaded.ID != item.ID {
 			t.Fatalf("GetHistoryByContentRevision(%d) = %#v, err %v", item.ContentRevision, loaded, err)
 		}

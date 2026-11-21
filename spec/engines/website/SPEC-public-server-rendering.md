@@ -44,6 +44,4 @@ Diagnostics ограничены allowlisted стадиями и безопас�
 - Проверить route/status/SEO, 404/503/500, system-page overrides, publication/restore и отсутствие drafts/private data в public HTML.
 - Проверить cache identity, validators, query semantics, concurrency coalescing, publish/assignment invalidation и отказ от кеширования частичного/ошибочного результата.
 - Проверить Chromium sandbox, запросы worker, retries и приватность diagnostics на изолированной disposable среде.
-- Запустить applicable browser acceptance на актуальных Vitasil ZIP: главная, каталог, detail, форма, media и system pages; проверить navigation и отсутствие browser errors.
-- Lighthouse Performance target для Vitasil `/`, `/catalog` и `/catalog/{slug}` — median 100 на стандартных mobile и desktop профилях, пять повторов для каждой комбинации маршрута/профиля/cold-warm Engine HTML cache. Browser cache очищается перед каждым запуском; фиксируются scores и HTTP status. Этот lab target не обещает результат на произвольных устройствах/сетях и не заменяет field Core Web Vitals.
 - Все browser/API acceptance выполнять только с disposable DB/storage. Фактические результаты, ограничения и незакрытые сценарии записывать в [QA_REPORT.md](../../../docs/QA_REPORT.md); критерии здесь сами по себе не подтверждают прохождение.

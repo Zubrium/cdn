@@ -79,7 +79,6 @@ export type WebsiteSnapshotState = "provisioning" | "ready" | "failed";
 
 export interface WebsiteSnapshot {
   id: string;
-  site_id: string;
   page_id: string;
   parent_id?: string;
   parent_name?: string;
@@ -110,7 +109,6 @@ export interface WebsiteSnapshotPage {
 
 export interface WebsitePage {
   id: string;
-  site_id: string;
   name: string;
   latest_snapshot_id: string;
   latest_snapshot_state: WebsiteSnapshotState;
@@ -131,7 +129,6 @@ export interface WebsitePageTemplateConfiguration {
 
 export interface WebsitePageTemplate {
   id: string;
-  site_id: string;
   name: string;
   description: string;
   revision: number;
@@ -479,9 +476,8 @@ export interface DataModel {
   positions?: Record<string, { x: number; y: number }>;
 }
 
-export interface SiteContentSchema {
+export interface ContentModel {
   version: 1;
-  siteId: string;
   modelRevision: number;
   digest: string;
   dataModel: DataModel;
@@ -555,7 +551,6 @@ export interface SiteSnapshot {
   state: WebsiteSnapshotState;
   contentRevision?: number;
   id: string;
-  siteId: string;
   pageId: string;
   revision?: number;
   parentSnapshotId?: string;
@@ -651,8 +646,7 @@ export interface ModelContentSelection {
 }
 
 export interface ModelContentWorkspace {
-  snapshot: Pick<WebsiteSnapshot, "id" | "site_id" | "page_id">;
-  siteId: string;
+  snapshot: Pick<WebsiteSnapshot, "id" | "page_id">;
   pageSnapshotId: string;
   pageId: string;
   locale: string;

@@ -130,10 +130,6 @@ type FormsAPI struct {
 	ExportMaxBytes             int64  `yaml:"export_max_bytes"`
 }
 
-type Website struct {
-	SiteIDs []string `yaml:"site_ids"`
-}
-
 type HTTP struct {
 	ListenAddress     string `yaml:"listen_address"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
@@ -223,10 +219,6 @@ type FormsAPISettings struct {
 	ExportMaxBytes             int64
 }
 
-type WebsiteSettings struct {
-	Sites []string
-}
-
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -234,7 +226,6 @@ type Resolved struct {
 	AdminAPI               AdminAPISettings
 	RouterAPI              RouterAPISettings
 	FormsAPI               FormsAPISettings
-	Website                WebsiteSettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
@@ -248,11 +239,6 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 	selected := make(map[string]struct{}, len(plan.Components))
 	for _, component := range plan.Components {
 		selected[component] = struct{}{}
-	}
-	if _, hasWebsite := selected["engine.website"]; hasWebsite {
-		if _, fixtures := selected["development.fixtures"]; !fixtures && (len(r.Website.Sites) == 0 || !validWebsiteSiteIDs(r.Website.Sites)) {
-			return errors.New("Website Engine requires explicit static site_ids")
-		}
 	}
 	if _, hasCoordinatorAPI := selected["admin.coordinator"]; hasCoordinatorAPI {
 		if !platform.ValidAccessGroupKey(r.Coordinator.WorkflowAccessGroup) {
@@ -373,9 +359,6 @@ func (r Resolved) WithBuildPlan(plan platform.BuildPlan) (Resolved, error) {
 func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if getenv == nil {
 		return Resolved{}, errors.New("missing environment lookup")
-	}
-	if !validWebsiteSiteIDs(c.Website.SiteIDs) {
-		return Resolved{}, errors.New("invalid Website site_ids")
 	}
 	durations := []string{c.Core.ConnectTimeout, c.Core.MaxLifetime, c.Core.MaxIdleTime, c.Core.HealthInterval, c.Core.MigrationLockTimeout, c.Core.CacheTTL, c.Core.MaintenanceInterval, c.Core.MaintenanceTimeout, c.Core.PendingTTL, c.Core.SessionIdleTTL, c.Core.SessionAbsoluteTTL}
 	var parsed [11]time.Duration
@@ -588,7 +571,6 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		FormsAPI: FormsAPISettings{FileServiceCredential: formsFileServiceCredential, VisitorSessionTTL: formsSessionTTL,
 			VisitorSessionCleanupEvery: formsCleanupInterval, ExportMaxConcurrent: c.FormsAPI.ExportMaxConcurrent,
 			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},
-		Website: WebsiteSettings{Sites: append([]string(nil), c.Website.SiteIDs...)},
 		Coordinator: CoordinatorSettings{
 			WorkflowAccessGroup:  c.Coordinator.WorkflowAccessGroup,
 			WorkflowsPageDefault: c.Coordinator.WorkflowsPageDefault, WorkflowsPageMaximum: c.Coordinator.WorkflowsPageMaximum,
@@ -609,13 +591,11 @@ type Config struct {
 	AdminAPI    AdminAPI          `yaml:"admin_api"`
 	RouterAPI   RouterAPI         `yaml:"router_api"`
 	FormsAPI    FormsAPI          `yaml:"forms_api"`
-	Website     Website           `yaml:"website"`
 	HTTP        HTTP              `yaml:"http"`
 	Coordinator CoordinatorConfig `yaml:"coordinator"`
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-var websiteSiteIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 func configFingerprint(config Config, runtimeURL, migrationURL string) (string, error) {
 	config.Core.DatabaseURLEnv = ""
@@ -779,23 +759,6 @@ func validBranchID(value string) bool {
 		if char < 0x21 || char == 0x7f || char == '/' || char == '\\' {
 			return false
 		}
-	}
-	return true
-}
-
-func validWebsiteSiteIDs(values []string) bool {
-	if len(values) > 256 {
-		return false
-	}
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if !websiteSiteIDPattern.MatchString(value) {
-			return false
-		}
-		if _, duplicate := seen[value]; duplicate {
-			return false
-		}
-		seen[value] = struct{}{}
 	}
 	return true
 }

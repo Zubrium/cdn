@@ -198,8 +198,26 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		if s.config.SyntheticData {
 			wrapped = syntheticDataMode(wrapped)
 		}
-		mux.Handle("/api/admin/sites", wrapped)
-		mux.Handle("/api/admin/sites/", wrapped)
+		for _, pattern := range []string{
+			"/api/admin/model",
+			"/api/admin/model/",
+			"/api/admin/pages",
+			"/api/admin/pages/",
+			"/api/admin/templates",
+			"/api/admin/templates/",
+			"/api/admin/snapshots",
+			"/api/admin/snapshots/",
+			"/api/admin/builds",
+			"/api/admin/builds/",
+			"/api/admin/features",
+			"/api/admin/features/",
+			"/api/admin/feature-imports",
+			"/api/admin/feature-imports/",
+			"/api/admin/media",
+			"/api/admin/media/",
+		} {
+			mux.Handle(pattern, wrapped)
+		}
 	}
 	if s.deps.Content != nil {
 		handler, err := contentadmin.NewHandler(s.deps.Content, s.deps.ContentSchemas, contentadmin.Config{

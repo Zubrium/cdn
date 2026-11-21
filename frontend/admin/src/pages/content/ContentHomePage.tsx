@@ -11,12 +11,11 @@ export default function ContentHomePage() {
   const location = useLocation();
   const { entityKey = "", recordId = "" } = useParams();
   const requestedSnapshotID = searchParams.get("snapshot") ?? "";
-  const requestedSiteID = searchParams.get("site_id") ?? "";
   const requestedPageID = searchParams.get("page_id") ?? "";
   const requestedLocale = searchParams.get("locale") ?? "";
   const snapshots = useQuery({
-    queryKey: ["website", "snapshots", "content", requestedSiteID, requestedPageID],
-    queryFn: ({ signal }) => api.website.allSnapshots(signal, requestedSiteID || undefined, requestedPageID || undefined),
+    queryKey: ["website", "snapshots", "content", requestedPageID],
+    queryFn: ({ signal }) => api.website.allSnapshots(signal, requestedPageID || undefined),
   });
   const allSnapshots = useMemo(() => snapshots.data ?? [], [snapshots.data]);
   const readySnapshots = useMemo(() => allSnapshots.filter((snapshot) => snapshot.state === "ready"), [allSnapshots]);
@@ -25,9 +24,8 @@ export default function ContentHomePage() {
     ? requestedSnapshot.state === "ready" ? requestedSnapshot : undefined
     : readySnapshots[0];
   const localeConfig = useQuery({
-    queryKey: ["content", "locales", selectedSnapshot?.site_id],
-    queryFn: ({ signal }) => api.contentEngine.localeConfig(selectedSnapshot!.site_id, signal),
-    enabled: Boolean(selectedSnapshot),
+    queryKey: ["content", "locales"],
+    queryFn: ({ signal }) => api.contentEngine.localeConfig(signal),
   });
   const selectedLocale = localeConfig.data?.locales.includes(requestedLocale)
     ? requestedLocale
@@ -37,13 +35,12 @@ export default function ContentHomePage() {
 
   useEffect(() => {
     if (!selectedSnapshot || (requestedSnapshot && requestedSnapshot.id !== selectedSnapshot.id)) return;
-    if (requestedSnapshotID === selectedSnapshot.id && requestedSiteID === selectedSnapshot.site_id && requestedPageID === selectedSnapshot.page_id) return;
+    if (requestedSnapshotID === selectedSnapshot.id && requestedPageID === selectedSnapshot.page_id) return;
     const next = new URLSearchParams(searchParams);
     next.set("snapshot", selectedSnapshot.id);
-    next.set("site_id", selectedSnapshot.site_id);
     next.set("page_id", selectedSnapshot.page_id);
     setSearchParams(next, { replace: true });
-  }, [requestedPageID, requestedSiteID, requestedSnapshot, requestedSnapshotID, searchParams, selectedSnapshot, setSearchParams]);
+  }, [requestedPageID, requestedSnapshot, requestedSnapshotID, searchParams, selectedSnapshot, setSearchParams]);
 
   useEffect(() => {
     if (!selectedSnapshot || !selectedLocale || requestedLocale === selectedLocale) return;
@@ -65,7 +62,7 @@ export default function ContentHomePage() {
     return <div className="page-grid"><PageHeader title="Контент" description="Данные появятся после завершения копирования в дочерний снапшот." /><EmptyState title="Снапшот готовится" description="Пока Website и Content завершают durable workflow, черновики и публикации недоступны." action={<Button type="button" variant="outline" onClick={() => void snapshots.refetch()} loading={snapshots.isFetching}>Обновить состояние</Button>} /></div>;
   }
   if (!selectedSnapshot) {
-    return <div className="page-grid"><PageHeader title="Контент" description="Записи и их публикации для выбранной структуры сайта." /><EmptyState title="Нет готовых снапшотов" description={allSnapshots.length ? "Дождитесь завершения подготовки снапшота." : "Создайте снапшот в разделе «Сайт», затем добавьте в нём модель данных."} action={allSnapshots.length ? <Button type="button" variant="outline" onClick={() => void snapshots.refetch()} loading={snapshots.isFetching}>Обновить состояние</Button> : undefined} /></div>;
+    return <div className="page-grid"><PageHeader title="Контент" description="Записи и их публикации для выбранной структуры страницы." /><EmptyState title="Нет готовых снапшотов" description={allSnapshots.length ? "Дождитесь завершения подготовки снапшота." : "Создайте снапшот в разделе «Редактор страниц», затем добавьте в нём модель данных."} action={allSnapshots.length ? <Button type="button" variant="outline" onClick={() => void snapshots.refetch()} loading={snapshots.isFetching}>Обновить состояние</Button> : undefined} /></div>;
   }
   if (localeConfig.isLoading) return <LoadingPage label="Загружаем каталог локалей…" />;
   if (localeConfig.error) return <div className="page-grid"><ErrorState error={localeConfig.error} title="Не удалось загрузить локали контента" onRetry={() => void localeConfig.refetch()} /></div>;
@@ -107,10 +104,7 @@ export default function ContentHomePage() {
         const next = new URLSearchParams(searchParams);
         next.set("snapshot", snapshotID);
         const nextSnapshot = readySnapshots.find((candidate) => candidate.id === snapshotID);
-        if (nextSnapshot) {
-          next.set("site_id", nextSnapshot.site_id);
-          next.set("page_id", nextSnapshot.page_id);
-        }
+        if (nextSnapshot) next.set("page_id", nextSnapshot.page_id);
         setSearchParams(next);
       }}
     />

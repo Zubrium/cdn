@@ -4,8 +4,8 @@ import { PageHeader, useDocumentTitle } from "@/components/common/page";
 import { Badge } from "@/components/ui/badge";
 
 const previewAssignments = [
-  { branch: "основная", site: "витрина", snapshot: "#18 · Каталог" },
-  { branch: "предпросмотр", site: "витрина", snapshot: "#21 · Новая главная" },
+  { branch: "основная", snapshot: "#18 · Каталог" },
+  { branch: "предпросмотр", snapshot: "#21 · Новая главная" },
 ];
 
 export default function BranchesPage() {
@@ -36,7 +36,6 @@ export default function BranchesPage() {
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr>
                   <th scope="col" className="px-4 py-2.5 font-medium">Ветка</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Сайт</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Назначенный снапшот</th>
                 </tr>
               </thead>
@@ -44,7 +43,6 @@ export default function BranchesPage() {
                 {previewAssignments.map((item) => (
                   <tr key={item.branch}>
                     <th scope="row" className="px-4 py-3 font-medium">{item.branch}</th>
-                    <td className="px-4 py-3 text-muted-foreground">{item.site}</td>
                     <td className="px-4 py-3">{item.snapshot}</td>
                   </tr>
                 ))}

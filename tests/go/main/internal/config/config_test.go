@@ -51,6 +51,9 @@ func TestLoadRequiresExplicitCoreConfiguration(t *testing.T) {
 	if _, err := Load(strings.NewReader("defaults: &defaults {database_url_env: DB_URL}\ncore: *defaults\n")); err == nil {
 		t.Fatal("configuration alias accepted")
 	}
+	if _, err := Load(strings.NewReader(validCoreYAML + "website:\n  site_ids:\n    - main\n")); err == nil {
+		t.Fatal("removed website site configuration accepted")
+	}
 }
 
 func TestCoordinatorFingerprintIncludesConnectionPolicyAndOmitsCredentials(t *testing.T) {
@@ -361,26 +364,14 @@ func TestResolveRejectsSharedRuntimeAndMigrationDatabaseUser(t *testing.T) {
 	}
 }
 
-func TestWebsiteBuildRequiresExplicitStaticSitesOutsideFixtures(t *testing.T) {
+func TestWebsiteBuildUsesSingleImplicitScope(t *testing.T) {
 	production := platform.BuildPlan{Components: []string{"engine.website"}}
-	if err := (Resolved{}).ValidateBuildPlan(production); err == nil {
-		t.Fatal("Website production build accepted no configured sites")
-	}
-	configured := Resolved{Website: WebsiteSettings{Sites: []string{"main-site"}}}
-	if err := configured.ValidateBuildPlan(production); err != nil {
-		t.Fatalf("Website production build rejected configured sites: %v", err)
+	if err := (Resolved{}).ValidateBuildPlan(production); err != nil {
+		t.Fatalf("Website production build must not require site configuration: %v", err)
 	}
 	fixtures := platform.BuildPlan{Components: []string{"engine.website", "development.fixtures"}}
 	if err := (Resolved{}).ValidateBuildPlan(fixtures); err != nil {
-		t.Fatalf("development fixtures unexpectedly require production sites: %v", err)
-	}
-	for _, sites := range [][]string{{"bad/site"}, {"duplicate", "duplicate"}, make([]string, 257)} {
-		if validWebsiteSiteIDs(sites) {
-			t.Fatalf("invalid Website site IDs accepted: count=%d", len(sites))
-		}
-		if err := (Resolved{Website: WebsiteSettings{Sites: sites}}).ValidateBuildPlan(production); err == nil {
-			t.Fatalf("production build accepted invalid Website site IDs: count=%d", len(sites))
-		}
+		t.Fatalf("Website fixture build must not require site configuration: %v", err)
 	}
 }
 

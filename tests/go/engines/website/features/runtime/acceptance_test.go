@@ -4,7 +4,7 @@ import "testing"
 
 // TestWebsiteRuntimeAcceptance owns the executable assertions referenced by
 // the Website scenario ledger for the static-lifecycle runtime layer. Scenarios
-// that require live Composition, Router CAS or Vitasil features stay open in
+// that require live Composition, Router CAS features stay open in
 // tests/qa/website-scenarios.json and are not claimed here.
 func TestWebsiteRuntimeAcceptance(t *testing.T) {
 	t.Run("WEB-023", func(t *testing.T) {

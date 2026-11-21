@@ -16,7 +16,7 @@ vi.mock("@/components/common/confirm", () => ({ useConfirm: mocks.useConfirm }))
 
 import SubmissionsPage from "../../../../../../frontend/admin/src/pages/submissions/SubmissionsPage";
 
-const snapshot = { id: "snapshot-1", site_id: "site-1", name: "Homepage", sequence: 1, revision: 1, feature_pins: {}, state: "published" };
+const snapshot = { id: "snapshot-1", page_id: "home", name: "Homepage", sequence: 1, revision: 1, feature_pins: {}, state: "published" };
 const schema = { id: "form-1", key: "contact", version: 1, fields: {}, revision: 1 };
 const submission = {
   id: "submission-1", form_id: "form-1", state: "new", values: { email: "person@example.test" },

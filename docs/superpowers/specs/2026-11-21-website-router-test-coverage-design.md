@@ -19,7 +19,7 @@
 1. Unit: domain/application rules, валидация, URL/path/locale matching, error mapping, state transitions и изоляция отказов.
 2. Contract: строгое соответствие HTTP/OpenAPI и typed component/worker contracts; отсутствие прямых междвижковых вызовов и обходов capability.
 3. Integration: адаптеры и persistence на disposable PostgreSQL и disposable object storage; проверка CAS, идемпотентности, access revocation, streaming, восстановления и cleanup.
-4. E2E: реальные HTTP процессы и браузер для admin/public flow на изолированных disposable данных; никаких write-запросов к рабочему API, БД, bucket или Vitasil stack.
+4. E2E: реальные HTTP процессы и браузер для admin/public flow на изолированных disposable данных; никаких write-запросов к рабочему API, БД, bucket.
 
 Тестовые данные и внешние ресурсы создаются с уникальными именами, после прогона удаляются только ресурсы, созданные этим прогоном. Отсутствие обязательной инфраструктуры должно обозначаться отдельным явным статусом, а не считаться успехом или покрытием.
 
@@ -34,7 +34,7 @@
 ## Ограничения и нецели
 
 - Не переписывать или ослаблять утверждённые контракты, чтобы подогнать их под текущую реализацию.
-- Не включать production credentials, live API/DB/storage и не использовать Vitasil shared stack для write QA.
+- Не включать production credentials, live API/DB/storage и не использовать shared stack для write QA.
 - Не реализовывать новые продуктовые возможности до фиксации соответствующего требуемого сценария.
 - Не вводить самостоятельные требования к проценту покрытия строк; его можно собирать отдельно как диагностическую метрику.
 - Не объединять ответственность Website и Router: Website создаёт и проверяет page artifact; Router управляет route mapping и delivery.

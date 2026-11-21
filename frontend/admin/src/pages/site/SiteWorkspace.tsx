@@ -8,7 +8,7 @@ import { ErrorState, useDocumentTitle, useUnsavedChangesGuard } from "@/componen
 import { useConfirm } from "@/components/common/confirm";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import type { DataModel, SiteConfig, SiteContentSchema, SiteEditorDraft, SiteMetadata, SiteSnapshot } from "@/types";
+import type { ContentModel, DataModel, SiteConfig, SiteEditorDraft, SiteMetadata, SiteSnapshot } from "@/types";
 import { hasCompetingSiteDraftChange, parseSiteDraft, siteDraftKey } from "./workspace-draft";
 import { featureVersionChanges, normalizeFeatureComposition } from "./feature-selection";
 import { siteContextQuery } from "./site-query";
@@ -42,7 +42,7 @@ const siteEditorModes = [
   ["/site/pages", "Страницы"],
   ["/site/templates", "Шаблоны"],
   ["/site/features", "Версии"],
-  ["/site/settings", "Настройки сайта"],
+  ["/site/settings", "Настройки"],
   ["/site/data-model", "Модель данных"],
 ] as const;
 const siteEditorModePaths = new Set<string>(siteEditorModes.map(([path]) => path));
@@ -92,13 +92,12 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const selected = params.get("snapshot") ?? "";
-  const requestedSiteID = params.get("site_id") ?? "";
   const requestedPageID = params.get("page_id") ?? "";
   useDocumentTitle("Снапшоты");
 
   const snapshots = useQuery({
-    queryKey: ["site", "snapshot-choices", requestedSiteID, requestedPageID],
-    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, requestedPageID || undefined, requestedSiteID || undefined),
+    queryKey: ["site", "snapshot-choices", requestedPageID],
+    queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, requestedPageID || undefined),
   });
   const readySnapshotItems = readySnapshots(snapshots.data?.items ?? []);
   const selectedSnapshotState = snapshots.data?.items.find((item) => item.id === selected)?.state;
@@ -150,20 +149,17 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     setError(null);
     try {
       const detail = selected ? await api.siteBuilder.snapshot(selected) : null;
-      let modelSchema: SiteContentSchema | null = null;
-      if (detail?.snapshot.siteId) {
-        try {
-          modelSchema = await api.website.siteModel(detail.snapshot.siteId);
-        } catch (reason) {
-          if (!isApiError(reason) || reason.status !== 404) throw reason;
-          modelSchema = {
-            version: 1,
-            siteId: detail.snapshot.siteId,
-            modelRevision: 0,
-            digest: "",
-            dataModel: { formatVersion: 1, entities: [], positions: {} },
-          };
-        }
+      let modelSchema: ContentModel;
+      try {
+        modelSchema = await api.website.contentModel();
+      } catch (reason) {
+        if (!isApiError(reason) || reason.status !== 404) throw reason;
+        modelSchema = {
+          version: 1,
+          modelRevision: 0,
+          digest: "",
+          dataModel: { formatVersion: 1, entities: [], positions: {} },
+        };
       }
       if (request !== requestNumber.current) return;
       let initial = detail ? editorDraftFromConfig(detail.payload.config) : emptyConfig();
@@ -209,7 +205,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   useEffect(() => {
     if (!selected && readySnapshotItems.length > 0) {
       const first = readySnapshotItems[0]!;
-      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", first.id); next.set("site_id", first.siteId); next.set("page_id", first.pageId); return next; }, { replace: true });
+      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", first.id); next.set("page_id", first.pageId); return next; }, { replace: true });
     }
   }, [selected, setParams, readySnapshotItems]);
 
@@ -226,9 +222,9 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   }, [reload, selected, waitingForSelection]);
 
   useEffect(() => {
-    if (!selected || snapshot?.id !== selected || !snapshot.siteId || !snapshot.pageId || (requestedSiteID === snapshot.siteId && requestedPageID === snapshot.pageId)) return;
-    setParams((current) => { const next = new URLSearchParams(current); next.set("site_id", snapshot.siteId); next.set("page_id", snapshot.pageId); return next; }, { replace: true });
-  }, [requestedPageID, requestedSiteID, selected, setParams, snapshot]);
+    if (!selected || snapshot?.id !== selected || !snapshot.pageId || requestedPageID === snapshot.pageId) return;
+    setParams((current) => { const next = new URLSearchParams(current); next.set("page_id", snapshot.pageId); return next; }, { replace: true });
+  }, [requestedPageID, selected, setParams, snapshot]);
 
   useEffect(() => {
     if (!selected || !snapshot || snapshot.id !== selected || !selectedSnapshotState || selectedSnapshotState === snapshot.state) return;
@@ -249,7 +245,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     protectSearch: (current, next) => {
       const currentParams = new URLSearchParams(current);
       const nextParams = new URLSearchParams(next);
-      return currentParams.get("snapshot") !== nextParams.get("snapshot") || currentParams.get("site_id") !== nextParams.get("site_id") || currentParams.get("page_id") !== nextParams.get("page_id");
+      return currentParams.get("snapshot") !== nextParams.get("snapshot") || currentParams.get("page_id") !== nextParams.get("page_id");
     },
   });
 
@@ -289,12 +285,12 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
 
   const saveDataModel = useCallback(async () => {
     const submitted = currentDataModel.current;
-    if (!submitted || !snapshot || modelSaving) return false;
+    if (!submitted || modelSaving) return false;
     if (savedDataModelRef.current && JSON.stringify(submitted) === JSON.stringify(savedDataModelRef.current)) return true;
     setModelSaving(true);
     setModelConflict(false);
     try {
-      const saved = await api.website.saveSiteModel(snapshot.siteId, modelRevision, submitted);
+      const saved = await api.website.saveContentModel(modelRevision, submitted);
       savedDataModelRef.current = saved.dataModel;
       setSavedDataModel(saved.dataModel);
       setModelRevision(saved.modelRevision);
@@ -311,7 +307,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     } finally {
       setModelSaving(false);
     }
-  }, [modelRevision, modelSaving, snapshot]);
+  }, [modelRevision, modelSaving]);
 
   const save = useCallback(async (name?: string) => {
     if (modelDirty && !(await saveDataModel())) return false;
@@ -327,7 +323,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     const isDirtyNow = () => currentConfig.current !== savedConfigRef.current || JSON.stringify(currentMetadata.current) !== JSON.stringify(savedMetadataRef.current);
     if (!isDirtyNow() && snapshot && name === undefined) return true;
     if (!snapshot) {
-      toast.error("Новый корневой снапшот нельзя создать из Admin: текущий API не предоставляет источник настроенных site_id и page_id.");
+      toast.error("Новый корневой снапшот нельзя создать из Admin: текущий API не предоставляет source page_id для конфигурации запуска.");
       return false;
     }
     const versionChanges = featureVersionChanges(savedConfigRef.current ?? submitted, submitted);
@@ -337,7 +333,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     try {
 	  let parentSnapshotRequest: { parentSnapshotId: string; expectedParentRevision: number; expectedParentContentRevision: number } | undefined;
 	  if (snapshot) {
-	    const localeConfig = await api.contentEngine.localeConfig(snapshot.siteId);
+	    const localeConfig = await api.contentEngine.localeConfig();
 	    const contentWorkspace = await api.contentEngine.workspace(snapshot.id, localeConfig.default_locale);
 	    if (snapshot.revision === undefined || !Number.isSafeInteger(contentWorkspace.revision) || contentWorkspace.revision < 0) {
 	      throw new Error("Не удалось проверить ревизии родительского снапшота. Обновите страницу и повторите действие.");
@@ -372,7 +368,6 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
 	    }
 	  }
       const input = {
-        siteID: snapshot.siteId,
         pageID: snapshot.pageId,
         name: name?.trim() || childSnapshotName(snapshot),
         ...(parentSnapshotRequest ?? {}),
@@ -409,7 +404,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
       setSnapshot(created);
       createdSelection.current = created.id;
       guardBypass.current = true;
-      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", created.id); next.set("site_id", created.siteId); next.set("page_id", created.pageId); return next; }, { replace: true });
+      setParams((current) => { const next = new URLSearchParams(current); next.set("snapshot", created.id); next.set("page_id", created.pageId); return next; }, { replace: true });
       void queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] });
       void queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] });
       void queryClient.invalidateQueries({ queryKey: ["content"] });
@@ -465,7 +460,6 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
               } else {
                 const item = snapshots.data?.items.find((candidate) => candidate.id === value);
                 next.set("snapshot", value);
-                if (item?.siteId) next.set("site_id", item.siteId);
                 if (item?.pageId) next.set("page_id", item.pageId);
               }
               navigate({ pathname: "/site/data-model", search: next.size ? `?${next}` : "" });
@@ -476,7 +470,6 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
                 else {
                   const item = snapshots.data?.items.find((candidate) => candidate.id === value);
                   next.set("snapshot", value);
-                  if (item?.siteId) next.set("site_id", item.siteId);
                   if (item?.pageId) next.set("page_id", item.pageId);
                 }
                 return next;
@@ -490,13 +483,13 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
             </SelectContent>
           </Select>
           <Button type="button" size="sm" variant="outline" onClick={() => void snapshots.refetch()} disabled={snapshots.isFetching}>Обновить список</Button>
-          {!selected && readySnapshotItems.length === 0 && <span role="status" className="text-xs text-muted-foreground">Нет снапшотов. Для корневого снапшота нужны site_id и page_id из конфигурации запуска; текущий Admin API их не предоставляет.</span>}
+          {!selected && readySnapshotItems.length === 0 && <span role="status" className="text-xs text-muted-foreground">Нет снапшотов. Создайте страницу, чтобы получить корневой снапшот.</span>}
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
             {visibleModes.map(([path, label]) => {
               const active = location.pathname === path
                 || path === "/site/pages" && location.pathname.startsWith("/site/pages/")
                 || path === "/site/data-model" && location.pathname.startsWith("/site/data-model/");
-              return <Link key={path} to={`${path}${siteContextQuery(selected, snapshot?.pageId ?? requestedPageID, snapshot?.siteId ?? requestedSiteID)}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
+              return <Link key={path} to={`${path}${siteContextQuery(selected, snapshot?.pageId ?? requestedPageID)}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
             })}
           </nav>
           <span role="status" aria-live="polite" className={`ml-auto text-xs ${allDirty ? "text-warning" : "text-success"}`}>{allDirty ? "Есть изменения" : "Сохранено"}</span>

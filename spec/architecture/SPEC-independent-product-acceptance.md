@@ -2,7 +2,7 @@
 
 ## Цель
 
-Подтвердить Website/Content/Admin contracts на синтетических feature builds независимо от Vitasil. Проверки не используют рабочие API, credentials, базы, object storage или файлы.
+Подтвердить Website/Content/Admin contracts на синтетических feature builds независим. Проверки не используют рабочие API, credentials, базы, object storage или файлы.
 
 ## Синтетические builds
 
@@ -32,4 +32,4 @@
 
 ## Результаты и ограничения
 
-Эти сценарии — критерии, а не утверждение о прохождении. Результаты, команды и ограничения записываются в [QA_REPORT.md](../../docs/QA_REPORT.md); незакрытые пункты находятся в [TODO](../../docs/TODO-admin-snapshots-content-files.md). Полный независимый browser/API run и реальная Vitasil acceptance остаются открытыми до выполнения применимых сценариев на disposable ресурсах.
+Эти сценарии — критерии, а не утверждение о прохождении. Результаты, команды и ограничения записываются в [QA_REPORT.md](../../docs/QA_REPORT.md); незакрытые пункты находятся в [TODO](../../docs/TODO-admin-snapshots-content-files.md). Полный независимый browser/API run и реальная acceptance остаются открытыми до выполнения применимых сценариев на disposable ресурсах.

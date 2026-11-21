@@ -14,9 +14,10 @@ func TestWorkspaceAcceptsOptionalTypedValuesAndOrderedSelection(t *testing.T) {
 	}
 
 	workspace := domain.WorkspaceData{
+		Locale: "en-US",
 		Records: []domain.Record{
-			{ID: "44444444-4444-4444-8444-444444444444", EntityID: "11111111-1111-4111-8111-111111111111", SortOrder: 0, Values: map[string]any{"title": "A", "status": "live"}},
-			{ID: "55555555-5555-4555-8555-555555555555", EntityID: "11111111-1111-4111-8111-111111111111", SortOrder: 1, Values: map[string]any{"title": ""}},
+			{ID: "44444444-4444-4444-8444-444444444444", TranslationID: "44444444-4444-4444-8444-444444444444", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", SortOrder: 0, Values: map[string]any{"title": "A", "status": "live"}},
+			{ID: "55555555-5555-4555-8555-555555555555", TranslationID: "55555555-5555-4555-8555-555555555555", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", SortOrder: 1, Values: map[string]any{"title": ""}},
 		},
 		Selections: []domain.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{"55555555-5555-4555-8555-555555555555", "44444444-4444-4444-8444-444444444444"}}},
 	}
@@ -34,7 +35,8 @@ func TestWorkspaceRejectsInvalidFieldTypeEnumAndSelectionTarget(t *testing.T) {
 	}
 	placements := []domain.Placement{{ID: "placement-one", Inputs: []domain.PlacementInput{{InputKey: "articles", Kind: "collection", EntityID: "11111111-1111-4111-8111-111111111111"}}}}
 	base := domain.WorkspaceData{
-		Records:    []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{"title": "A", "status": "live"}}},
+		Locale:     "en-US",
+		Records:    []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", TranslationID: "44444444-4444-4444-8444-444444444444", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{"title": "A", "status": "live"}}},
 		Selections: []domain.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{"44444444-4444-4444-8444-444444444444"}}},
 	}
 
@@ -60,10 +62,10 @@ func TestSingletonRequiresExactlyOneDraftRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseDataModel() error = %v", err)
 	}
-	if err := domain.ValidateWorkspace(model, nil, domain.WorkspaceData{}, nil, false); err == nil {
+	if err := domain.ValidateWorkspace(model, nil, domain.WorkspaceData{Locale: "en-US"}, nil, false); err == nil {
 		t.Fatal("ValidateWorkspace() accepted a singleton without its required draft record")
 	}
-	workspace := domain.WorkspaceData{Records: []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{}}}}
+	workspace := domain.WorkspaceData{Locale: "en-US", Records: []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", TranslationID: "44444444-4444-4444-8444-444444444444", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{}}}}
 	if err := domain.ValidateWorkspace(model, nil, workspace, nil, false); err != nil {
 		t.Fatalf("ValidateWorkspace() rejected exactly one singleton draft: %v", err)
 	}
@@ -74,8 +76,8 @@ func TestWorkspacePreservesKnownRecordOrphanFieldsButPublicationRejectsThem(t *t
 	if err != nil {
 		t.Fatalf("ParseDataModel() error = %v", err)
 	}
-	workspace := domain.WorkspaceData{Records: []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{"title": "A", "removed_field": "kept"}}}}
-	previous := &domain.WorkspaceData{Records: []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{"removed_field": "kept"}}}}
+	workspace := domain.WorkspaceData{Locale: "en-US", Records: []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", TranslationID: "44444444-4444-4444-8444-444444444444", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{"title": "A", "removed_field": "kept"}}}}
+	previous := &domain.WorkspaceData{Locale: "en-US", Records: []domain.Record{{ID: "44444444-4444-4444-8444-444444444444", TranslationID: "44444444-4444-4444-8444-444444444444", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{"removed_field": "kept"}}}}
 	if err := domain.ValidateWorkspace(model, nil, workspace, previous, false); err != nil {
 		t.Fatalf("draft should retain an orphaned field: %v", err)
 	}
@@ -90,12 +92,13 @@ func TestSingletonRecordInputResolvesAutomaticallyAndOldManualChoiceStaysEditabl
 		t.Fatalf("ParseDataModel() error = %v", err)
 	}
 	placements := []domain.Placement{{ID: "placement-one", Inputs: []domain.PlacementInput{{InputKey: "settings", Kind: "record", EntityID: "11111111-1111-4111-8111-111111111111"}}}}
-	record := domain.Record{ID: "22222222-2222-4222-8222-222222222222", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{}}
-	automatic := domain.WorkspaceData{Records: []domain.Record{record}, Selections: []domain.Selection{}}
+	record := domain.Record{ID: "22222222-2222-4222-8222-222222222222", TranslationID: "22222222-2222-4222-8222-222222222222", Locale: "en-US", EntityID: "11111111-1111-4111-8111-111111111111", Values: map[string]any{}}
+	automatic := domain.WorkspaceData{Locale: "en-US", Records: []domain.Record{record}, Selections: []domain.Selection{}}
 	if err := domain.ValidateWorkspace(model, placements, automatic, nil, false); err != nil {
 		t.Fatalf("singleton record input without a manual selection: %v", err)
 	}
 	existing := domain.WorkspaceData{
+		Locale:     "en-US",
 		Records:    []domain.Record{record},
 		Selections: []domain.Selection{{PlacementID: "placement-one", InputKey: "settings", Mode: "ids", RecordIDs: []string{record.ID}}},
 	}
@@ -141,7 +144,7 @@ func TestDataModelRequiresExplicitManyOrSingletonCardinality(t *testing.T) {
 }
 
 func cloneWorkspace(source domain.WorkspaceData) domain.WorkspaceData {
-	cloned := domain.WorkspaceData{Records: make([]domain.Record, len(source.Records)), Selections: make([]domain.Selection, len(source.Selections))}
+	cloned := domain.WorkspaceData{Locale: source.Locale, Records: make([]domain.Record, len(source.Records)), Selections: make([]domain.Selection, len(source.Selections))}
 	for index, record := range source.Records {
 		values := make(map[string]any, len(record.Values))
 		for key, value := range record.Values {

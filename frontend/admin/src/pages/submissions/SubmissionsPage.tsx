@@ -33,8 +33,8 @@ function dateTime(value: string): string {
   return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function snapshotLabel(id: string, siteID: string): string {
-  return `Сайт ${siteID.slice(0, 8)} · снапшот ${id.slice(0, 8)}`;
+function snapshotLabel(id: string): string {
+  return `Снапшот ${id.slice(0, 8)}`;
 }
 
 export default function SubmissionsPage() {
@@ -52,7 +52,7 @@ export default function SubmissionsPage() {
   const requestedSnapshotID = params.get("snapshot") ?? "";
   const snapshots = useInfiniteQuery({
     queryKey: snapshotKey,
-    queryFn: ({ pageParam, signal }) => api.website.snapshots(undefined, undefined, pageParam ?? undefined, pageSize, signal),
+    queryFn: ({ pageParam, signal }) => api.website.snapshots(undefined, pageParam ?? undefined, pageSize, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: canReadSnapshots && !requestedSnapshotID,
@@ -171,7 +171,7 @@ export default function SubmissionsPage() {
       <Button type="button" variant="outline" className="min-h-11" disabled={!snapshotID || !canView} loading={exportMutation.isPending} onClick={() => exportMutation.mutate()}><Download />Экспорт CSV</Button>
       {canReadSchemas && <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("form", event.currentTarget.value); else next.delete("form"); setParams(next); }}><option value="">Все формы</option>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>}
       <label className="space-y-1.5 text-sm"><span className="sr-only">Статус</span><select aria-label="Статус" className="h-11 min-w-36 rounded-md border border-input bg-background px-3" value={state} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("state", event.currentTarget.value); else next.delete("state"); setParams(next); }}><option value="">Все статусы</option>{[...new Set([...statusValues, ...submissionItems.map((item) => item.state)])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-      {canReadSnapshots && snapshotItems.length > 0 && <label className="space-y-1.5 text-sm"><span className="sr-only">Снапшот</span><select aria-label="Снапшот" className="h-11 min-w-56 rounded-md border border-input bg-background px-3" value={snapshotID} onChange={(event) => navigate(`/submissions?snapshot=${encodeURIComponent(event.currentTarget.value)}`)}>{snapshotItems.map((item) => <option key={item.id} value={item.id}>{snapshotLabel(item.id, item.site_id)}</option>)}</select></label>}
+      {canReadSnapshots && snapshotItems.length > 0 && <label className="space-y-1.5 text-sm"><span className="sr-only">Снапшот</span><select aria-label="Снапшот" className="h-11 min-w-56 rounded-md border border-input bg-background px-3" value={snapshotID} onChange={(event) => navigate(`/submissions?snapshot=${encodeURIComponent(event.currentTarget.value)}`)}>{snapshotItems.map((item) => <option key={item.id} value={item.id}>{snapshotLabel(item.id)}</option>)}</select></label>}
     </>} />
     {canReadSchemas && schemas.hasNextPage && <div className="-mt-5"><Button type="button" variant="ghost" size="sm" onClick={() => void schemas.fetchNextPage()} loading={schemas.isFetchingNextPage}>Загрузить ещё формы</Button></div>}
     {submissions.isLoading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">Загружаем заявки…</p> : submissions.error ? <ErrorState error={submissions.error} title="Не удалось загрузить заявки" onRetry={() => void submissions.refetch()} /> : submissionItems.length === 0 ? <EmptyState title="Заявок пока нет" description="Новые ответы появятся после отправки опубликованной формы." /> : <div className="overflow-hidden rounded-lg border border-border bg-card"><ul className="divide-y divide-border">{submissionItems.map((submission) => <li key={submission.id}><button type="button" className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => navigate(`/submissions/${encodeURIComponent(submission.id)}?snapshot=${encodeURIComponent(snapshotID)}${formID ? `&form=${encodeURIComponent(formID)}` : ""}`)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{summary(submission.values) || selectedForm?.key || submission.form_id}</span><span className="mt-1 block text-xs text-muted-foreground">{dateTime(submission.created_at)} · {selectedForm?.key ?? submission.form_id}</span></span><Badge variant="outline">{submission.state}</Badge></button></li>)}</ul>{submissions.hasNextPage && <div className="border-t border-border p-3 text-center"><Button type="button" variant="outline" onClick={() => void submissions.fetchNextPage()} loading={submissions.isFetchingNextPage}>Загрузить ещё</Button></div>}</div>}

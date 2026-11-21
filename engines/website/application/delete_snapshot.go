@@ -25,36 +25,36 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 	if targetRecord.Revision != request.ExpectedRevision {
 		return websiteapi.ErrConflict
 	}
-	page, _, err := s.loadPage(ctx, target.SiteID, target.PageID)
+	page, _, err := s.loadPage(ctx, target.PageID)
 	if err != nil {
 		return err
 	}
 	if page.LatestSnapshotID == target.ID {
 		return websiteapi.ErrConflict
 	}
-	registryRecord, registryState, err := s.loadSiteRegistry(ctx, target.SiteID, target.PageID)
+	registryRecord, registryState, err := s.loadPageTreeRegistry(ctx, target.PageID)
 	if err != nil {
 		return err
 	}
-	registryState.LastSequence, err = s.ensureSiteSequence(ctx, target.SiteID, target.PageID, registryState)
+	registryState.LastSequence, err = s.ensurePageTreeSequence(ctx, target.PageID, registryState)
 	if err != nil {
 		return err
 	}
 	// Re-read after the page-tree registry revision. Every concurrent create/delete
 	// commits against that same revision, so this read and the final batch form a
 	// safe optimistic transaction within the page tree.
-	target, targetRecord, err = s.snapshotInPage(ctx, target.SiteID, target.PageID, request.SnapshotID)
+	target, targetRecord, err = s.snapshotInPage(ctx, target.PageID, request.SnapshotID)
 	if err != nil {
 		return err
 	}
-	targetKey = snapshotKey(target.SiteID, target.PageID, target.ID)
+	targetKey = snapshotKey(target.PageID, target.ID)
 	if targetRecord.Revision != request.ExpectedRevision {
 		return websiteapi.ErrConflict
 	}
 
 	var newParent *websiteapi.Snapshot
 	if target.ParentID != "" {
-		parent, _, err := s.snapshotInPage(ctx, target.SiteID, target.PageID, target.ParentID)
+		parent, _, err := s.snapshotInPage(ctx, target.PageID, target.ParentID)
 		if err != nil {
 			// A missing parent indicates corrupt tree state; deleting would make
 			// the remaining children impossible to place consistently.
@@ -68,7 +68,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 		{Field: "page_id", Operator: core.SelectorEqual, Values: []any{target.PageID}},
 		{Field: "parent_id", Operator: core.SelectorEqual, Values: []any{target.ID}},
 	}
-	childrenKeys, childrenRecords, err := s.listSnapshotChildren(ctx, target.SiteID, selectors)
+	childrenKeys, childrenRecords, err := s.listSnapshotChildren(ctx, selectors)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 	mutations := make([]core.ModuleDataMutation, 0, len(childrenKeys)+2)
 	for i, childRecord := range childrenRecords {
 		childKey := childrenKeys[i]
-		child, err := decodeSnapshotRecord(target.SiteID, childKey, childRecord)
+		child, err := decodeSnapshotRecord(childKey, childRecord)
 		if err != nil {
 			return err
 		}
@@ -122,7 +122,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 		})
 	}
 	mutations = append(mutations, core.ModuleDataMutation{Key: targetKey, ExpectedRevision: targetRecord.Revision})
-	registryMutation, err := siteRegistryMutation(target.SiteID, target.PageID, registryRecord, registryState.LastSequence)
+	registryMutation, err := pageTreeRegistryMutation(target.PageID, registryRecord, registryState.LastSequence)
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 	return nil
 }
 
-func (s *Service) listSnapshotChildren(ctx context.Context, siteID string, selectors []core.ModuleDataSelector) ([]core.ModuleDataKey, []core.ModuleDataRecord, error) {
+func (s *Service) listSnapshotChildren(ctx context.Context, selectors []core.ModuleDataSelector) ([]core.ModuleDataKey, []core.ModuleDataRecord, error) {
 	pageLimit := s.store.MaxPageSize()
 	if batchLimit := s.store.MaxBatchSize(); pageLimit > batchLimit {
 		pageLimit = batchLimit
@@ -145,7 +145,7 @@ func (s *Service) listSnapshotChildren(ctx context.Context, siteID string, selec
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		pageKeys, pageRecords, next, err := s.store.List(ctx, snapshotsNamespace, "site", siteID, after, selectors, pageLimit)
+		pageKeys, pageRecords, next, err := s.store.List(ctx, snapshotsNamespace, "global", "global", after, selectors, pageLimit)
 		if err != nil {
 			return nil, nil, mapCoreError(err)
 		}

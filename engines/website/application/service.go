@@ -31,15 +31,10 @@ type RecordStore interface {
 type Config struct {
 	AccessGroup            string
 	CoordinatorAccessGroup string
-	Sites                  []string
-	// PageIDs is retained for source compatibility only. Page identities are
-	// Website-owned records and are never seeded or authorized from static config.
-	PageIDs map[string][]string
 }
 
 type Service struct {
 	config    Config
-	sites     map[string]struct{}
 	store     RecordStore
 	authority core.GroupAuthorizationCapability
 	sessions  core.SessionCapability
@@ -53,42 +48,10 @@ type actorContextKey struct{}
 
 func NewService(config Config, store RecordStore, authority core.GroupAuthorizationCapability, sessions core.SessionCapability) (*Service, error) {
 	if !validInterface(store) || !validInterface(authority) || !validInterface(sessions) ||
-		!core.ValidAccessGroupKey(config.AccessGroup) || !core.ValidAccessGroupKey(config.CoordinatorAccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 || len(config.Sites) == 0 || len(config.Sites) > 256 {
+		!core.ValidAccessGroupKey(config.AccessGroup) || !core.ValidAccessGroupKey(config.CoordinatorAccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 {
 		return nil, errConfigInvalid
 	}
-	siteSet := make(map[string]struct{}, len(config.Sites))
-	for _, id := range config.Sites {
-		if !identifierPattern.MatchString(id) {
-			return nil, errConfigInvalid
-		}
-		if _, duplicate := siteSet[id]; duplicate {
-			return nil, errConfigInvalid
-		}
-		siteSet[id] = struct{}{}
-	}
-	// Site ordering is stable across replicas, so paginated API results do not depend on Go map iteration order.
-	sites := append([]string(nil), config.Sites...)
-	for i := 0; i < len(sites); i++ {
-		for j := i + 1; j < len(sites); j++ {
-			if sites[j] < sites[i] {
-				sites[i], sites[j] = sites[j], sites[i]
-			}
-		}
-	}
-	config.Sites = sites
-	return &Service{config: config, sites: siteSet,
-		store: store, authority: authority, sessions: sessions}, nil
-}
-
-func (s *Service) ListConfiguredSites(ctx context.Context) (websiteapi.ConfiguredSiteList, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
-		return websiteapi.ConfiguredSiteList{}, err
-	}
-	items := make([]websiteapi.ConfiguredSite, len(s.config.Sites))
-	for index, siteID := range s.config.Sites {
-		items[index] = websiteapi.ConfiguredSite{SiteID: siteID}
-	}
-	return websiteapi.ConfiguredSiteList{Items: items}, nil
+	return &Service{config: config, store: store, authority: authority, sessions: sessions}, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, credential string) (context.Context, error) {

@@ -19,13 +19,12 @@ vi.mock("@/components/common/confirm", () => ({ useConfirm: () => vi.fn() }));
 
 import BranchesPage from "../../../../../../frontend/admin/src/pages/site/BranchesPage";
 
-const siteID = "33333333-3333-4333-8333-333333333333";
 const snapshot = {
-  id: "22222222-2222-4222-8222-222222222222", site_id: siteID, name: "Homepage", sequence: 12,
+  id: "22222222-2222-4222-8222-222222222222", page_id: "home", name: "Homepage", sequence: 12,
   revision: 9, feature_pins: {}, state: "ready",
 };
 const branch = {
-  id: "11111111-1111-4111-8111-111111111111", name: "preview", site_id: siteID,
+  id: "11111111-1111-4111-8111-111111111111", name: "preview",
   listen_address: "127.0.0.1:8081", cors_origins: [], indexable: false,
   snapshot_id: snapshot.id, revision: 4, enabled: true, updated_at: "2026-11-18T10:00:00Z",
 };

@@ -35,8 +35,8 @@ type Contract interface {
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
-	GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error)
-	ReplaceLocaleConfig(context.Context, string, domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error)
+	GetLocaleConfig(context.Context) (domain.LocaleConfig, error)
+	ReplaceLocaleConfig(context.Context, domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error)
 	GetWorkspace(context.Context, Projections) (Workspace, error)
 	SaveWorkspaceDraft(context.Context, Projections, SaveWorkspaceDraftRequest) (Workspace, error)
 	PublishWorkspace(context.Context, Projections, PublishWorkspaceRequest) (Workspace, error)
@@ -59,22 +59,20 @@ const ProjectionVersion = 1
 type LocaleConfig = domain.LocaleConfig
 type ReplaceLocaleConfigRequest = domain.ReplaceLocaleConfigRequest
 
-// SiteContentSchema contains the immutable site-wide model projection.
-type SiteContentSchema struct {
+// ContentModelProjection contains the immutable system-wide model projection.
+type ContentModelProjection struct {
 	Version       int             `json:"version"`
-	SiteID        string          `json:"site_id"`
 	ModelRevision int64           `json:"model_revision"`
 	Digest        string          `json:"digest"`
 	DataModel     json.RawMessage `json:"data_model"`
 }
 
-func (schema SiteContentSchema) ComputeDigest() (string, error) {
+func (schema ContentModelProjection) ComputeDigest() (string, error) {
 	payload := struct {
 		Version       int             `json:"version"`
-		SiteID        string          `json:"site_id"`
 		ModelRevision int64           `json:"model_revision"`
 		DataModel     json.RawMessage `json:"data_model"`
-	}{schema.Version, schema.SiteID, schema.ModelRevision, schema.DataModel}
+	}{schema.Version, schema.ModelRevision, schema.DataModel}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -83,8 +81,8 @@ func (schema SiteContentSchema) ComputeDigest() (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func (schema SiteContentSchema) VerifyDigest() bool {
-	if schema.Version != ProjectionVersion || schema.SiteID == "" || schema.ModelRevision < 1 || schema.DataModel == nil || len(schema.Digest) != sha256.Size*2 {
+func (schema ContentModelProjection) VerifyDigest() bool {
+	if schema.Version != ProjectionVersion || schema.ModelRevision < 1 || schema.DataModel == nil || len(schema.Digest) != sha256.Size*2 {
 		return false
 	}
 	digest, err := schema.ComputeDigest()
@@ -96,7 +94,6 @@ type PagePlacementProjection struct {
 	Version        int         `json:"version"`
 	PageSnapshotID string      `json:"page_snapshot_id"`
 	PageID         string      `json:"page_id"`
-	SiteID         string      `json:"site_id"`
 	Revision       int64       `json:"revision"`
 	Digest         string      `json:"digest"`
 	State          string      `json:"state"`
@@ -108,11 +105,10 @@ func (projection PagePlacementProjection) ComputeDigest() (string, error) {
 		Version        int         `json:"version"`
 		PageSnapshotID string      `json:"page_snapshot_id"`
 		PageID         string      `json:"page_id"`
-		SiteID         string      `json:"site_id"`
 		Revision       int64       `json:"revision"`
 		State          string      `json:"state"`
 		Placements     []Placement `json:"placements"`
-	}{projection.Version, projection.PageSnapshotID, projection.PageID, projection.SiteID, projection.Revision, projection.State, projection.Placements}
+	}{projection.Version, projection.PageSnapshotID, projection.PageID, projection.Revision, projection.State, projection.Placements}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -122,7 +118,7 @@ func (projection PagePlacementProjection) ComputeDigest() (string, error) {
 }
 
 func (projection PagePlacementProjection) VerifyDigest() bool {
-	if projection.Version != ProjectionVersion || projection.PageSnapshotID == "" || projection.PageID == "" || projection.SiteID == "" || projection.Revision < 1 || projection.Placements == nil || len(projection.Digest) != sha256.Size*2 {
+	if projection.Version != ProjectionVersion || projection.PageSnapshotID == "" || projection.PageID == "" || projection.Revision < 1 || projection.Placements == nil || len(projection.Digest) != sha256.Size*2 {
 		return false
 	}
 	digest, err := projection.ComputeDigest()
@@ -130,14 +126,14 @@ func (projection PagePlacementProjection) VerifyDigest() bool {
 }
 
 type Projections struct {
-	Site   SiteContentSchema       `json:"site_content_schema"`
-	Page   PagePlacementProjection `json:"page_placement_projection"`
-	Locale string                  `json:"locale"`
+	ContentModel ContentModelProjection  `json:"content_model"`
+	Page         PagePlacementProjection `json:"page_placement_projection"`
+	Locale       string                  `json:"locale"`
 }
 
 func (projections Projections) VerifyScope(pageSnapshotID string) bool {
-	return projections.Site.VerifyDigest() && projections.Page.VerifyDigest() &&
-		projections.Site.SiteID == projections.Page.SiteID && projections.Page.PageSnapshotID == pageSnapshotID
+	return projections.ContentModel.VerifyDigest() && projections.Page.VerifyDigest() &&
+		projections.Page.PageSnapshotID == pageSnapshotID
 }
 
 type Placement struct {
@@ -169,26 +165,25 @@ type PlacementInputLookup struct {
 }
 
 // Workspace combines Website's read-only schema with Content-owned mutable
-// draft/publication state. SnapshotID identifies the selected Website scope.
+// draft/publication state. SnapshotID identifies the selected page snapshot.
 type Workspace struct {
-	SnapshotID             string            `json:"snapshot_id"`
-	SiteID                  string            `json:"site_id"`
-	PageSnapshotID          string            `json:"page_snapshot_id"`
-	Locale                  string            `json:"locale"`
-	LocaleCatalogRevision   int64             `json:"locale_catalog_revision"`
-	ModelRevision           int64             `json:"model_revision"`
-	ModelDigest             string            `json:"model_digest"`
-	PageRevision            int64             `json:"page_revision"`
-	PageDigest              string            `json:"page_digest"`
-	DataModel               json.RawMessage   `json:"data_model"`
-	Revision                int64             `json:"revision"`
-	SelectionRevision       int64             `json:"selection_revision"`
-	PublishedRevision       int64             `json:"published_revision"`
-	Records                 []Record          `json:"records"`
-	Selections              []Selection       `json:"selections"`
-	Placements              []Placement       `json:"placements"`
-	ClientRecordIDs         map[string]string `json:"client_record_ids,omitempty"`
-	ClientTranslationIDs    map[string]string `json:"client_translation_ids,omitempty"`
+	SnapshotID            string            `json:"snapshot_id"`
+	PageSnapshotID        string            `json:"page_snapshot_id"`
+	Locale                string            `json:"locale"`
+	LocaleCatalogRevision int64             `json:"locale_catalog_revision"`
+	ModelRevision         int64             `json:"model_revision"`
+	ModelDigest           string            `json:"model_digest"`
+	PageRevision          int64             `json:"page_revision"`
+	PageDigest            string            `json:"page_digest"`
+	DataModel             json.RawMessage   `json:"data_model"`
+	Revision              int64             `json:"revision"`
+	SelectionRevision     int64             `json:"selection_revision"`
+	PublishedRevision     int64             `json:"published_revision"`
+	Records               []Record          `json:"records"`
+	Selections            []Selection       `json:"selections"`
+	Placements            []Placement       `json:"placements"`
+	ClientRecordIDs       map[string]string `json:"client_record_ids,omitempty"`
+	ClientTranslationIDs  map[string]string `json:"client_translation_ids,omitempty"`
 }
 
 type Record struct {

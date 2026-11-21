@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Copy, FilePlus2, LayoutTemplate, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { useAuth } from "@/app/auth";
@@ -126,12 +126,12 @@ function readableConfiguration(configuration: WebsitePageTemplateConfiguration, 
   }, null, 2);
 }
 
-function contextURL(snapshotID: string, pageID: string, siteID: string): string {
-  return siteContextQuery(snapshotID, pageID, siteID);
+function contextURL(snapshotID: string, pageID: string): string {
+  return siteContextQuery(snapshotID, pageID);
 }
 
-function createPageURL(templateID: string, snapshotID: string, pageID: string, siteID: string): string {
-  const query = new URLSearchParams(contextURL(snapshotID, pageID, siteID).replace(/^\\?/u, ""));
+function createPageURL(templateID: string, snapshotID: string, pageID: string): string {
+  const query = new URLSearchParams(contextURL(snapshotID, pageID).replace(/^\\?/u, ""));
   query.set("create", "1");
   query.set("template_id", templateID);
   return `/site/pages?${query.toString()}`;
@@ -144,8 +144,6 @@ export default function PageTemplatesPage() {
   const confirm = useConfirm();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [searchParams] = useSearchParams();
-  const siteID = searchParams.get("site_id") || snapshot?.siteId || "";
   const canEdit = hasGroupAccess(auth.principal, "features", 2);
   const [draft, setDraft] = useState<TemplateDraft>(blankDraft);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -160,18 +158,16 @@ export default function PageTemplatesPage() {
   const createAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const templates = useInfiniteQuery({
-    queryKey: ["site", "website-page-templates", siteID],
-    queryFn: ({ pageParam, signal }) => api.website.pageTemplates(siteID, pageParam ?? undefined, LIST_LIMIT, signal),
+    queryKey: ["site", "website-page-templates"],
+    queryFn: ({ pageParam, signal }) => api.website.pageTemplates(pageParam ?? undefined, LIST_LIMIT, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
-    enabled: Boolean(siteID),
   });
   const pages = useInfiniteQuery({
-    queryKey: ["site", "website-pages", siteID],
-    queryFn: ({ pageParam, signal }) => api.website.pages(siteID, pageParam ?? undefined, LIST_LIMIT, signal),
+    queryKey: ["site", "website-pages"],
+    queryFn: ({ pageParam, signal }) => api.website.pages(pageParam ?? undefined, LIST_LIMIT, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
-    enabled: Boolean(siteID),
   });
   const templateItems = useMemo(() => templates.data?.pages.flatMap((page) => page.items) ?? [], [templates.data]);
   const pageItems = useMemo(() => pages.data?.pages.flatMap((page) => page.items) ?? [], [pages.data]);
@@ -211,17 +207,17 @@ export default function PageTemplatesPage() {
     event.preventDefault();
     const cleanName = draft.name.trim();
     const pageName = draft.pageName.trim();
-    if (!siteID || !cleanName || !pageName || saving) return;
+    if (!cleanName || !pageName || saving) return;
     setSaving(true);
     try {
       let configuration: WebsitePageTemplateConfiguration;
       if (draft.sourcePageID) {
         const source = pageItems.find((page) => page.id === draft.sourcePageID);
         if (!source) throw new Error("Исходная страница не найдена. Обновите список и выберите её снова.");
-        const currentPage = await api.website.page(siteID, source.id);
+        const currentPage = await api.website.page(source.id);
         if (currentPage.latest_snapshot_state !== "ready") throw new Error("Для шаблона можно использовать только страницу с готовым последним снапшотом.");
         const sourceSnapshot = await api.siteBuilder.snapshot(currentPage.latest_snapshot_id);
-        if (sourceSnapshot.snapshot.siteId !== siteID || sourceSnapshot.snapshot.pageId !== currentPage.id || sourceSnapshot.snapshot.state !== "ready") {
+        if (sourceSnapshot.snapshot.pageId !== currentPage.id || sourceSnapshot.snapshot.state !== "ready") {
           throw new Error("Последний снапшот исходной страницы изменился. Обновите список и повторите действие.");
         }
         configuration = copySnapshotConfiguration(sourceSnapshot, pageName);
@@ -233,23 +229,23 @@ export default function PageTemplatesPage() {
       const input = { name: cleanName, description: draft.description.trim(), configuration };
       if (draft.id) {
         if (!draft.revision) throw new Error("Не удалось определить ревизию шаблона. Обновите список.");
-        await api.website.updatePageTemplate(siteID, draft.id, draft.revision, input);
+        await api.website.updatePageTemplate(draft.id, draft.revision, input);
       } else {
-        const fingerprint = JSON.stringify({ siteID, ...input });
+        const fingerprint = JSON.stringify(input);
         if (!createAttempt.current || createAttempt.current.fingerprint !== fingerprint) {
           createAttempt.current = { fingerprint, key: `template-create-${crypto.randomUUID()}` };
         }
-        await api.website.createPageTemplate(siteID, input, createAttempt.current.key);
+        await api.website.createPageTemplate(input, createAttempt.current.key);
         createAttempt.current = null;
       }
       setEditorOpen(false);
       setDraft(blankDraft());
-      await queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates", siteID] });
+      await queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates"] });
       toast.success(draft.id ? "Шаблон обновлён" : "Шаблон создан");
     } catch (error) {
       toast.error(errorMessage(error));
-      void queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates", siteID] });
-      void queryClient.invalidateQueries({ queryKey: ["site", "website-pages", siteID] });
+      void queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates"] });
+      void queryClient.invalidateQueries({ queryKey: ["site", "website-pages"] });
     } finally {
       setSaving(false);
     }
@@ -265,31 +261,31 @@ export default function PageTemplatesPage() {
     });
     if (!accepted) return;
     try {
-      await api.website.deletePageTemplate(siteID, template.id, template.revision);
-      await queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates", siteID] });
+      await api.website.deletePageTemplate(template.id, template.revision);
+      await queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates"] });
       toast.success("Шаблон удалён");
     } catch (error) {
       toast.error(errorMessage(error));
-      void queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates", siteID] });
+      void queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates"] });
     }
   };
 
   const startApplication = async () => {
-    if (!siteID || !applyingTemplateID || !applicationPageID || applicationLoading) return;
+    if (!applyingTemplateID || !applicationPageID || applicationLoading) return;
     setApplicationLoading(true);
     setApplicationError("");
     setApplicationPreview(null);
     try {
       const [template, page] = await Promise.all([
-        api.website.pageTemplate(siteID, applyingTemplateID),
-        api.website.page(siteID, applicationPageID),
+        api.website.pageTemplate(applyingTemplateID),
+        api.website.page(applicationPageID),
       ]);
       if (page.latest_snapshot_state !== "ready") throw new Error("Последний снапшот страницы ещё не готов. Обновите список и повторите действие.");
       const detail = await api.siteBuilder.snapshot(page.latest_snapshot_id);
-      if (detail.snapshot.siteId !== siteID || detail.snapshot.pageId !== page.id || detail.snapshot.state !== "ready" || detail.snapshot.revision === undefined) {
+      if (detail.snapshot.pageId !== page.id || detail.snapshot.state !== "ready" || detail.snapshot.revision === undefined) {
         throw new Error("Последний снапшот изменился или ещё не готов. Обновите список страниц.");
       }
-      const localeConfig = await api.contentEngine.localeConfig(detail.snapshot.siteId);
+      const localeConfig = await api.contentEngine.localeConfig();
       const content = await api.contentEngine.workspace(detail.snapshot.id, localeConfig.default_locale);
       if (content.pageSnapshotId !== detail.snapshot.id || !Number.isSafeInteger(content.revision) || content.revision < 0) {
         throw new Error("Не удалось проверить текущую ревизию контента. Повторите подготовку применения.");
@@ -320,10 +316,10 @@ export default function PageTemplatesPage() {
   };
 
   const applyTemplate = async () => {
-    if (!siteID || !applicationPreview || applying) return;
+    if (!applicationPreview || applying) return;
     setApplying(true);
     try {
-      const created = await api.website.applyPageTemplate(siteID, applicationPreview.page.id, {
+      const created = await api.website.applyPageTemplate(applicationPreview.page.id, {
         template_id: applicationPreview.template.id,
         template_revision: applicationPreview.template.revision,
         expected_snapshot_id: applicationPreview.snapshot.id,
@@ -331,11 +327,11 @@ export default function PageTemplatesPage() {
         expected_content_revision: applicationPreview.contentRevision,
         confirmed: true,
       }, applicationPreview.idempotencyKey);
-      if (created.site_id !== siteID || created.page_id !== applicationPreview.page.id || created.parent_id !== applicationPreview.snapshot.id) {
+      if (created.page_id !== applicationPreview.page.id || created.parent_id !== applicationPreview.snapshot.id) {
         throw new Error("Сервер вернул снапшот, не соответствующий подтверждённому применению.");
       }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["site", "website-pages", siteID] }),
+        queryClient.invalidateQueries({ queryKey: ["site", "website-pages"] }),
         queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
         queryClient.invalidateQueries({ queryKey: ["website", "snapshots"] }),
         queryClient.invalidateQueries({ queryKey: ["content"] }),
@@ -343,11 +339,11 @@ export default function PageTemplatesPage() {
       setApplicationOpen(false);
       setApplicationPreview(null);
       toast.success(created.state === "ready" ? "Шаблон применён: создан дочерний снапшот" : "Дочерний снапшот создан и готовится");
-      navigate(`/site/pages/${encodeURIComponent(applicationPreview.page.id)}${contextURL(created.id, applicationPreview.page.id, siteID)}`);
+      navigate(`/site/pages/${encodeURIComponent(applicationPreview.page.id)}${contextURL(created.id, applicationPreview.page.id)}`);
     } catch (error) {
       setApplicationError(errorMessage(error));
-      void queryClient.invalidateQueries({ queryKey: ["site", "website-pages", siteID] });
-      void queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates", siteID] });
+      void queryClient.invalidateQueries({ queryKey: ["site", "website-pages"] });
+      void queryClient.invalidateQueries({ queryKey: ["site", "website-page-templates"] });
     } finally {
       setApplying(false);
     }
@@ -361,10 +357,6 @@ export default function PageTemplatesPage() {
     setApplicationOpen(true);
   };
 
-  if (!siteID) return <section className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-7">
-    <header className="border-b border-border pb-5"><h1 className="text-2xl font-semibold tracking-tight">Шаблоны страниц</h1><p className="mt-1 text-sm text-muted-foreground">Библиотека конфигураций для страниц этого сайта.</p></header>
-    <p className="py-12 text-sm leading-6 text-muted-foreground">Откройте редактор из выбранного снапшота. Текущий Admin API не предоставляет список настроенных site ID для сайта без страниц.</p>
-  </section>;
   if (templates.error) return <ErrorState error={templates.error} title="Не удалось загрузить шаблоны страниц" onRetry={() => void templates.refetch()} />;
 
   const applicationTemplate = templateItems.find((item) => item.id === applyingTemplateID);
@@ -398,7 +390,7 @@ export default function PageTemplatesPage() {
               <div className="min-w-0"><h2 className="truncate text-sm font-semibold">{template.name}</h2><p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">{template.description || "Описание не задано."}</p><p className="mt-2 text-xs text-muted-foreground">Страница «{pageName}» · {featureCount} фич · {placementCount} размещений · ревизия {template.revision}</p></div>
             </div>
             {canEdit && <div className="flex flex-wrap gap-2 sm:shrink-0">
-              <Button asChild type="button" variant="outline" className="min-h-10"><Link to={createPageURL(template.id, snapshot?.id ?? "", snapshot?.pageId ?? "", siteID)}><FilePlus2 />Создать страницу</Link></Button>
+              <Button asChild type="button" variant="outline" className="min-h-10"><Link to={createPageURL(template.id, snapshot?.id ?? "", snapshot?.pageId ?? "")}><FilePlus2 />Создать страницу</Link></Button>
               <Button type="button" variant="outline" className="min-h-10" onClick={() => openApplication(template)}><Copy />Применить к странице</Button>
               <Button type="button" variant="outline" className="min-h-10" onClick={() => openEdit(template)}><Pencil />Изменить</Button>
               <Button type="button" variant="destructive" className="min-h-10" onClick={() => void deleteTemplate(template)} aria-label={`Удалить шаблон ${template.name}`}><Trash2 /><span className="hidden sm:inline">Удалить</span></Button>

@@ -1,4 +1,4 @@
-// Package sitesapi adapts the typed Website contract to the HTTP Sites API.
+// Package sitesapi adapts the typed Website contract to flat Admin HTTP routes.
 package sitesapi
 
 import (
@@ -21,8 +21,8 @@ import (
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
 
-const importPath = "/api/admin/sites/feature-imports"
-const apiPrefix = "/api/admin/sites"
+const importPath = "/api/admin/feature-imports"
+const apiPrefix = "/api/admin"
 
 type Config struct {
 	MaxJSONBytes         int64
@@ -44,27 +44,38 @@ type Handler struct {
 func NewHandler(api website.API, cfg Config) (*Handler, error) {
 	if nilInterface(api) || cfg.MaxJSONBytes <= 0 || cfg.MaxJSONBytes > 16<<20 ||
 		cfg.DefaultPageSize < 1 || cfg.MaxPageSize < cfg.DefaultPageSize || cfg.MaxPageSize > 500 {
-		return nil, errors.New("invalid Sites API configuration")
+		return nil, errors.New("invalid Website API configuration")
 	}
 	auth, err := adminhttpauth.New(cfg.AllowedOrigins)
 	if err != nil {
 		return nil, err
 	}
 	h := &Handler{website: api, cfg: cfg, auth: auth, mux: http.NewServeMux()}
-	h.mux.HandleFunc("GET "+apiPrefix, h.listConfiguredSites)
 	h.mux.HandleFunc("POST "+importPath, h.beginImport)
-	h.mux.HandleFunc("GET "+apiPrefix+"/{path...}", h.getResource)
+	h.mux.HandleFunc("GET "+importPath+"/{id}", h.getImport)
 	h.mux.HandleFunc("GET "+apiPrefix+"/features", h.listFeatureCatalog)
-	h.mux.HandleFunc("POST "+apiPrefix+"/{siteID}/pages", h.createPage)
-	h.mux.HandleFunc("POST "+apiPrefix+"/{siteID}/templates", h.createPageTemplate)
-	h.mux.HandleFunc("PUT "+apiPrefix+"/{siteID}/templates/{templateID}", h.updatePageTemplate)
-	h.mux.HandleFunc("DELETE "+apiPrefix+"/{siteID}/templates/{templateID}", h.deletePageTemplate)
-	h.mux.HandleFunc("POST "+apiPrefix+"/{siteID}/pages/{pageID}/template-applications", h.applyPageTemplate)
-	h.mux.HandleFunc("PUT "+apiPrefix+"/{siteID}/model", h.saveSiteModel)
+	h.mux.HandleFunc("GET "+apiPrefix+"/features/{featureID}/versions", h.listFeatureVersions)
+	h.mux.HandleFunc("GET "+apiPrefix+"/features/{featureID}/versions/{version}", h.getFeatureVersion)
+	h.mux.HandleFunc("GET "+apiPrefix+"/model", h.getContentModel)
+	h.mux.HandleFunc("PUT "+apiPrefix+"/model", h.saveContentModel)
+	h.mux.HandleFunc("GET "+apiPrefix+"/pages/{pageID}/snapshots/{snapshotID}/content-projection", h.getPagePlacementProjection)
+	h.mux.HandleFunc("GET "+apiPrefix+"/pages", h.listPages)
+	h.mux.HandleFunc("POST "+apiPrefix+"/pages", h.createPage)
+	h.mux.HandleFunc("GET "+apiPrefix+"/pages/{pageID}", h.getPage)
+	h.mux.HandleFunc("GET "+apiPrefix+"/templates", h.listPageTemplates)
+	h.mux.HandleFunc("POST "+apiPrefix+"/templates", h.createPageTemplate)
+	h.mux.HandleFunc("GET "+apiPrefix+"/templates/{templateID}", h.getPageTemplate)
+	h.mux.HandleFunc("PUT "+apiPrefix+"/templates/{templateID}", h.updatePageTemplate)
+	h.mux.HandleFunc("DELETE "+apiPrefix+"/templates/{templateID}", h.deletePageTemplate)
+	h.mux.HandleFunc("POST "+apiPrefix+"/pages/{pageID}/template-applications", h.applyPageTemplate)
+	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots", h.listSnapshots)
 	h.mux.HandleFunc("POST "+apiPrefix+"/snapshots", h.createSnapshot)
+	h.mux.HandleFunc("GET "+apiPrefix+"/snapshots/{snapshotID}", h.getSnapshot)
 	h.mux.HandleFunc("DELETE "+apiPrefix+"/snapshots/{snapshotID}", h.deleteSnapshot)
 	h.mux.HandleFunc("POST "+apiPrefix+"/builds", h.buildSnapshot)
+	h.mux.HandleFunc("GET "+apiPrefix+"/builds/{jobID}", h.getBuild)
 	h.mux.HandleFunc("POST "+apiPrefix+"/media/derivatives", h.createMediaDerivative)
+	h.mux.HandleFunc("GET "+apiPrefix+"/media/jobs/{jobID}", h.getMediaJob)
 	return h, nil
 }
 
@@ -110,80 +121,6 @@ func (h *Handler) beginImport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", importPath+"/"+job.ID)
 	writeJSON(w, http.StatusAccepted, job)
-}
-
-func (h *Handler) getResource(w http.ResponseWriter, r *http.Request) {
-	segments := strings.Split(r.PathValue("path"), "/")
-	set := func(name, value string) { r.SetPathValue(name, value) }
-	switch len(segments) {
-	case 1:
-		if segments[0] == "snapshots" {
-			h.listSnapshots(w, r)
-			return
-		}
-		writeError(w, http.StatusNotFound, "not_found")
-	case 2:
-		switch {
-		case segments[0] == "snapshots":
-			set("snapshotID", segments[1])
-			h.getSnapshot(w, r)
-		case segments[0] == "builds":
-			set("jobID", segments[1])
-			h.getBuild(w, r)
-		case segments[0] == "feature-imports":
-			set("id", segments[1])
-			h.getImport(w, r)
-		case segments[1] == "pages":
-			set("siteID", segments[0])
-			h.listPages(w, r)
-		case segments[1] == "templates":
-			set("siteID", segments[0])
-			h.listPageTemplates(w, r)
-		case segments[1] == "model":
-			set("siteID", segments[0])
-			h.getSiteContentSchema(w, r)
-		default:
-			writeError(w, http.StatusNotFound, "not_found")
-		}
-	case 3:
-		switch {
-		case segments[0] == "features" && segments[2] == "versions":
-			set("featureID", segments[1])
-			h.listFeatureVersions(w, r)
-		case segments[1] == "pages":
-			set("siteID", segments[0])
-			set("pageID", segments[2])
-			h.getPage(w, r)
-		case segments[1] == "templates":
-			set("siteID", segments[0])
-			set("templateID", segments[2])
-			h.getPageTemplate(w, r)
-		case segments[0] == "media" && segments[1] == "jobs":
-			set("jobID", segments[2])
-			h.getMediaJob(w, r)
-		default:
-			writeError(w, http.StatusNotFound, "not_found")
-		}
-	case 4:
-		if segments[0] == "features" && segments[2] == "versions" {
-			set("featureID", segments[1])
-			set("version", segments[3])
-			h.getFeatureVersion(w, r)
-			return
-		}
-		writeError(w, http.StatusNotFound, "not_found")
-	case 6:
-		if segments[1] == "pages" && segments[3] == "snapshots" && segments[5] == "content-projection" {
-			set("siteID", segments[0])
-			set("pageID", segments[2])
-			set("snapshotID", segments[4])
-			h.getPagePlacementProjection(w, r)
-			return
-		}
-		writeError(w, http.StatusNotFound, "not_found")
-	default:
-		writeError(w, http.StatusNotFound, "not_found")
-	}
 }
 
 func (h *Handler) getImport(w http.ResponseWriter, r *http.Request) {
@@ -269,43 +206,13 @@ func (h *Handler) getFeatureVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (h *Handler) listConfiguredSites(w http.ResponseWriter, r *http.Request) {
-	ctx, ok := h.authenticate(w, r)
-	if !ok {
-		return
-	}
-	result, err := h.website.ListConfiguredSites(ctx)
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	if result.Items == nil || len(result.Items) > 256 {
-		writeError(w, http.StatusBadGateway, "unavailable")
-		return
-	}
-	seen := make(map[string]struct{}, len(result.Items))
-	for _, site := range result.Items {
-		if !validSiteID(site.SiteID) {
-			writeError(w, http.StatusBadGateway, "unavailable")
-			return
-		}
-		if _, exists := seen[site.SiteID]; exists {
-			writeError(w, http.StatusBadGateway, "unavailable")
-			return
-		}
-		seen[site.SiteID] = struct{}{}
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) listPages(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-	siteID := r.PathValue("siteID")
 	query, valid := readQuery(r, "cursor", "limit")
-	if !valid || !validSiteID(siteID) || len(query["cursor"]) > 1024 {
+	if !valid || len(query["cursor"]) > 1024 {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -314,7 +221,7 @@ func (h *Handler) listPages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.website.ListPages(ctx, siteID, query["cursor"], limit)
+	page, err := h.website.ListPages(ctx, query["cursor"], limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -324,7 +231,7 @@ func (h *Handler) listPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, value := range page.Items {
-		if !validUUID(value.ID) || value.SiteID != siteID || !validSnapshotName(value.Name) || !validUUID(value.LatestSnapshotID) || !validSnapshotState(value.LatestSnapshotState) || value.LatestSnapshotState != "ready" {
+		if !validUUID(value.ID) || !validSnapshotName(value.Name) || !validUUID(value.LatestSnapshotID) || !validSnapshotState(value.LatestSnapshotState) || value.LatestSnapshotState != "ready" {
 			writeError(w, http.StatusBadGateway, "unavailable")
 			return
 		}
@@ -337,17 +244,17 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID, pageID := r.PathValue("siteID"), r.PathValue("pageID")
-	if !validSiteID(siteID) || !validUUID(pageID) {
+	pageID := r.PathValue("pageID")
+	if !validUUID(pageID) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	value, err := h.website.GetPage(ctx, siteID, pageID)
+	value, err := h.website.GetPage(ctx, pageID)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if !validPageResponse(value, siteID, pageID) {
+	if !validPageResponse(value, pageID) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -362,11 +269,6 @@ func (h *Handler) createPage(w http.ResponseWriter, r *http.Request) {
 	key, valid := readIdempotencyKey(r)
 	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	siteID := r.PathValue("siteID")
-	if !validSiteID(siteID) {
-		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
 	var input struct {
@@ -384,23 +286,23 @@ func (h *Handler) createPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := h.website.CreatePage(ctx, website.CreatePageRequest{
-		SiteID: siteID, Name: input.Name, TemplateID: input.TemplateID,
+		Name: input.Name, TemplateID: input.TemplateID,
 		TemplateRevision: input.TemplateRevision, IdempotencyKey: key,
 	})
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if !validPageResponse(value, siteID, value.ID) || value.LatestSnapshotState != "ready" {
+	if !validPageResponse(value, value.ID) || value.LatestSnapshotState != "ready" {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
-	w.Header().Set("Location", apiPrefix+"/"+siteID+"/pages/"+value.ID)
+	w.Header().Set("Location", apiPrefix+"/pages/"+value.ID)
 	writeJSON(w, http.StatusCreated, value)
 }
 
-func validPageResponse(value website.Page, siteID, pageID string) bool {
-	return validUUID(value.ID) && value.ID == pageID && value.SiteID == siteID && validSnapshotName(value.Name) &&
+func validPageResponse(value website.Page, pageID string) bool {
+	return validUUID(value.ID) && value.ID == pageID && validSnapshotName(value.Name) &&
 		validUUID(value.LatestSnapshotID) && validSnapshotState(value.LatestSnapshotState)
 }
 
@@ -409,9 +311,8 @@ func (h *Handler) listPageTemplates(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID := r.PathValue("siteID")
 	query, valid := readQuery(r, "cursor", "limit")
-	if !valid || !validSiteID(siteID) || len(query["cursor"]) > 1024 {
+	if !valid || len(query["cursor"]) > 1024 {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -420,7 +321,7 @@ func (h *Handler) listPageTemplates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.website.ListPageTemplates(ctx, siteID, query["cursor"], limit)
+	page, err := h.website.ListPageTemplates(ctx, query["cursor"], limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -430,7 +331,7 @@ func (h *Handler) listPageTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, value := range page.Items {
-		if !validPageTemplate(value, siteID, value.ID) {
+		if !validPageTemplate(value, value.ID) {
 			writeError(w, http.StatusBadGateway, "unavailable")
 			return
 		}
@@ -443,17 +344,17 @@ func (h *Handler) getPageTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID, templateID := r.PathValue("siteID"), r.PathValue("templateID")
-	if !validSiteID(siteID) || !validUUID(templateID) {
+	templateID := r.PathValue("templateID")
+	if !validUUID(templateID) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	value, err := h.website.GetPageTemplate(ctx, siteID, templateID)
+	value, err := h.website.GetPageTemplate(ctx, templateID)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if !validPageTemplate(value, siteID, templateID) {
+	if !validPageTemplate(value, templateID) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -471,11 +372,6 @@ func (h *Handler) createPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	siteID := r.PathValue("siteID")
-	if !validSiteID(siteID) {
-		writeError(w, http.StatusNotFound, "not_found")
-		return
-	}
 	var input struct {
 		Name          string                            `json:"name"`
 		Description   string                            `json:"description"`
@@ -490,18 +386,18 @@ func (h *Handler) createPageTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := h.website.CreatePageTemplate(ctx, website.CreatePageTemplateRequest{
-		SiteID: siteID, Name: input.Name, Description: input.Description,
+		Name: input.Name, Description: input.Description,
 		Configuration: input.Configuration, IdempotencyKey: key,
 	})
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if !validPageTemplate(value, siteID, value.ID) || value.Revision != 1 {
+	if !validPageTemplate(value, value.ID) || value.Revision != 1 {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
-	w.Header().Set("Location", apiPrefix+"/"+siteID+"/templates/"+value.ID)
+	w.Header().Set("Location", apiPrefix+"/templates/"+value.ID)
 	setSnapshotETag(w, value.Revision)
 	writeJSON(w, http.StatusCreated, value)
 }
@@ -511,8 +407,8 @@ func (h *Handler) updatePageTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID, templateID := r.PathValue("siteID"), r.PathValue("templateID")
-	if !validSiteID(siteID) || !validUUID(templateID) {
+	templateID := r.PathValue("templateID")
+	if !validUUID(templateID) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -535,14 +431,14 @@ func (h *Handler) updatePageTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := h.website.UpdatePageTemplate(ctx, website.UpdatePageTemplateRequest{
-		SiteID: siteID, TemplateID: templateID, ExpectedRevision: revision,
+		TemplateID: templateID, ExpectedRevision: revision,
 		Name: input.Name, Description: input.Description, Configuration: input.Configuration,
 	})
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if !validPageTemplate(value, siteID, templateID) || value.Revision <= revision {
+	if !validPageTemplate(value, templateID) || value.Revision <= revision {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -555,8 +451,8 @@ func (h *Handler) deletePageTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	siteID, templateID := r.PathValue("siteID"), r.PathValue("templateID")
-	if !validSiteID(siteID) || !validUUID(templateID) {
+	templateID := r.PathValue("templateID")
+	if !validUUID(templateID) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -565,7 +461,7 @@ func (h *Handler) deletePageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, "invalid_revision")
 		return
 	}
-	if err := h.website.DeletePageTemplate(ctx, website.DeletePageTemplateRequest{SiteID: siteID, TemplateID: templateID, ExpectedRevision: revision}); err != nil {
+	if err := h.website.DeletePageTemplate(ctx, website.DeletePageTemplateRequest{TemplateID: templateID, ExpectedRevision: revision}); err != nil {
 		writeEngineError(w, err)
 		return
 	}
@@ -582,8 +478,8 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	siteID, pageID := r.PathValue("siteID"), r.PathValue("pageID")
-	if !validSiteID(siteID) || !validUUID(pageID) {
+	pageID := r.PathValue("pageID")
+	if !validUUID(pageID) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -597,13 +493,13 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	input.SiteID, input.PageID, input.IdempotencyKey = siteID, pageID, key
+	input.PageID, input.IdempotencyKey = pageID, key
 	snapshot, err := h.website.ApplyPageTemplate(ctx, input)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if snapshot.SiteID != siteID || snapshot.PageID != pageID || !validUUID(snapshot.ID) || snapshot.ParentID != input.ExpectedSnapshotID || snapshot.Revision < 1 || snapshot.State != "provisioning" || snapshot.Payload == nil || !validSnapshotPayload(*snapshot.Payload) {
+	if snapshot.PageID != pageID || !validUUID(snapshot.ID) || snapshot.ParentID != input.ExpectedSnapshotID || snapshot.Revision < 1 || snapshot.State != "provisioning" || snapshot.Payload == nil || !validSnapshotPayload(*snapshot.Payload) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -634,8 +530,8 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, snapshot)
 }
 
-func validPageTemplate(value website.PageTemplate, siteID, templateID string) bool {
-	return validUUID(value.ID) && value.ID == templateID && value.SiteID == siteID && validSnapshotName(value.Name) &&
+func validPageTemplate(value website.PageTemplate, templateID string) bool {
+	return validUUID(value.ID) && value.ID == templateID && validSnapshotName(value.Name) &&
 		utf8.ValidString(value.Description) && len(value.Description) <= 1000 && value.Revision >= 1 &&
 		sha256Pattern.MatchString(value.Digest) && validPageTemplateConfiguration(value.Configuration)
 }
@@ -661,22 +557,17 @@ func validText(value string, max int) bool {
 	return utf8.ValidString(value) && strings.TrimSpace(value) == value && utf8.RuneCountInString(value) > 0 && utf8.RuneCountInString(value) <= max
 }
 
-func (h *Handler) getSiteContentSchema(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) getContentModel(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-	siteID := r.PathValue("siteID")
-	if !validSiteID(siteID) {
-		writeError(w, http.StatusNotFound, "not_found")
-		return
-	}
-	schema, err := h.website.GetSiteContentSchema(ctx, siteID)
+	schema, err := h.website.GetContentModel(ctx)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if schema.SiteID != siteID || !schema.VerifyDigest() || !validUniqueJSONObject(schema.DataModel, 1<<20) {
+	if !schema.VerifyDigest() || !validUniqueJSONObject(schema.DataModel, 1<<20) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -684,17 +575,12 @@ func (h *Handler) getSiteContentSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, schema)
 }
 
-func (h *Handler) saveSiteModel(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) saveContentModel(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-	siteID := r.PathValue("siteID")
-	if !validSiteID(siteID) {
-		writeError(w, http.StatusNotFound, "not_found")
-		return
-	}
-	var request website.SaveSiteModelRequest
+	var request website.SaveContentModelRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -703,13 +589,12 @@ func (h *Handler) saveSiteModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	request.SiteID = siteID
-	schema, err := h.website.SaveSiteModel(ctx, request)
+	schema, err := h.website.SaveContentModel(ctx, request)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if schema.SiteID != siteID || !schema.VerifyDigest() || schema.ModelRevision != request.ExpectedRevision+1 || !validUniqueJSONObject(schema.DataModel, 1<<20) {
+	if !schema.VerifyDigest() || schema.ModelRevision != request.ExpectedRevision+1 || !validUniqueJSONObject(schema.DataModel, 1<<20) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -722,17 +607,17 @@ func (h *Handler) getPagePlacementProjection(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	siteID, pageID, snapshotID := r.PathValue("siteID"), r.PathValue("pageID"), r.PathValue("snapshotID")
-	if !validSiteID(siteID) || !validPageID(pageID) || !validUUID(snapshotID) {
+	pageID, snapshotID := r.PathValue("pageID"), r.PathValue("snapshotID")
+	if !validPageID(pageID) || !validUUID(snapshotID) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	projection, err := h.website.GetPagePlacementProjection(ctx, siteID, pageID, snapshotID)
+	projection, err := h.website.GetPagePlacementProjection(ctx, pageID, snapshotID)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if projection.SiteID != siteID || projection.PageID != pageID || projection.PageSnapshotID != snapshotID || !projection.VerifyDigest() {
+	if projection.PageID != pageID || projection.PageSnapshotID != snapshotID || !projection.VerifyDigest() {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -754,7 +639,7 @@ func (h *Handler) getSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if value.ID != snapshotID || !validID(value.SiteID) || !validPageID(value.PageID) || !validSnapshotName(value.Name) || value.Sequence < 1 || value.Revision < 1 || !validSnapshotState(value.State) ||
+	if value.ID != snapshotID || !validPageID(value.PageID) || !validSnapshotName(value.Name) || value.Sequence < 1 || value.Revision < 1 || !validSnapshotState(value.State) ||
 		value.Payload == nil || !validSnapshotPayload(*value.Payload) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
@@ -768,9 +653,8 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "site_id", "page_id", "cursor", "limit")
-	if !valid || (query["site_id"] != "" && !validSiteID(query["site_id"])) ||
-		(query["page_id"] != "" && !validPageID(query["page_id"])) || len(query["cursor"]) > 1024 {
+	query, valid := readQuery(r, "page_id", "cursor", "limit")
+	if !valid || (query["page_id"] != "" && !validPageID(query["page_id"])) || len(query["cursor"]) > 1024 {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -779,7 +663,7 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.website.ListSnapshots(ctx, query["site_id"], query["page_id"], query["cursor"], limit)
+	page, err := h.website.ListSnapshots(ctx, query["page_id"], query["cursor"], limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -789,8 +673,7 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, snapshot := range page.Items {
-		if !validID(snapshot.ID) || !validID(snapshot.SiteID) || !validPageID(snapshot.PageID) ||
-			(query["site_id"] != "" && snapshot.SiteID != query["site_id"]) ||
+		if !validID(snapshot.ID) || !validPageID(snapshot.PageID) ||
 			(query["page_id"] != "" && snapshot.PageID != query["page_id"]) ||
 			!validSnapshotName(snapshot.Name) || snapshot.Sequence < 1 || snapshot.Revision < 1 || !validSnapshotState(snapshot.State) {
 			writeError(w, http.StatusBadGateway, "unavailable")
@@ -815,7 +698,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
-	if !validSiteID(input.SiteID) || !validPageID(input.PageID) || (input.ParentID != "" && !validUUID(input.ParentID)) ||
+	if !validPageID(input.PageID) || (input.ParentID != "" && !validUUID(input.ParentID)) ||
 		(input.ParentID == "" && (input.ExpectedRevision != 0 || input.ExpectedContentRevision != 0)) ||
 		(input.ParentID != "" && (input.ExpectedRevision < 1 || input.ExpectedContentRevision < 0)) ||
 		!validSnapshotName(input.Name) || !validSnapshotPayload(input.Payload) {
@@ -836,7 +719,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	if input.ParentID != "" {
 		expectedState = "provisioning"
 	}
-	if !validUUID(value.ID) || value.SiteID != input.SiteID || value.PageID != input.PageID || value.ParentID != input.ParentID || value.Name != input.Name || value.Sequence < 1 || value.Revision < 1 || value.State != expectedState ||
+	if !validUUID(value.ID) || value.PageID != input.PageID || value.ParentID != input.ParentID || value.Name != input.Name || value.Sequence < 1 || value.Revision < 1 || value.State != expectedState ||
 		value.Payload == nil || !validSnapshotPayload(*value.Payload) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
@@ -1188,12 +1071,6 @@ func parseLimit(value string, config Config) (int, bool) {
 	}
 	limit, err := strconv.Atoi(value)
 	return limit, err == nil && limit > 0 && limit <= config.MaxPageSize
-}
-
-var siteIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-
-func validSiteID(value string) bool {
-	return siteIDPattern.MatchString(value)
 }
 
 func validID(value string) bool {

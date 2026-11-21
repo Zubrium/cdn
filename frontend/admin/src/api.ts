@@ -57,7 +57,7 @@ import type {
   WebsitePageTemplate,
   WebsitePageTemplatePage,
   WebsitePageTemplateConfiguration,
-  SiteContentSchema,
+  ContentModel,
 } from "./types";
 
 import { hasControlCharacters, isActiveFormContentType } from "@/domains/forms/schema-draft";
@@ -320,7 +320,6 @@ function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
   const valid = validateWebsiteSnapshot(snapshot);
   return {
     id: valid.id,
-    siteId: valid.site_id,
     pageId: valid.page_id,
     revision: valid.revision,
     parentSnapshotId: valid.parent_id,
@@ -339,7 +338,7 @@ function siteSnapshotFromWebsite(snapshot: WebsiteSnapshot): SiteSnapshot {
 }
 
 function validateWebsiteSnapshot(value: unknown): WebsiteSnapshot {
-  if (!isRecord(value) || typeof value.id !== "string" || !value.id || typeof value.site_id !== "string" || !value.site_id ||
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id ||
     typeof value.page_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.page_id) ||
     typeof value.name !== "string" || !value.name || typeof value.sequence !== "number" || !Number.isSafeInteger(value.sequence) || value.sequence < 1 ||
     typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
@@ -460,23 +459,23 @@ function parseFeatureImport(value: unknown): WebsiteFeatureImport {
   return value as unknown as WebsiteFeatureImport;
 }
 
-function parseSiteContentSchema(value: unknown, siteID: string): SiteContentSchema {
-  if (!isRecord(value) || value.version !== 1 || value.site_id !== siteID ||
+function parseContentModel(value: unknown): ContentModel {
+  if (!isRecord(value) || value.version !== 1 ||
     !Number.isSafeInteger(value.model_revision) || Number(value.model_revision) < 1 ||
     typeof value.digest !== "string" || !/^[a-f0-9]{64}$/i.test(value.digest) ||
     !isRecord(value.data_model) || value.data_model.formatVersion !== 1 || !Array.isArray(value.data_model.entities)) {
-    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную модель данных сайта");
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную модель данных");
   }
   return {
     version: 1,
-    siteId: siteID,    modelRevision: Number(value.model_revision),
+    modelRevision: Number(value.model_revision),
     digest: value.digest,
     dataModel: value.data_model as unknown as DataModel,
   };
 }
 
 function parseContentWorkspace(value: unknown, snapshotID: string): ModelContentWorkspace {
-  if (!isRecord(value) || value.page_snapshot_id !== snapshotID || typeof value.site_id !== "string" || !value.site_id ||
+  if (!isRecord(value) || value.page_snapshot_id !== snapshotID ||
     typeof value.page_id !== "string" || !value.page_id || !Number.isSafeInteger(value.model_revision) || Number(value.model_revision) < 1 ||
     typeof value.model_digest !== "string" || !Number.isSafeInteger(value.page_revision) || Number(value.page_revision) < 1 ||
     typeof value.page_digest !== "string" || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0 ||
@@ -560,8 +559,7 @@ function parseContentWorkspace(value: unknown, snapshotID: string): ModelContent
     throw new ApiError(502, "invalid_response", "Сервер вернул некорректные идентификаторы переводов");
   }
   return {
-    snapshot: { id: snapshotID, site_id: value.site_id, page_id: value.page_id },
-    siteId: value.site_id,
+    snapshot: { id: snapshotID, page_id: value.page_id },
     pageSnapshotId: snapshotID,
     pageId: value.page_id,
     locale: value.locale,
@@ -849,9 +847,9 @@ function toMedia(file: CoreFile): Media {
   };
 }
 
-function parseWebsitePage(value: unknown, siteID: string): WebsitePage {
+function parseWebsitePage(value: unknown): WebsitePage {
   if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
-    value.site_id !== siteID || typeof value.name !== "string" || typeof value.latest_snapshot_id !== "string" ||
+    typeof value.name !== "string" || typeof value.latest_snapshot_id !== "string" ||
     !uuidValuePattern.test(value.latest_snapshot_id) || !["provisioning", "ready", "failed"].includes(String(value.latest_snapshot_state)) ||
     typeof value.created_at !== "string" || !Number.isFinite(Date.parse(value.created_at))) {
     throw new ApiError(502, "invalid_response", "Сервер вернул некорректную страницу сайта");
@@ -859,8 +857,8 @@ function parseWebsitePage(value: unknown, siteID: string): WebsitePage {
   return value as unknown as WebsitePage;
 }
 
-function parseWebsitePageTemplate(value: unknown, siteID: string): WebsitePageTemplate {
-  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) || value.site_id !== siteID ||
+function parseWebsitePageTemplate(value: unknown): WebsitePageTemplate {
+  if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
     typeof value.name !== "string" || typeof value.description !== "string" || !Number.isSafeInteger(value.revision) ||
     (value.revision as number) < 1 || typeof value.digest !== "string" || !/^[a-f0-9]{64}$/i.test(value.digest) ||
     typeof value.updated_at !== "string" || !isRecord(value.configuration) || value.configuration.schema_version !== 1 ||
@@ -873,69 +871,69 @@ function parseWebsitePageTemplate(value: unknown, siteID: string): WebsitePageTe
 
 export const api = {
   website: {
-    async siteModel(siteID: string, signal?: AbortSignal): Promise<SiteContentSchema> {
-      return parseSiteContentSchema(
-        await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/model`, { signal }),
-        siteID,
-      );
+    async contentModel(signal?: AbortSignal): Promise<ContentModel> {
+      return parseContentModel(await request<unknown>(`${ADMIN_ROOT}/model`, { signal }));
     },
-    async saveSiteModel(siteID: string, expectedRevision: number, dataModel: DataModel): Promise<SiteContentSchema> {
-      return parseSiteContentSchema(
-        await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/model`, {
+    async saveContentModel(expectedRevision: number, dataModel: DataModel): Promise<ContentModel> {
+      return parseContentModel(
+        await request<unknown>(`${ADMIN_ROOT}/model`, {
           method: "PUT",
           body: { expected_revision: expectedRevision, data_model: dataModel },
         }),
-        siteID,
       );
     },
-    async pages(siteID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePagePage> {
-      const page = await requestList<WebsitePage>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages`, { signal, query: { cursor, limit } });
-      return { ...page, items: page.items.map((item) => parseWebsitePage(item, siteID)) };
+    async pages(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePagePage> {
+      const page = await requestList<WebsitePage>(`${ADMIN_ROOT}/pages`, { signal, query: { cursor, limit } });
+      return { ...page, items: page.items.map((item) => parseWebsitePage(item)) };
     },
-    async page(siteID: string, pageID: string, signal?: AbortSignal): Promise<WebsitePage> {
-      return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}`, { signal }), siteID);
+    async page(pageID: string): Promise<WebsitePage> {
+      return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/pages/${encoded(pageID)}`));
     },
-    async createPage(siteID: string, input: { name: string; template_id?: string; template_revision?: number }, idempotencyKey: string): Promise<WebsitePage> {
-      return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages`, {
+    async createPage(input: { name: string; template_id?: string; template_revision?: number }, idempotencyKey: string): Promise<WebsitePage> {
+      return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/pages`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
-      }), siteID);
+      }));
     },
-    async pageTemplates(siteID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePageTemplatePage> {
-      const page = await requestList<WebsitePageTemplate>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates`, { signal, query: { cursor, limit } });
-      return { ...page, items: page.items.map((item) => parseWebsitePageTemplate(item, siteID)) };
+    async pageTemplates(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePageTemplatePage> {
+      const page = await requestList<WebsitePageTemplate>(`${ADMIN_ROOT}/templates`, { signal, query: { cursor, limit } });
+      return { ...page, items: page.items.map((item) => parseWebsitePageTemplate(item)) };
     },
-    async pageTemplate(siteID: string, templateID: string, signal?: AbortSignal): Promise<WebsitePageTemplate> {
-      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, { signal }), siteID);
+    async pageTemplate(templateID: string): Promise<WebsitePageTemplate> {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/templates/${encoded(templateID)}`));
     },
-    async createPageTemplate(siteID: string, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }, idempotencyKey: string): Promise<WebsitePageTemplate> {
-      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates`, {
+    async createPageTemplate(input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }, idempotencyKey: string): Promise<WebsitePageTemplate> {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/templates`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
-      }), siteID);
+      }));
     },
-    async updatePageTemplate(siteID: string, templateID: string, revision: number, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }): Promise<WebsitePageTemplate> {
-      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
+    async updatePageTemplate(templateID: string, revision: number, input: { name: string; description: string; configuration: WebsitePageTemplateConfiguration }): Promise<WebsitePageTemplate> {
+      return parseWebsitePageTemplate(await request<unknown>(`${ADMIN_ROOT}/templates/${encoded(templateID)}`, {
         method: "PUT", headers: { "If-Match": `"${revision}"` }, body: input,
-      }), siteID);
+      }));
     },
-    deletePageTemplate(siteID: string, templateID: string, revision: number): Promise<void> {
-      return request<void>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/templates/${encoded(templateID)}`, {
+    deletePageTemplate(templateID: string, revision: number): Promise<void> {
+      return request<void>(`${ADMIN_ROOT}/templates/${encoded(templateID)}`, {
         method: "DELETE", headers: { "If-Match": `"${revision}"` },
       });
     },
-    applyPageTemplate(siteID: string, pageID: string, input: { template_id: string; template_revision: number; expected_snapshot_id: string; expected_snapshot_revision: number; expected_content_revision: number; confirmed: true }, idempotencyKey: string): Promise<WebsiteSnapshot> {
-      return request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/pages/${encoded(pageID)}/template-applications`, {
+    applyPageTemplate(pageID: string, input: { template_id: string; template_revision: number; expected_snapshot_id: string; expected_snapshot_revision: number; expected_content_revision: number; confirmed: true }, idempotencyKey: string): Promise<WebsiteSnapshot> {
+      return request<unknown>(`${ADMIN_ROOT}/pages/${encoded(pageID)}/template-applications`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
-      }).then(validateWebsiteSnapshot);
+      }).then((value) => {
+        const snapshot = validateWebsiteSnapshot(value);
+        if (snapshot.page_id !== pageID) throw new ApiError(502, "invalid_response", "Сервер вернул снапшот другой страницы");
+        return snapshot;
+      });
     },
-    snapshots(siteID?: string, pageID?: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteSnapshotPage> {
-      return requestList<WebsiteSnapshot>(`${ADMIN_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor, limit } });
+    snapshots(pageID?: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteSnapshotPage> {
+      return requestList<WebsiteSnapshot>(`${ADMIN_ROOT}/snapshots`, { signal, query: { page_id: pageID, cursor, limit } });
     },
-    async allSnapshots(signal?: AbortSignal, siteID?: string, pageID?: string): Promise<WebsiteSnapshot[]> {
+    async allSnapshots(signal?: AbortSignal, pageID?: string): Promise<WebsiteSnapshot[]> {
       const items: WebsiteSnapshot[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
       for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
-        const page = await requestList<WebsiteSnapshot>(`${ADMIN_ROOT}/sites/snapshots`, { signal, query: { site_id: siteID, page_id: pageID, cursor } });
+        const page = await requestList<WebsiteSnapshot>(`${ADMIN_ROOT}/snapshots`, { signal, query: { page_id: pageID, cursor } });
         items.push(...page.items.map(validateWebsiteSnapshot));
         const nextCursor = page.next_cursor || undefined;
         if (!nextCursor) return items;
@@ -946,24 +944,24 @@ export const api = {
       throw new ApiError(502, "snapshot_list_too_large", "Список снапшотов превышает допустимый размер");
     },
     featureCatalog(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
-      return request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/sites/features`, { signal, query: { cursor, limit } });
+      return request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/features`, { signal, query: { cursor, limit } });
     },
     featureVersions(featureID: string, cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsiteFeatureVersionPage> {
-      return request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/sites/features/${encoded(featureID)}/versions`, { signal, query: { cursor, limit } });
+      return request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/features/${encoded(featureID)}/versions`, { signal, query: { cursor, limit } });
     },
     featureVersion(featureID: string, version: string, signal?: AbortSignal): Promise<WebsiteFeatureVersion> {
-      return request<WebsiteFeatureVersion>(`${ADMIN_ROOT}/sites/features/${encoded(featureID)}/versions/${encoded(version)}`, { signal });
+      return request<WebsiteFeatureVersion>(`${ADMIN_ROOT}/features/${encoded(featureID)}/versions/${encoded(version)}`, { signal });
     },
     snapshot(id: string, signal?: AbortSignal): Promise<WebsiteSnapshot> {
-      return request<unknown>(`${ADMIN_ROOT}/sites/snapshots/${encoded(id)}`, { signal }).then((value) => {
+      return request<unknown>(`${ADMIN_ROOT}/snapshots/${encoded(id)}`, { signal }).then((value) => {
         const snapshot = validateWebsiteSnapshot(value);
         if (snapshot.id !== id) throw new ApiError(502, "invalid_response", "Сервер вернул другой снапшот");
         return snapshot;
       });
     },
-    createSnapshot(input: { site_id: string; page_id: string; parent_id?: string; name: string; expected_revision: number; expected_content_revision: number; payload: WebsiteSnapshotPayload }, idempotencyKey: string): Promise<WebsiteSnapshot> {
+    createSnapshot(input: { page_id: string; parent_id?: string; name: string; expected_revision: number; expected_content_revision: number; payload: WebsiteSnapshotPayload }, idempotencyKey: string): Promise<WebsiteSnapshot> {
       const payload = snapshotPayloadFromWebsite(input.payload, input.page_id, true);
-      return request<unknown>(`${ADMIN_ROOT}/sites/snapshots`, {
+      return request<unknown>(`${ADMIN_ROOT}/snapshots`, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
         body: { ...input, payload },
@@ -971,30 +969,30 @@ export const api = {
     },
     deleteSnapshot(id: string, revision: number): Promise<void> {
       if (!Number.isSafeInteger(revision) || revision < 1) throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия снапшота");
-      return request<void>(`${ADMIN_ROOT}/sites/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
+      return request<void>(`${ADMIN_ROOT}/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
     },
     buildSnapshot(snapshotID: string, idempotencyKey: string): Promise<WebsiteBuild> {
-      return request<WebsiteBuild>(`${ADMIN_ROOT}/sites/builds`, {
+      return request<WebsiteBuild>(`${ADMIN_ROOT}/builds`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { snapshot_id: snapshotID },
       });
     },
     build(id: string, signal?: AbortSignal): Promise<WebsiteBuild> {
-      return request<WebsiteBuild>(`${ADMIN_ROOT}/sites/builds/${encoded(id)}`, { signal });
+      return request<WebsiteBuild>(`${ADMIN_ROOT}/builds/${encoded(id)}`, { signal });
     },
     createMediaDerivative(input: { source_file_id: string; feature_id: string; profile: string }, idempotencyKey: string): Promise<WebsiteMediaJob> {
-      return request<WebsiteMediaJob>(`${ADMIN_ROOT}/sites/media/derivatives`, {
+      return request<WebsiteMediaJob>(`${ADMIN_ROOT}/media/derivatives`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       });
     },
     mediaJob(id: string, signal?: AbortSignal): Promise<WebsiteMediaJob> {
-      return request<WebsiteMediaJob>(`${ADMIN_ROOT}/sites/media/jobs/${encoded(id)}`, { signal });
+      return request<WebsiteMediaJob>(`${ADMIN_ROOT}/media/jobs/${encoded(id)}`, { signal });
     },
     async featureBuilds(signal?: AbortSignal): Promise<{ items: FeatureBuild[] }> {
       const items: FeatureBuild[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
       for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
-        const page = await request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/sites/features`, { signal, query: { cursor } });
+        const page = await request<WebsiteFeatureVersionPage>(`${ADMIN_ROOT}/features`, { signal, query: { cursor } });
         if (!page || !Array.isArray(page.items)) throw invalidFeatureCatalog();
         items.push(...page.items.map(featureBuildFromCatalog));
         if (page.next_cursor != null && typeof page.next_cursor !== "string") throw invalidFeatureCatalog();
@@ -1007,24 +1005,24 @@ export const api = {
       throw new ApiError(502, "catalog_too_large", "Каталог фич превышает допустимый размер");
     },
     beginFeatureImport(sourceFileID: string, idempotencyKey: string, expectedSHA256?: string): Promise<WebsiteFeatureImport> {
-      return request<unknown>(`${ADMIN_ROOT}/sites/feature-imports`, {
+      return request<unknown>(`${ADMIN_ROOT}/feature-imports`, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
         body: { source_file_id: sourceFileID, ...(expectedSHA256 ? { expected_sha256: expectedSHA256 } : {}) },
       }).then(parseFeatureImport);
     },
     featureImport(id: string, signal?: AbortSignal): Promise<WebsiteFeatureImport> {
-      return request<unknown>(`${ADMIN_ROOT}/sites/feature-imports/${encoded(id)}`, { signal }).then(parseFeatureImport);
+      return request<unknown>(`${ADMIN_ROOT}/feature-imports/${encoded(id)}`, { signal }).then(parseFeatureImport);
     },
   },
 
   contentEngine: {
-    localeConfig(siteID: string, signal?: AbortSignal): Promise<ContentLocaleConfig> {
-      return request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/content/locales`, { signal })
+    localeConfig(signal?: AbortSignal): Promise<ContentLocaleConfig> {
+      return request<unknown>(`${ADMIN_ROOT}/content/locales`, { signal })
         .then(parseContentLocaleConfig);
     },
-    replaceLocaleConfig(siteID: string, input: ReplaceContentLocaleConfig, idempotencyKey: string): Promise<ContentLocaleConfig> {
-      return request<unknown>(`${ADMIN_ROOT}/sites/${encoded(siteID)}/content/locales`, {
+    replaceLocaleConfig(input: ReplaceContentLocaleConfig, idempotencyKey: string): Promise<ContentLocaleConfig> {
+      return request<unknown>(`${ADMIN_ROOT}/content/locales`, {
         method: "PUT", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       }).then(parseContentLocaleConfig);
     },
@@ -1288,7 +1286,7 @@ export const api = {
     },
     prepareRenditions(id: string, context: MediaRenditionContext): Promise<MediaRenditionState> {
       return request<MediaRenditionState>(
-        `${ADMIN_ROOT}/sites/media/${encoded(id)}/renditions/prepare`,
+        `${ADMIN_ROOT}/media/${encoded(id)}/renditions/prepare`,
         {
           method: "POST",
           body: {
@@ -1316,7 +1314,6 @@ export const api = {
     },
     async createSnapshotFrom(input: {
       name: string;
-      siteID?: string;
       pageID?: string;
       parentSnapshotId?: string;
       expectedParentRevision?: number;
@@ -1331,22 +1328,20 @@ export const api = {
       }
       const config = input.config ?? parent?.payload?.config;
       const metadata = input.metadata ?? parent?.payload?.metadata;
-      const siteID = input.siteID ?? parent?.site_id;
       const pageID = input.pageID ?? parent?.page_id;
-      if (!siteID || !pageID || !config || !metadata) {
-        throw new ApiError(400, "invalid_snapshot_scope", "Для корневого снапшота нужны site_id и page_id из конфигурации запуска");
+      if (!pageID || !config || !metadata) {
+        throw new ApiError(400, "invalid_snapshot_scope", "Для корневого снапшота нужен page_id из конфигурации запуска");
       }
       const payload = snapshotPayloadFromWebsite({ config, metadata }, pageID, true);
       const snapshotName = input.name.trim();
       const created = await api.website.createSnapshot({
-        site_id: siteID,
         page_id: pageID,
         ...(input.parentSnapshotId ? { parent_id: input.parentSnapshotId } : {}),
         name: snapshotName,
         expected_revision: input.expectedParentRevision ?? 0,
         expected_content_revision: input.expectedParentContentRevision ?? 0,
         payload: { config: payload.config, metadata },      }, input.idempotencyKey ?? `snapshot-${crypto.randomUUID()}`);
-      if (created.site_id !== siteID || created.page_id !== pageID || created.parent_id !== input.parentSnapshotId || created.name !== snapshotName || !created.payload) {
+      if (created.page_id !== pageID || created.parent_id !== input.parentSnapshotId || created.name !== snapshotName || !created.payload) {
         throw new ApiError(502, "invalid_response", "Сервер создал снапшот с неожиданными данными");
       }
       snapshotPayloadFromWebsite(created.payload, created.page_id);
@@ -1355,8 +1350,8 @@ export const api = {
     deleteSnapshot(id: string, revision: number): Promise<void> {
       return api.website.deleteSnapshot(id, revision);
     },
-    async contentSnapshots(signal?: AbortSignal, pageID?: string, siteID?: string): Promise<{ items: SiteSnapshot[] }> {
-      return { items: (await api.website.allSnapshots(signal, siteID, pageID)).map(siteSnapshotFromWebsite) };
+    async contentSnapshots(signal?: AbortSignal, pageID?: string): Promise<{ items: SiteSnapshot[] }> {
+      return { items: (await api.website.allSnapshots(signal, pageID)).map(siteSnapshotFromWebsite) };
     },
   },
 

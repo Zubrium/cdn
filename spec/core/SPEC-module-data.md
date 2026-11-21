@@ -18,8 +18,8 @@
 | Поле | Назначение |
 | --- | --- |
 | `engine_id` | Стабильный ID зарегистрированного engine, подставляемый Core, например `engine.loader`, `engine.website` или `engine.content` |
-| `namespace` | Пространство имён контракта engine, например `uploads/session`, `site/snapshot` или `content/record`; не более 255 байт |
-| `scope_type`, `scope_id` | Область документа: глобальная, сайт, сессия или другая объявленная engine область |
+| `namespace` | Пространство имён контракта engine, например `uploads/session`, `website/snapshot` или `content/record`; не более 255 байт |
+| `scope_type`, `scope_id` | Область документа: глобальная, страница, сессия или другая объявленная engine область |
 | `record_key` | Стабильный ключ документа внутри namespace и scope |
 | `payload` | Данные агрегата в JSONB |
 | `payload_version` | Версия JSON-контракта, которую понимает engine |

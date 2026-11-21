@@ -9,7 +9,9 @@ import (
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	content "github.com/Zubrium/cdn/engines/content"
+	"github.com/Zubrium/cdn/engines/content/domain"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
+	"github.com/Zubrium/cdn/engines/content/repository"
 )
 
 const engineSnapshotID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -148,11 +150,11 @@ func (testProjectionsProvider) GetContentProjections(_ context.Context, pageSnap
 }
 
 func schemaSnapshot(state string) contentapi.Projections {
-	site := contentapi.SiteContentSchema{Version: contentapi.ProjectionVersion, SiteID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", ModelRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
-	site.Digest, _ = site.ComputeDigest()
-	page := contentapi.PagePlacementProjection{Version: contentapi.ProjectionVersion, PageSnapshotID: engineSnapshotID, PageID: "page-1", SiteID: site.SiteID, Revision: 1, State: state, Placements: []contentapi.Placement{}}
+	model := contentapi.ContentModelProjection{Version: contentapi.ProjectionVersion, ModelRevision: 1, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`)}
+	model.Digest, _ = model.ComputeDigest()
+	page := contentapi.PagePlacementProjection{Version: contentapi.ProjectionVersion, PageSnapshotID: engineSnapshotID, PageID: "page-1", Revision: 1, State: state, Placements: []contentapi.Placement{}}
 	page.Digest, _ = page.ComputeDigest()
-	return contentapi.Projections{Site: site, Page: page}
+	return contentapi.Projections{ContentModel: model, Page: page, Locale: "en-US"}
 }
 
 func TestEngineRejectsInvalidSchemaSnapshotVersionDigestStateAndBinding(t *testing.T) {
@@ -165,8 +167,8 @@ func TestEngineRejectsInvalidSchemaSnapshotVersionDigestStateAndBinding(t *testi
 	}
 
 	unsupported := schemaSnapshot("ready")
-	unsupported.Site.Version++
-	unsupported.Site.Digest, _ = unsupported.Site.ComputeDigest()
+	unsupported.ContentModel.Version++
+	unsupported.ContentModel.Digest, _ = unsupported.ContentModel.ComputeDigest()
 	if _, err := engine.GetWorkspace(ctx, unsupported); !errors.Is(err, contentapi.ErrInvalid) {
 		t.Errorf("unsupported version with valid digest error = %v", err)
 	}
@@ -201,7 +203,18 @@ type testDataStore struct {
 }
 
 func newEngineStore() *testDataStore {
-	return &testDataStore{rows: map[core.ModuleDataKey]core.ModuleDataRecord{}}
+	store := &testDataStore{rows: map[core.ModuleDataKey]core.ModuleDataRecord{}}
+	repo, err := repository.New(store)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := repo.ReplaceLocaleConfig(context.Background(), domain.ReplaceLocaleConfigRequest{
+		ExpectedRevision: 0, Locales: []string{"en-US"}, DefaultLocale: "en-US",
+	}, "seed-key-0001", "seed-fingerprint-0001"); err != nil {
+		panic(err)
+	}
+	store.putCount = 0
+	return store
 }
 func (store *testDataStore) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
 	row, exists := store.rows[key]

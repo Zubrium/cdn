@@ -77,13 +77,13 @@ const routerNav: NavItem[] = [
 ];
 
 const snapshotManagementNav: NavItem[] = [
-  { to: "/site/pages", label: "Редактор сайтов", icon: Layers, match: (p) => p.startsWith("/site/") },
+  { to: "/site/pages", label: "Редактор страниц", icon: Layers, match: (p) => p.startsWith("/site/") },
   { to: "/snapshots/registry", label: "Реестр фичей", icon: Blocks, match: (p) => p.startsWith("/snapshots/registry") },
   { to: "/snapshots/tree", label: "Дерево снапшотов", icon: History, match: (p) => p.startsWith("/snapshots/tree") },
 ];
 
 const siteReadNav: NavItem[] = [
-  { to: "/site/pages", label: "Страницы сайта", icon: Layers, match: (p) => p.startsWith("/site/") },
+  { to: "/site/pages", label: "Страницы", icon: Layers, match: (p) => p.startsWith("/site/") },
 ];
 
 const accessNav: NavItem[] = [
@@ -149,7 +149,6 @@ function NavList({
         const snapshotContext = currentParams.has("snapshot")
           ? new URLSearchParams({
             snapshot: currentParams.get("snapshot")!,
-            ...(currentParams.get("site_id") ? { site_id: currentParams.get("site_id")! } : {}),
             ...(currentParams.get("page_id") ? { page_id: currentParams.get("page_id")! } : {}),
           })
           : null;
@@ -311,7 +310,7 @@ function SidebarContent({
         {siteManager && (
           <NavGroup label="Управление" collapsed={collapsed} items={snapshotManagementNav} onNavigate={onNavigate} className="mt-3" />
         )}
-        {siteReader && !siteManager && <NavGroup label="Сайты" collapsed={collapsed} items={siteReadNav} onNavigate={onNavigate} className="mt-3" />}
+        {siteReader && !siteManager && <NavGroup label="Страницы" collapsed={collapsed} items={siteReadNav} onNavigate={onNavigate} className="mt-3" />}
         {siteReader && <NavGroup label="Система" collapsed={collapsed} items={settingsNav} onNavigate={onNavigate} className="mt-3" />}
         {accessManager && <NavGroup label="Администрирование" collapsed={collapsed} items={accessNav} onNavigate={onNavigate} className="mt-3" />}
       </nav>

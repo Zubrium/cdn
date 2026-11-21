@@ -80,7 +80,7 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 		t.Fatalf("initialize page B: %v", err)
 	}
 	if initialA.Revision != initialB.Revision || initialA.Revision != 0 {
-		t.Fatalf("site revision changed during page initialization: A=%d B=%d", initialA.Revision, initialB.Revision)
+		t.Fatalf("global revision changed during page initialization: A=%d B=%d", initialA.Revision, initialB.Revision)
 	}
 
 	requestA := contentapi.SaveWorkspaceDraftRequest{
@@ -93,16 +93,16 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 		t.Fatalf("save page A selection: %v", err)
 	}
 	requestB := contentapi.SaveWorkspaceDraftRequest{
-		SnapshotID: schemaB.PageSnapshotID, IdempotencyKey: "page-b-selection", ExpectedRevision: initialB.Revision,
+		SnapshotID: schemaB.PageSnapshotID, IdempotencyKey: "page-b-selection", ExpectedRevision: firstA.Revision,
 		ExpectedSelectionRevision: initialB.SelectionRevision, Records: []contentapi.RecordInput{},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{}}},
 	}
 	firstB, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaB, requestB)
 	if err != nil {
-		t.Fatalf("parallel-scope page B selection save conflicted: %v", err)
+		t.Fatalf("page-scope B selection save conflicted: %v", err)
 	}
-	if firstA.Revision != initialA.Revision || firstB.Revision != initialB.Revision {
-		t.Fatalf("page-only writes changed site revision: A=%d B=%d initial=%d", firstA.Revision, firstB.Revision, initialA.Revision)
+	if firstA.Revision != initialA.Revision+1 || firstB.Revision != firstA.Revision+1 {
+		t.Fatalf("global revision did not advance for page writes: A=%d B=%d initial=%d", firstA.Revision, firstB.Revision, initialA.Revision)
 	}
 	if firstA.SelectionRevision != initialA.SelectionRevision+1 || firstB.SelectionRevision != initialB.SelectionRevision+1 {
 		t.Fatalf("page revisions did not advance independently: A=%d B=%d", firstA.SelectionRevision, firstB.SelectionRevision)
@@ -286,7 +286,7 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 	if err != nil || resetPublic.ContentRevision != public.ContentRevision || resetPublic.Records[0].Values["title"] != "Published" || len(resetPublic.Selections) != 0 {
 		t.Fatalf("reset target publication = %#v, err %v", resetPublic, err)
 	}
-	history, _, err := repo.ListHistory(ctx, sourceSchema.SiteID, "", 100)
+	history, _, err := repo.ListHistory(ctx, sourceSchema.Locale, "", 100)
 	if err != nil || len(history) != 1 {
 		t.Fatalf("shared publication history changed after reset: %d, err %v", len(history), err)
 	}
@@ -343,8 +343,12 @@ func TestCopySnapshotContentRejectsStaleSourceBeforePublishingTargetWorkspace(t 
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale source copy error = %v, want conflict", err)
 	}
-	if _, err := repo.Get(ctx, targetID); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("stale copy exposed target workspace: err = %v", err)
+	latest, err := repo.Get(ctx, sourceSchema.Locale)
+	if err != nil {
+		t.Fatalf("read source workspace after stale copy: %v", err)
+	}
+	if _, exists := latest.PageSelections[targetID]; exists {
+		t.Fatalf("stale copy exposed target page selections: %#v", latest.PageSelections)
 	}
 }
 
@@ -380,22 +384,19 @@ func TestLocaleConfigServiceValidatesAndDelegates(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	ctx := context.Background()
-	if _, err := service.GetLocaleConfig(ctx, "not-an-id"); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("GetLocaleConfig() with invalid site error = %v, want invalid", err)
-	}
 	request := domain.ReplaceLocaleConfigRequest{
 		ExpectedRevision: 0, Locales: []string{"EN-us", "fr"}, DefaultLocale: "en-us", IdempotencyKey: "locale-key-1",
 	}
-	config, err := service.ReplaceLocaleConfig(ctx, snapshotID, request)
+	config, err := service.ReplaceLocaleConfig(ctx, request)
 	if err != nil || config.Revision != 1 || config.DefaultLocale != "en-US" {
 		t.Fatalf("ReplaceLocaleConfig() = %#v, err %v", config, err)
 	}
-	loaded, err := service.GetLocaleConfig(ctx, snapshotID)
+	loaded, err := service.GetLocaleConfig(ctx)
 	if err != nil || loaded.Revision != 1 || len(loaded.Locales) != 2 || loaded.Locales[0] != "en-US" {
 		t.Fatalf("GetLocaleConfig() = %#v, err %v", loaded, err)
 	}
 	request.Locales = []string{"en-US", "EN-us"}
-	if _, err := service.ReplaceLocaleConfig(ctx, snapshotID, request); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.ReplaceLocaleConfig(ctx, request); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("duplicate canonical locale error = %v, want invalid", err)
 	}
 }
@@ -417,7 +418,7 @@ func readySchema(singleton bool) domain.Schema {
 		panic(err)
 	}
 	return domain.Schema{
-		State: "ready", SiteID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", PageSnapshotID: snapshotID,
+		State: "ready", PageSnapshotID: snapshotID, Locale: "en-US", LocaleCatalogRevision: 1,
 		ModelRevision: 1, ModelDigest: "model-digest", PageRevision: 1, PageDigest: "page-digest",
 		DataModel: raw, Model: model,
 		Placements: []domain.PlacementView{{ID: "placement-one", Inputs: []domain.PlacementInput{{InputKey: "articles", Kind: "collection", EntityID: entityID}}}},
@@ -430,6 +431,8 @@ func (inertFiles) StatFile(context.Context, core.Session, string) (core.File, er
 	return core.File{}, core.ErrFileNotFound
 }
 
+const memoryGlobalKey = "global"
+
 type memoryRepository struct {
 	workspaces   map[string]domain.StoredWorkspace
 	histories    map[string]map[string]domain.Publication
@@ -440,10 +443,10 @@ type memoryRepository struct {
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{workspaces: map[string]domain.StoredWorkspace{}, histories: map[string]map[string]domain.Publication{}, markers: map[string]domain.StoredCopyMarker{}}
 }
-func (repo *memoryRepository) GetLocaleConfig(context.Context, string) (domain.LocaleConfig, error) {
+func (repo *memoryRepository) GetLocaleConfig(context.Context) (domain.LocaleConfig, error) {
 	return repo.localeConfig, nil
 }
-func (repo *memoryRepository) ReplaceLocaleConfig(_ context.Context, _ string, request domain.ReplaceLocaleConfigRequest, _, _ string) (domain.LocaleConfig, error) {
+func (repo *memoryRepository) ReplaceLocaleConfig(_ context.Context, request domain.ReplaceLocaleConfigRequest, _, _ string) (domain.LocaleConfig, error) {
 	config, err := domain.NormalizeLocaleConfig(request, request.ExpectedRevision+1)
 	if err != nil {
 		return domain.LocaleConfig{}, err
@@ -453,15 +456,16 @@ func (repo *memoryRepository) ReplaceLocaleConfig(_ context.Context, _ string, r
 }
 func (*memoryRepository) MaxPageSize() int     { return 100 }
 func (*memoryRepository) MaxPayloadBytes() int { return 1 << 20 }
-func (repo *memoryRepository) Get(_ context.Context, snapshot string) (domain.StoredWorkspace, error) {
-	value, exists := repo.workspaces[snapshot]
+func (repo *memoryRepository) Get(_ context.Context, locale string) (domain.StoredWorkspace, error) {
+	value, exists := repo.workspaces[locale]
 	if !exists {
 		return domain.StoredWorkspace{}, domain.ErrNotFound
 	}
 	return cloneStored(value), nil
 }
-func (repo *memoryRepository) Create(_ context.Context, snapshot string, value domain.StoredWorkspace) (domain.StoredWorkspace, error) {
-	if _, exists := repo.workspaces[snapshot]; exists {
+func (repo *memoryRepository) Create(_ context.Context, value domain.StoredWorkspace) (domain.StoredWorkspace, error) {
+	locale := value.Aggregate.Locale
+	if _, exists := repo.workspaces[locale]; exists {
 		return domain.StoredWorkspace{}, domain.ErrConflict
 	}
 	if value.PageSelections == nil {
@@ -472,22 +476,23 @@ func (repo *memoryRepository) Create(_ context.Context, snapshot string, value d
 		value.PageSelections[pageID] = page
 	}
 	value.StoreRevision = 1
-	repo.workspaces[snapshot] = cloneStored(value)
+	repo.workspaces[locale] = cloneStored(value)
 	return cloneStored(value), nil
 }
-func (repo *memoryRepository) Commit(_ context.Context, snapshot string, expected int64, value domain.StoredWorkspace, publication *domain.Publication) (domain.StoredWorkspace, error) {
-	current, exists := repo.workspaces[snapshot]
+func (repo *memoryRepository) Commit(_ context.Context, expected int64, value domain.StoredWorkspace, publication *domain.Publication) (domain.StoredWorkspace, error) {
+	locale := value.Aggregate.Locale
+	current, exists := repo.workspaces[locale]
 	if !exists || current.StoreRevision != expected {
 		return domain.StoredWorkspace{}, domain.ErrConflict
 	}
 	if publication != nil {
-		if repo.histories[snapshot] == nil {
-			repo.histories[snapshot] = map[string]domain.Publication{}
+		if repo.histories[locale] == nil {
+			repo.histories[locale] = map[string]domain.Publication{}
 		}
-		if _, exists := repo.histories[snapshot][publication.ID]; exists {
+		if _, exists := repo.histories[locale][publication.ID]; exists {
 			return domain.StoredWorkspace{}, domain.ErrConflict
 		}
-		repo.histories[snapshot][publication.ID] = clonePublication(*publication)
+		repo.histories[locale][publication.ID] = clonePublication(*publication)
 	}
 	for _, pageID := range value.ChangedPageSelectionIDs {
 		page, ok := value.PageSelections[pageID]
@@ -501,11 +506,11 @@ func (repo *memoryRepository) Commit(_ context.Context, snapshot string, expecte
 		value.PageSelections[pageID] = page
 	}
 	value.StoreRevision = expected + 1
-	repo.workspaces[snapshot] = cloneStored(value)
+	repo.workspaces[locale] = cloneStored(value)
 	return cloneStored(value), nil
 }
-func (repo *memoryRepository) CommitPageSelections(_ context.Context, siteID, pageID string, expected int64, draft, published []domain.Selection, receipt *domain.MutationReceipt) (domain.StoredPageSelections, error) {
-	stored, exists := repo.workspaces[siteID]
+func (repo *memoryRepository) CommitPageSelections(_ context.Context, pageID, locale string, expected int64, draft, published []domain.Selection, receipt *domain.MutationReceipt) (domain.StoredPageSelections, error) {
+	stored, exists := repo.workspaces[locale]
 	if !exists {
 		return domain.StoredPageSelections{}, domain.ErrNotFound
 	}
@@ -517,27 +522,27 @@ func (repo *memoryRepository) CommitPageSelections(_ context.Context, siteID, pa
 	}
 	page := domain.StoredPageSelections{Draft: cloneSelections(draft), Published: cloneSelections(published), StoreRevision: expected + 1, LastMutation: receipt}
 	stored.PageSelections[pageID] = page
-	repo.workspaces[siteID] = cloneStored(stored)
+	repo.workspaces[locale] = cloneStored(stored)
 	return page, nil
 }
-func (repo *memoryRepository) GetHistoryByID(_ context.Context, snapshot, id string) (domain.Publication, error) {
-	value, exists := repo.histories[snapshot][id]
+func (repo *memoryRepository) GetHistoryByID(_ context.Context, locale, id string) (domain.Publication, error) {
+	value, exists := repo.histories[locale][id]
 	if !exists {
 		return domain.Publication{}, domain.ErrNotFound
 	}
 	return clonePublication(value), nil
 }
-func (repo *memoryRepository) GetHistoryByContentRevision(_ context.Context, snapshot string, revision int64) (domain.Publication, error) {
-	for _, value := range repo.histories[snapshot] {
+func (repo *memoryRepository) GetHistoryByContentRevision(_ context.Context, locale string, revision int64) (domain.Publication, error) {
+	for _, value := range repo.histories[locale] {
 		if value.ContentRevision == revision {
 			return clonePublication(value), nil
 		}
 	}
 	return domain.Publication{}, domain.ErrNotFound
 }
-func (repo *memoryRepository) ListHistory(_ context.Context, snapshot, after string, limit int) ([]domain.Publication, string, error) {
-	items := make([]domain.Publication, 0, len(repo.histories[snapshot]))
-	for _, value := range repo.histories[snapshot] {
+func (repo *memoryRepository) ListHistory(_ context.Context, locale, after string, limit int) ([]domain.Publication, string, error) {
+	items := make([]domain.Publication, 0, len(repo.histories[locale]))
+	for _, value := range repo.histories[locale] {
 		if fmt.Sprintf("history/%020d", value.ContentRevision) > after {
 			items = append(items, clonePublication(value))
 		}
@@ -548,47 +553,49 @@ func (repo *memoryRepository) ListHistory(_ context.Context, snapshot, after str
 	}
 	return items, "", nil
 }
-func (repo *memoryRepository) GetCopyMarker(_ context.Context, target string) (domain.StoredCopyMarker, error) {
-	marker, exists := repo.markers[target]
+func (repo *memoryRepository) GetCopyMarker(_ context.Context) (domain.StoredCopyMarker, error) {
+	marker, exists := repo.markers[memoryGlobalKey]
 	if !exists {
 		return domain.StoredCopyMarker{}, domain.ErrNotFound
 	}
 	return marker, nil
 }
-func (repo *memoryRepository) BeginCopy(_ context.Context, target string, marker domain.CopyMarker) (domain.StoredCopyMarker, error) {
-	if _, exists := repo.markers[target]; exists {
+func (repo *memoryRepository) BeginCopy(_ context.Context, marker domain.CopyMarker) (domain.StoredCopyMarker, error) {
+	if _, exists := repo.markers[memoryGlobalKey]; exists {
 		return domain.StoredCopyMarker{}, domain.ErrConflict
 	}
 	stored := domain.StoredCopyMarker{Marker: marker, StoreRevision: 1}
-	repo.markers[target] = stored
+	repo.markers[memoryGlobalKey] = stored
 	return stored, nil
 }
-func (repo *memoryRepository) PutCopiedHistory(_ context.Context, target string, publication domain.Publication) error {
-	if repo.histories[target] == nil {
-		repo.histories[target] = map[string]domain.Publication{}
+func (repo *memoryRepository) PutCopiedHistory(_ context.Context, publication domain.Publication) error {
+	locale := publication.Locale
+	if repo.histories[locale] == nil {
+		repo.histories[locale] = map[string]domain.Publication{}
 	}
-	if previous, exists := repo.histories[target][publication.ID]; exists {
+	if previous, exists := repo.histories[locale][publication.ID]; exists {
 		if !jsonEquivalent(previous, publication) {
 			return domain.ErrConflict
 		}
 		return nil
 	}
-	repo.histories[target][publication.ID] = clonePublication(publication)
+	repo.histories[locale][publication.ID] = clonePublication(publication)
 	return nil
 }
-func (repo *memoryRepository) CompleteCopy(_ context.Context, target string, markerRevision int64, value domain.StoredWorkspace, marker domain.CopyMarker) (domain.StoredWorkspace, error) {
-	current := repo.markers[target]
+func (repo *memoryRepository) CompleteCopy(_ context.Context, markerRevision int64, value domain.StoredWorkspace, marker domain.CopyMarker) (domain.StoredWorkspace, error) {
+	current := repo.markers[memoryGlobalKey]
 	if current.StoreRevision != markerRevision || current.Marker.State != "copying" {
 		return domain.StoredWorkspace{}, domain.ErrConflict
 	}
-	if _, exists := repo.workspaces[target]; exists {
+	locale := value.Aggregate.Locale
+	if _, exists := repo.workspaces[locale]; exists {
 		return domain.StoredWorkspace{}, domain.ErrConflict
 	}
 	current.Marker = marker
 	current.StoreRevision++
-	repo.markers[target] = current
+	repo.markers[memoryGlobalKey] = current
 	value.StoreRevision = 1
-	repo.workspaces[target] = cloneStored(value)
+	repo.workspaces[locale] = cloneStored(value)
 	return cloneStored(value), nil
 }
 

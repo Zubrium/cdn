@@ -62,12 +62,12 @@
 
 **Interfaces:**
 - Locale catalog DTO: `supported_locales`, `default_locale`, `revision`; mutations используют expected revision и idempotency согласно текущим API patterns.
-- Workspace, publish, history и restore требуют canonical locale; drafts/publications/history хранятся в site scope per locale; page selections — `(page_snapshot_id, locale)` scope.
+- Workspace, publish, history и restore требуют canonical locale; drafts/publications/history хранятся в системном scope per locale; page selections — `(page_snapshot_id, locale)` scope.
 - Translation group invariant: стабильный `translation_id`, не более одной записи на locale и одна entity.
 
 - [ ] Добавить BCP 47 canonicalization с IANA Preferred-Value и casing normalization; отклонять invalid tags и дубликаты после canonicalization.
 - [ ] Реализовать locale catalog read/write/CAS, требуемую `default_locale` membership и удаление только когда нет draft/publication/history/selection/Router references; immutable history самостоятельно блокирует удаление.
-- [ ] Разделить aggregate и storage records на site locale state и page-locale selections без копирования общих records в snapshot scope; сохранить общий payload ceiling и atomic Core CAS.
+- [ ] Разделить aggregate и storage records на системный locale state и page-locale selections без копирования общих records в snapshot scope; сохранить общий payload ceiling и atomic Core CAS.
 - [ ] Ввести locale-aware record/translation validation, singleton initialization per locale/model revision, selection checks и очистку ссылок только внутри той же locale.
 - [ ] Реализовать locale-bound workspace save, publish, history paging и restore; публикация/restore фиксируют только выбранную locale, история immutable, restore создаёт draft и не меняет public pointer.
 - [ ] Реализовать copy/fork operation для selections всех поддерживаемых locale, не копируя records/publications/history; workflow inputs используют bounded versioned projections.
@@ -79,7 +79,7 @@
 - Modify: `engines/website/application/unavailable.go` и Website application services
 - Modify: `engines/website/presentation/contract.go`, handlers, DTOs
 - Modify: `main/internal/composition/website_component.go`, `components.go` и worker composition
-- Modify: `spec/presentation/openapi/sites.yaml` и Admin client/site workflows при необходимости
+- Modify: `spec/presentation/openapi/website.yaml` и Admin client/Website workflows при необходимости
 
 **Interfaces:**
 - Build request/result содержит locale, locale catalog revision, deterministic input digest и immutable artifact manifest Core file ID.

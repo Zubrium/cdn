@@ -3,26 +3,24 @@ info:
   title: Zubrium Content Admin API
   version: 2.0.0
   description: >-
-    Site-wide records/drafts/publication/history with page-snapshot-scoped placement selections.
-    Trusted outer Presentation supplies separate site-model and page-placement projections.
+    System-wide records/drafts/publication/history with page-snapshot-scoped placement selections.
+    Trusted outer Presentation supplies separate system-model and page-placement projections.
 servers: [{ url: / }]
 security:
   - AdminSession: []
   - BearerCredential: []
 x-rejects-cookie-and-bearer-together: true
 paths:
-  /api/admin/sites/{siteID}/content/locales:
-    parameters:
-      - { name: siteID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+  /api/admin/content/locales:
     get:
-      operationId: getSiteLocales
+      operationId: getContentLocales
       responses:
         '200': { description: Supported locales, default locale and revision., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LocaleConfig' } } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
     put:
-      operationId: replaceSiteLocales
+      operationId: replaceContentLocales
       x-csrf-required-for-cookie-auth: true
       x-required-group-level: { group: content, level: 2 }
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
@@ -147,10 +145,9 @@ components:
         default_locale: { type: string, minLength: 2, maxLength: 64, description: Must be present in locales. }
     Workspace:
       type: object
-      required: [snapshot_id, site_id, page_snapshot_id, locale, locale_catalog_revision, model_revision, model_digest, page_revision, page_digest, data_model, revision, selection_revision, published_revision, records, selections, placements]
+      required: [snapshot_id, page_snapshot_id, locale, locale_catalog_revision, model_revision, model_digest, page_revision, page_digest, data_model, revision, selection_revision, published_revision, records, selections, placements]
       properties:
         snapshot_id: { type: string, description: Selected page snapshot context. }
-        site_id: { type: string, description: Site-wide records and publication scope. }
         page_snapshot_id: { type: string, description: Page-scoped placement selection scope. }
         locale: { type: string, description: Requested locale. }
         locale_catalog_revision: { type: integer, minimum: 1 }

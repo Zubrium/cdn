@@ -13,7 +13,7 @@ Router является отдельным engine module и предоставл
 1. **Settings API** — авторизованное управление соответствием branch/host/path file, artifact или зарегистрированной operation, проверка конфликтов, чтение revision и атомарное переключение.
 2. **Delivery API** — публичная выдача только по заранее сохранённым mappings. Route может вызвать лишь operation из неизменяемого каталога текущей сборки. В URL нельзя передать произвольный Core file ID, module-data key, operation name или параметры назначения загрузки.
 
-Админский клиент сначала вызывает Website Sites API и получает `artifact_manifest_file_id`; затем отдельным запросом вызывает Router Settings API. Нет Website→Router или Router→Website вызовов.
+Админский клиент сначала вызывает Website API и получает `artifact_manifest_file_id`; затем отдельным запросом вызывает Router Settings API. Нет Website→Router или Router→Website вызовов.
 
 Settings API предоставляет `GET /api/admin/router/operations`: он требует ту же аутентификацию, что и настройки маршрутов, и возвращает только отсортированные неизменяемые descriptors операций, скомпилированных в текущий build profile (`id`, версия контракта, методы, предел тела запроса и MIME allowlist). Endpoint не раскрывает callbacks, route config, Loader credentials или содержимое файлов. Admin использует descriptor `public.form-upload` для построения допустимых настроек: только при наличии `POST`, `max_bytes` не выше `max_request_bytes`, выбранные MIME-типы должны быть подмножеством allowlist. Если каталог недоступен или операция не зарегистрирована, создание upload route закрыто; обычные file/artifact routes остаются доступны.
 
@@ -22,7 +22,7 @@ Settings API предоставляет `GET /api/admin/router/operations`: он
 ```mermaid
 flowchart TB
     Client[Admin UI / API client]
-    SiteAPI[Website Sites API]
+    WebsiteAPI[Website API]
     Website[Website Engine]
     Settings[Router Settings API]
     Delivery[Router Delivery API]
@@ -55,7 +55,7 @@ Router не хранит `snapshot_id`, `page_id`, Website build inputs, branch-
 
 Topology branch, public hostnames, ports, CORS/indexing policy и branch IDs конфигурируются статически при запуске. На каждый branch запускается отдельный Router process с `branch_id` и configured `public_listen_address`; эти process-local значения не входят в общий Coordinator config fingerprint. Общие настройки и build profile должны совпадать. Route records ссылаются только на объявленный branch.
 
-Route → page publication slot связь принадлежит trusted outer Presentation/Coordinator registry, а не Website snapshot и не visitor request. Route record хранит текущую locale-to-artifact map и revision; привязка в registry непрозрачная для Router. После Website build и проверки готового page artifact coordinator вызывает Router ReplaceLocaleTarget для одной locale отдельным CAS. Сбой build или CAS оставляет прежнюю цель этой locale. Несколько routes/locales обновляются независимо; orchestration сообщает partial result и безопасно повторяет незавершённые назначения. Site-wide Content publication автоматически триггерит этот fan-out через Coordinator, не заставляя Router разбирать Website или Content модель.
+Route → page publication slot связь принадлежит trusted outer Presentation/Coordinator registry, а не Website snapshot и не visitor request. Route record хранит текущую locale-to-artifact map и revision; привязка в registry непрозрачная для Router. После Website build и проверки готового page artifact coordinator вызывает Router ReplaceLocaleTarget для одной locale отдельным CAS. Сбой build или CAS оставляет прежнюю цель этой locale. Несколько routes/locales обновляются независимо; orchestration сообщает partial result и безопасно повторяет незавершённые назначения. System-wide Content publication автоматически триггерит этот fan-out через Coordinator, не заставляя Router разбирать Website или Content модель.
 
 ## Locale resolution и preference cookie
 
@@ -169,7 +169,7 @@ Website сначала создаёт и проверяет immutable artifact �
 ```mermaid
 sequenceDiagram
     actor A as Admin / client
-    participant W as Website Sites API
+    participant W as Website API
     participant C as Core
     participant R as Router Settings API
     participant D as engine_data.records

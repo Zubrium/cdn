@@ -29,7 +29,7 @@ const fieldTypes: { value: FormFieldType; label: string }[] = [
 ];
 
 function snapshotLabel(snapshot: WebsiteSnapshot): string {
-  return `Сайт ${snapshot.site_id.slice(0, 8)} · #${snapshot.sequence} · ${snapshot.name}`;
+  return `#${snapshot.sequence} · ${snapshot.name}`;
 }
 
 function validSchemaKey(value: string): boolean {
@@ -329,7 +329,7 @@ export default function FormsPage() {
 
   if (snapshots.isLoading) return <LoadingPage label="Загружаем снапшоты…" />;
   if (snapshots.error) return <div className="page-grid"><ErrorState error={snapshots.error} title="Не удалось загрузить снапшоты" onRetry={() => void snapshots.refetch()} /></div>;
-  if (!readySnapshots.length) return <div className="page-grid"><PageHeader title="Формы" description="Схемы определяют типизированные поля, которые принимает публичный движок Forms." /><EmptyState icon={FilePlus2} title="Нет готовых снапшотов" description="Создайте и подготовьте снапшот в разделе «Сайт», затем добавьте в нём схему формы." /></div>;
+  if (!readySnapshots.length) return <div className="page-grid"><PageHeader title="Формы" description="Схемы определяют типизированные поля, которые принимает публичный движок Forms." /><EmptyState icon={FilePlus2} title="Нет готовых снапшотов" description="Создайте и подготовьте снапшот в разделе «Редактор страниц», затем добавьте в нём схему формы." /></div>;
   if (schemas.isLoading) return <LoadingPage label="Загружаем схемы форм…" />;
   if (schemas.error) return <div className="page-grid"><ErrorState error={schemas.error} title="Не удалось загрузить схемы форм" onRetry={() => void schemas.refetch()} /></div>;
   if (schemaDetail.error && canonicalUUID.test(requestedFormID) && !listedSchema) return <div className="page-grid"><ErrorState error={schemaDetail.error} title="Не удалось загрузить схему формы" onRetry={() => void schemaDetail.refetch()} /></div>;

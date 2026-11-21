@@ -12,7 +12,7 @@
 
 ## Глобальные ограничения
 
-- Не отправлять мутации в live API/database/bucket или общий Vitasil stack. Runner запускает только test instances/resources, созданные для данного прогона, и удаляет только их.
+- Не отправлять мутации в live API/database/bucket. Runner запускает только test instances/resources, созданные для данного прогона, и удаляет только их.
 - Требовать явные test-only DB/storage inputs и уникальный run namespace; запрещены implicit network targets, credentials, fallback services и массовая очистка.
 - Перед любым write workflow доказать, что Admin API принадлежит тестовой composition из текущего checkout; при несовпадении origin/build identity остановиться.
 - Все межкомпонентные runtime calls идут через process-local bus в `main` с static profile allowlist и общим JSON envelope; durable work остаётся в Core Coordinator.
@@ -54,6 +54,7 @@
 ### Task 1: Создать изолированный browser harness и safety gate
 
 **Файлы:**
+
 - Создать: `tests/e2e/playwright.config.ts`
 - Создать: `tests/e2e/compose.yaml`
 - Создать: `tests/e2e/postgres-init.sh`
@@ -74,6 +75,7 @@
 ### Task 2: Проверить создание страницы, импорт feature и durable build workflow
 
 **Файлы:**
+
 - Создать: `tests/e2e/specs/website-router-publication.spec.ts`
 - Изменить: `tests/e2e/scenarios.json`
 
@@ -86,6 +88,7 @@
 ### Task 3: Проверить явный Router binding, CAS и сбои публикации
 
 **Файлы:**
+
 - Изменить: `tests/e2e/specs/website-router-publication.spec.ts`, `tests/e2e/scenarios.json`
 
 - [ ] Добавить `E2E-PUB-001`: после успешного Website artifact build подтвердить, что он ещё не public; отдельно выполнить поддерживаемую Router settings operation с revision/CAS и проверить route response.
@@ -98,6 +101,7 @@
 ### Task 4: Проверить browser delivery, locale preference и public security
 
 **Файлы:**
+
 - Создать: `tests/e2e/specs/router-locale-delivery.spec.ts`
 - Изменить: `tests/e2e/scenarios.json`
 
@@ -110,6 +114,7 @@
 ### Task 5: Зафиксировать E2E red baseline и устранить блокеры/провалы
 
 **Файлы:**
+
 - Изменить: E2E fixtures/specs; runtime composition files только при наличии нормативных blockers
 - Изменить: `tests/e2e/scenarios.json`, `tests/ACCEPTANCE-MATRIX.md`, `docs/QA_REPORT.md`
 

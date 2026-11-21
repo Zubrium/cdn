@@ -19,7 +19,7 @@
 - Core/Loader доступны через Core presentation capabilities и зарегистрированные operations; не добавлять прямые Website/Router вызовы, Router-owned SQL или rate limiting.
 - Acceptance-red tests изолированы от обычного CI до устранения целевых провалов. Blockers остаются в denominator и не считаются покрытыми; отчёт показывает процент покрытия относительно порога не менее 60% на модуль, отдельно от statement coverage.
 - Не начинать product-code fixes до полного исходного red-baseline по обоим движкам и междвижковому E2E; сначала собрать и запустить все три набора.
-- Использовать только уникальные disposable resources; запрещены writes в live API/database/bucket или общий Vitasil stack.
+- Использовать только уникальные disposable resources; запрещены writes в live API/database/bucket.
 
 ## Основные риски для проверки
 
@@ -45,7 +45,6 @@
 - Сначала выполнить Задачу 1 Website-плана, которая создаёт общий `tests/qa/scenario-ledger.py`; затем Router red-набор не зависит от Website test implementation и может готовиться отдельно.
 - E2E-plan зависит от обоих scenario ledgers и red selectors. Во всех трёх планах до первого product-code изменения должны быть собраны и запущены полные unit/contract/integration/E2E red-наборы.
 
-
 - Overlay `python3 tests/go-overlay.py` создаёт `-overlay` JSON для `tests/go/`; новые target-файлы не должны существовать, package directories должны быть.
 - Каждый случай — tagged subtest со стабильным `ROUTER-###` ID и конкретными assertions по входу, ответу и состоянию. Статус не выводится из существования файла.
 - Запись Router ledger использует ту же схему, что Website: `id` (строка `ROUTER-###`), `source` (спецификация/раздел или matrix clause), `level` (`unit|contract|integration`), `preconditions` (массив строк), `input`, `action`, `expected_result`, `expected_state` (строки-описания), `test_file`, `test_symbol`, `coverage_status` (`covered|blocked|gap`), `execution_status` (`not_run|pass|fail|blocked`), `blocker` (строка или `null`). Общий checker принимает только соответствующую схему и проверяет source/symbol для покрытых тестом сценариев.
@@ -55,6 +54,7 @@
 ### Task 1: Зарегистрировать Router scenarios и изолированный runner
 
 **Файлы:**
+
 - Создать: `tests/qa/router-scenarios.json`
 - Создать: `tests/qa/run-router-red.sh`
 - Создать: `tests/go/engines/router/features/routes/application/acceptance_ledger_test.go`
@@ -68,6 +68,7 @@
 ### Task 2: Проверить route model/settings contracts
 
 **Файлы:**
+
 - Создать: `tests/go/engines/router/features/routes/model/acceptance_test.go`
 - Создать: `tests/go/engines/router/features/routes/application/acceptance_routes_test.go`
 - Создать: `tests/go/engines/router/presentation/acceptance_settings_test.go`
@@ -85,6 +86,7 @@
 ### Task 3: Проверить locale и public artifact/file delivery
 
 **Файлы:**
+
 - Создать: `tests/go/presentation/router/acceptance_delivery_test.go`
 - Создать: `tests/go/engines/router/presentation/acceptance_delivery_test.go`
 - Изменить: `tests/qa/router-scenarios.json`
@@ -101,6 +103,7 @@
 ### Task 4: Проверить registered operations, upload и persistence
 
 **Файлы:**
+
 - Создать: `tests/go/presentation/router/acceptance_operations_test.go`
 - Создать: `tests/go/presentation/router/publicupload/acceptance_test.go`
 - Создать: `tests/go/engines/router/features/routes/repository/acceptance_integration_test.go`
@@ -115,6 +118,7 @@
 ### Task 5: Зафиксировать red baseline и исправить Router gaps
 
 **Файлы:**
+
 - Изменить: только Router implementation files, на которые указывают red scenarios
 - Изменить: `tests/qa/router-scenarios.json`, `tests/ACCEPTANCE-MATRIX.md`, `docs/QA_REPORT.md`
 
