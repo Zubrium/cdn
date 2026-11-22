@@ -16,6 +16,10 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 				"host":        {Type: core.SelectorString},
 				"path":        {Type: core.SelectorString},
 				"state":       {Type: core.SelectorString},
+				// Locale CAS revisions are opaque durable metadata, not a
+				// visitor-selectable index. They are encoded as one bounded
+				// string because Core projections are scalar-only.
+				"locale_revisions": {Type: core.SelectorString},
 			},
 		}},
 	}

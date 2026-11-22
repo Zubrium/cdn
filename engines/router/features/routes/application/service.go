@@ -64,6 +64,16 @@ type ReplaceTargetInput struct {
 	ExpectedRevision int64
 }
 
+// ReplaceLocaleTargetInput activates exactly one configured (route, locale)
+// slot. ExpectedRevision is that locale slot's independent CAS revision.
+type ReplaceLocaleTargetInput struct {
+	RouteID                string
+	Locale                 string
+	ArtifactManifestFileID string
+	ExpectedRevision       int64
+	IdempotencyKey         string
+}
+
 type DeleteRouteInput struct {
 	RouteID          string
 	ExpectedRevision int64
@@ -214,6 +224,51 @@ func (service *Service) ReplaceTarget(ctx context.Context, branchID string, inpu
 		return model.Route{}, mapRepositoryError(err)
 	}
 	return updated, nil
+}
+
+// ReplaceLocaleTarget performs an independent, retry-safe CAS for one route
+// locale. Sibling locale revisions and unverified artifacts are untouched.
+func (service *Service) ReplaceLocaleTarget(ctx context.Context, branchID string, input ReplaceLocaleTargetInput) (model.Route, error) {
+	if err := service.authorize(ctx, core.AccessLevelWrite); err != nil {
+		return model.Route{}, err
+	}
+	locale, err := model.CanonicalLocale(input.Locale)
+	if err != nil || locale != input.Locale || branchID != service.config.BranchID || !validUUID(input.RouteID) ||
+		!validUUID(input.ArtifactManifestFileID) || input.ExpectedRevision < 1 || !validIdempotency.MatchString(input.IdempotencyKey) {
+		return model.Route{}, ErrInvalid
+	}
+	current, err := service.repository.GetByID(ctx, branchID, input.RouteID)
+	if err != nil {
+		return model.Route{}, mapRepositoryError(err)
+	}
+	_, found := current.Target.LocaleTarget(locale)
+	if !found || current.Target.Kind != model.TargetStaticSiteArtifact {
+		return model.Route{}, ErrNotFound
+	}
+	updatedTarget := current.Target
+	updatedTarget.LocaleTargets = append([]model.LocaleArtifactTarget(nil), current.Target.LocaleTargets...)
+	for index := range updatedTarget.LocaleTargets {
+		if updatedTarget.LocaleTargets[index].Locale == locale {
+			updatedTarget.LocaleTargets[index].ArtifactManifestFileID = input.ArtifactManifestFileID
+			break
+		}
+	}
+	if err := service.validator.ValidateRouteTarget(ctx, updatedTarget, current.Match); err != nil {
+		return model.Route{}, mapTargetError(err)
+	}
+	route, err := service.repository.ReplaceLocaleTarget(ctx, branchID, input.RouteID, repository.LocaleTargetUpdate{
+		Locale: locale, ArtifactManifestFileID: input.ArtifactManifestFileID,
+		ExpectedRevision: input.ExpectedRevision, IdempotencyKey: input.IdempotencyKey,
+	}, service.now())
+	if err != nil {
+		return model.Route{}, mapRepositoryError(err)
+	}
+	for _, item := range route.Target.LocaleTargets {
+		if item.Locale == locale {
+			return route, nil
+		}
+	}
+	return model.Route{}, ErrConflict
 }
 
 func (service *Service) DeleteRoute(ctx context.Context, branchID string, input DeleteRouteInput) error {

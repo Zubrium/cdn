@@ -357,11 +357,11 @@
       "action": "Run durable rebuild fan-out and per-target activation.",
       "expected_result": "Every (route, locale) target uses independent CAS; successes remain, failed target retains prior artifact, retry is safe, and stale output is discarded.",
       "expected_state": "Website never selects visitor target or performs direct Router call; partial failure has no rollback of independent successful targets.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-021",
-      "coverage_status": "blocked",
-      "execution_status": "blocked",
-      "blocker": "Нет trusted outer orchestration, route→page registry и per-(route, locale) Router CAS fan-out; live routes и artifacts трогать запрещено."
+      "test_file": "tests/go/main/cmd/zubrium/website_publication_fanout_acceptance_test.go",
+      "test_symbol": "TestWebsitePublicationFanoutAcceptance/WEB-021",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-022",

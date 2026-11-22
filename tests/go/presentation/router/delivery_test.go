@@ -178,14 +178,21 @@ func TestStaticPageArtifactDeliversDocumentAndOnlyDeclaredAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := model.Target{Kind: model.TargetStaticSiteArtifact, FileID: manifestFile.ID}
+	target, err := model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
+		{Locale: "en-US", ArtifactManifestFileID: manifestFile.ID, Revision: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := validator.ValidateRouteTarget(context.Background(), target, model.MatchPrefix); err != nil {
 		t.Fatalf("valid static page artifact rejected: %v", err)
 	}
 	if err := validator.ValidateRouteTarget(context.Background(), target, model.MatchExact); !errors.Is(err, engine.ErrInvalidTarget) {
 		t.Fatalf("exact artifact route with assets returned %v, want invalid target", err)
 	}
-	if err := validator.ValidateRouteTarget(context.Background(), model.Target{Kind: model.TargetStaticSiteArtifact, FileID: manifestFile.ID, FallbackEnabled: true}, model.MatchPrefix); !errors.Is(err, engine.ErrInvalidTarget) {
+	fallbackTarget := target
+	fallbackTarget.FallbackEnabled = true
+	if err := validator.ValidateRouteTarget(context.Background(), fallbackTarget, model.MatchPrefix); !errors.Is(err, engine.ErrInvalidTarget) {
 		t.Fatalf("artifact fallback setting returned %v, want invalid target", err)
 	}
 	route := newDeliveryRoute(t, target, model.MatchPrefix, "/site")

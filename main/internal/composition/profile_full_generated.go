@@ -10,6 +10,7 @@ import (
 	loaderEngine "github.com/Zubrium/cdn/engines/loader/presentation"
 	routerEngine "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteEngine "github.com/Zubrium/cdn/engines/website/presentation"
+	_ "github.com/Zubrium/cdn/main/internal/publication"
 	_ "github.com/Zubrium/cdn/presentation/admin/base/transport"
 	_ "github.com/Zubrium/cdn/presentation/admin/content"
 	_ "github.com/Zubrium/cdn/presentation/admin/forms"
@@ -65,6 +66,7 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"admin.router",
 		"admin.ui",
 		"admin.website",
+		"engine.publication",
 		"public.router",
 		"public.content-runtime",
 		"public.form-session",

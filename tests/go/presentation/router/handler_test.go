@@ -20,6 +20,8 @@ type fakeRouter struct {
 	getRoute         engine.Route
 	replaceInput     engine.ReplaceRouteTargetRequest
 	replaceCalls     int
+	localeInput      engine.ReplaceLocaleTargetRequest
+	localeCalls      int
 	deliveryInput    engine.DeliveryRequest
 	createRoute      engine.Route
 	delivery         engine.DeliveryResponse
@@ -57,6 +59,11 @@ func (f *fakeRouter) CreateRoute(_ context.Context, input engine.CreateRouteRequ
 func (f *fakeRouter) ReplaceRouteTarget(_ context.Context, input engine.ReplaceRouteTargetRequest) (engine.Route, error) {
 	f.replaceCalls++
 	f.replaceInput = input
+	return engine.Route{ID: input.RouteID, BranchID: "storefront", Revision: input.ExpectedRevision + 1}, nil
+}
+func (f *fakeRouter) ReplaceLocaleTarget(_ context.Context, input engine.ReplaceLocaleTargetRequest) (engine.Route, error) {
+	f.localeCalls++
+	f.localeInput = input
 	return engine.Route{ID: input.RouteID, BranchID: "storefront", Revision: input.ExpectedRevision + 1}, nil
 }
 func (*fakeRouter) DeleteRoute(context.Context, engine.DeleteRouteRequest) error { return nil }

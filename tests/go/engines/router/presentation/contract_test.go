@@ -5,6 +5,7 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	routerengine "github.com/Zubrium/cdn/engines/router"
+	routemodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
 func TestRouterDescriptorDeclaresOnlyExplicitFileOperations(t *testing.T) {
@@ -32,9 +33,15 @@ func TestRouteTargetRejectsUntrustedFileLocations(t *testing.T) {
 			t.Errorf("RouteTarget.Validate(%+v) succeeded", target)
 		}
 	}
+	artifactTarget, err := routemodel.NewStaticArtifactTarget("en-US", []routemodel.LocaleArtifactTarget{
+		{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125302", Revision: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, target := range []RouteTarget{
 		{Kind: TargetCoreFile, FileID: "01938f7a-68af-7c10-a51d-78b6ca125301"},
-		{Kind: TargetStaticSiteArtifact, FileID: "01938f7a-68af-7c10-a51d-78b6ca125302"},
+		artifactTarget,
 	} {
 		if err := target.Validate(); err != nil {
 			t.Errorf("RouteTarget.Validate(%+v) = %v", target, err)

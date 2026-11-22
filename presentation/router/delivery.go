@@ -11,6 +11,8 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	core "github.com/Zubrium/cdn/core/presentation"
@@ -82,14 +84,19 @@ func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, t
 		_, err := validator.files.StatFile(ctx, session, target.FileID)
 		return mapTargetCoreError(err)
 	}
-	manifest, _, err := readArtifactManifest(ctx, validator.files, session, target.FileID)
-	if err != nil {
-		return mapTargetCoreError(err)
+	for _, slot := range target.LocaleSlots() {
+		manifest, _, err := readArtifactManifest(ctx, validator.files, session, slot.ArtifactManifestFileID)
+		if err != nil {
+			return mapTargetCoreError(err)
+		}
+		if len(manifest.assets) > 0 && match != model.MatchPrefix {
+			return engine.ErrInvalidTarget
+		}
+		if err := validateArtifactFiles(ctx, validator.files, session, slot.ArtifactManifestFileID, manifest); err != nil {
+			return err
+		}
 	}
-	if len(manifest.assets) > 0 && match != model.MatchPrefix {
-		return engine.ErrInvalidTarget
-	}
-	return validateArtifactFiles(ctx, validator.files, session, target.FileID, manifest)
+	return nil
 }
 
 func mapOperationTargetValidationError(err error) error {
@@ -250,6 +257,89 @@ func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string
 		ETag: etag, CacheControl: "no-store", ContentDisposition: "attachment", Body: body}, nil
 }
 
+type languageRange struct {
+	value string
+	order int
+	q     float64
+}
+
+// selectArtifactFileID resolves the server-owned locale catalog in the order
+// declared by the Router contract: a supported preference cookie, then RFC 4647
+// lookup over Accept-Language, then the configured default locale. Path and
+// query never participate.
+func selectArtifactFileID(target model.Target, request engine.DeliveryRequest) (string, error) {
+	supported := make(map[string]string, len(target.LocaleTargets))
+	for _, item := range target.LocaleTargets {
+		supported[item.Locale] = item.ArtifactManifestFileID
+	}
+	if request.LocalePreference != "" {
+		if locale, err := model.CanonicalLocale(request.LocalePreference); err == nil {
+			if fileID, found := supported[locale]; found {
+				return fileID, nil
+			}
+		}
+	}
+	ranges := parseAcceptLanguage(request.AcceptLanguage)
+	for _, item := range ranges {
+		if item.value == "*" {
+			break
+		}
+		candidate := item.value
+		for {
+			if locale, err := model.CanonicalLocale(candidate); err == nil {
+				if fileID, found := supported[locale]; found {
+					return fileID, nil
+				}
+			}
+			separator := strings.LastIndex(candidate, "-")
+			if separator <= 0 {
+				break
+			}
+			candidate = candidate[:separator]
+		}
+	}
+	return target.DefaultArtifactFileID()
+}
+
+func parseAcceptLanguage(header string) []languageRange {
+	if strings.TrimSpace(header) == "" {
+		return nil
+	}
+	parts := strings.Split(header, ",")
+	if len(parts) > 64 {
+		parts = parts[:64]
+	}
+	ranges := make([]languageRange, 0, len(parts))
+	for order, part := range parts {
+		fields := strings.Split(part, ";")
+		value := strings.TrimSpace(fields[0])
+		if value == "" || len(value) > 64 {
+			continue
+		}
+		quality := 1.0
+		valid := true
+		for _, parameter := range fields[1:] {
+			name, raw, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !found || !strings.EqualFold(strings.TrimSpace(name), "q") {
+				valid = false
+				break
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				valid = false
+				break
+			}
+			quality = parsed
+		}
+		if !valid || quality == 0 {
+			continue
+		}
+		ranges = append(ranges, languageRange{value: value, order: order, q: quality})
+	}
+	sort.SliceStable(ranges, func(i, j int) bool { return ranges[i].q > ranges[j].q })
+	return ranges
+}
+
 func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.Route, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
 	if route.Target.FallbackEnabled {
 		return engine.DeliveryResponse{}, engine.ErrNotFound
@@ -258,7 +348,11 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 	if err != nil {
 		return engine.DeliveryResponse{}, mapDeliveryAuthError(err)
 	}
-	manifest, _, err := readArtifactManifest(ctx, delivery.files, session, route.Target.FileID)
+	artifactFileID, err := selectArtifactFileID(route.Target, request)
+	if err != nil {
+		return engine.DeliveryResponse{}, engine.ErrNotFound
+	}
+	manifest, _, err := readArtifactManifest(ctx, delivery.files, session, artifactFileID)
 	if err != nil {
 		return engine.DeliveryResponse{}, mapDeliveryFileError(err)
 	}

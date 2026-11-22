@@ -378,6 +378,7 @@ type fileAPIComponent struct {
 	formsEngine         *formsEngineComponent
 	websiteEngine       *websiteEngineComponent
 	routerEngine        *routerEngineComponent
+	publicationEngine   *publicationComponent
 	formsAdminEnabled   bool
 	websiteAdminEnabled bool
 	identityAdmin       bool
@@ -584,6 +585,9 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if _, ok := selected["public.content-runtime"]; ok {
 		keys = append(keys, contracts.PublishedContentReadOperation().Key)
 	}
+	if _, enabled := selected["engine.publication"]; enabled {
+		keys = append(keys, contracts.PublicationPublishOperation().Key)
+	}
 	dispatcher, err := bus.NewAllowlisted(keys...)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -774,6 +778,20 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, err
 		}
 	}
+	if _, enabled := selected["engine.publication"]; enabled {
+		if websiteEngine == nil || routerEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		publicationEngine := &publicationComponent{
+			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
+		}
+		fileAPI.publicationEngine = publicationEngine
+		if err := registry.Register(platform.RuntimeComponent{ID: "engine.publication", Requires: []string{"core", "engine.website", "engine.content", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return publicationEngine, nil
+		}}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	if _, enabled := selected["admin.router"]; enabled {
 		if routerEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
@@ -851,7 +869,7 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	}
 	available := map[string]struct{}{
 		"core": {}, "engine.loader": {}, "admin.files": {}, "admin.coordinator": {}, "admin.identity": {}, "admin.notifications": {},
-		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
+		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "engine.publication": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
 		"public.form-session": {}, "public.form-submit": {},
 		"worker.archive": {}, "worker.media": {}, "worker.prerender": {},
 	}

@@ -138,14 +138,24 @@ func crossArtifact(t *testing.T, cacheClass string, mutatePayload func(map[strin
 	return data, files, observed
 }
 
+func crossArtifactTarget(t *testing.T) model.Target {
+	t.Helper()
+	target, err := model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
+		{Locale: "en-US", ArtifactManifestFileID: crossManifestID, Revision: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
 func crossRouterTargetValid(t *testing.T, files *crossFiles) error {
 	t.Helper()
 	validator, err := NewCoreTargetValidator(crossIdentity{}, files, "router-service-key", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return validator.ValidateRouteTarget(context.Background(),
-		model.Target{Kind: model.TargetStaticSiteArtifact, FileID: crossManifestID}, model.MatchPrefix)
+	return validator.ValidateRouteTarget(context.Background(), crossArtifactTarget(t), model.MatchPrefix)
 }
 
 func TestWebsiteAndRouterShareArtifactCanonicalPayload(t *testing.T) {
@@ -251,7 +261,7 @@ func TestBothValidatorsRejectMismatchedCoreFileMetadata(t *testing.T) {
 func TestRouterDocumentDeliveryUsesNoStoreWhileAssetsUseSafeCachePolicy(t *testing.T) {
 	_, files, _ := crossArtifact(t, "immutable", nil, nil)
 	route, err := model.NewRoute("01938f7a-68af-7c10-a51d-78b6ca125303", "main", "example.com", "/site", model.MatchPrefix,
-		model.Target{Kind: model.TargetStaticSiteArtifact, FileID: crossManifestID}, crossTime(t))
+		crossArtifactTarget(t), crossTime(t))
 	if err != nil {
 		t.Fatal(err)
 	}

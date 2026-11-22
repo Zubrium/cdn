@@ -17,6 +17,7 @@ type RouteUseCase interface {
 	GetRoute(context.Context, string, string) (model.Route, error)
 	CreateRoute(context.Context, routesapp.CreateRouteInput) (model.Route, error)
 	ReplaceTarget(context.Context, string, routesapp.ReplaceTargetInput) (model.Route, error)
+	ReplaceLocaleTarget(context.Context, string, routesapp.ReplaceLocaleTargetInput) (model.Route, error)
 	DeleteRoute(context.Context, string, routesapp.DeleteRouteInput) error
 }
 
@@ -96,6 +97,20 @@ func (adapter *APIAdapter) ReplaceRouteTarget(ctx context.Context, input Replace
 	}
 	route, err := adapter.routes.ReplaceTarget(ctx, adapter.branchID, routesapp.ReplaceTargetInput{
 		RouteID: input.RouteID, Target: input.Target, ExpectedRevision: input.ExpectedRevision,
+	})
+	if err != nil {
+		return Route{}, mapApplicationError(err)
+	}
+	return route, nil
+}
+
+func (adapter *APIAdapter) ReplaceLocaleTarget(ctx context.Context, input ReplaceLocaleTargetRequest) (Route, error) {
+	if adapter == nil || adapter.routes == nil {
+		return Route{}, ErrUnavailable
+	}
+	route, err := adapter.routes.ReplaceLocaleTarget(ctx, adapter.branchID, routesapp.ReplaceLocaleTargetInput{
+		RouteID: input.RouteID, Locale: input.Locale, ArtifactManifestFileID: input.ArtifactManifestFileID,
+		ExpectedRevision: input.ExpectedRevision, IdempotencyKey: input.IdempotencyKey,
 	})
 	if err != nil {
 		return Route{}, mapApplicationError(err)

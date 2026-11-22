@@ -31,15 +31,34 @@ var (
 	ErrInvalidRoute  = errors.New("invalid Router route")
 	hostLabel        = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	operationID      = regexp.MustCompile(`^public\.[A-Za-z0-9._-]{1,121}$`)
+	localeCharacters = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 	encodedSeparator = regexp.MustCompile(`(?i)%2f|%5c|%25`)
 )
 
+// LocaleArtifactTarget is one independently versioned locale slot of an
+// artifact route. Its CAS revision is owned by Router and is never taken from
+// a visitor request or from Website.
+type LocaleArtifactTarget struct {
+	Locale                 string `json:"locale"`
+	ArtifactManifestFileID string `json:"artifact_manifest_file_id"`
+	Revision               int64  `json:"-"`
+}
+
+// LocaleSlot is the public-facing Router view of a configured artifact locale.
+// Router CAS revisions are intentionally not exposed to callers or visitors.
+type LocaleSlot struct {
+	Locale                 string `json:"locale"`
+	ArtifactManifestFileID string `json:"artifact_manifest_file_id"`
+}
+
 type Target struct {
-	Kind            string          `json:"kind"`
-	FileID          string          `json:"file_id,omitempty"`
-	OperationID     string          `json:"operation_id,omitempty"`
-	OperationConfig json.RawMessage `json:"operation_config,omitempty"`
-	FallbackEnabled bool            `json:"fallback_enabled,omitempty"`
+	Kind            string                 `json:"kind"`
+	FileID          string                 `json:"file_id,omitempty"`
+	DefaultLocale   string                 `json:"default_locale,omitempty"`
+	LocaleTargets   []LocaleArtifactTarget `json:"locale_targets,omitempty"`
+	OperationID     string                 `json:"operation_id,omitempty"`
+	OperationConfig json.RawMessage        `json:"operation_config,omitempty"`
+	FallbackEnabled bool                   `json:"fallback_enabled,omitempty"`
 }
 
 type Route struct {
@@ -56,6 +75,72 @@ type Route struct {
 }
 
 func ValidPublicOperationID(value string) bool { return operationID.MatchString(value) }
+
+// CanonicalLocale validates and canonicalizes a configured BCP 47-like tag.
+// Router accepts only supported, server-configured locales; no visitor value
+// reaches this function through a route target selection path.
+func CanonicalLocale(value string) (string, error) {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 64 || !localeCharacters.MatchString(value) ||
+		strings.HasPrefix(value, "-") || strings.HasSuffix(value, "-") || strings.Contains(value, "--") {
+		return "", ErrInvalidRoute
+	}
+	parts := strings.Split(value, "-")
+	if len(parts) > 4 || len(parts[0]) < 2 || len(parts[0]) > 3 {
+		return "", ErrInvalidRoute
+	}
+	for index, part := range parts {
+		if len(part) < 2 || len(part) > 8 {
+			return "", ErrInvalidRoute
+		}
+		if index == 0 {
+			parts[index] = strings.ToLower(part)
+			continue
+		}
+		if index == 1 && len(part) == 2 {
+			parts[index] = strings.ToUpper(part)
+			continue
+		}
+		if index == 1 && len(part) == 4 {
+			parts[index] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+			continue
+		}
+		parts[index] = strings.ToLower(part)
+	}
+	canonical := strings.Join(parts, "-")
+	if canonical == "und" || len(canonical) > 64 {
+		return "", ErrInvalidRoute
+	}
+	return canonical, nil
+}
+
+// LocaleTarget returns the immutable catalog entry for one configured locale.
+func (target Target) LocaleTarget(locale string) (LocaleArtifactTarget, bool) {
+	for _, item := range target.LocaleTargets {
+		if item.Locale == locale {
+			return item, true
+		}
+	}
+	return LocaleArtifactTarget{}, false
+}
+
+// LocaleSlots exposes the target catalog without Router-internal CAS revisions.
+func (target Target) LocaleSlots() []LocaleSlot {
+	slots := make([]LocaleSlot, 0, len(target.LocaleTargets))
+	for _, item := range target.LocaleTargets {
+		slots = append(slots, LocaleSlot{Locale: item.Locale, ArtifactManifestFileID: item.ArtifactManifestFileID})
+	}
+	return slots
+}
+
+// DefaultArtifactFileID returns the artifact bound to the configured default
+// locale. Delivery selects only from this server-owned catalog.
+func (target Target) DefaultArtifactFileID() (string, error) {
+	item, found := target.LocaleTarget(target.DefaultLocale)
+	if !found {
+		return "", ErrInvalidRoute
+	}
+	return item.ArtifactManifestFileID, nil
+}
 
 // NormalizeHost returns the canonical ASCII hostname used for route keys and
 // matching. Ports, wildcard names, userinfo, and non-DNS syntax are rejected.
@@ -186,17 +271,42 @@ func (target Target) Validate() error {
 	switch target.Kind {
 	case TargetCoreFile:
 		id, err := uuid.Parse(target.FileID)
-		if err != nil || id == uuid.Nil || id.String() != target.FileID || target.OperationID != "" || len(target.OperationConfig) != 0 || target.FallbackEnabled {
+		if err != nil || id == uuid.Nil || id.String() != target.FileID || target.OperationID != "" || len(target.OperationConfig) != 0 ||
+			target.FallbackEnabled || target.DefaultLocale != "" || len(target.LocaleTargets) != 0 {
 			return ErrInvalidRoute
 		}
 	case TargetStaticSiteArtifact:
-		id, err := uuid.Parse(target.FileID)
-		if err != nil || id == uuid.Nil || id.String() != target.FileID || target.OperationID != "" || len(target.OperationConfig) != 0 {
+		defaultLocale, err := CanonicalLocale(target.DefaultLocale)
+		if err != nil || target.FileID != "" || target.OperationID != "" || len(target.OperationConfig) != 0 || target.FallbackEnabled ||
+			len(target.LocaleTargets) < 1 || len(target.LocaleTargets) > 256 {
+			return ErrInvalidRoute
+		}
+		seen := make(map[string]struct{}, len(target.LocaleTargets))
+		defaultFound := false
+		for _, item := range target.LocaleTargets {
+			locale, err := CanonicalLocale(item.Locale)
+			if err != nil || locale != item.Locale || item.Revision < 1 {
+				return ErrInvalidRoute
+			}
+			if _, duplicate := seen[locale]; duplicate {
+				return ErrInvalidRoute
+			}
+			id, err := uuid.Parse(item.ArtifactManifestFileID)
+			if err != nil || id == uuid.Nil || id.String() != item.ArtifactManifestFileID {
+				return ErrInvalidRoute
+			}
+			seen[locale] = struct{}{}
+			if locale == defaultLocale {
+				defaultFound = true
+			}
+		}
+		if !defaultFound {
 			return ErrInvalidRoute
 		}
 	case TargetRegisteredOperation:
 		if !operationID.MatchString(target.OperationID) || target.FileID != "" || len(target.OperationConfig) == 0 ||
-			target.FallbackEnabled || len(target.OperationConfig) > MaxOperationConfigBytes || !json.Valid(target.OperationConfig) {
+			target.FallbackEnabled || len(target.OperationConfig) > MaxOperationConfigBytes || !json.Valid(target.OperationConfig) ||
+			target.DefaultLocale != "" || len(target.LocaleTargets) != 0 {
 			return ErrInvalidRoute
 		}
 		var fields map[string]json.RawMessage
@@ -207,6 +317,20 @@ func (target Target) Validate() error {
 		return ErrInvalidRoute
 	}
 	return nil
+}
+
+// NewStaticArtifactTarget builds a strict locale catalog for an artifact
+// route. Catalog order and the default locale are server-owned inputs.
+func NewStaticArtifactTarget(defaultLocale string, items []LocaleArtifactTarget) (Target, error) {
+	canonical, err := CanonicalLocale(defaultLocale)
+	if err != nil {
+		return Target{}, err
+	}
+	target := Target{Kind: TargetStaticSiteArtifact, DefaultLocale: canonical, LocaleTargets: append([]LocaleArtifactTarget(nil), items...)}
+	if err := target.Validate(); err != nil {
+		return Target{}, err
+	}
+	return target, nil
 }
 
 func NewRoute(id, branchID, host, routePath, match string, target Target, now time.Time) (Route, error) {

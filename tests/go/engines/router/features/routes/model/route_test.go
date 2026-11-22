@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -120,9 +121,15 @@ func TestNewRouteRequiresExactCoreFilePathAndExplicitOperationConfig(t *testing.
 	if err != nil || operation.Target.OperationID != "public.form-upload" {
 		t.Fatalf("valid registered operation route rejected: route=%+v err=%v", operation, err)
 	}
-	artifact, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "main", "example.com", "/site", MatchPrefix,
-		Target{Kind: TargetStaticSiteArtifact, FileID: coreFile.FileID, FallbackEnabled: true}, now)
-	if err != nil || !artifact.Target.FallbackEnabled {
-		t.Fatalf("static artifact route rejected explicit fallback: route=%+v err=%v", artifact, err)
+	artifactTarget, err := NewStaticArtifactTarget("en-US", []LocaleArtifactTarget{
+		{Locale: "en-US", ArtifactManifestFileID: coreFile.FileID, Revision: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactTarget.FallbackEnabled = true
+	artifact, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "main", "example.com", "/site", MatchPrefix, artifactTarget, now)
+	if err == nil || !errors.Is(err, ErrInvalidRoute) {
+		t.Fatalf("static artifact route accepted explicit fallback: route=%+v err=%v", artifact, err)
 	}
 }

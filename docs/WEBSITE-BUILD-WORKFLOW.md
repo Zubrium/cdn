@@ -67,7 +67,7 @@
 ## Acceptance-связь
 
 - `WEB-020` — locale-bound full trusted input digest, `render-plan/v2`, kernel-enforced Chromium sandbox/network policy, stale result, Core-only artifact verification (disposable sandbox); исполнен REAL-тестом `TestWebsitePrerenderAcceptance/WEB-020`.
-- `WEB-021` — rebuild fan-out, независимые Router target CAS, retry и stale protection (disposable orchestration).
+- `WEB-021` — rebuild fan-out, независимые Router target CAS, retry только failed и stale protection (disposable orchestration); исполнен REAL-тестом `TestWebsitePublicationFanoutAcceptance/WEB-021`.
 - `WEB-014`, `WEB-026` — валидация artifact manifest и trusted file metadata.
 - `WEB-010` — отсутствие route/URL/branch/record values в structural/build DTO.
 - Новый Core regression test — владелец видит result child task, посторонний components/networks — нет.
@@ -75,5 +75,5 @@
 ## Ограничения, которые не снимаются этим решением
 
 - Реальный OS-supervised Chromium/network sandbox предоставляется trusted startup-конфигурацией static composition; вне full-профиля `worker.prerender/render-page/v1` остаётся fail-closed, поэтому сквозной build не доходит до готового artifact.
-- Disposable PostgreSQL/S3 обязательны для integration-приёмки; unit/contract checks их не заменяют. `WEB-020` исполнен на изолированном sandbox; `WEB-021` остаётся `blocked` до появления outer-orchestration Router CAS.
+- Disposable PostgreSQL/S3 обязательны для integration-приёмки; unit/contract checks их не заменяют. `WEB-020` исполнен на изолированном sandbox; `WEB-021` исполнен в живом disposable стеке с fault injection, но полный публичный E2E locale routing и crash recovery отдельно не прогонялись.
 - Core API расширяется только в описанной owner-scoped части; общий доступ к task payload/results не открывается. SQL-путь `GetTaskResult` проверен static/unit и реальным integration-прогоном `CORE-001` на disposable PostgreSQL.

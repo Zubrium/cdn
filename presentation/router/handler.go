@@ -383,6 +383,7 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: r.Header.Get("Idempotency-Key"), Body: r.Body,
 		IfNoneMatch: r.Header.Get("If-None-Match"), IfModifiedSince: r.Header.Get("If-Modified-Since"),
 		Range: r.Header.Get("Range"), IfRange: r.Header.Get("If-Range"),
+		LocalePreference: localePreferenceCookie(r), AcceptLanguage: r.Header.Get("Accept-Language"),
 		FormSessionTokens: formTokens,
 	}
 	response, err := h.api.Deliver(r.Context(), request)
@@ -469,6 +470,18 @@ func (h *Handler) formSessionTokens(r *http.Request) (map[string]string, error) 
 		tokens[formID] = cookie.Value
 	}
 	return tokens, nil
+}
+
+func localePreferenceCookie(r *http.Request) string {
+	if r == nil || len(r.Header.Values("Cookie")) > 1 {
+		return ""
+	}
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == "zubrium_locale" {
+			return cookie.Value
+		}
+	}
+	return ""
 }
 
 func validFormSessionToken(value string) bool {

@@ -19,6 +19,7 @@ type websiteEngineComponent struct {
 	service          *websiteapp.Service
 	localeCatalog    *websiteLocaleCatalog
 	contentBuildView *websiteContentBuildProjection
+	inputResolver    websiteapp.BuildInputResolver
 }
 
 func (component *websiteEngineComponent) Start(ctx context.Context) error {
@@ -100,6 +101,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	component.service = service
 	component.localeCatalog = localeCatalog
 	component.contentBuildView = contentBuildView
+	component.inputResolver = buildInputResolver
 	return nil
 }
 

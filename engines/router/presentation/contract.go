@@ -46,6 +46,7 @@ type SettingsAPI interface {
 	GetRoute(context.Context, string) (Route, error)
 	CreateRoute(context.Context, CreateRouteRequest) (Route, error)
 	ReplaceRouteTarget(context.Context, ReplaceRouteTargetRequest) (Route, error)
+	ReplaceLocaleTarget(context.Context, ReplaceLocaleTargetRequest) (Route, error)
 	DeleteRoute(context.Context, DeleteRouteRequest) error
 }
 
@@ -88,6 +89,17 @@ type ReplaceRouteTargetRequest struct {
 	ExpectedRevision int64       `json:"expected_revision"`
 }
 
+// ReplaceLocaleTargetRequest is the trusted facade input used by outer
+// orchestration. Locale is a server-configured catalog slot, never a visitor
+// selection.
+type ReplaceLocaleTargetRequest struct {
+	RouteID                string `json:"route_id"`
+	Locale                 string `json:"locale"`
+	ArtifactManifestFileID string `json:"artifact_manifest_file_id"`
+	ExpectedRevision       int64  `json:"expected_revision"`
+	IdempotencyKey         string `json:"-"`
+}
+
 type DeleteRouteRequest struct {
 	RouteID          string `json:"route_id"`
 	ExpectedRevision int64  `json:"expected_revision"`
@@ -107,6 +119,8 @@ type DeliveryRequest struct {
 	IfModifiedSince   string
 	Range             string
 	IfRange           string
+	LocalePreference  string
+	AcceptLanguage    string
 	FormSessionTokens map[string]string
 }
 

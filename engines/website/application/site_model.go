@@ -118,7 +118,11 @@ func decodeContentModelRecord(record core.ModuleDataRecord) (websiteapi.ContentM
 		!validJSONObject(stored.DataModel) || validateDataModel(stored.DataModel) != nil {
 		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
-	schema := websiteapi.ContentModel{Version: websiteapi.ContentProjectionVersion, ModelRevision: record.Revision,
+	// Core revisions are opaque and advance for every module-data write, while
+	// the model revision stored in the index is the logical revision pinned by
+	// contentModelDigest. Reading the globally assigned record revision here
+	// would invalidate the digest after unrelated writes.
+	schema := websiteapi.ContentModel{Version: websiteapi.ContentProjectionVersion, ModelRevision: index.Revision,
 		Digest: stored.Digest, DataModel: stored.DataModel}
 	expectedDigest, err := contentModelDigest(schema)
 	if err != nil || expectedDigest != schema.Digest {

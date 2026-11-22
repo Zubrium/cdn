@@ -20,8 +20,10 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
 	routermodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
+	publicationapp "github.com/Zubrium/cdn/main/internal/publication"
 	"github.com/Zubrium/cdn/presentation/fileapi"
 	"github.com/Zubrium/cdn/workers/archive"
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -134,6 +136,22 @@ type FormsAPI struct {
 type ContentAPI struct {
 	ServiceCredentialEnv string `yaml:"service_credential_env"`
 	Locale               string `yaml:"locale"`
+}
+
+// PublicationBinding is a server-owned (route, page snapshot, locale) slot.
+// Route and page identities are fixed by startup configuration; no HTTP client
+// can supply or alter them.
+type PublicationBinding struct {
+	RouteID        string `yaml:"route_id"`
+	PageSnapshotID string `yaml:"page_snapshot_id"`
+	Locale         string `yaml:"locale"`
+}
+
+type Publication struct {
+	Bindings             []PublicationBinding `yaml:"bindings"`
+	WebsiteCredentialEnv string               `yaml:"website_credential_env"`
+	BuildTimeout         string               `yaml:"build_timeout"`
+	PollInterval         string               `yaml:"poll_interval"`
 }
 
 // FeatureImport supplies trusted, server-side inputs for the durable archive
@@ -279,6 +297,15 @@ type ContentAPISettings struct {
 	Locale            string
 }
 
+type PublicationSettings struct {
+	Enabled           bool
+	Targets           []publicationapp.Target
+	WebsiteCredential string
+	RouterCredential  string
+	BuildTimeout      time.Duration
+	PollInterval      time.Duration
+}
+
 type FeatureImportSettings struct {
 	Enabled           bool
 	TargetFileSetID   string
@@ -329,6 +356,7 @@ type Resolved struct {
 	RouterAPI              RouterAPISettings
 	FormsAPI               FormsAPISettings
 	ContentAPI             ContentAPISettings
+	Publication            PublicationSettings
 	FeatureImport          FeatureImportSettings
 	Media                  MediaSettings
 	Prerender              PrerenderSettings
@@ -620,6 +648,42 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			return Resolved{}, errors.New("invalid Content locale")
 		}
 	}
+	publicationConfigured := len(c.Publication.Bindings) > 0 || c.Publication.WebsiteCredentialEnv != "" ||
+		c.Publication.BuildTimeout != "" || c.Publication.PollInterval != ""
+	var publicationBuildTimeout, publicationPollInterval time.Duration
+	publicationTargets := make([]publicationapp.Target, 0, len(c.Publication.Bindings))
+	if publicationConfigured {
+		if len(c.Publication.Bindings) == 0 || len(c.Publication.Bindings) > 256 ||
+			!envName.MatchString(c.Publication.WebsiteCredentialEnv) || c.RouterAPI.ServiceCredentialEnv == "" {
+			return Resolved{}, errors.New("publication requires trusted bindings and explicit Website and Router service credentials")
+		}
+		var err error
+		publicationBuildTimeout, err = time.ParseDuration(c.Publication.BuildTimeout)
+		if err != nil || publicationBuildTimeout <= 0 {
+			return Resolved{}, errors.New("invalid publication build timeout")
+		}
+		publicationPollInterval, err = time.ParseDuration(c.Publication.PollInterval)
+		if err != nil || publicationPollInterval <= 0 || publicationPollInterval >= publicationBuildTimeout {
+			return Resolved{}, errors.New("invalid publication poll interval")
+		}
+		seen := make(map[string]struct{}, len(c.Publication.Bindings))
+		for _, binding := range c.Publication.Bindings {
+			routeID, routeErr := uuid.Parse(binding.RouteID)
+			snapshotID, snapshotErr := uuid.Parse(binding.PageSnapshotID)
+			if routeErr != nil || routeID == uuid.Nil || snapshotErr != nil || snapshotID == uuid.Nil ||
+				!validContentLocale(binding.Locale) || binding.RouteID != routeID.String() || binding.PageSnapshotID != snapshotID.String() {
+				return Resolved{}, errors.New("publication bindings require canonical UUID route/page snapshot identities and a valid locale")
+			}
+			key := binding.RouteID + "\x00" + binding.Locale
+			if _, duplicate := seen[key]; duplicate {
+				return Resolved{}, errors.New("duplicate publication binding")
+			}
+			seen[key] = struct{}{}
+			publicationTargets = append(publicationTargets, publicationapp.Target{
+				RouteID: binding.RouteID, PageSnapshotID: binding.PageSnapshotID, Locale: binding.Locale,
+			})
+		}
+	}
 	featureImportConfigured := c.FeatureImport.TargetFileSetID != "" || c.FeatureImport.StagingDirectory != "" ||
 		c.FeatureImport.ServiceCredentialEnv != "" || len(c.FeatureImport.OutputGroups) > 0 || c.FeatureImport.MaxArchiveBytes != 0 ||
 		c.FeatureImport.MaxEntries != 0 || c.FeatureImport.MaxEntryBytes != 0 || c.FeatureImport.MaxExpandedBytes != 0 || c.FeatureImport.MaxCompressionRatio != 0
@@ -691,6 +755,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		routerServiceCredential = getenv(c.RouterAPI.ServiceCredentialEnv)
 		if routerServiceCredential == "" || strings.ContainsRune(routerServiceCredential, '\x00') {
 			return Resolved{}, errors.New("configured Router service credential is empty or invalid")
+		}
+	}
+	var publicationWebsiteCredential string
+	if publicationConfigured {
+		publicationWebsiteCredential = getenv(c.Publication.WebsiteCredentialEnv)
+		if publicationWebsiteCredential == "" || strings.ContainsRune(publicationWebsiteCredential, '\x00') {
+			return Resolved{}, errors.New("configured publication Website credential is empty or invalid")
 		}
 	}
 	var formsFileServiceCredential string
@@ -787,6 +858,9 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			VisitorSessionCleanupEvery: formsCleanupInterval, ExportMaxConcurrent: c.FormsAPI.ExportMaxConcurrent,
 			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},
 		ContentAPI: ContentAPISettings{ServiceCredential: contentServiceCredential, Locale: c.ContentAPI.Locale},
+		Publication: PublicationSettings{Enabled: publicationConfigured, Targets: publicationTargets,
+			BuildTimeout: publicationBuildTimeout, PollInterval: publicationPollInterval,
+			WebsiteCredential: publicationWebsiteCredential, RouterCredential: routerServiceCredential},
 		FeatureImport: FeatureImportSettings{Enabled: featureImportConfigured,
 			TargetFileSetID: c.FeatureImport.TargetFileSetID, OutputGroups: append([]string(nil), c.FeatureImport.OutputGroups...),
 			StagingDirectory: c.FeatureImport.StagingDirectory, ServiceCredential: featureImportCredential,
@@ -826,6 +900,7 @@ type Config struct {
 	RouterAPI     RouterAPI         `yaml:"router_api"`
 	FormsAPI      FormsAPI          `yaml:"forms_api"`
 	ContentAPI    ContentAPI        `yaml:"content_api"`
+	Publication   Publication       `yaml:"publication"`
 	FeatureImport FeatureImport     `yaml:"feature_import"`
 	Media         Media             `yaml:"media"`
 	Prerender     Prerender         `yaml:"prerender"`
@@ -847,6 +922,7 @@ func configFingerprint(config Config, runtimeURL, migrationURL string) (string, 
 	// remain identical for processes sharing the same Core Coordinator.
 	config.RouterAPI.BranchID = ""
 	config.RouterAPI.PublicListenAddress = ""
+	config.Publication.WebsiteCredentialEnv = ""
 	databaseIdentity := func(value string) (string, error) {
 		parsed, err := url.Parse(value)
 		if err != nil || parsed.Host == "" || parsed.Path == "" {

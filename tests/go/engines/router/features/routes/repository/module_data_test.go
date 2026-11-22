@@ -139,7 +139,13 @@ func testRouteWithMatch(t *testing.T, id, host, path, match string) model.Route 
 	t.Helper()
 	target := model.Target{Kind: model.TargetCoreFile, FileID: "01938f7a-68af-7c10-a51d-78b6ca125301"}
 	if match == model.MatchPrefix {
-		target.Kind = model.TargetStaticSiteArtifact
+		var err error
+		target, err = model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
+			{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301", Revision: 1},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	route, err := model.NewRoute(id, "main", host, path, match, target, time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC))
 	if err != nil {

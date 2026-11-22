@@ -5,6 +5,7 @@ engines:
   - forms
   - loader
   - router
+  - publication
 workers:
   - archive
   - media

@@ -40,14 +40,14 @@ func TestFullProfileCompilesWebsiteBuildAndPrerenderHandlers(t *testing.T) {
 	}
 	config := appconfig.Resolved{}
 	config.Coordinator.MaxAttempts = 3
-	if err := registerWorkerHandlers(registry, selected, config); err != nil {
+	if err := registerWorkerHandlers(registry, selected, config, &coreComponent{}); err != nil {
 		t.Fatalf("register worker handlers: %v", err)
 	}
 	catalog, err := registry.CompileWorkerCatalog(platform.BuildPlan{Components: []string{"core", "engine.website", "worker.prerender"}})
 	if err != nil || catalog == nil {
 		t.Fatalf("compile worker catalog: %#v, %v", catalog, err)
 	}
-	if err := registerWorkerHandlers(registry, selected, config); err == nil {
+	if err := registerWorkerHandlers(registry, selected, config, &coreComponent{}); err == nil {
 		t.Fatal("duplicate worker handler registration was accepted")
 	}
 }

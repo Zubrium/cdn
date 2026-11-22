@@ -125,6 +125,28 @@ func (repo *fakeRouteRepository) ReplaceTarget(_ context.Context, branchID, id s
 	repo.items[id] = route
 	return route, nil
 }
+func (repo *fakeRouteRepository) ReplaceLocaleTarget(_ context.Context, branchID, id string, update repository.LocaleTargetUpdate, now time.Time) (model.Route, error) {
+	route, err := repo.GetByID(context.Background(), branchID, id)
+	if err != nil {
+		return model.Route{}, err
+	}
+	index := -1
+	for position, item := range route.Target.LocaleTargets {
+		if item.Locale == update.Locale {
+			index = position
+			break
+		}
+	}
+	if index < 0 || route.Target.LocaleTargets[index].Revision != update.ExpectedRevision {
+		return model.Route{}, repository.ErrConflict
+	}
+	route.Target.LocaleTargets[index].ArtifactManifestFileID = update.ArtifactManifestFileID
+	route.Target.LocaleTargets[index].Revision++
+	route.UpdatedAt = now
+	repo.items[id] = route
+	return route, nil
+}
+
 func (repo *fakeRouteRepository) Delete(_ context.Context, branchID, id string, revision int64) error {
 	route, err := repo.GetByID(context.Background(), branchID, id)
 	if err != nil {
@@ -243,7 +265,12 @@ func TestReplaceAndDeleteRequireCurrentRevision(t *testing.T) {
 
 func TestPublicResolutionNormalizesRequestAndUsesConfiguredBranch(t *testing.T) {
 	service, _, _, ctx := newTestService(t, core.AccessLevelWrite, fakeTargetValidator{})
-	baseTarget := model.Target{Kind: model.TargetStaticSiteArtifact, FileID: "01938f7a-68af-7c10-a51d-78b6ca125301"}
+	baseTarget, err := model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
+		{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301", Revision: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	base, err := service.CreateRoute(ctx, CreateRouteInput{Host: "example.com", Path: "/assets", Match: model.MatchPrefix,
 		Target: baseTarget, IdempotencyKey: "router-route-resolve-001"})
 	if err != nil {

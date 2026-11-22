@@ -35,6 +35,9 @@ func (fakeEngine) CreateRoute(context.Context, engine.CreateRouteRequest) (engin
 func (fakeEngine) ReplaceRouteTarget(context.Context, engine.ReplaceRouteTargetRequest) (engine.Route, error) {
 	return engine.Route{}, engine.ErrUnavailable
 }
+func (fakeEngine) ReplaceLocaleTarget(context.Context, engine.ReplaceLocaleTargetRequest) (engine.Route, error) {
+	return engine.Route{}, engine.ErrUnavailable
+}
 func (fakeEngine) DeleteRoute(context.Context, engine.DeleteRouteRequest) error {
 	return engine.ErrUnavailable
 }
