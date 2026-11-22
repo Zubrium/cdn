@@ -37,13 +37,13 @@
 
 ## Кэширование и прогрев (2026-11-23)
 
-Целевой контракт: [SPEC-caching](../spec/architecture/SPEC-caching.md). Исполняемые сценарии `CACHE-001..CACHE-012` определены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md). Все они находятся в статусе «планируется/ожидает проверки»: в этом отчёте нет evidence реализации кэша, Vary/сжатия, метрик кэша и прогрева до Ready. Старые проходы ниже к новой функциональности не применяются. Статус `pass` будет выставлен только после реального прогона с зафиксированными командами, целевым стеком и ограничениями.
+Целевой контракт: [SPEC-caching](../spec/architecture/SPEC-caching.md). Исполняемые сценарии `CACHE-001..CACHE-012` определены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md). Все они находятся в статусе «планируется/ожидает проверки»: в этом отчёте нет evidence реализации кэша, Vary/сжатия, метрик кэша и прогрева до Ready. Метрики кэша перенесены в [SPEC-observability](../spec/observability/SPEC-observability.md), а наблюдатель получил поддержку gauge и redaction ключей кэша; сами кэши эти серии ещё не испускают. Старые проходы ниже к новой функциональности не применяются. Статус `pass` будет выставлен только после реального прогона с зафиксированными командами, целевым стеком и ограничениями.
 
 ## Observability (2026-11-23)
 
 ### Фактически запущенные проверки
 
-- Из каталога `pkg/`: `go test ./...`, `go vet ./...`, `go build ./...` и `go test -race ./observability/...` — PASS. Unit-тесты покрывают JSONL-сигналы с trace/span correlation, derived-key/value redaction, низкокардинальные метки операций, W3C traceparent, HTTP route/healthz поведение и OTLP-экспорт в `httptest`-сервер (logs/traces/metrics, parent propagation, error status).
+- Из каталога `pkg/`: `go test ./...`, `go vet ./...`, `go build ./...` и `go test -race ./observability/...` — PASS. Unit-тесты покрывают JSONL-сигналы с trace/span correlation, derived-key/value redaction (включая ключи кэша, file/principal ID, URL, locale и user-agent), низкокардинальные метки операций, gauge с last-write-wins, W3C traceparent, HTTP route/healthz поведение и OTLP-экспорт в `httptest`-сервер (logs/traces/metrics, parent propagation, error status).
 - Из каталога `presentation/admin/base`: `go test ./...`, `go vet ./...` — PASS.
 - Из каталога `main`: `go test ./...`, `go vet ./...`, `go build ./...`, `go build -tags full ./...` — PASS; `go test ./internal/config` — PASS (разрешение observability-блока, отказ не-loopback HTTP S3 без явного allowlist).
 - `--check-config main/config.observability.yaml.example` с фиктивными env и `-tags full` — `configuration is valid` (exit 0).

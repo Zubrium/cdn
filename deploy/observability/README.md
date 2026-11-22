@@ -111,6 +111,8 @@ sum by (module_id, component_id, operation_id, outcome) (
 )
 ```
 
+Метрики `zubrium_cache_*` описаны в [SPEC-caching](../../spec/architecture/SPEC-caching.md) и [SPEC-observability](../../spec/observability/SPEC-observability.md), но кэши пока не испускают их: запросы к этим сериям вернут пустой результат до волны реализации кэширования и прогрева.
+
 ## 6. Переключение в file-режим
 
 В `main/config.observability.yaml` замените `observability.mode: otel` на `file`; каталог уже настроен как `/var/lib/zubrium/observability` и живёт в tmpfs контейнера. Пересоздайте только приложение:

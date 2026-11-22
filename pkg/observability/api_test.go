@@ -15,7 +15,7 @@ func TestSanitisationAndSensitiveKeys(t *testing.T) {
 	if got := String("Authorization", "Bearer secret"); got.Key != "" {
 		t.Fatalf("sensitive attribute was not dropped: %#v", got)
 	}
-	if got := String("user name", "Василий\nПетрович\x00"); got.Key != "user_name" || strings.ContainsAny(got.Text, "\n\x00") {
+	if got := String("display name", "Василий\nПетрович\x00"); got.Key != "display_name" || strings.ContainsAny(got.Text, "\n\x00") {
 		t.Fatalf("unexpected sanitised attribute: %#v", got)
 	}
 	long := strings.Repeat("x", 300)
