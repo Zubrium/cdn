@@ -4,8 +4,8 @@
 
 ### Подтверждённые проверки
 
-- `python3 tests/qa/run-test-suite.py ci --integration --report output/test-report-full-integration.json`: exit 0; `gates: 67 pass, 0 fail, 0 blocked`. Финальный повтор с `--with-build --integration`: exit 0; `gates: 68 pass, 0 fail, 0 blocked`; `scenarios: 25 pass, 0 fail, 5 not_run, 0 blocked`; `coverage 25/25 executable = 100.00%`. Это включает REAL `CORE-001` и `WEB-018` на одноразовых PostgreSQL/S3-ресурсах; `WEB-012`, `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022` остаются blocked и исключены только из знаменателя executable coverage.
-- `python3 -m unittest tests/qa/test_run_test_suite.py tests/qa/test_scenario_ledger.py`: 26 тестов, OK. `python3 tests/qa/scenario-ledger.py tests/qa/website-scenarios.json`: `denominator: 29`, `covered: 24` (82.76%), `gaps: 0`, `blockers: 5`. Core ledger: `1/1`, 100.00%.
+- `python3 tests/qa/run-test-suite.py ci --integration --report output/test-report-web012.json`: exit 0; `gates: 67 pass, 0 fail, 0 blocked`; `scenarios: 26 pass, 0 fail, 4 not_run, 0 blocked`; `coverage 26/26 executable = 100.00%`. Полный `tests/qa/run-website-red.sh integration` на одноразовых PostgreSQL/S3: exit 0, включены REAL `WEB-012`, `WEB-018`, `CORE-001`. `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022` остаются blocked и исключены только из знаменателя executable coverage.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.qa.test_run_test_suite tests.qa.test_scenario_ledger`: 28 тестов, OK. `python3 tests/qa/scenario-ledger.py tests/qa/website-scenarios.json`: `denominator: 29`, `covered: 25` (86.21%), `gaps: 0`, `blockers: 4`, `execution_pass: 25`. Core ledger: `1/1`, 100.00%.
 - `tests/qa/run-website-red.sh contract`: exit 0 (ledger validator, Go contract-сценарии, `TestWebsiteAdminHTTPAcceptanceWEB017`, отдельный Vitest UI-файл). `PYTHONDONTWRITEBYTECODE=1` используется для локальных unittest-прогонов, чтобы не создавать `__pycache__` в исходниках.
 - RED/GREEN-тесты durable build и owner-scoped result прошли с централизованным overlay: `TestWebsiteBuildPageHandlerEmitsPinnedPrerenderChild`, `TestWebsiteBuildPageHandlerRejectsInvalidTaskAndPayload`, `TestWebsiteBuildWorkflowResolvesPrerenderEmissionKey`, `TestWebsiteBuildWorkflowFailsWhenPrerenderEmissionCannotBeResolved`, `TestWebsiteLocaleCatalogPinsRevisionOnlyForConfiguredLocale`, `TestWebsiteBuildWorkflowResolvesOnlyOwnedEmissionKey`, `TestDisposableOwnerScopedTaskResult/CORE-001`.
 - Все 19 модулей `go.work` по отдельности прошли `go test ./...`, `go vet ./...`, `go build ./...`; `main` дополнительно прошёл `go test/vet/build -tags=full ./...`, включая компиляцию root handler `engine.website/build-page/v1` и fail-closed child handlers.
@@ -20,6 +20,7 @@
 - `engines/website/workflow` регистрирует immutable root-операцию `engine.website/build-page/v1`, проверяет strict typed payload и эмитит child `worker.prerender/render-page/v1` с `render-plan/v1`, `plan_digest` и стабильным `prerender:<build_id>` emission key.
 - `main/internal/composition` инъектирует workflow adapter, locale catalog из доверенного Content service context и константы операции/версии; в не-full профилях capability не инъектируется. Условный порядок ребер full profile учитывает `admin.files → engine.forms/engine.website/engine.router` и `engine.router → engine.forms/engine.content`.
 - Website разрешает сгенерированный Core `Task.ID` по owner-scoped emission key, закрепляет его в `website/builds` и читает результат child только через `GetTaskResult`. Artifact manifest фиксируется в job только после typed validation.
+- `WEB-012`: `BeginFeatureImport` фиксирует CAS-запись и idempotency receipt по request-only fingerprint, стартует owner-scoped `feature-import/v1` с минимальным payload и reconcile-ит durable результат. Feature version становится `ready` только после проверенного результата archive worker и подтверждённого удаления source file; повтор task не создаёт дублирующих output. Настоящий `archive.Handler` включается только при явной trusted-конфигурации full profile, остальные профили остаются fail-closed.
 
 ### Найденные и исправленные дефекты текущего прохода
 
@@ -33,7 +34,7 @@
 
 ### Ограничения текущего прохода
 
-- `WEB-012`, `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022` остаются `blocked`: нет durable recovery feature import, supervised media isolation, prerender sandbox/network policy, outer orchestration с per-`(route, locale)` Router CAS и page retirement workflow. Эти статусы не должны трактоваться как pass.
+- `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022` остаются `blocked`: нет supervised media isolation, prerender sandbox/network policy, outer orchestration с per-`(route, locale)` Router CAS и page retirement workflow. Эти статусы не должны трактоваться как pass. `WEB-012` исполнен на disposable prerequisite и переведён в `pass`.
 - `moto` выбран для browser QA, потому что MinIO в этом стеке возвращает `GetPublicAccessBlock ... NotImplemented`, а Core `RequirePrivate` требует этот API. Реальные S3-провайдеры в browser QA не использовались.
 - `GET /api/admin/model → 404 {"error":"not_found"}` и `GET /api/admin/features → 503 {"error":"unavailable"}` остаются ожидаемыми для пустого реестра; UI показывает корректные empty/error состояния. Это не считается пройденной приёмкой соответствующих модулей.
 - `/admin/coordinator/workflows` один раз завис при быстром sequential navigation; свежий reload, network и snapshot прошли чисто. Явный product-дефект не воспроизведён, случай зафиксирован как незавершённый harness/browser flake.

@@ -34,7 +34,7 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 
 ## Website scenario ledger
 
-Независимые Website input/result scenarios и их стабильные `WEB-###` IDs находятся в [`qa/website-scenarios.json`](qa/website-scenarios.json). Этот ledger — единственный источник Website denominator: `covered` означает содержательную tagged acceptance-проверку, а `gap` и `blocked` остаются в denominator, но не в числителе; execution status учитывается отдельно. `blocked` требует точного prerequisite и не заменяется успешным fake-only или live-environment прогоном.
+Независимые Website input/result scenarios и их стабильные `WEB-###` IDs находятся в [`qa/website-scenarios.json`](qa/website-scenarios.json). Этот ledger — единственный источник Website denominator: `covered` означает содержательную tagged acceptance-проверку, а `gap` и `blocked` остаются в denominator, но не в числителе; execution status учитывается отдельно. `blocked` требует точного prerequisite и не заменяется успешным fake-only или live-environment прогоном. `WEB-012` исполнен реальным integration-тестом `TestWebsiteFeatureImportAcceptance/WEB-012` (`tests/go/main/cmd/zubrium/website_feature_import_acceptance_test.go`) на disposable PostgreSQL/S3: идемпотентный replay, конфликт fingerprint, crash recovery и отказ invalid ZIP без partial ready version confirmed.
 
 ## Верификация
 

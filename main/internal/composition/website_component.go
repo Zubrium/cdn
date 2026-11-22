@@ -9,6 +9,7 @@ import (
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/workers/archive"
 )
 
 type websiteEngineComponent struct {
@@ -43,13 +44,25 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 			component.config.Coordinator.MaxWorkflowTasks)
 	}
 	localeCatalog := newWebsiteLocaleCatalog()
-	service, err := websiteapp.NewService(websiteapp.Config{
-		AccessGroup: "features", CoordinatorAccessGroup: component.config.Coordinator.WorkflowAccessGroup,
-		BuildWorkflow:        buildWorkflow,
-		LocaleCatalog:        localeCatalog,
-		BuildOperationID:     websiteworkflow.OperationID,
-		BuildContractVersion: websiteworkflow.ContractVersion,
-	}, data, component.core.runtime.GroupAuthorization(), component.core.runtime.Sessions())
+	serviceConfig := websiteapp.Config{
+		AccessGroup:            "features",
+		CoordinatorAccessGroup: component.config.Coordinator.WorkflowAccessGroup,
+		BuildWorkflow:          buildWorkflow,
+		LocaleCatalog:          localeCatalog,
+		BuildOperationID:       websiteworkflow.OperationID,
+		BuildContractVersion:   websiteworkflow.ContractVersion,
+		FeatureImportFileSetID: component.config.FeatureImport.TargetFileSetID,
+	}
+	if component.config.FeatureImport.Enabled {
+		workflow, err := component.core.runtime.NewWorkflowClient(archive.DataModuleID)
+		if err != nil {
+			return err
+		}
+		serviceConfig.Files = component.core.runtime.EngineFiles()
+		serviceConfig.Workflow = workflow
+		serviceConfig.Sessions = component.core.runtime.Sessions()
+	}
+	service, err := websiteapp.NewService(serviceConfig, data, component.core.runtime.GroupAuthorization(), component.core.runtime.Sessions())
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
 	routermodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 	"github.com/Zubrium/cdn/presentation/fileapi"
+	"github.com/Zubrium/cdn/workers/archive"
 	"gopkg.in/yaml.v3"
 )
 
@@ -135,6 +136,20 @@ type ContentAPI struct {
 	Locale               string `yaml:"locale"`
 }
 
+// FeatureImport supplies trusted, server-side inputs for the durable archive
+// worker and the Website import API. It is never populated from an HTTP request.
+type FeatureImport struct {
+	TargetFileSetID      string   `yaml:"target_file_set_id"`
+	OutputGroups         []string `yaml:"output_groups"`
+	StagingDirectory     string   `yaml:"staging_directory"`
+	ServiceCredentialEnv string   `yaml:"service_credential_env"`
+	MaxArchiveBytes      int64    `yaml:"max_archive_bytes"`
+	MaxEntries           int      `yaml:"max_entries"`
+	MaxEntryBytes        int64    `yaml:"max_entry_bytes"`
+	MaxExpandedBytes     int64    `yaml:"max_expanded_bytes"`
+	MaxCompressionRatio  uint64   `yaml:"max_compression_ratio"`
+}
+
 type HTTP struct {
 	ListenAddress     string `yaml:"listen_address"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
@@ -229,6 +244,15 @@ type ContentAPISettings struct {
 	Locale            string
 }
 
+type FeatureImportSettings struct {
+	Enabled           bool
+	TargetFileSetID   string
+	OutputGroups      []string
+	StagingDirectory  string
+	ServiceCredential string
+	Limits            archive.Limits
+}
+
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -237,6 +261,7 @@ type Resolved struct {
 	RouterAPI              RouterAPISettings
 	FormsAPI               FormsAPISettings
 	ContentAPI             ContentAPISettings
+	FeatureImport          FeatureImportSettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
@@ -525,6 +550,24 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			return Resolved{}, errors.New("invalid Content locale")
 		}
 	}
+	featureImportConfigured := c.FeatureImport.TargetFileSetID != "" || c.FeatureImport.StagingDirectory != "" ||
+		c.FeatureImport.ServiceCredentialEnv != "" || len(c.FeatureImport.OutputGroups) > 0 || c.FeatureImport.MaxArchiveBytes != 0 ||
+		c.FeatureImport.MaxEntries != 0 || c.FeatureImport.MaxEntryBytes != 0 || c.FeatureImport.MaxExpandedBytes != 0 || c.FeatureImport.MaxCompressionRatio != 0
+	if featureImportConfigured {
+		settings := c.FeatureImport
+		if !filepath.IsAbs(settings.StagingDirectory) || filepath.Clean(settings.StagingDirectory) != settings.StagingDirectory ||
+			settings.StagingDirectory == string(filepath.Separator) || !envName.MatchString(settings.ServiceCredentialEnv) ||
+			strings.TrimSpace(settings.TargetFileSetID) == "" || len(settings.OutputGroups) == 0 ||
+			settings.MaxArchiveBytes <= 0 || settings.MaxEntries <= 0 || settings.MaxEntryBytes <= 0 ||
+			settings.MaxExpandedBytes <= 0 || settings.MaxCompressionRatio == 0 {
+			return Resolved{}, errors.New("feature_import requires an absolute staging directory, service credential, target FileSet, output groups, and explicit archive limits")
+		}
+		for _, group := range settings.OutputGroups {
+			if !platform.ValidAccessGroupKey(group) {
+				return Resolved{}, errors.New("feature_import output_groups contains an invalid group")
+			}
+		}
+	}
 	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
 		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
 	}
@@ -564,6 +607,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		contentServiceCredential = getenv(c.ContentAPI.ServiceCredentialEnv)
 		if contentServiceCredential == "" || strings.ContainsRune(contentServiceCredential, '\x00') {
 			return Resolved{}, errors.New("configured Content service credential is empty or invalid")
+		}
+	}
+	var featureImportCredential string
+	if featureImportConfigured {
+		featureImportCredential = getenv(c.FeatureImport.ServiceCredentialEnv)
+		if featureImportCredential == "" || strings.ContainsRune(featureImportCredential, '\x00') {
+			return Resolved{}, errors.New("configured FeatureImport service credential is empty or invalid")
 		}
 	}
 	if c.Core.AccessGroups == nil {
@@ -618,6 +668,12 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			VisitorSessionCleanupEvery: formsCleanupInterval, ExportMaxConcurrent: c.FormsAPI.ExportMaxConcurrent,
 			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},
 		ContentAPI: ContentAPISettings{ServiceCredential: contentServiceCredential, Locale: c.ContentAPI.Locale},
+		FeatureImport: FeatureImportSettings{Enabled: featureImportConfigured,
+			TargetFileSetID: c.FeatureImport.TargetFileSetID, OutputGroups: append([]string(nil), c.FeatureImport.OutputGroups...),
+			StagingDirectory: c.FeatureImport.StagingDirectory, ServiceCredential: featureImportCredential,
+			Limits: archive.Limits{MaxArchiveBytes: c.FeatureImport.MaxArchiveBytes, MaxEntries: c.FeatureImport.MaxEntries,
+				MaxEntryBytes: c.FeatureImport.MaxEntryBytes, MaxExpandedBytes: c.FeatureImport.MaxExpandedBytes,
+				MaxCompressionRatio: c.FeatureImport.MaxCompressionRatio}},
 		Coordinator: CoordinatorSettings{
 			WorkflowAccessGroup:  c.Coordinator.WorkflowAccessGroup,
 			WorkflowsPageDefault: c.Coordinator.WorkflowsPageDefault, WorkflowsPageMaximum: c.Coordinator.WorkflowsPageMaximum,
@@ -632,15 +688,16 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 }
 
 type Config struct {
-	Core        Core              `yaml:"core"`
-	Loader      Loader            `yaml:"loader"`
-	FileAPI     FileAPI           `yaml:"file_api"`
-	AdminAPI    AdminAPI          `yaml:"admin_api"`
-	RouterAPI   RouterAPI         `yaml:"router_api"`
-	FormsAPI    FormsAPI          `yaml:"forms_api"`
-	ContentAPI  ContentAPI        `yaml:"content_api"`
-	HTTP        HTTP              `yaml:"http"`
-	Coordinator CoordinatorConfig `yaml:"coordinator"`
+	Core          Core              `yaml:"core"`
+	Loader        Loader            `yaml:"loader"`
+	FileAPI       FileAPI           `yaml:"file_api"`
+	AdminAPI      AdminAPI          `yaml:"admin_api"`
+	RouterAPI     RouterAPI         `yaml:"router_api"`
+	FormsAPI      FormsAPI          `yaml:"forms_api"`
+	ContentAPI    ContentAPI        `yaml:"content_api"`
+	FeatureImport FeatureImport     `yaml:"feature_import"`
+	HTTP          HTTP              `yaml:"http"`
+	Coordinator   CoordinatorConfig `yaml:"coordinator"`
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

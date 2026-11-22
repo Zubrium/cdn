@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"sync/atomic"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
@@ -16,16 +17,18 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
 	"github.com/Zubrium/cdn/presentation/router"
+	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/google/uuid"
 )
 
 type coreComponent struct {
-	config     appconfig.Resolved
-	runtime    *platform.Runtime
-	secret     string
-	catalog    *platform.WorkerCatalog
-	selected   map[string]struct{}
-	dispatcher *bus.Dispatcher
+	config        appconfig.Resolved
+	runtime       *platform.Runtime
+	secret        string
+	catalog       *platform.WorkerCatalog
+	selected      map[string]struct{}
+	dispatcher    *bus.Dispatcher
+	archiveHandle atomic.Pointer[archive.Handler]
 }
 
 func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descriptors []platform.ComponentDescriptor) (map[string]platform.AccessLevel, error) {
@@ -71,6 +74,12 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		_ = runtime.Close()
 		return fmt.Errorf("register Coordinator capability: %w", err)
 	}
+	if c.config.FeatureImport.Enabled {
+		if err := c.configureArchiveImport(ctx, runtime); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("configure archive import worker: %w", err)
+		}
+	}
 	settings := c.config.Coordinator
 	if err := runtime.StartCoordinator(ctx, platform.CoordinatorRuntimeConfig{
 		Fingerprint:   c.config.CoordinatorFingerprint,
@@ -108,6 +117,34 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		_ = runtime.Close()
 		return fmt.Errorf("seal runtime bus: %w", err)
 	}
+	return nil
+}
+
+// configureArchiveImport issues only narrow Core capabilities to the archive
+// worker. SQL, object storage, module identity, and visitor credentials never
+// cross this boundary; the worker receives one authenticated service session.
+func (c *coreComponent) configureArchiveImport(ctx context.Context, runtime *platform.Runtime) error {
+	settings := c.config.FeatureImport
+	session, _, err := runtime.EngineIdentity().Authenticate(ctx, settings.ServiceCredential)
+	if err != nil {
+		return fmt.Errorf("authenticate feature import service: %w", err)
+	}
+	progress, err := runtime.RegisterDataModule(archive.DataDescriptor())
+	if err != nil {
+		return fmt.Errorf("register archive progress capability: %w", err)
+	}
+	handler, err := archive.NewHandler(runtime.EngineFiles(), session, archive.Config{
+		Limits:          settings.Limits,
+		StagingDir:      settings.StagingDirectory,
+		TargetFileSetID: settings.TargetFileSetID,
+		OutputGroups:    settings.OutputGroups,
+		Progress:        progress,
+		Index:           runtime.EngineFiles(),
+	})
+	if err != nil {
+		return err
+	}
+	c.archiveHandle.Store(handler)
 	return nil
 }
 
@@ -423,7 +460,8 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	for _, id := range plan.Components {
 		selected[id] = struct{}{}
 	}
-	if err := registerWorkerHandlers(registry, selected, resolved); err != nil {
+	core := &coreComponent{config: resolved, selected: selected, dispatcher: nil}
+	if err := registerWorkerHandlers(registry, selected, resolved, core); err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("register worker handlers: %w", err)
 	}
 	keys := []contracts.Key{contracts.CoreReadinessOperation().Key}
@@ -443,7 +481,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if err := validateRunnableComposition(selected); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	core := &coreComponent{config: resolved, selected: selected, dispatcher: dispatcher}
+	core.dispatcher = dispatcher
 	loader := &loaderComponent{core: core, config: resolved}
 	fileAPI := &fileAPIComponent{loader: loader, core: core, config: resolved}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]

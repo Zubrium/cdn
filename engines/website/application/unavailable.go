@@ -8,26 +8,9 @@ import (
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 )
 
-// Mutations and job/catalog APIs stay unavailable until their durable worker
-// contracts and Core capabilities are provided by composition. Returning a
-// typed unavailable error keeps incomplete production profiles fail-closed.
-func (s *Service) BeginFeatureImport(ctx context.Context, _ websiteapi.ImportFeatureRequest) (websiteapi.FeatureImport, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return websiteapi.FeatureImport{}, err
-	}
-	if err := s.requireCoordinatorWrite(ctx); err != nil {
-		return websiteapi.FeatureImport{}, err
-	}
-	return websiteapi.FeatureImport{}, websiteapi.ErrUnavailable
-}
-
-func (s *Service) GetFeatureImport(ctx context.Context, _ string) (websiteapi.FeatureImport, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
-		return websiteapi.FeatureImport{}, err
-	}
-	return websiteapi.FeatureImport{}, websiteapi.ErrUnavailable
-}
-
+// Mutations and read-only catalog APIs stay unavailable until their durable
+// worker contracts and Core capabilities are provided by composition. Returning
+// a typed unavailable error keeps incomplete production profiles fail-closed.
 func (s *Service) ListFeatureCatalog(ctx context.Context, _ string, _ int) (websiteapi.FeatureVersionPage, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
 		return websiteapi.FeatureVersionPage{}, err

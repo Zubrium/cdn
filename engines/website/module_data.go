@@ -15,6 +15,7 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 			}},
 			{Name: "features/imports", ScopeTypes: []string{"job"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "source_file_id": {Type: core.SelectorString}, "feature_id": {Type: core.SelectorString},
+				"revision": {Type: core.SelectorNumber},
 			}},
 			{Name: "website/content-models", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString},

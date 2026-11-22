@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"regexp"
 	"strings"
@@ -45,13 +46,35 @@ type LocaleCatalogResolver interface {
 	LocaleCatalogRevision(context.Context, string) (int64, error)
 }
 
+// ImportFilesCapability is the narrow, owner-independent Core file surface
+// used by durable feature imports. Composition supplies it with a service
+// identity; an import request cannot choose Core files or access groups.
+type ImportFilesCapability interface {
+	StatFile(context.Context, core.Session, string) (core.File, error)
+	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
+}
+
+// ImportWorkflowClient is owner-scoped by composition. A request can only
+// carry an opaque source file ID, never an operation, owner or task identity.
+type ImportWorkflowClient interface {
+	Start(context.Context, core.WorkflowStartRequest) (core.WorkflowReceipt, error)
+	Get(context.Context, uuid.UUID) (core.Workflow, error)
+	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
+}
+
 type Config struct {
-	AccessGroup            string
-	CoordinatorAccessGroup string
-	BuildWorkflow          BuildWorkflowClient
-	LocaleCatalog          LocaleCatalogResolver
-	BuildOperationID       string
-	BuildContractVersion   int
+	AccessGroup                  string
+	CoordinatorAccessGroup       string
+	BuildWorkflow                BuildWorkflowClient
+	LocaleCatalog                LocaleCatalogResolver
+	BuildOperationID             string
+	BuildContractVersion         int
+	Files                        ImportFilesCapability
+	Workflow                     ImportWorkflowClient
+	Sessions                     core.SessionCapability
+	FeatureImportOperationID     string
+	FeatureImportContractVersion int
+	FeatureImportFileSetID       string
 }
 
 type Service struct {
@@ -72,6 +95,12 @@ func NewService(config Config, store RecordStore, authority core.GroupAuthorizat
 		!core.ValidAccessGroupKey(config.AccessGroup) || !core.ValidAccessGroupKey(config.CoordinatorAccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 {
 		return nil, errConfigInvalid
 	}
+	if strings.TrimSpace(config.FeatureImportOperationID) == "" {
+		config.FeatureImportOperationID = importDefaultOperationID
+	}
+	if config.FeatureImportContractVersion == 0 {
+		config.FeatureImportContractVersion = importContractVersion
+	}
 	return &Service{config: config, store: store, authority: authority, sessions: sessions}, nil
 }
 
@@ -90,7 +119,11 @@ func (s *Service) AuthenticateSession(ctx context.Context, token string) (contex
 	if s == nil || ctx == nil || strings.TrimSpace(token) == "" {
 		return nil, websiteapi.ErrUnauthorized
 	}
-	session, _, err := s.sessions.AuthenticateSession(ctx, token)
+	sessions := s.sessions
+	if validInterface(s.config.Sessions) {
+		sessions = s.config.Sessions
+	}
+	session, _, err := sessions.AuthenticateSession(ctx, token)
 	if err != nil {
 		return nil, mapCoreError(err)
 	}

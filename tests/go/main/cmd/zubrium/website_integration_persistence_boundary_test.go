@@ -4,9 +4,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -339,11 +337,11 @@ func hasWebsitePrefix(value string, prefixes ...string) bool {
 
 func newWebsitePersistenceBootstrapSecret(t *testing.T) string {
 	t.Helper()
-	var entropy [32]byte
-	if _, err := rand.Read(entropy[:]); err != nil {
-		t.Fatalf("generate run-only Core bootstrap credential: %v", err)
+	runID := strings.TrimSpace(os.Getenv("WEBSITE_TEST_RUN_ID"))
+	if runID == "" {
+		t.Fatal("WEBSITE_TEST_RUN_ID is required for the disposable Core bootstrap identity")
 	}
-	return "ct_live_" + base64.RawURLEncoding.EncodeToString(entropy[:])
+	return websiteRunBootstrapSecret(runID)
 }
 
 func websiteRuntimeConfig(env websitePersistenceEnv, bootstrapSecret string) core.RuntimeConfig {

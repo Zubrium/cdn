@@ -16,6 +16,10 @@ const (
 	SnapshotNamespace = "website/snapshots"
 	TemplateNamespace = "website/page-templates"
 	BuildNamespace    = "website/builds"
+	ImportNamespace   = "features/imports"
+	FeatureCatalogNS  = "features/catalog"
+	ImportScopeID     = "import"
+	CatalogScopeID    = "global"
 )
 
 // BuildScopeID is shared by a job and its idempotency receipts so their
@@ -46,6 +50,21 @@ func BuildKey(id string) core.ModuleDataKey {
 func BuildIdempotencyKey(key string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: BuildNamespace, ScopeType: "job", ScopeID: BuildScopeID,
 		RecordKey: "idempotency/" + digestKey(key)}
+}
+
+func FeatureImportKey(jobID string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: ImportNamespace, ScopeType: "job", ScopeID: ImportScopeID,
+		RecordKey: "job/" + strings.ToLower(jobID)}
+}
+
+func FeatureImportReceiptKey(idempotencyKey string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: ImportNamespace, ScopeType: "job", ScopeID: ImportScopeID,
+		RecordKey: "idempotency/" + digestKey(idempotencyKey)}
+}
+
+func FeatureVersionKey(featureID, version string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: FeatureCatalogNS, ScopeType: "global", ScopeID: CatalogScopeID,
+		RecordKey: "feature/" + strings.ToLower(featureID) + "/" + strings.ToLower(version)}
 }
 
 func digestKey(value string) string {

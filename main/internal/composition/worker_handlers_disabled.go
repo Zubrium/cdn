@@ -7,6 +7,6 @@ import (
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 )
 
-func registerWorkerHandlers(*platform.RuntimeRegistry, map[string]struct{}, appconfig.Resolved) error {
+func registerWorkerHandlers(*platform.RuntimeRegistry, map[string]struct{}, appconfig.Resolved, *coreComponent) error {
 	return nil
 }

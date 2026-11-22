@@ -203,11 +203,11 @@
       "action": "Run the durable feature import workflow against disposable Core storage.",
       "expected_result": "Same fingerprint resumes or returns one job, conflicting fingerprint is rejected, and recovery preserves exact progress without duplicate outputs.",
       "expected_state": "Feature version becomes ready only after verified outputs and source cleanup; failures expose no partial ready version.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-012",
-      "coverage_status": "blocked",
-      "execution_status": "blocked",
-      "blocker": "Нет durable recovery/reconciliation workflow для feature import и isolated crash-injection fixture; live Core storage использовать запрещено."
+      "test_file": "tests/go/main/cmd/zubrium/website_feature_import_acceptance_test.go",
+      "test_symbol": "TestWebsiteFeatureImportAcceptance/WEB-012",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-013",

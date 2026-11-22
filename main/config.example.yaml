@@ -125,6 +125,22 @@ content_api:
   service_credential_env: ZUBRIUM_CONTENT_SERVICE_CREDENTIAL
   locale: en-US
 
+# Enable durable feature imports only after an operator-created managed FileSet
+# and a service credential with write access to its output groups exist. Without
+# this block the compiled archive worker stays fail-closed.
+# feature_import:
+#   target_file_set_id: 00000000-0000-4000-8000-000000000000
+#   output_groups:
+#     - features
+#   # Must exist, be a real directory, and have mode 0700.
+#   staging_directory: /var/lib/zubrium/feature-import-staging
+#   service_credential_env: ZUBRIUM_FEATURE_IMPORT_SERVICE_CREDENTIAL
+#   max_archive_bytes: 1048576
+#   max_entries: 16
+#   max_entry_bytes: 65536
+#   max_expanded_bytes: 262144
+#   max_compression_ratio: 100
+
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s
