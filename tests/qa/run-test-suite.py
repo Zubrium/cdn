@@ -23,6 +23,7 @@ CONFIG_PATH = ROOT / "tests/qa/gates.json"
 LEDGER_PATHS = (
     ROOT / "tests/qa/website-scenarios.json",
     ROOT / "tests/qa/core-scenarios.json",
+    ROOT / "tests/qa/e2e-scenarios.json",
 )
 DEFAULT_REPORT = ROOT / "output/test-report.json"
 LOG_DIR = ROOT / "output/test-logs"

@@ -47,8 +47,14 @@ type ModuleBuildInputResolver struct {
 
 // NewModuleBuildInputResolver fails closed unless every capability is present.
 func NewModuleBuildInputResolver(store RecordStore, content ContentBuildProjectionResolver, imageDigest string) (*ModuleBuildInputResolver, error) {
-	if !validInterface(store) || !validInterface(content) || !strings.HasPrefix(imageDigest, "sha256:") ||
-		len(imageDigest) != len("sha256:")+sha256.Size*2 {
+	if !validInterface(store) || !validInterface(content) {
+		return nil, errConfigInvalid
+	}
+	imageDigest = strings.TrimSpace(imageDigest)
+	if at := strings.LastIndex(imageDigest, "@"); at >= 0 {
+		imageDigest = imageDigest[at+1:]
+	}
+	if !strings.HasPrefix(imageDigest, "sha256:") || len(imageDigest) != len("sha256:")+sha256.Size*2 {
 		return nil, errConfigInvalid
 	}
 	for _, r := range imageDigest[len("sha256:"):] {

@@ -176,5 +176,30 @@ wait "$SERVER_PID" 2>/dev/null || true
 rm -rf "$RUN_DIR"
 ```
 
+## 8. Автоматический живой E2E-runner
+
+Полный separate-checkout прогон публикации и retirement выполняется одной
+командой из корня репозитория:
+
+```sh
+tests/qa/run-website-router-e2e.sh
+```
+
+Runner сам выбирает уникальный run ID и нерабочие порты, создаёт приватный env
+через `tests/qa/docker/up.sh`, копирует чекаут через `prepare-checkout.sh`,
+собирает Admin и `bin/zubrium` только в копии, запускает server в три фазы
+(bootstrap → fixtures → trusted publication bindings), вычисляет build identity
+из артефактов копии и вызывает `verify-target.sh` перед записью. Playwright
+установлен отдельно в `tests/e2e` (`npm ci`, не в основной pnpm workspace).
+Сценарии исполняются через Go-обвязку `tests/e2e/e2e_shim_test.go` с
+`GOWORK=off`; runner требует точные строки `PASS E2E-PUB-001` и
+`PASS E2E-RET-001`, а также нулевой exit code. `t.Skip`, fake-only и zero-test
+success не принимаются.
+
+Логи хранятся в `output/e2e/<run-id>/`. При завершении удаляются только
+созданный Docker compose-стек, его приватный env-файл и временный run directory.
+Эту команду можно также вызвать как `run-release-checks.sh --with-e2e`;
+отсутствие harness там считается жёстким prerequisite failure.
+
 Не трогай рабочие PostgreSQL, MinIO, `.env`, dependency caches и listener'ы на
 `8080`, `5173`, `55432`. Сервис не должен остаться запущенным после cleanup.

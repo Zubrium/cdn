@@ -37,6 +37,19 @@ tests/qa/run-release-checks.sh --integration-env /path/to/private-disposable.env
   typecheck/lint/test/build, ledger-валидаторы, unified gates и, по явным
   флагам, disposable integration и live E2E. Отсутствие E2E-harness при
   `--with-e2e` считается жёстким prerequisite failure, а не пропуском.
+- `tests/qa/run-website-router-e2e.sh` — живой E2E-runner публикации и retirement.
+  Он создаёт отдельную копию чекаута, собирает в ней Admin и `bin/zubrium`,
+  поднимает run-specific PostgreSQL/MinIO, проверяет target через
+  `browser/verify-target.sh`, выполняет Playwright-сценарии через Go-ledger shim
+  (`tests/e2e`) и требует точные строки `PASS E2E-PUB-001` и `PASS E2E-RET-001`.
+  Логи и артефакты прогона остаются в `output/e2e/<run-id>/`; Docker-стек,
+  приватный env-файл и временная копия удаляются только для этого run ID.
+  MinIO не реализует S3 public access block, поэтому runner поднимает
+  `tests/e2e/s3-boundary-proxy.py`: он отвечает только на проверку приватности
+  bucket и прозрачно проксирует остальные S3-запросы в MinIO, сохраняя
+  подписанные Host/path/query/body. Каждое перехваченное обращение пишется в
+  `output/e2e/<run-id>/s3-proxy.log`. Версия Atlas проверяется через
+  run-specific wrapper, который использует закреплённый `arigaio/atlas:1.3.0`.
 - `status` печатает краткую сводку последнего отчёта, `diagnose` — причины
   провалов и заблокированные сценарии.
 
@@ -47,8 +60,8 @@ tests/qa/run-release-checks.sh --integration-env /path/to/private-disposable.env
 
 Runner комбинирует три источника:
 
-1. `tests/qa/website-scenarios.json` и `tests/qa/core-scenarios.json` — объявленное
-   покрытие и статусы ledger.
+1. `tests/qa/website-scenarios.json`, `tests/qa/core-scenarios.json` и
+   `tests/qa/e2e-scenarios.json` — объявленное покрытие и статусы ledger.
 2. Логи гейтов `website-*` и `core-*`: `--- PASS/FAIL/SKIP: TestX/WEB-NNN` (или
    `CORE-NNN`) из `go test -v` переопределяют ledger-статус, поэтому отчёт отражает
    реальный прогон.

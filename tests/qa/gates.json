@@ -17,6 +17,12 @@
       "cwd": "."
     },
     {
+      "id": "e2e-ledger",
+      "label": "Website/Router E2E scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/e2e-scenarios.json"],
+      "cwd": "."
+    },
+    {
       "id": "website-unit",
       "label": "Website acceptance unit scenarios",
       "command": ["tests/qa/run-website-red.sh", "unit"],

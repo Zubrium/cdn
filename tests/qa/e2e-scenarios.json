@@ -1,0 +1,43 @@
+{
+  "scenarios": [
+    {
+      "id": "E2E-PUB-001",
+      "source": "spec/presentation/openapi/content.yaml, spec/presentation/openapi/website.yaml, spec/presentation/openapi/router.yaml; Playwright: tests/e2e/specs/publication.spec.ts",
+      "level": "e2e",
+      "preconditions": [
+        "Изолированный separate checkout собран из того же HEAD, что и проверяемые артефакты",
+        "verify-target.sh подтвердил admin/public listener и их build identity",
+        "Disposable PostgreSQL и S3 пространство созданы только для этого run ID",
+        "Созданы page, child snapshot, feature version, два маршрута и два локальных артефакта"
+      ],
+      "input": "POST /api/admin/content/snapshots/{snapshotID}/workspace/publish?locale=en-US с ожидаемыми revision из workspace; locale en-US; два static-site-artifact route targets; последующий PUT drafts workspace без публикации",
+      "action": "Опубликовать en-US workspace, дождаться fan-out и попытаться активировать последующий черновик без публикации",
+      "expected_result": "Публикация возвращает 200; manifest каждого маршрута для en-US заменяется на новый артефакт с тем же locale; de-DE targets остаются на исходных manifest file ID; публичный GET отдаёт правильные locale marker; последующий черновик не меняет активные target'ы",
+      "expected_state": "Все настроенные route targets en-US указывают на один опубликованный artifact manifest; активные артефакты доступны через публичный router; неопубликованные изменения остаются неактивными",
+      "test_file": "tests/e2e/e2e_shim_test.go",
+      "test_symbol": "TestPublication/E2E-PUB-001",
+      "coverage_status": "covered",
+      "execution_status": "not_run",
+      "blocker": null
+    },
+    {
+      "id": "E2E-RET-001",
+      "source": "spec/presentation/openapi/website.yaml#/paths/~1api~1admin~1pages~1{pageID}/delete; Playwright: tests/e2e/specs/retirement.spec.ts",
+      "level": "e2e",
+      "preconditions": [
+        "Страница опубликована и имеет два активных маршрута с locale_targets en-US и de-DE",
+        "Получены page ETag и все идентификаторы созданных данных",
+        "Публичный Router отдаёт артефакты страницы на обоих маршрутах"
+      ],
+      "input": "DELETE /api/admin/pages/{pageID} с If-Match и Idempotency-Key; повтор с тем же ключом, затем с новым ключом",
+      "action": "Инициировать retirement страницы, повторить запрос и наблюдать durable workflow до завершения",
+      "expected_result": "Первый запрос возвращает 202 и PageRetirement с заданиями для всех route targets; повтор с тем же Idempotency-Key возвращает тот же job ID; повтор с новым Idempotency-Key отклоняется; workflow завершается success; публичные GET перестают отдавать статические артефакты страницы",
+      "expected_state": "Page остаётся доступной по тому же ID в lifecycle_state retired; snapshot, workspace, form schema и исходный feature file сохраняются; route targets больше не ссылаются на артефакты страницы",
+      "test_file": "tests/e2e/e2e_shim_test.go",
+      "test_symbol": "TestRetirement/E2E-RET-001",
+      "coverage_status": "covered",
+      "execution_status": "not_run",
+      "blocker": null
+    }
+  ]
+}

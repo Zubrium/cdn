@@ -203,7 +203,11 @@ func (c *coreComponent) configureMedia(ctx context.Context, runtime *platform.Ru
 // trusted startup configuration; the in-container preflight is mandatory.
 func (c *coreComponent) configurePrerender(ctx context.Context, runtime *platform.Runtime) error {
 	settings := c.config.Prerender
-	session, _, err := runtime.EngineIdentity().Authenticate(ctx, c.secret)
+	secret := c.secret
+	if secret == "" {
+		secret = c.config.Core.BootstrapSecret
+	}
+	session, _, err := runtime.EngineIdentity().Authenticate(ctx, secret)
 	if err != nil {
 		return err
 	}
@@ -377,6 +381,7 @@ type fileAPIComponent struct {
 	workflowControl     workflowControl
 	formsEngine         *formsEngineComponent
 	websiteEngine       *websiteEngineComponent
+	contentEngine       *contentEngineComponent
 	routerEngine        *routerEngineComponent
 	publicationEngine   *publicationComponent
 	retirementEngine    *retirementComponent
@@ -440,6 +445,10 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 	} else {
 		if c.websiteAdminEnabled && c.websiteEngine != nil {
 			dependencies.Website = c.websiteEngine.service
+		}
+		if c.contentEngine != nil && c.contentEngine.engine != nil {
+			dependencies.Content = c.contentEngine.engine
+			dependencies.ContentSchemas = c.contentEngine.projections
 		}
 		if c.formsAdminEnabled && c.formsEngine != nil {
 			dependencies.Forms = c.formsEngine.engine
@@ -663,6 +672,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		contentEngine = newContentEngineComponent(core, resolved, nil)
+		fileAPI.contentEngine = contentEngine
 		if _, enabled := selected["public.content-runtime"]; enabled {
 			if err := bus.RegisterPublishedContent(dispatcher, func(ctx context.Context, pageSnapshotID, locale string) (json.RawMessage, error) {
 				content, err := contentEngine.ReadPublishedContent(ctx, pageSnapshotID, locale)
