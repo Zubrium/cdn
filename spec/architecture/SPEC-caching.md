@@ -2,6 +2,8 @@
 
 Статус: целевой контракт. Этот документ — центральный источник правил кэширования для Core, engines, workers, Presentation и deploy-окружения. Локальные спецификации не должны определять собственную политику кэша и обязаны ссылаться на этот документ. При расхождении приоритет у `SPEC-caching.md`.
 
+Механизмы потокобезопасности, шардирования, zero-copy, coalescing cold misses, батчинга инвалидации и ограничения параллелизма перечислены в [SPEC-concurrency.md](SPEC-concurrency.md). Настоящий документ задаёт инварианты кэша и HTTP-политику; `SPEC-concurrency.md` задаёт способ их выполнения под нагрузкой. При расхождении в механизмах приоритет у `SPEC-concurrency.md`, при расхождении в инвариантах доступа — у настоящего документа.
+
 Реализация описанных возможностей — отдельная волна работ. До её завершения текущий `main/config.example.yaml` остаётся конфигурацией текущего кода, а этот документ задаёт целевую схему, которую нужно синхронно внедрить в код, пример конфига, OpenAPI, тесты и acceptance-матрицу. Старый evidence из `docs/QA_REPORT.md` не подтверждает сценарии этого документа.
 
 ## 1. Область и владение
@@ -42,7 +44,7 @@
 | `admin.static` | Admin UI + browser | URL ассета | hashed-ассеты `public, max-age=<uint>, immutable`, `index.html` `no-store` | смена имени файла при сборке | HTTP-заголовки origin |
 | `deploy.proxy_cdn` | deployer | origin URL + `Vary` keys | политика deployer | строго по origin `Cache-Control`/`ETag` | внешняя инфраструктура |
 
-`core.cache.max_object_bytes` остаётся жёстким потолком: объект больше лимита не кэшируется, а читается потоково. `core.cache.max_bytes` ограничивает суммарный размер всех записей одного LRU, включая длину ключа.
+`core.cache.max_object_bytes` остаётся жёстким потолком: объект больше лимита не кэшируется, а читается потоково. `core.cache.max_bytes` ограничивает суммарный размер всех записей одного LRU, включая длину ключа. Значения в колонке «Потокобезопасность» описывают текущий код; целевое состояние — шардированные LRU, `RWMutex`, immutable `cache.View` и coalescing согласно [SPEC-concurrency.md](SPEC-concurrency.md). Инварианты авторизации, revision и fail-closed от этого не меняются.
 
 ## 4. HTTP cache policy
 
@@ -141,7 +143,7 @@ Origin и Router обязаны использовать только:
 
 ### 5.7. Отказные и конкурентные случаи
 
-- Два процесса с одним YAML прогревают свои локальные кэши независимо; между ними нет общей памяти. Инвалидация приходит через PostgreSQL `pg_notify`.
+- Разные процессы/branch с этим YAML прогревают свои локальные кэши независимо; между ними нет общей памяти. Внутри одной branch сохраняется ровно один Router process согласно [SPEC-concurrency.md](SPEC-concurrency.md). Инвалидация приходит через PostgreSQL `pg_notify`.
 - Если во время прогрева изменился grant, `access_epoch` делает warmed запись непригодной; следующий запрос выполнит полную проверку. При отключённой цели `authorization` гарантию обеспечивает сам обязательный вызов `Authorize` на каждом ключе.
 - Если во время прогрева изменился объект, revision mismatch забрасывает запись и вызывает перечитывание.
 - Если LISTEN-слушатель был отключён, высокий `zubrium_cache_invalidation_lag_seconds` не даёт права использовать старую authorization entry.
@@ -277,6 +279,7 @@ router:
 
 ## 10. Связанные документы
 
+- [SPEC-concurrency.md](SPEC-concurrency.md) — потокобезопасность, backpressure, coalescing и worker-пулы.
 - [SPEC-core-architecture.md](../core/SPEC-core-architecture.md) — границы Core и владение PostgreSQL, S3, cache.
 - [SPEC-module-data.md](../core/SPEC-module-data.md) — CAS revision как основа инвалидации.
 - [SPEC-router-engine.md](../engines/router/SPEC-router-engine.md) — маршрутизация, proxy и fail-closed правила.

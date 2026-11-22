@@ -161,6 +161,18 @@ active span context и экспортируются OTel SDK. Они **не** с
 | `zubrium_cache_warmup_keys_total`        | counter  | Ключи прогрева; `cache`, `tier=REQUIRED\|OPTIONAL`, `result=WARMED\|FAILED\|SKIPPED` |
 | `zubrium_cache_warmup_duration_seconds`  | histogram| Длительность прогрева; `cache`                                                 |
 | `zubrium_cache_invalidation_lag_seconds` | gauge    | Задержка инвалидации; `cache`                                                  |
+| `zubrium_concurrency_in_flight`          | gauge    | Активные операции; `scope=HTTP\|BUS\|STORAGE\|LOADER`                            |
+| `zubrium_concurrency_rejected_total`     | counter  | Отказы перегрузки; `scope`, `reason=GLOBAL\|PER_ROUTE\|PER_OPERATION\|DB_RESERVE` |
+| `zubrium_cache_coalesced_total`          | counter  | Coalescing cold misses; `cache`, `result=JOINED\|LEADER\|FAILED`                  |
+| `zubrium_cache_invalidation_batch_total` | counter  | Батчи инвалидации; `result=APPLIED\|OVERFLOW\|CLEARED`                           |
+| `zubrium_worker_pool_active`             | gauge    | Активные задачи пула; `pool=ARCHIVE\|MEDIA\|PRERENDER\|PUBLICATION`              |
+| `zubrium_worker_pool_tasks_total`        | counter  | Завершённые задачи пула; `pool`, `outcome=OK\|ERROR`                             |
+| `zubrium_db_pool_usage`                  | gauge    | Использование пула PostgreSQL; без дополнительных меток                         |
+
+Метрики конкуренции, multipool и coalescing определены в [SPEC-concurrency.md](../architecture/SPEC-concurrency.md)
+и перечислены здесь как обязательный контракт будущей волны. Метки `scope`, `pool`,
+`result` и `reason` низкокардинальны; метрики не содержат route ID, operation ID,
+file ID, principal ID, URL, query, locale и User-Agent.
 
 Метрики кэша и прогрева определены в [SPEC-caching.md](../architecture/SPEC-caching.md)
 и перечислены здесь как обязательный контракт будущей волны. Наблюдатель поддерживает
@@ -212,6 +224,8 @@ active span context и экспортируются OTel SDK. Они **не** с
 | Сброс/завершение компонента | При `Close` rollback/commit telemetry не меняет бизнес-результат; открытые span'ы закрываются, буферы сбрасываются в рамках shutdown timeout; повторный `End` не создаёт дубликат. |
 | Двойной старт/duplicate operation ID | Композиция отклоняет неоднозначную identity; duplicates не сливаются в одну серию метрик. |
 | Ошибка конфигурации | Неизвестный `mode`, пустой directory/endpoint, некорректный `headers_env`, невалидный `min_level` → fail-fast до старта приложения. |
+
+Отказные случаи перегрузки, backpressure и shutdown под нагрузкой описаны в [SPEC-concurrency.md](../architecture/SPEC-concurrency.md); observer должен фиксировать их через метрики `zubrium_concurrency_*` и `zubrium_worker_pool_*`, не раскрывая идентификаторы запросов и principal.
 
 ## 7. Конфигурация
 

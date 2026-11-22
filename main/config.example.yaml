@@ -1,6 +1,8 @@
 # Текущие плоские ключи ниже соответствуют текущему коду. Целевая вложенная
 # схема core.cache.* / router.cache.* и параметры прогрева описаны в
-# spec/architecture/SPEC-caching.md; их внедрение — отдельная волна вместе с
+# spec/architecture/SPEC-caching.md; целевые лимиты конкуренции, backpressure,
+# шардирование кэша, coalescing и изолированные worker-пулы описаны в
+# spec/architecture/SPEC-concurrency.md. Их внедрение — отдельная волна вместе с
 # изменением конфигурационного контракта, без compatibility aliases.
 core:
   database_url_env: ZUBRIUM_DATABASE_URL
