@@ -8,7 +8,7 @@
 
 - Docker Compose v2, свободные порты `18080` (Admin), `18081` (публичный Router), `15080` (OpenObserve UI), `14317/14318` (OTLP gRPC/HTTP), `15900` (Moto S3 API), `15432` (PostgreSQL).
 - Только disposable-данные. PostgreSQL живёт в tmpfs, Moto хранит состояние в памяти процесса; оба исчезают при остановке контейнеров. OpenObserve хранит сигналы в named volume `openobserve-data`.
-- S3-эмулятор — `motoserver/moto`: он поддерживает `Get/PutPublicAccessBlock`, обязательный для Core `RequirePrivate`. Ранее использованный `alpine/minio` является development-сборкой и возвращает `NotImplemented` на эту операцию.
+- S3-эмулятор — `motoserver/moto`: он поддерживает `Get/PutPublicAccessBlock`, обязательный для Core `RequirePrivate` ([Moto S3 coverage](https://github.com/getmoto/moto/blob/master/docs/docs/services/s3.rst)). Ранее использованный `alpine/minio` является development-сборкой и возвращает `NotImplemented` на эту операцию.
 - Образ OpenObserve зафиксирован как `public.ecr.aws/zinclabs/openobserve:v1.1.2`: тег `latest` в этом реестре нестабилен для повторяемого прогона.
 - Не направляйте запросы на рабочий API. Для write-сценариев используйте только этот стек.
 
