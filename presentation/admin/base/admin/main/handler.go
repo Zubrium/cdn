@@ -333,6 +333,10 @@ func (h *Handler) trustedOrigin(r *http.Request) bool {
 	return h.transport != nil && h.transport.TrustedOrigin(r)
 }
 
+func (h *Handler) trustedReadOrigin(r *http.Request) bool {
+	return h.transport != nil && h.transport.TrustedReadOrigin(r)
+}
+
 func (h *Handler) listPrincipals(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.authenticate(w, r)
 	if !ok {

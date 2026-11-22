@@ -258,7 +258,7 @@ func decodePageRecord(key core.ModuleDataKey, record core.ModuleDataRecord) (web
 	if !strings.HasPrefix(key.RecordKey, "page/") || pageIDFromKey == key.RecordKey || key != websiterepo.PageKey(pageIDFromKey) || record.PayloadVersion != pageRecordVersion || record.Revision < 1 ||
 		json.Unmarshal(record.Payload, &stored) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
 		index.RecordType != "page" || index.PageID != stored.Page.ID || index.PageID != pageIDFromKey || index.SnapshotID != stored.Page.LatestSnapshotID ||
-		index.State != stored.Page.LatestSnapshotState || index.Revision != record.Revision ||
+		index.State != stored.Page.LatestSnapshotState || index.Revision < 1 ||
 		!snapshotIDPattern.MatchString(stored.Page.ID) || !validSnapshotName(stored.Page.Name) || !snapshotIDPattern.MatchString(stored.Page.LatestSnapshotID) ||
 		!validSnapshotState(stored.Page.LatestSnapshotState) || stored.Page.CreatedAt.IsZero() {
 		return websiteapi.Page{}, websiteapi.ErrUnavailable
@@ -301,8 +301,8 @@ func (s *Service) readPageCreateReceipt(ctx context.Context, idempotencyKey, fin
 		State      string `json:"state"`
 		Revision   int64  `json:"revision"`
 	}
-	if record.PayloadVersion != 1 || record.Revision != 1 || json.Unmarshal(record.Payload, &receipt) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
-		index.RecordType != "page_idempotency" || index.State != "created" || index.Revision != 1 || index.PageID != receipt.PageID || index.SnapshotID != receipt.SnapshotID ||
+	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &receipt) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
+		index.RecordType != "page_idempotency" || index.State != "created" || index.Revision < 1 || index.PageID != receipt.PageID || index.SnapshotID != receipt.SnapshotID ||
 		!snapshotIDPattern.MatchString(receipt.PageID) || !snapshotIDPattern.MatchString(receipt.SnapshotID) || !sha256HexPattern.MatchString(receipt.Fingerprint) {
 		return websiteapi.Page{}, false, websiteapi.ErrUnavailable
 	}
@@ -331,7 +331,10 @@ func pageCreateFingerprint(request websiteapi.CreatePageRequest) (string, error)
 }
 
 func emptyPagePayload(pageID, name string) websiteapi.SnapshotPayload {
-	return websiteapi.SnapshotPayload{Config: json.RawMessage(`{"format_version":3,"page":{"id":"` + pageID + `","name":"` + jsonEscape(name) + `","placements":[]}}`), Metadata: json.RawMessage(`{}`)}
+	return websiteapi.SnapshotPayload{
+		Config:   json.RawMessage(`{"format_version":3,"page":{"id":"` + pageID + `","name":"` + jsonEscape(name) + `","placements":[]}}`),
+		Metadata: json.RawMessage(`{"formatVersion":1,"siteName":"` + jsonEscape(name) + `"}`),
+	}
 }
 
 func jsonEscape(value string) string {
@@ -589,7 +592,7 @@ func decodePageTemplate(key core.ModuleDataKey, record core.ModuleDataRecord) (w
 	}
 	if key.Namespace != websiterepo.TemplateNamespace || key.ScopeType != "global" || key.ScopeID != "global" || record.PayloadVersion != pageTemplateRecordVersion || record.Revision < 1 ||
 		json.Unmarshal(record.Payload, &value) != nil || json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "page_template" ||
-		index.TemplateID != value.ID || index.Revision != record.Revision || value.Revision != record.Revision || index.Digest != value.Digest ||
+		index.TemplateID != value.ID || index.Revision < 1 || index.Digest != value.Digest ||
 		!snapshotIDPattern.MatchString(value.ID) || key.RecordKey != "template/"+value.ID || !validSnapshotName(value.Name) ||
 		!validTemplateDescription(value.Description) || value.UpdatedAt.IsZero() || !sha256HexPattern.MatchString(value.Digest) {
 		return websiteapi.PageTemplate{}, websiteapi.ErrUnavailable
@@ -601,6 +604,7 @@ func decodePageTemplate(key core.ModuleDataKey, record core.ModuleDataRecord) (w
 	if _, err := validatePageTemplateConfiguration(value.Configuration); err != nil {
 		return websiteapi.PageTemplate{}, websiteapi.ErrUnavailable
 	}
+	value.Revision = record.Revision
 	return value, nil
 }
 
@@ -797,8 +801,8 @@ func (s *Service) readTemplateCreateReceipt(ctx context.Context, idempotencyKey,
 		Revision   int64  `json:"revision"`
 		Digest     string `json:"digest"`
 	}
-	if record.PayloadVersion != 1 || record.Revision != 1 || json.Unmarshal(record.Payload, &receipt) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
-		index.RecordType != "template_idempotency" || index.Revision != 1 || index.TemplateID != receipt.TemplateID || !snapshotIDPattern.MatchString(receipt.TemplateID) || !sha256HexPattern.MatchString(receipt.Fingerprint) {
+	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &receipt) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
+		index.RecordType != "template_idempotency" || index.Revision < 1 || index.TemplateID != receipt.TemplateID || !snapshotIDPattern.MatchString(receipt.TemplateID) || !sha256HexPattern.MatchString(receipt.Fingerprint) {
 		return websiteapi.PageTemplate{}, false, websiteapi.ErrUnavailable
 	}
 	if receipt.Fingerprint != fingerprint {

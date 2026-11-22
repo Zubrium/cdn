@@ -193,6 +193,85 @@ func TestListSnapshotsPaginatesDeterministicallyWithinPage(t *testing.T) {
 	}
 }
 
+func TestCreatePageSurvivesCoreGlobalRevisionSequence(t *testing.T) {
+	store := newGlobalRevisionMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{
+		Name: "Глобальная ревизия", IdempotencyKey: "global-revision-page-001",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.LatestSnapshotID == "" {
+		t.Fatalf("created page has no root snapshot: %#v", page)
+	}
+	loaded, err := service.GetPage(ctx, page.ID)
+	if err != nil {
+		t.Fatalf("reading created page with global Core revisions: %v", err)
+	}
+	if loaded.ID != page.ID || loaded.LatestSnapshotID != page.LatestSnapshotID {
+		t.Fatalf("loaded page = %#v, want %#v", loaded, page)
+	}
+	snapshots, err := service.ListSnapshots(ctx, page.ID, "", 10)
+	if err != nil {
+		t.Fatalf("listing created page snapshots with global Core revisions: %v", err)
+	}
+	if len(snapshots.Items) != 1 || snapshots.Items[0].ID != page.LatestSnapshotID {
+		t.Fatalf("snapshots for created page = %#v", snapshots)
+	}
+	snapshot, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
+	if err != nil {
+		t.Fatalf("reading created snapshot payload: %v", err)
+	}
+	var metadata struct {
+		FormatVersion int    `json:"formatVersion"`
+		SiteName      string `json:"siteName"`
+	}
+	if json.Unmarshal(snapshot.Payload.Metadata, &metadata) != nil || metadata.FormatVersion != 1 || metadata.SiteName == "" {
+		t.Fatalf("created snapshot metadata = %s", snapshot.Payload.Metadata)
+	}
+	model, err := service.SaveContentModel(ctx, websiteapi.SaveContentModelRequest{
+		ExpectedRevision: 0, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`),
+	})
+	if err != nil {
+		t.Fatalf("saving content model with global Core revisions: %v", err)
+	}
+	if model.ModelRevision < 1 || !model.VerifyDigest() {
+		t.Fatalf("saved content model = %#v", model)
+	}
+}
+
+func TestListSnapshotsWithoutPageFilterListsEveryPageTree(t *testing.T) {
+	store := newMemoryStore()
+	putSnapshot(t, store, snapshotA, 1)
+	putSnapshotForPageWithState(t, store, pageB, snapshotB, 1, "ready")
+	service := newService(t, store, core.AccessLevelRead, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.ListSnapshots(ctx, "", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != snapshotA || first.NextCursor == "" {
+		t.Fatalf("first unfiltered page = %#v", first)
+	}
+	second, err := service.ListSnapshots(ctx, "", first.NextCursor, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != snapshotB {
+		t.Fatalf("second unfiltered page = %#v", second)
+	}
+}
+
 func TestListSnapshotsFailsClosedForUnknownLifecycleState(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshotWithState(t, store, snapshotA, 3, "draft")
@@ -931,14 +1010,23 @@ func (fakeSessions) AuthenticateSession(_ context.Context, token string) (core.S
 func (fakeSessions) RevokeSession(context.Context, string) error { return nil }
 
 type memoryStore struct {
-	records      map[core.ModuleDataKey]core.ModuleDataRecord
-	maxPageSize  int
-	maxBatchSize int
-	maxPayload   int
+	records         map[core.ModuleDataKey]core.ModuleDataRecord
+	maxPageSize     int
+	maxBatchSize    int
+	maxPayload      int
+	globalRevisions bool
+	nextRevision    int64
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{records: map[core.ModuleDataKey]core.ModuleDataRecord{}, maxPageSize: 100, maxBatchSize: 100, maxPayload: 16 << 20}
+}
+
+// newGlobalRevisionMemoryStore mirrors Core's engine_data.revision_seq: one
+// monotonic sequence is shared by every record in the module, so a record's
+// assigned revision cannot be predicted from its own previous revision.
+func newGlobalRevisionMemoryStore() *memoryStore {
+	return &memoryStore{records: map[core.ModuleDataKey]core.ModuleDataRecord{}, maxPageSize: 100, maxBatchSize: 100, maxPayload: 16 << 20, globalRevisions: true, nextRevision: 7}
 }
 
 func (s *memoryStore) MaxPageSize() int { return s.maxPageSize }
@@ -983,17 +1071,23 @@ func (s *memoryStore) Batch(_ context.Context, mutations []core.ModuleDataMutati
 			continue
 		}
 		current := s.records[mutation.Key]
+		revision := current.Revision + 1
+		createdAt := current.CreatedAt
+		if current.Revision == 0 {
+			revision = 1
+			createdAt = time.Now().UTC()
+		}
+		if s.globalRevisions {
+			s.nextRevision++
+			revision = s.nextRevision
+			if current.Revision == 0 {
+				createdAt = time.Now().UTC()
+			}
+		}
 		s.records[mutation.Key] = core.ModuleDataRecord{
 			Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion,
-			IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: current.Revision + 1,
-			CreatedAt: current.CreatedAt, UpdatedAt: time.Now().UTC(),
-		}
-		if current.Revision == 0 {
-			s.records[mutation.Key] = core.ModuleDataRecord{
-				Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion,
-				IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: 1,
-				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
-			}
+			IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: revision,
+			CreatedAt: createdAt, UpdatedAt: time.Now().UTC(),
 		}
 	}
 	return nil

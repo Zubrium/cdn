@@ -92,6 +92,24 @@ type WorkflowRepository interface {
 	CancelWorkflow(context.Context, string, uuid.UUID, int64, uuid.UUID, time.Duration) error
 }
 
+// TaskResult is a bounded, engine-neutral view of one durable task result.
+// It carries no input payload, scheduling metadata or administrative fields.
+type TaskResult struct {
+	TaskID     uuid.UUID
+	WorkflowID uuid.UUID
+	Worker     *WorkerRef
+	State      string
+	Result     json.RawMessage
+	ErrorCode  string
+}
+
+// TaskResultRepository is a narrow read port for the owner of a workflow. It is
+// deliberately separate from WorkflowRepository and WorkflowControlRepository:
+// task results are not part of the administrative task graph.
+type TaskResultRepository interface {
+	GetTaskResult(context.Context, string, uuid.UUID, int64, uuid.UUID, uuid.UUID) (TaskResult, error)
+}
+
 type TaskKind string
 
 const (

@@ -31,11 +31,11 @@ func GeneratedBuildPlan() platform.BuildPlan {
 	return platform.BuildPlan{Components: []string{
 		"core",
 		"engine.loader",
+		"engine.router",
 		"admin.files",
 		"admin.coordinator",
 		"admin.identity",
 		"admin.notifications",
-		"engine.router",
 		"admin.router",
 		"public.router",
 		"public.form-upload",

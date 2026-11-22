@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "CORE-001",
+      "source": "spec/core/SPEC-core-architecture.md; docs/WEBSITE-BUILD-WORKFLOW.md",
+      "level": "integration",
+      "preconditions": [
+        "A fresh disposable PostgreSQL database with a zubrium_core_qa_ prefix is provisioned for this run.",
+        "Atlas CLI v1.3.0 is available through TEST_ATLAS_BINARY or PATH."
+      ],
+      "input": "Register an owning engine instance, start a workflow, complete a root task with one prerender child, and complete that child with a typed result.",
+      "action": "Read the child result through the owner-scoped Core WorkflowClient.GetTaskResult capability and repeat the read from a foreign engine, an unknown workflow, and an unknown task.",
+      "expected_result": "The owner reads exactly the committed child result and worker identity; every foreign or unknown identity receives ErrTaskMissing.",
+      "expected_state": "The durable workflow and its task result remain in the disposable Core schema; no result is exposed outside the owning workflow and engine scope.",
+      "test_file": "tests/go/core/infrastructure/postgres/coordinator_task_result_integration_test.go",
+      "test_symbol": "TestDisposableOwnerScopedTaskResult/CORE-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    }
+  ]
+}

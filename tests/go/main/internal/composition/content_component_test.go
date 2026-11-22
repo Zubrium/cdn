@@ -197,9 +197,7 @@ func TestContentComponentFailsClosedWithoutCredentialOrRuntime(t *testing.T) {
 	if _, err := component.ReadPublishedContent(ctx, contentTestSnapshotID, "en-US"); err == nil {
 		t.Fatal("nil Content component served published content")
 	}
-	if _, open := <-component.Errors(); open {
-		t.Fatal("nil Content component exposed a live failure stream")
-	}
+	assertSilentFailureStream(t, component.Errors())
 
 	component = newContentEngineComponent(nil, appconfig.Resolved{}, nil)
 	if err := component.Start(ctx); err == nil {
@@ -216,9 +214,7 @@ func TestContentComponentFailsClosedWithoutCredentialOrRuntime(t *testing.T) {
 	if err := component.Stop(ctx); err != nil || component.IsReady() {
 		t.Fatalf("stopping an uninitialized Content component: err=%v ready=%t", err, component.IsReady())
 	}
-	if _, open := <-component.Errors(); open {
-		t.Fatal("uninitialized Content component exposed a live failure stream")
-	}
+	assertSilentFailureStream(t, component.Errors())
 }
 
 type publishedContentDispatcherStub struct {

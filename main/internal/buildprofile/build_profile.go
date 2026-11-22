@@ -51,7 +51,7 @@ func buildRegistry() Registry {
 		"admin.coordinator":      {ID: "admin.coordinator", Requires: []string{"core", "admin.files"}},
 		"admin.identity":         {ID: "admin.identity", Requires: []string{"core", "admin.files"}},
 		"admin.notifications":    {ID: "admin.notifications", Requires: []string{"admin.identity", "admin.files"}},
-		"admin.ui":               {ID: "admin.ui", Requires: []string{"core"}},
+		"admin.ui":               {ID: "admin.ui", Requires: []string{"core", "admin.files"}},
 		"public.router":          {ID: "public.router", Requires: []string{"engine.router"}},
 		"public.form-session":    {ID: "public.form-session", Requires: []string{"engine.forms", "public.router"}},
 		"public.form-submit":     {ID: "public.form-submit", Requires: []string{"engine.forms", "public.router"}},
@@ -116,6 +116,10 @@ func canonicalBuildPlan(selected []string) (BuildPlan, error) {
 	if err := registry.Validate(selected); err != nil {
 		return BuildPlan{}, err
 	}
+	active := make(map[string]bool, len(selected))
+	for _, id := range selected {
+		active[id] = true
+	}
 	sort.Strings(selected)
 	ordered := make([]string, 0, len(selected))
 	visited := make(map[string]bool, len(selected))
@@ -126,6 +130,23 @@ func canonicalBuildPlan(selected []string) (BuildPlan, error) {
 		}
 		visited[id] = true
 		deps := append([]string(nil), registry[id].Requires...)
+		// The shared Admin listener wires live engine services into its routes
+		// during Start. Their factories must run before admin.files, but
+		// profiles without those Admin APIs must not declare the dependencies.
+		if id == "admin.files" {
+			for _, engine := range []string{"engine.forms", "engine.website", "engine.router"} {
+				if active[engine] {
+					deps = append(deps, engine)
+				}
+			}
+		}
+		if id == "engine.router" {
+			for _, engine := range []string{"engine.forms", "engine.content"} {
+				if active[engine] {
+					deps = append(deps, engine)
+				}
+			}
+		}
 		sort.Strings(deps)
 		for _, dep := range deps {
 			visit(dep)

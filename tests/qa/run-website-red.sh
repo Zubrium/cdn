@@ -37,7 +37,7 @@ run_ledger_validator() {
 	printf '%s\n' "==> running TestWebsiteScenarioLedger"
 	(
 		cd "$root/engines/website" || exit 1
-		GOCACHE="$gocache" go test -tags=website_acceptance -overlay="$overlay" -run '^TestWebsiteScenarioLedger$' ./application
+		GOCACHE="$gocache" go test -v -tags=website_acceptance -overlay="$overlay" -run '^TestWebsiteScenarioLedger$' ./application
 	)
 }
 
@@ -66,7 +66,16 @@ run_go_level() {
 	printf '%s\n' "==> running $level Go scenarios: $pattern"
 	(
 		cd "$root/engines/website" || exit 1
-		GOCACHE="$gocache" go test -tags=website_acceptance -overlay="$overlay" -run "$pattern" ./...
+		GOCACHE="$gocache" go test -v -tags=website_acceptance -overlay="$overlay" -run "$pattern" ./...
+	)
+}
+
+run_sites_http_contract_selector() {
+	printf '%s\n' "==> running Website Admin HTTP contract scenarios"
+	(
+		cd "$root/presentation/admin/sites" || exit 1
+		GOCACHE="$gocache" go test -v -tags=website_acceptance -overlay="$overlay" \
+			-run '^TestWebsiteAdminHTTPAcceptanceWEB017$' ./...
 	)
 }
 
@@ -78,21 +87,32 @@ run_ui_contract_selector() {
 		return 1
 	fi
 
+	absolute_ui_test_file="$root/frontend/admin/$ui_test_file"
 	printf '%s\n' "==> running Website contract UI scenario: $ui_test_file"
 	(
-		cd "$root/frontend" || exit 1
-		pnpm --filter @website-engine/admin test -- "$ui_test_file"
+		cd "$root/frontend/admin" || exit 1
+		# Call the repository's Vitest wrapper directly: pnpm's --filter does not
+		# forward positional file filters to the custom test script.
+		node "$root/tests/run-admin-tests.mjs" "$absolute_ui_test_file"
 	)
 }
 
 require_integration_prerequisites() {
 	missing=""
-	for name in WEBSITE_TEST_DISPOSABLE WEBSITE_TEST_RUN_ID WEBSITE_TEST_POSTGRES_DSN WEBSITE_TEST_S3_ENDPOINT WEBSITE_TEST_S3_BUCKET WEBSITE_TEST_S3_ACCESS_KEY WEBSITE_TEST_S3_SECRET_KEY; do
+	for name in WEBSITE_TEST_DISPOSABLE WEBSITE_TEST_RUN_ID WEBSITE_TEST_POSTGRES_DSN WEBSITE_TEST_POSTGRES_MIGRATION_DSN WEBSITE_TEST_S3_BUCKET; do
 		eval "value=\${$name-}"
 		if [ -z "$value" ]; then
 			missing="$missing $name"
 		fi
 	done
+	if [ "${WEBSITE_TEST_S3_MOCK:-}" != "1" ]; then
+		for name in WEBSITE_TEST_S3_ENDPOINT WEBSITE_TEST_S3_ACCESS_KEY WEBSITE_TEST_S3_SECRET_KEY; do
+			eval "value=\${$name-}"
+			if [ -z "$value" ]; then
+				missing="$missing $name"
+			fi
+		done
+	fi
 	if [ -n "$missing" ]; then
 		printf '%s\n' "integration prerequisites are missing:$missing" >&2
 		printf '%s\n' "Set only run-specific disposable PostgreSQL/S3 inputs; this runner never falls back to a live API, database, bucket, or credentials." >&2
@@ -110,10 +130,71 @@ require_integration_prerequisites() {
 	esac
 }
 
+module_for_test_file() {
+	case "$1" in
+		tests/go/main/*)
+			printf '%s\n' "main"
+			;;
+		tests/go/core/*)
+			printf '%s\n' "core"
+			;;
+		tests/go/engines/*)
+			remainder=${1#tests/go/engines/}
+			printf '%s\n' "engines/${remainder%%/*}"
+			;;
+		tests/go/presentation/*)
+			remainder=${1#tests/go/presentation/}
+			printf '%s\n' "presentation/${remainder%%/*}"
+			;;
+		tests/go/workers/*)
+			remainder=${1#tests/go/workers/}
+			printf '%s\n' "workers/${remainder%%/*}"
+			;;
+		*)
+			printf '%s\n' "unsupported centralized test file: $1" >&2
+			return 1
+			;;
+	esac
+}
+
+run_integration_targets() {
+	targets="$work_dir/integration-targets"
+	python3 "$checker" --test-targets integration "$ledger" > "$targets" || return $?
+	if [ ! -s "$targets" ]; then
+		printf '%s\n' "no substantive integration Go scenarios are registered; refusing a zero-test success" >&2
+		return 1
+	fi
+
+	while IFS='|' read -r test_file test_symbol; do
+		[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
+		top_level=${test_symbol%%/*}
+		module=$(module_for_test_file "$test_file") || return $?
+		case "$test_symbol" in
+			*/*) ;;
+			*)
+				printf '%s\n' "integration symbol $test_symbol must include its exact scenario subtest" >&2
+				return 1
+				;;
+		esac
+		printf '%s\n' "==> running integration scenario $test_symbol in $module"
+		log="$work_dir/$(printf '%s' "$test_symbol" | tr '/|' '__').log"
+		if ! (cd "$root/$module" && GOCACHE="$gocache" go test -count=1 -v -tags=website_acceptance \
+			-overlay="$overlay" -run "^${top_level}$" ./...) > "$log" 2>&1; then
+			cat "$log" >&2
+			return 1
+		fi
+		cat "$log"
+		if ! grep -q -- "--- PASS: $test_symbol" "$log"; then
+			printf '%s\n' "integration selector $test_symbol did not produce a PASS result; refusing a zero-test success" >&2
+			return 1
+		fi
+	done < "$targets"
+}
+
 run_integration() {
 	printf '%s\n' "==> checking disposable integration prerequisites"
 	require_integration_prerequisites || return $?
-	run_go_level integration
+	run_integration_targets
 }
 
 python3 "$root/tests/go-overlay.py" > "$overlay" || exit $?
@@ -126,6 +207,7 @@ case "$selector" in
 		;;
 	contract)
 		run_go_level contract || status=1
+		run_sites_http_contract_selector || status=1
 		run_ui_contract_selector || status=1
 		;;
 	integration)
@@ -134,6 +216,7 @@ case "$selector" in
 	all)
 		run_go_level unit || status=1
 		run_go_level contract || status=1
+		run_sites_http_contract_selector || status=1
 		run_ui_contract_selector || status=1
 		run_integration || status=1
 		;;

@@ -7,13 +7,12 @@
   "scripts": {
     "dev": "pnpm --filter @website-engine/admin dev",
     "dev:admin": "pnpm --filter @website-engine/admin dev",
-    "build": "pnpm typecheck && pnpm --filter @website-engine/admin build && pnpm build:runtime",
+    "build": "pnpm typecheck && pnpm --filter @website-engine/admin build",
     "build:admin": "pnpm --filter @website-engine/admin build",
-    "build:runtime": "vite build --config vite.runtime.config.ts",
-    "lint": "cd .. && eslint --config frontend/eslint.config.js frontend/admin pkg/runtime/scripts --max-warnings=0",
+    "lint": "cd .. && eslint --config frontend/eslint.config.js frontend/admin --max-warnings=0",
     "preview": "pnpm --filter @website-engine/admin preview",
     "test": "pnpm --filter @website-engine/admin test",
-    "typecheck": "pnpm --filter @website-engine/admin typecheck && tsc --noEmit -p tsconfig.runtime.json"
+    "typecheck": "pnpm --filter @website-engine/admin typecheck"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

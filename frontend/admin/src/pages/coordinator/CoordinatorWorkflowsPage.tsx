@@ -195,7 +195,7 @@ function WorkflowDetails({ workflowId }: { workflowId: string }) {
   });
 
   const firstPage = workflow.data?.pages[0];
-  const tasks = workflow.data?.pages.flatMap((page) => page.tasks.items) ?? [];
+  const tasks = useMemo(() => workflow.data?.pages.flatMap((page) => page.tasks.items) ?? [], [workflow.data?.pages]);
   const orderedTasks = useMemo(() => [...tasks].sort((left, right) => left.created_at.localeCompare(right.created_at)), [tasks]);
   const detailForbidden = workflow.error instanceof ApiError && workflow.error.isForbidden;
   const permissionsUnavailable = Boolean(permissions.error && !(permissions.error instanceof ApiError && permissions.error.isForbidden));

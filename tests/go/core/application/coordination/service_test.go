@@ -152,6 +152,15 @@ func TestCoordinatorServiceLifecycleAndScopedWorkflowCapability(t *testing.T) {
 	if err := service.CheckStartup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Scoped workflow capabilities are available before final worker
+	// activation; engines construct them during composition, while Admin
+	// control is registered during the same window.
+	if _, err := service.NewWorkflowControl(); err != nil {
+		t.Fatalf("read-only workflow control was unavailable during startup: %v", err)
+	}
+	if _, err := service.NewWorkflowClient("engine.example"); err != nil {
+		t.Fatalf("scoped workflow client was unavailable during startup: %v", err)
+	}
 	if err := service.Activate(context.Background()); err != nil {
 		t.Fatal(err)
 	}

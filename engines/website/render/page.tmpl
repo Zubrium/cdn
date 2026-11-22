@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-document-identity="{{.Identity}}" data-rendered-at="{{.RenderedAt}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{- if .Description}}
+<meta name="description" content="{{.Description}}">
+{{- end}}
+{{- if .CanonicalURL}}
+<link rel="canonical" href="{{.CanonicalURL}}">
+{{- end}}
+{{- if .Robots}}
+<meta name="robots" content="{{.Robots}}">
+{{- end}}
+{{- range $key, $value := .OGMetadata}}
+<meta property="og:{{$key}}" content="{{$value}}">
+{{- end}}
+{{- range .Stylesheets}}
+<link rel="stylesheet" href="{{.Path}}" integrity="{{.Integrity}}">
+{{- end}}
+</head>
+<body>
+<main id="{{.MainID}}">
+{{- range .MainPlacements}}
+<div id="placement-{{.ID}}" data-placement-id="{{.ID}}" data-slot="{{.Slot}}" data-lifecycle="{{.Operation}}"{{if .FeatureKey}} data-feature-key="{{.FeatureKey}}"{{end}}{{if .SignalID}} data-signal-id="{{.SignalID}}"{{end}}>
+{{.HTML}}
+</div>
+{{- end}}
+</main>
+{{- range .OutsidePlacements}}
+<div id="placement-{{.ID}}" data-placement-id="{{.ID}}" data-slot="{{.Slot}}" data-lifecycle="{{.Operation}}"{{if .FeatureKey}} data-feature-key="{{.FeatureKey}}"{{end}}{{if .SignalID}} data-signal-id="{{.SignalID}}"{{end}}>
+{{.HTML}}
+</div>
+{{- end}}
+<script type="application/json" id="{{.BootstrapID}}">{{.BootstrapJSON}}</script>
+{{- range .Scripts}}
+<script type="module" src="{{.Path}}" integrity="{{.Integrity}}"></script>
+{{- end}}
+</body>
+</html>

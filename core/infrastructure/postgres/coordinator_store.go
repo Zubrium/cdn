@@ -58,6 +58,13 @@ func (s CoordinatorStore) CancelWorkflow(ctx context.Context, owner string, inst
 	return CancelCoordinatorWorkflow(ctx, s.Pool, owner, instanceID, epoch, workflowID, retention)
 }
 
+func (s CoordinatorStore) GetTaskResult(ctx context.Context, ownerEngineID string, owner uuid.UUID, epoch int64, workflowID, taskID uuid.UUID) (coordination.TaskResult, error) {
+	if !s.valid() {
+		return coordination.TaskResult{}, coordination.ErrInvalid
+	}
+	return GetCoordinatorTaskResult(ctx, s.Pool, ownerEngineID, owner, epoch, workflowID, taskID)
+}
+
 func (s CoordinatorStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64, limit int, lease, retention time.Duration) ([]coordination.Task, error) {
 	if !s.valid() {
 		return nil, coordination.ErrInvalid
@@ -114,6 +121,7 @@ var _ interface {
 	StartWorkflow(context.Context, coordination.WorkflowRequest) (coordination.Workflow, bool, error)
 	GetWorkflow(context.Context, string, uuid.UUID, int64, uuid.UUID) (coordination.Workflow, error)
 	CancelWorkflow(context.Context, string, uuid.UUID, int64, uuid.UUID, time.Duration) error
+	GetTaskResult(context.Context, string, uuid.UUID, int64, uuid.UUID, uuid.UUID) (coordination.TaskResult, error)
 	ListWorkflows(context.Context, coordination.WorkflowListRequest) (coordination.WorkflowPage, error)
 	GetWorkflowDetail(context.Context, uuid.UUID, int64, uuid.UUID, int, *coordination.TaskCursor) (coordination.WorkflowDetail, error)
 	RetryTask(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int64) error

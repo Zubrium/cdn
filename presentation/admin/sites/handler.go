@@ -845,16 +845,17 @@ func (h *Handler) buildSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		SnapshotID string `json:"snapshot_id"`
+		Locale     string `json:"locale"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
 		return
 	}
-	if !validID(input.SnapshotID) {
+	if !validID(input.SnapshotID) || !validBuildLocale(input.Locale) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	job, err := h.website.BuildSnapshot(ctx, website.BuildSnapshotRequest{SnapshotID: input.SnapshotID, IdempotencyKey: key})
+	job, err := h.website.BuildSnapshot(ctx, website.BuildSnapshotRequest{SnapshotID: input.SnapshotID, Locale: input.Locale, IdempotencyKey: key})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -991,6 +992,18 @@ func readIdempotencyKey(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return values[0], true
+}
+
+func validBuildLocale(locale string) bool {
+	if len(locale) < 2 || len(locale) > 64 {
+		return false
+	}
+	for _, char := range locale {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) error {

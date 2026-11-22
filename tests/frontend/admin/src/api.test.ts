@@ -605,21 +605,32 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("uses the Website build contract with request idempotency and cookie CSRF", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      id: "build-1", snapshot_id: "snapshot-1", state: "queued",
+      id: "build-1", snapshot_id: "snapshot-1", locale: "ru-RU", locale_catalog_revision: 4,
+      input_digest: "a".repeat(64), state: "queued",
       created_at: "2026-11-18T10:00:00Z", updated_at: "2026-11-18T10:00:00Z",
     }), { status: 202, headers: { "Content-Type": "application/json" } }));
     stubApi(fetchMock);
 
-    await api.website.buildSnapshot("snapshot-1", "website-build:request-0001");
+    await api.website.buildSnapshot("snapshot-1", "ru-RU", "website-build:request-0001");
 
     const [input, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(input).toBe("/api/admin/builds");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual({ snapshot_id: "snapshot-1" });
+    expect(JSON.parse(String(init.body))).toEqual({ snapshot_id: "snapshot-1", locale: "ru-RU" });
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("website-build:request-0001");
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("a".repeat(43));
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
     expect(init.credentials).toBe("same-origin");
+  });
+
+  it("rejects a Website build response without locale-bound required fields", async () => {
+    stubApi(vi.fn(async () => new Response(JSON.stringify({
+      id: "build-1", snapshot_id: "snapshot-1", state: "queued",
+      created_at: "2026-11-18T10:00:00Z", updated_at: "2026-11-18T10:00:00Z",
+    }), { status: 202, headers: { "Content-Type": "application/json" } })));
+
+    await expect(api.website.buildSnapshot("snapshot-1", "ru-RU", "website-build:request-0002"))
+      .rejects.toMatchObject({ code: "invalid_response", status: 502 });
   });
 
   it("uses Content and Forms snapshot contracts with revision guards", async () => {

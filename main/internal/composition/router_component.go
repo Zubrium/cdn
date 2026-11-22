@@ -213,9 +213,7 @@ func (component *publicRouterComponent) IsReady() bool {
 
 func (component *publicRouterComponent) Errors() <-chan error {
 	if component == nil || component.server == nil {
-		closed := make(chan error)
-		close(closed)
-		return closed
+		return idleFailureStream()
 	}
 	return component.server.Errors()
 }

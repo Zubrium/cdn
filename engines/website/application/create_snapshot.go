@@ -104,6 +104,9 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		if value.State != "ready" || record.Revision != request.ExpectedRevision {
 			return websiteapi.Snapshot{}, websiteapi.ErrConflict
 		}
+		if pageRecordValue.LatestSnapshotID != request.ParentID {
+			return websiteapi.Snapshot{}, websiteapi.ErrConflict
+		}
 		parent = &value
 	}
 	if err := ctx.Err(); err != nil {
@@ -200,8 +203,8 @@ func (s *Service) readSnapshotCreateReceipt(ctx context.Context, pageID, idempot
 		SnapshotID string `json:"snapshot_id"`
 		Revision   int64  `json:"revision"`
 	}
-	if record.PayloadVersion != 1 || record.Revision != 1 || json.Unmarshal(record.Payload, &receipt) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
-		index.RecordType != "snapshot_idempotency" || index.State != "created" || index.Revision != record.Revision || index.SnapshotID != receipt.SnapshotID ||
+	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &receipt) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
+		index.RecordType != "snapshot_idempotency" || index.State != "created" || index.Revision < 1 || index.SnapshotID != receipt.SnapshotID ||
 		!snapshotIDPattern.MatchString(receipt.SnapshotID) || !sha256HexPattern.MatchString(receipt.Fingerprint) {
 		return websiteapi.Snapshot{}, false, websiteapi.ErrUnavailable
 	}

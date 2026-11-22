@@ -21,6 +21,9 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 	if registry == nil {
 		return platform.ErrInvalid
 	}
+	if err := registry.Register("forms", formsEngine.Descriptor{}); err != nil {
+		return err
+	}
 	if err := registry.Register("loader", loaderEngine.Descriptor{}); err != nil {
 		return err
 	}
@@ -28,9 +31,6 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 		return err
 	}
 	if err := registry.Register("content", contentEngine.Descriptor{}); err != nil {
-		return err
-	}
-	if err := registry.Register("forms", formsEngine.Descriptor{}); err != nil {
 		return err
 	}
 	if err := registry.Register("development.fixtures", devfixtures.Descriptor{}); err != nil {
@@ -42,13 +42,13 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 func GeneratedBuildPlan() platform.BuildPlan {
 	return platform.BuildPlan{Components: []string{
 		"core",
+		"engine.forms",
 		"engine.loader",
-		"admin.files",
 		"engine.website",
+		"admin.files",
 		"engine.content",
 		"admin.content",
 		"admin.coordinator",
-		"engine.forms",
 		"admin.forms",
 		"admin.identity",
 		"admin.website",

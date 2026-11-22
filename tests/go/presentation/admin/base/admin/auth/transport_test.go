@@ -118,3 +118,33 @@ func TestSessionReadsDoNotRequireCSRFAndOriginsAreStrict(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustedReadOriginAcceptsSameOriginEventSourceAndRejectsSpoofing(t *testing.T) {
+	transport, err := New([]string{"http://127.0.0.1:18080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/notifications", nil)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.Header.Set("Referer", "http://127.0.0.1:18080/admin/")
+	if !transport.TrustedReadOrigin(request) {
+		t.Fatal("browser-style same-origin EventSource request was rejected")
+	}
+
+	for name, mutate := range map[string]func(*http.Request){
+		"cross-site fetch metadata": func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "cross-site") },
+		"foreign referer":           func(r *http.Request) { r.Header.Set("Referer", "http://evil.example/admin/") },
+		"missing referer":           func(r *http.Request) { r.Header.Del("Referer") },
+		"explicit foreign origin":   func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rejected := httptest.NewRequest(http.MethodGet, "/api/admin/notifications", nil)
+			rejected.Header.Set("Sec-Fetch-Site", "same-origin")
+			rejected.Header.Set("Referer", "http://127.0.0.1:18080/admin/")
+			mutate(rejected)
+			if transport.TrustedReadOrigin(rejected) {
+				t.Fatal("untrusted read request was accepted")
+			}
+		})
+	}
+}

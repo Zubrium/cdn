@@ -78,9 +78,7 @@ func (component *formsEngineComponent) IsReady() bool {
 
 func (component *formsEngineComponent) Errors() <-chan error {
 	if component == nil || component.cleanup == nil {
-		closed := make(chan error)
-		close(closed)
-		return closed
+		return idleFailureStream()
 	}
 	return component.cleanup
 }

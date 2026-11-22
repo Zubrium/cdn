@@ -11,6 +11,7 @@ import (
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/google/uuid"
 )
 
 var errConfigInvalid = errors.New("invalid Website configuration")
@@ -28,9 +29,29 @@ type RecordStore interface {
 	MaxPayloadBytes() int
 }
 
+// BuildWorkflowClient is the owner-scoped Coordinator capability used by
+// durable Website builds. It is supplied by composition; no request can choose
+// an operation, owner or task identity.
+type BuildWorkflowClient interface {
+	Start(context.Context, core.WorkflowStartRequest) (core.WorkflowReceipt, error)
+	Get(context.Context, uuid.UUID) (core.Workflow, error)
+	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
+	ResolveTaskID(context.Context, uuid.UUID, string) (uuid.UUID, error)
+}
+
+// LocaleCatalogResolver pins the locale catalog revision into a build input so
+// a prerender result cannot be activated after the catalog changed.
+type LocaleCatalogResolver interface {
+	LocaleCatalogRevision(context.Context, string) (int64, error)
+}
+
 type Config struct {
 	AccessGroup            string
 	CoordinatorAccessGroup string
+	BuildWorkflow          BuildWorkflowClient
+	LocaleCatalog          LocaleCatalogResolver
+	BuildOperationID       string
+	BuildContractVersion   int
 }
 
 type Service struct {

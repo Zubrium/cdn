@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	NotificationSnapshotStateChanged     = "snapshot.state_changed"
-	NotificationFeatureImportStateChanged = "feature_import.state_changed"
+	NotificationSnapshotStateChanged       = "snapshot.state_changed"
+	NotificationFeatureImportStateChanged  = "feature_import.state_changed"
 	NotificationMediaRenditionStateChanged = "media_rendition.state_changed"
 	notificationQueueSize                  = 16
 	notificationHeartbeat                  = 10 * time.Second
@@ -139,7 +139,7 @@ func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, 
 			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
 			return platform.Principal{}, nil, false
 		}
-		if requireOrigin && !h.trustedOrigin(r) {
+		if requireOrigin && !h.trustedReadOrigin(r) {
 			writeCodeError(w, http.StatusForbidden, "origin_forbidden")
 			return platform.Principal{}, nil, false
 		}

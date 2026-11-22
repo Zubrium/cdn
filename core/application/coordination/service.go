@@ -262,12 +262,19 @@ func (s *Service) Errors() <-chan error {
 }
 
 func (s *Service) NewWorkflowClient(componentID string) (*WorkflowClient, error) {
-	if s == nil || !s.Ready() || s.cfg.Workers == nil {
+	if s == nil || s.cfg.Workers == nil {
 		return nil, ErrInstanceNotReady
 	}
+	// Engines construct their scoped workflow clients during composition,
+	// before the shared executor is activated. The instance lease already
+	// fixes the owner and config epoch at this point; full readiness is only
+	// required once the outer runtime starts dispatching work.
 	s.mu.RLock()
-	instance := s.instance
+	instance, closing, failed := s.instance, s.closing, s.failed
 	s.mu.RUnlock()
+	if instance == nil || closing || failed || !instance.Ready() {
+		return nil, ErrInstanceNotReady
+	}
 	return NewWorkflowClient(WorkflowClientConfig{Store: s.cfg.Store, Workers: s.cfg.Workers,
 		OwnerEngineID: componentID, InstanceID: instance.ID(), ConfigEpoch: instance.Epoch(), MaxAttempts: s.cfg.MaxAttempts,
 		Retention: s.cfg.WorkflowRetention})
@@ -277,12 +284,19 @@ func (s *Service) NewWorkflowClient(componentID string) (*WorkflowClient, error)
 // authorized presentation handler. It exposes summaries, task graphs, and
 // task retry without exposing payloads or results.
 func (s *Service) NewWorkflowControl() (*WorkflowControl, error) {
-	if s == nil || !s.Ready() {
+	if s == nil {
 		return nil, ErrInstanceNotReady
 	}
+	// Workflow inspection is a read capability. Composition and read-only
+	// Admin handlers construct it after the instance lease is registered but
+	// before durable workers are activated; requiring full readiness here
+	// would make that startup order impossible.
 	s.mu.RLock()
-	instance := s.instance
+	instance, closing, failed := s.instance, s.closing, s.failed
 	s.mu.RUnlock()
+	if instance == nil || closing || failed || !instance.Ready() {
+		return nil, ErrInstanceNotReady
+	}
 	return NewWorkflowControl(WorkflowControlConfig{Store: s.cfg.Store,
 		Owner: instance.ID(), ConfigEpoch: instance.Epoch()})
 }

@@ -26,6 +26,7 @@ export default function ContentHomePage() {
   const localeConfig = useQuery({
     queryKey: ["content", "locales"],
     queryFn: ({ signal }) => api.contentEngine.localeConfig(signal),
+    enabled: Boolean(selectedSnapshot),
   });
   const selectedLocale = localeConfig.data?.locales.includes(requestedLocale)
     ? requestedLocale

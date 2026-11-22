@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"unicode"
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
@@ -48,30 +49,6 @@ func (s *Service) GetFeatureVersion(ctx context.Context, _, _ string) (websiteap
 	return websiteapi.FeatureVersion{}, websiteapi.ErrUnavailable
 }
 
-func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return websiteapi.BuildJob{}, err
-	}
-	snapshot, err := s.GetSnapshot(ctx, request.SnapshotID)
-	if err != nil {
-		return websiteapi.BuildJob{}, err
-	}
-	if snapshot.State != "ready" {
-		return websiteapi.BuildJob{}, websiteapi.ErrConflict
-	}
-	if err := s.requireCoordinatorWrite(ctx); err != nil {
-		return websiteapi.BuildJob{}, err
-	}
-	return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
-}
-
-func (s *Service) GetBuild(ctx context.Context, _ string) (websiteapi.BuildJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
-		return websiteapi.BuildJob{}, err
-	}
-	return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
-}
-
 func (s *Service) CreateMediaDerivative(ctx context.Context, _ websiteapi.CreateDerivativeRequest) (websiteapi.MediaJob, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
 		return websiteapi.MediaJob{}, err
@@ -87,4 +64,16 @@ func (s *Service) GetMediaJob(ctx context.Context, _ string) (websiteapi.MediaJo
 		return websiteapi.MediaJob{}, err
 	}
 	return websiteapi.MediaJob{}, websiteapi.ErrUnavailable
+}
+
+func validBuildLocale(locale string) bool {
+	if len(locale) < 2 || len(locale) > 64 {
+		return false
+	}
+	for _, char := range locale {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
+			return false
+		}
+	}
+	return true
 }

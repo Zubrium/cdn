@@ -145,6 +145,9 @@ export interface WebsitePageTemplatePage {
 export interface WebsiteBuild {
   id: string;
   snapshot_id: string;
+  locale: string;
+  locale_catalog_revision: number;
+  input_digest: string;
   state: string;
   artifact_manifest_file_id?: string;
   error_code?: string;

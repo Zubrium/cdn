@@ -377,12 +377,16 @@ type DeleteSnapshotRequest struct {
 
 type BuildSnapshotRequest struct {
 	SnapshotID     string `json:"snapshot_id"`
+	Locale         string `json:"locale"`
 	IdempotencyKey string `json:"-"`
 }
 
 type BuildJob struct {
 	ID                     string    `json:"id"`
 	SnapshotID             string    `json:"snapshot_id"`
+	Locale                 string    `json:"locale"`
+	LocaleCatalogRevision  int64     `json:"locale_catalog_revision"`
+	InputDigest            string    `json:"input_digest"`
 	State                  string    `json:"state"`
 	ArtifactManifestFileID string    `json:"artifact_manifest_file_id,omitempty"`
 	ErrorCode              string    `json:"error_code,omitempty"`

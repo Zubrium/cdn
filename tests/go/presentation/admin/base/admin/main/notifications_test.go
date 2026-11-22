@@ -163,6 +163,36 @@ func TestNotificationStreamDeliversEventsAndRejectsUntrustedOrigin(t *testing.T)
 	}
 }
 
+func TestNotificationStreamAcceptsSameOriginBrowserGETWithoutOrigin(t *testing.T) {
+	sessions := &sessionStub{login: testSessionLogin()}
+	handler, err := NewHandlerWithSessions(&fakeIdentityAdmin{}, sessions, Config{
+		MaxJSONBytes: 1024, SessionCookieSecure: true, AllowedOrigins: []string{testAdminOrigin}, Notifications: NewNotificationHub(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+apiPrefix+"/notifications", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: sessions.login.Token})
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.Header.Set("Referer", testAdminOrigin+"/admin/")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("same-origin EventSource without Origin returned %d, want %d", response.StatusCode, http.StatusOK)
+	}
+}
+
 func TestNotificationHubRejectsInvalidEvent(t *testing.T) {
 	hub := NewNotificationHub()
 	if err := hub.Publish(uuid.NewString(), NotificationEvent{Type: "unknown", State: "ready"}); err == nil {

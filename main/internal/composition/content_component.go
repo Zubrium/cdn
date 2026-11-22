@@ -12,13 +12,14 @@ import (
 )
 
 type contentEngineComponent struct {
-	core        *coreComponent
-	config      appconfig.Resolved
-	website     websiteapi.API
-	engine      *contentengine.Engine
-	projections *contentProjectionProvider
-	serviceCtx  context.Context
-	cancel      context.CancelFunc
+	core               *coreComponent
+	config             appconfig.Resolved
+	website            websiteapi.API
+	engine             *contentengine.Engine
+	projections        *contentProjectionProvider
+	serviceCtx         context.Context
+	cancel             context.CancelFunc
+	buildLocaleCatalog *websiteLocaleCatalog
 }
 
 func newContentEngineComponent(core *coreComponent, config appconfig.Resolved, website websiteapi.API) *contentEngineComponent {
@@ -75,6 +76,20 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 	return nil
 }
 
+// Activate publishes the trusted locale catalog reader to Website's durable
+// build capability after every component has started and the service context
+// is authenticated.
+func (component *contentEngineComponent) Activate(context.Context) error {
+	if component == nil {
+		return errors.New("Content Engine is not initialized")
+	}
+	if component.buildLocaleCatalog == nil || component.engine == nil || component.serviceCtx == nil {
+		return nil
+	}
+	component.buildLocaleCatalog.setSource(component.serviceCtx, component.engine)
+	return nil
+}
+
 func (component *contentEngineComponent) Ready(context.Context) error {
 	if component == nil || component.engine == nil || component.projections == nil {
 		return errors.New("Content Engine is not initialized")
@@ -98,9 +113,7 @@ func (component *contentEngineComponent) IsReady() bool {
 }
 
 func (component *contentEngineComponent) Errors() <-chan error {
-	closed := make(chan error)
-	close(closed)
-	return closed
+	return idleFailureStream()
 }
 
 // ReadPublishedContent is the narrow trusted runtime method used by Router's
@@ -123,4 +136,7 @@ func (component *contentEngineComponent) ReadPublishedContent(ctx context.Contex
 	return component.engine.ReadPublishedContent(ctx, projections)
 }
 
-var _ platform.ManagedComponent = (*contentEngineComponent)(nil)
+var (
+	_ platform.ManagedComponent     = (*contentEngineComponent)(nil)
+	_ platform.ActivatableComponent = (*contentEngineComponent)(nil)
+)

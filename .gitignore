@@ -18,3 +18,5 @@ pkg/runtime/dist/*
 docs-site/.vitepress/dist/
 docs-site/.vitepress/cache/
 docs-site/node_modules/
+__pycache__/
+*.pyc

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -17,7 +19,10 @@ var (
 	ErrFileMeta = errors.New("artifact file metadata mismatch")
 )
 
-const artifactFormat = "static-page-artifact/v1"
+const (
+	artifactFormat      = "static-page-artifact/v1"
+	canonicalMaxNesting = 64
+)
 
 var (
 	sha256Pattern       = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -76,12 +81,15 @@ func ValidateArtifact(data []byte, maxFiles int, maxBytes int64) (ArtifactManife
 	if manifest.Format != artifactFormat || manifest.Assets == nil || len(manifest.Assets) >= maxFiles {
 		return ArtifactManifest{}, fmt.Errorf("%w: format or file count", ErrArtifact)
 	}
-	expectedDigest, err := artifactDigest(data)
+	expectedDigest, err := ArtifactDigest(data)
 	if err != nil {
 		return ArtifactManifest{}, err
 	}
 	if manifest.Digest != expectedDigest {
 		return ArtifactManifest{}, fmt.Errorf("%w: digest mismatch", ErrArtifact)
+	}
+	if documentDeclaresCacheClass(data) {
+		return ArtifactManifest{}, fmt.Errorf("%w: document cache class", ErrArtifact)
 	}
 	if err := validateArtifactFile(manifest.Document, true, maxBytes); err != nil {
 		return ArtifactManifest{}, err
@@ -114,6 +122,22 @@ func ValidateArtifact(data []byte, maxFiles int, maxBytes int64) (ArtifactManife
 		}
 	}
 	return manifest, nil
+}
+
+// documentDeclaresCacheClass rejects even an explicitly empty cache_class on
+// the document. The document always uses the no-store policy and Router's
+// strict schema does not admit the field there.
+func documentDeclaresCacheClass(data []byte) bool {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(data, &root) != nil {
+		return true
+	}
+	var document map[string]json.RawMessage
+	if json.Unmarshal(root["document"], &document) != nil {
+		return true
+	}
+	_, present := document["cache_class"]
+	return present
 }
 
 func validateArtifactFile(file ArtifactFile, document bool, maxBytes int64) error {
@@ -166,18 +190,97 @@ func validArtifactPath(value string) bool {
 	return true
 }
 
-func artifactDigest(data []byte) (string, error) {
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(data, &payload); err != nil || payload == nil {
-		return "", fmt.Errorf("%w: JSON object", ErrArtifact)
+// CanonicalArtifactPayload returns the single canonical JSON payload of a
+// static-page-artifact/v1 manifest: the manifest object without its "digest"
+// field, with object keys sorted at every level and no insignificant
+// whitespace. The result is identical for any valid encoding of the same
+// payload, independent of Go struct field order or JSON key order.
+func CanonicalArtifactPayload(data []byte) ([]byte, error) {
+	if len(data) == 0 || !utf8.Valid(data) {
+		return nil, fmt.Errorf("%w: canonical payload", ErrArtifact)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	value, err := decodeUniqueJSONValue(decoder, 1)
+	if err != nil || ensureNoTrailingJSON(decoder) != nil {
+		return nil, fmt.Errorf("%w: canonical payload JSON", ErrArtifact)
+	}
+	payload, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: canonical payload object", ErrArtifact)
 	}
 	delete(payload, "digest")
 	canonical, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("%w: canonical payload", ErrArtifact)
+		return nil, fmt.Errorf("%w: canonical payload", ErrArtifact)
+	}
+	return canonical, nil
+}
+
+// ArtifactDigest returns the digest of CanonicalArtifactPayload(data) using the
+// shared static-page-artifact/v1 "sha256:" prefix.
+func ArtifactDigest(data []byte) (string, error) {
+	canonical, err := CanonicalArtifactPayload(data)
+	if err != nil {
+		return "", err
 	}
 	sum := sha256Sum(canonical)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func decodeUniqueJSONValue(decoder *json.Decoder, depth int) (any, error) {
+	if depth > canonicalMaxNesting {
+		return nil, errors.New("JSON nesting too deep")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, composite := token.(json.Delim)
+	if !composite {
+		return token, nil
+	}
+	switch delimiter {
+	case '{':
+		object := make(map[string]any)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, errors.New("JSON object key")
+			}
+			if _, duplicate := object[key]; duplicate {
+				return nil, errors.New("duplicate JSON key")
+			}
+			value, err := decodeUniqueJSONValue(decoder, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			object[key] = value
+		}
+		if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') {
+			return nil, errors.New("JSON object close")
+		}
+		return object, nil
+	case '[':
+		array := make([]any, 0)
+		for decoder.More() {
+			value, err := decodeUniqueJSONValue(decoder, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			array = append(array, value)
+		}
+		if closing, err := decoder.Token(); err != nil || closing != json.Delim(']') {
+			return nil, errors.New("JSON array close")
+		}
+		return array, nil
+	default:
+		return nil, errors.New("unexpected JSON delimiter")
+	}
 }
 
 // VerifyArtifactFiles compares trusted Core metadata with the manifest. A

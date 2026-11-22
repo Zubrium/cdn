@@ -541,6 +541,15 @@ def selected_symbols(scenarios: list[dict[str, Any]], level: str) -> list[str]:
     return sorted(symbols)
 
 
+def selected_test_targets(scenarios: list[dict[str, Any]], level: str) -> list[str]:
+    targets: set[str] = set()
+    for scenario in scenarios:
+        if scenario["level"] != level or scenario["coverage_status"] != "covered":
+            continue
+        targets.add(f"{scenario['test_file']}|{scenario['test_symbol']}")
+    return sorted(targets)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -548,6 +557,12 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(LEVELS),
         metavar="LEVEL",
         help="print unique top-level Go test symbols for covered scenarios at the selected level after validation",
+    )
+    parser.add_argument(
+        "--test-targets",
+        choices=sorted(LEVELS),
+        metavar="LEVEL",
+        help="print repository-relative test file and exact symbol pairs for covered scenarios at the selected level",
     )
     parser.add_argument("ledger", type=Path, help="path to a scenario ledger JSON file")
     return parser.parse_args()
@@ -564,6 +579,8 @@ def main() -> int:
 
     if args.test_symbols:
         print("\n".join(selected_symbols(scenarios, args.test_symbols)))
+    elif args.test_targets:
+        print("\n".join(selected_test_targets(scenarios, args.test_targets)))
     else:
         print_report(scenarios)
     return 0

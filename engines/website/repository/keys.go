@@ -15,7 +15,12 @@ const (
 	// atomically persist the page and its ready root snapshot in one Core batch.
 	SnapshotNamespace = "website/snapshots"
 	TemplateNamespace = "website/page-templates"
+	BuildNamespace    = "website/builds"
 )
+
+// BuildScopeID is shared by a job and its idempotency receipts so their
+// creation can be committed in one scoped Core batch.
+const BuildScopeID = "build"
 
 func PageKey(pageID string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: SnapshotNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "page/" + strings.ToLower(pageID)}
@@ -31,6 +36,16 @@ func PageTemplateKey(templateID string) core.ModuleDataKey {
 
 func PageTemplateCreateReceiptKey(idempotencyKey string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: TemplateNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "idempotency/" + digestKey(idempotencyKey)}
+}
+
+func BuildKey(id string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: BuildNamespace, ScopeType: "job", ScopeID: BuildScopeID,
+		RecordKey: "build/" + strings.ToLower(id)}
+}
+
+func BuildIdempotencyKey(key string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: BuildNamespace, ScopeType: "job", ScopeID: BuildScopeID,
+		RecordKey: "idempotency/" + digestKey(key)}
 }
 
 func digestKey(value string) string {

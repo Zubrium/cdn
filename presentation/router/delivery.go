@@ -26,7 +26,11 @@ const (
 	maxArtifactAssets        = 4096
 )
 
-var artifactSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var (
+	artifactSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// An omitted cache_class is equivalent to "none" (no-store) in both modules.
+	allowedArtifactCacheClasses = map[string]bool{"": true, "none": true, "short": true, "immutable": true}
+)
 
 type RouteResolver interface {
 	ResolveRoute(context.Context, string, string) (model.Route, error)
@@ -318,22 +322,25 @@ func (delivery *CoreDelivery) authenticate(ctx context.Context) (core.Session, e
 	return session, err
 }
 
+// Struct field order follows the canonical JSON key order so a payload marshalled
+// from this struct is byte-identical to the canonical payload computed from raw
+// manifest bytes. Do not reorder these fields without updating the conformance test.
 type artifactFile struct {
-	FileID      string `json:"file_id"`
 	ContentType string `json:"content_type"`
+	FileID      string `json:"file_id"`
 	SHA256      string `json:"sha256"`
 	Size        int64  `json:"size"`
 }
 
 type artifactAsset struct {
-	artifactFile
 	CacheClass string `json:"cache_class"`
+	artifactFile
 }
 
 type artifactPayload struct {
-	Format   string                   `json:"format"`
-	Document artifactFile             `json:"document"`
 	Assets   map[string]artifactAsset `json:"assets"`
+	Document artifactFile             `json:"document"`
+	Format   string                   `json:"format"`
 }
 
 type artifactEnvelope struct {
@@ -401,18 +408,16 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Ses
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
 	for _, fields := range rawAssets {
-		if len(fields) != 5 || fields["file_id"] == nil || fields["content_type"] == nil || fields["sha256"] == nil ||
-			fields["size"] == nil || fields["cache_class"] == nil {
+		if (len(fields) != 4 && len(fields) != 5) || fields["file_id"] == nil || fields["content_type"] == nil ||
+			fields["sha256"] == nil || fields["size"] == nil {
+			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
+		}
+		if len(fields) == 5 && fields["cache_class"] == nil {
 			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 		}
 	}
-	payload := artifactPayload{Format: envelope.Format, Document: envelope.Document, Assets: envelope.Assets}
-	canonical, err := json.Marshal(payload)
-	if err != nil || !strings.HasPrefix(envelope.Digest, "sha256:") || !artifactSHA256Pattern.MatchString(strings.TrimPrefix(envelope.Digest, "sha256:")) {
-		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
-	}
-	digest := sha256.Sum256(canonical)
-	if hex.EncodeToString(digest[:]) != strings.TrimPrefix(envelope.Digest, "sha256:") {
+	expectedDigest, err := artifactPayloadDigest(data)
+	if err != nil || envelope.Digest != expectedDigest {
 		return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 	}
 	manifest := parsedArtifact{document: envelope.Document, assets: make(map[string]artifactAsset, len(envelope.Assets))}
@@ -425,7 +430,7 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, session core.Ses
 		if err := validateArtifactAssetPath(path); err != nil {
 			return parsedArtifact{}, core.File{}, err
 		}
-		if (entry.CacheClass != "document" && entry.CacheClass != "immutable") || validateArtifactFile(entry.artifactFile, fileID, false) != nil {
+		if !allowedArtifactCacheClasses[entry.CacheClass] || validateArtifactFile(entry.artifactFile, fileID, false) != nil {
 			return parsedArtifact{}, core.File{}, engine.ErrInvalidTarget
 		}
 		if _, duplicate := fileIDs[entry.FileID]; duplicate {
@@ -478,10 +483,14 @@ func validArtifactContentType(value string) bool {
 }
 
 func artifactCacheControl(asset artifactAsset) string {
-	if asset.CacheClass == "immutable" {
+	switch asset.CacheClass {
+	case "immutable":
 		return "public, max-age=31536000, immutable"
+	case "short":
+		return "public, max-age=300"
+	default:
+		return "no-store"
 	}
-	return "no-store"
 }
 
 func validateArtifactAssetPath(path string) error {

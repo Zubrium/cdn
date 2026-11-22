@@ -3,8 +3,10 @@
 package composition
 
 import (
-	platform "github.com/Zubrium/cdn/core/presentation"
 	"testing"
+
+	platform "github.com/Zubrium/cdn/core/presentation"
+	appconfig "github.com/Zubrium/cdn/main/internal/config"
 )
 
 func TestFullProfileRegistersEngineContractsAndOperations(t *testing.T) {
@@ -28,5 +30,24 @@ func TestFullProfileRegistersEngineContractsAndOperations(t *testing.T) {
 		if !groups[group] {
 			t.Errorf("full profile did not declare engine access group %q: %v", group, groups)
 		}
+	}
+}
+
+func TestFullProfileCompilesWebsiteBuildAndPrerenderHandlers(t *testing.T) {
+	registry := platform.NewRuntimeRegistry()
+	selected := map[string]struct{}{
+		"core": {}, "engine.website": {}, "worker.prerender": {},
+	}
+	config := appconfig.Resolved{}
+	config.Coordinator.MaxAttempts = 3
+	if err := registerWorkerHandlers(registry, selected, config); err != nil {
+		t.Fatalf("register worker handlers: %v", err)
+	}
+	catalog, err := registry.CompileWorkerCatalog(platform.BuildPlan{Components: []string{"core", "engine.website", "worker.prerender"}})
+	if err != nil || catalog == nil {
+		t.Fatalf("compile worker catalog: %#v, %v", catalog, err)
+	}
+	if err := registerWorkerHandlers(registry, selected, config); err == nil {
+		t.Fatal("duplicate worker handler registration was accepted")
 	}
 }

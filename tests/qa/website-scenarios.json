@@ -13,10 +13,10 @@
       "action": "Вызвать operation чтения системной модели Website с проверкой group grant.",
       "expected_result": "Read grant получает стабильный системный ContentModel; отсутствие grant получает typed forbidden result.",
       "expected_state": "Операция не создаёт Website records и не раскрывает данные за пределами grants.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-001",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioSystemModelGrantCoverage/WEB-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -69,7 +69,7 @@
       "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
       "test_symbol": "TestWebsiteScenarioSnapshotCAS/WEB-004",
       "coverage_status": "covered",
-      "execution_status": "fail",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -83,10 +83,10 @@
       "action": "Сохранить системную модель и прочитать typed model/projection DTOs.",
       "expected_result": "Model is system-scoped CAS state; invalidating change is rejected; projection is returned only for the exact (page_id, snapshot_id) tuple.",
       "expected_state": "Model revision не хранится в snapshot namespace; rejected mutation leaves model and bindings unchanged.",
-      "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
-      "test_symbol": "TestWebsiteScenarioLocaleProjection/WEB-005",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioModelCASHardeningCoverage/WEB-005",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -103,7 +103,7 @@
       "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
       "test_symbol": "TestWebsiteScenarioSiteEditorBindings/WEB-006",
       "coverage_status": "covered",
-      "execution_status": "fail",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -117,10 +117,10 @@
       "action": "Apply data-model cardinality operations through the authoritative contract.",
       "expected_result": "New singleton gets exactly one empty draft, never auto-publishes, clear preserves record ID, and lossy cardinality change is rejected.",
       "expected_state": "Rejected change preserves existing records, draft/publication revisions and locale isolation.",
-      "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
-      "test_symbol": "TestWebsiteScenarioDataModelCardinality/WEB-007",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioDataModelCardinalityCoverage/WEB-007",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -137,7 +137,7 @@
       "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
       "test_symbol": "TestWebsiteScenarioTemplateMaterialization/WEB-008",
       "coverage_status": "covered",
-      "execution_status": "fail",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -151,10 +151,10 @@
       "action": "Run explicit structural replacement.",
       "expected_result": "Confirmed operation creates a child in the same page tree and replaces only declared structure; unconfirmed/stale/invalid operation conflicts without partial state.",
       "expected_state": "Parent, page ID, other trees, Router binding, system model and Content values remain unchanged; only old-placement selections reset in the new child.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-009",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioTemplateApplicationCoverage/WEB-009",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -168,10 +168,10 @@
       "action": "Validate Website structural input and build result boundaries.",
       "expected_result": "Website accepts no route/URL/branch assignment or record values in snapshot input and does not activate Router targets itself.",
       "expected_state": "Structural mutation preserves prior public artifact; Router selection remains an explicit outer orchestration/CAS action.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-010",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioStructuralBoundaryCoverage/WEB-010",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -207,7 +207,7 @@
       "test_symbol": "TestWebsiteScenarioLedger/WEB-012",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Для этого запуска не заданы подтверждённые disposable PostgreSQL DSN, S3 endpoint/bucket и изолированные credentials; live Core storage использовать запрещено."
+      "blocker": "Нет durable recovery/reconciliation workflow для feature import и isolated crash-injection fixture; live Core storage использовать запрещено."
     },
     {
       "id": "WEB-013",
@@ -220,10 +220,10 @@
       "action": "Create/validate a snapshot dependency lock and build digest.",
       "expected_result": "Resolver has one deterministic compatible closure or rejects the request; lock retains exact versions, hashes and API versions.",
       "expected_state": "A later import does not alter an existing snapshot or its build digest; invalid closure creates no ready snapshot.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-013",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioDependencyResolverCoverage/WEB-013",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -254,10 +254,10 @@
       "action": "Run the server-rendering and runtime contract checks.",
       "expected_result": "Hydration preserves server markup, each placement has one lifecycle root, and output supplies only the declared locale-specific SEO/system-page behavior.",
       "expected_state": "No secret/private context enters public HTML; one placement failure does not corrupt sibling output or activate a partial artifact.",
-      "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
+      "test_file": "tests/go/engines/website/render/render_acceptance_test.go",
       "test_symbol": "TestWebsiteScenarioRenderAndSEO/WEB-015",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -271,10 +271,10 @@
       "action": "Validate feature runtime context, network policy and graphical design token state.",
       "expected_result": "Runtime uses only declared HTTPS origins and typed contracts, propagates cancellation, excludes credentials, and accepts only complete accessible token values.",
       "expected_state": "Cancelled work cannot mutate DOM; invalid request/token state is rejected without partial saved design change or broader CSP/CORS permission.",
-      "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
+      "test_file": "tests/go/engines/website/features/runtime/website_runtime_acceptance_test.go",
       "test_symbol": "TestWebsiteScenarioFeatureRuntime/WEB-016",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -288,10 +288,10 @@
       "action": "Exercise mounted unversioned /api/... Website handlers and compare their OpenAPI schemas.",
       "expected_result": "Routes are flat unversioned /api paths with strict bounded decode, typed errors, required headers and group checks; request/response schema excludes Router assignment fields and extra scope identifiers.",
       "expected_state": "Invalid/unauthorized HTTP request produces no structural mutation and no existence disclosure for foreign resources.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-017",
-      "coverage_status": "gap",
-      "execution_status": "not_run",
+      "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
+      "test_symbol": "TestWebsiteScenarioAdminContractCoverage/WEB-017",
+      "coverage_status": "covered",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -302,15 +302,15 @@
         "A dedicated disposable PostgreSQL database and object-storage bucket are configured for this run.",
         "Website uses only Core presentation capabilities under its scoped module identity."
       ],
-      "input": "Persist pages, snapshots, templates and projections in the single implicit scope; race CAS/retry; revoke access; try foreign namespace/scope and direct engine-to-engine boundary paths.",
-      "action": "Run persistence and boundary scenarios against the disposable composition.",
-      "expected_result": "Records remain immutable and scope-isolated, CAS/retry is atomic, revocation fails closed, and Website uses no SQL/S3/direct Router or Content call.",
+      "input": "Seed a page and root snapshot through the scoped Core module-data capability on disposable PostgreSQL; race stale CAS; revoke a Core session; probe foreign namespace and undeclared scope.",
+      "action": "Run persistence and boundary scenarios against disposable Core with the Website read path and explicit S3 private-contract fixture.",
+      "expected_result": "Website reads the seeded records, stale CAS fails without a revision bump, revocation fails closed, and foreign namespace/scope operations are rejected.",
       "expected_state": "No cross-namespace/scope record or partial artifact becomes observable after failed persistence operations.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-018",
-      "coverage_status": "blocked",
-      "execution_status": "blocked",
-      "blocker": "Для этого запуска не заданы подтверждённые disposable PostgreSQL DSN, S3 endpoint/bucket и изолированные credentials; live persistence проверять запрещено."
+      "test_file": "tests/go/main/cmd/zubrium/website_integration_persistence_boundary_test.go",
+      "test_symbol": "TestWebsiteIntegrationPersistenceBoundary/WEB-018",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-019",
@@ -327,7 +327,7 @@
       "test_symbol": "TestWebsiteScenarioLedger/WEB-019",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Нет явно заданных disposable Core file storage и supervised worker.media fixture с лимитами; запуск against shared или live media resources запрещён."
+      "blocker": "Нет OS-enforced media supervision, resource limits и изолированного DTO/OpenAPI-backed derivative fixture; shared или live media resources использовать запрещено."
     },
     {
       "id": "WEB-020",
@@ -344,7 +344,7 @@
       "test_symbol": "TestWebsiteScenarioLedger/WEB-020",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Нет явно заданных disposable prerender sandbox, Core artifact storage и network-policy fixture; production browser/worker infrastructure использовать запрещено."
+      "blocker": "Нет Chromium sandbox, network policy, production artifact writer и полного buildInputFingerprint; production browser/worker infrastructure использовать запрещено."
     },
     {
       "id": "WEB-021",
@@ -361,7 +361,7 @@
       "test_symbol": "TestWebsiteScenarioLedger/WEB-021",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Нет изолированной disposable outer-orchestration composition с Router target CAS и locale Content projections; live routes и artifacts трогать запрещено."
+      "blocker": "Нет trusted outer orchestration, route→page registry и per-(route, locale) Router CAS fan-out; live routes и artifacts трогать запрещено."
     },
     {
       "id": "WEB-022",
@@ -378,7 +378,7 @@
       "test_symbol": "TestWebsiteScenarioPageDeletion/WEB-022",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Нет изолированного disposable workflow fixture с route targets, Content, Forms и Core resources; destructive retirement against a non-disposable system запрещён."
+      "blocker": "Нет RetirePage, HTTP DELETE и durable retirement workflow; destructive retirement against a non-disposable system запрещён."
     },
     {
       "id": "WEB-023",

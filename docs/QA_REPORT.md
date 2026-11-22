@@ -1,5 +1,45 @@
 # QA-отчёт
 
+## Текущий проход — durable Website build, integration и browser QA (2026-11-22)
+
+### Подтверждённые проверки
+
+- `python3 tests/qa/run-test-suite.py ci --integration --report output/test-report-full-integration.json`: exit 0; `gates: 67 pass, 0 fail, 0 blocked`. Финальный повтор с `--with-build --integration`: exit 0; `gates: 68 pass, 0 fail, 0 blocked`; `scenarios: 25 pass, 0 fail, 5 not_run, 0 blocked`; `coverage 25/25 executable = 100.00%`. Это включает REAL `CORE-001` и `WEB-018` на одноразовых PostgreSQL/S3-ресурсах; `WEB-012`, `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022` остаются blocked и исключены только из знаменателя executable coverage.
+- `python3 -m unittest tests/qa/test_run_test_suite.py tests/qa/test_scenario_ledger.py`: 26 тестов, OK. `python3 tests/qa/scenario-ledger.py tests/qa/website-scenarios.json`: `denominator: 29`, `covered: 24` (82.76%), `gaps: 0`, `blockers: 5`. Core ledger: `1/1`, 100.00%.
+- `tests/qa/run-website-red.sh contract`: exit 0 (ledger validator, Go contract-сценарии, `TestWebsiteAdminHTTPAcceptanceWEB017`, отдельный Vitest UI-файл). `PYTHONDONTWRITEBYTECODE=1` используется для локальных unittest-прогонов, чтобы не создавать `__pycache__` в исходниках.
+- RED/GREEN-тесты durable build и owner-scoped result прошли с централизованным overlay: `TestWebsiteBuildPageHandlerEmitsPinnedPrerenderChild`, `TestWebsiteBuildPageHandlerRejectsInvalidTaskAndPayload`, `TestWebsiteBuildWorkflowResolvesPrerenderEmissionKey`, `TestWebsiteBuildWorkflowFailsWhenPrerenderEmissionCannotBeResolved`, `TestWebsiteLocaleCatalogPinsRevisionOnlyForConfiguredLocale`, `TestWebsiteBuildWorkflowResolvesOnlyOwnedEmissionKey`, `TestDisposableOwnerScopedTaskResult/CORE-001`.
+- Все 19 модулей `go.work` по отдельности прошли `go test ./...`, `go vet ./...`, `go build ./...`; `main` дополнительно прошёл `go test/vet/build -tags=full ./...`, включая компиляцию root handler `engine.website/build-page/v1` и fail-closed child handlers.
+- Admin SPA из `frontend/`: `pnpm --filter @website-engine/admin typecheck`, `pnpm lint`, `pnpm --filter @website-engine/admin test` (48 файлов, 218 тестов) и `pnpm --filter @website-engine/admin build` — PASS. Build перезаписал `pkg/static/dist` и ассеты.
+- `make lint-core-boundary`: exit 0. `git diff --check`: exit 0.
+- Browser QA выполнен в отдельном checkout с build identity current run; disposable PostgreSQL и `moto` S3 использовались только для изолированного стека. Admin: `/admin`, `/admin/content`, `/admin/forms`, `/admin/submissions`, `/admin/media`, `/admin/coordinator/workflows`, `/admin/router/routes`, `/admin/site/pages`, `/admin/snapshots/registry`, `/admin/snapshots/tree`, `/admin/settings`, `/admin/access/users` — desktop 1440/light, без горизонтального overflow. Responsive 360/390/768/1024/1280/1920 px на репрезентативных экранах, темы system/light/dark, цикл `ThemeToggle`, видимый фокус по первому `Tab`, диалоги с закрытием по `Escape`, переключатель `Сетка/Список` — проверены. `/healthz` отдаёт ожидаемый `X-Zubrium-Build-Identity`. Публичный listener на проверенных путях отдаёт `404 {"error":"not_found"}` и не экспонирует `/healthz`, `/readyz` или Admin session.
+- Write-проверка browser QA выполнялась только в изолированной disposable БД: создание страницы через Admin API вернуло `201`, последующее чтение `/api/admin/pages`, `/api/admin/snapshots` и `/api/admin/snapshots/{id}` вернуло `200`; страница отрисовалась в редакторе. Credential и приватные env в отчёт не попадают.
+
+### Фактическое состояние durable build
+
+- Core предоставляет owner-scoped `WorkflowClient.GetTaskResult`; владелец, instance lease и config epoch берутся только из сконструированного клиента. `CORE-001` подтверждает базу данных, миграции и owner-scoped чтение результата в живом PostgreSQL.
+- `engines/website/workflow` регистрирует immutable root-операцию `engine.website/build-page/v1`, проверяет strict typed payload и эмитит child `worker.prerender/render-page/v1` с `render-plan/v1`, `plan_digest` и стабильным `prerender:<build_id>` emission key.
+- `main/internal/composition` инъектирует workflow adapter, locale catalog из доверенного Content service context и константы операции/версии; в не-full профилях capability не инъектируется. Условный порядок ребер full profile учитывает `admin.files → engine.forms/engine.website/engine.router` и `engine.router → engine.forms/engine.content`.
+- Website разрешает сгенерированный Core `Task.ID` по owner-scoped emission key, закрепляет его в `website/builds` и читает результат child только через `GetTaskResult`. Artifact manifest фиксируется в job только после typed validation.
+
+### Найденные и исправленные дефекты текущего прохода
+
+- **Full profile:** кондиционально упорядоченные ребра и созданный до финальной активации `NewWorkflowClient` устранили отказ живой композиции; компоненты без асинхронных ошибок получили открытый failure stream вместо ошибочно фатального закрытия канала.
+- **Admin notifications:** same-origin `EventSource` не шлёт `Origin`; добавлен `TrustedReadOrigin` с проверкой `Sec-Fetch-Site: same-origin` и разрешённого `Referer`, write-запросы по-прежнему требуют точный `Origin` и CSRF. SSE держится открытым без console errors.
+- **Website persistence:** `ListSnapshots` без `page_id` теперь возвращает снимки всех page trees вместо пустого результата; добавлен `TestListSnapshotsWithoutPageFilterListsEveryPageTree`.
+- **Website/Core revisions:** декодеры Website сравнивали локальный `index.revision` с глобальным `engine_data.revision_seq`, из-за чего созданная страница возвращала `201`, но последующие чтения давали `503`. Инвариант заменён на проверку положительной ревизии в index; добавлен `TestCreatePageSurvivesCoreGlobalRevisionSequence` с эмуляцией глобальной sequence.
+- **Site editor payload:** пустая страница создавалась с `metadata: {}`, который Admin отвергал как несоответствующий page-snapshot контракту; пустой payload теперь содержит `formatVersion: 1` и `siteName`.
+- **Admin responsive:** `span.sr-only` в action column таблицы расширял layout viewport до `innerWidth=503` при `client=390`; `.table-wrap` получил `position: relative`, повторная проверка на 390 px дала `scroll=390`, `inner=390`.
+- **Admin content:** запрос locale config больше не выполняется без выбранного snapshot, что убирает ожидаемый `404 /api/admin/content/locales` на пустом экране.
+
+### Ограничения текущего прохода
+
+- `WEB-012`, `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022` остаются `blocked`: нет durable recovery feature import, supervised media isolation, prerender sandbox/network policy, outer orchestration с per-`(route, locale)` Router CAS и page retirement workflow. Эти статусы не должны трактоваться как pass.
+- `moto` выбран для browser QA, потому что MinIO в этом стеке возвращает `GetPublicAccessBlock ... NotImplemented`, а Core `RequirePrivate` требует этот API. Реальные S3-провайдеры в browser QA не использовались.
+- `GET /api/admin/model → 404 {"error":"not_found"}` и `GET /api/admin/features → 503 {"error":"unavailable"}` остаются ожидаемыми для пустого реестра; UI показывает корректные empty/error состояния. Это не считается пройденной приёмкой соответствующих модулей.
+- `/admin/coordinator/workflows` один раз завис при быстром sequential navigation; свежий reload, network и snapshot прошли чисто. Явный product-дефект не воспроизведён, случай зафиксирован как незавершённый harness/browser flake.
+- Реальный supervising prerender sandbox, Chromium/network policy, Router activation, media supervisor, crash/recovery и page retirement не прогонялись. Host-side durable build тесты не заменяют полный live E2E.
+- Release checks и полный cybersecurity audit в этом проходе не выполнялись; blocked сценарии остаются видимыми в отчёте и `diagnose`.
+
 ## Текущий проход — изоляция `main`, профили и runtime-интеграции (2026-11-21)
 
 ### Подтверждённые проверки

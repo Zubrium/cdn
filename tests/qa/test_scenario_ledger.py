@@ -153,5 +153,27 @@ class ExactSubtestReceiverTests(unittest.TestCase):
         )
 
 
+class TestTargetSelectionTests(unittest.TestCase):
+    def test_targets_pair_test_file_with_exact_symbol(self) -> None:
+        scenarios = [
+            {
+                "level": "integration",
+                "coverage_status": "covered",
+                "test_file": "tests/go/main/cmd/zubrium/example_test.go",
+                "test_symbol": "TestExample/WEB-018",
+            },
+            {
+                "level": "integration",
+                "coverage_status": "blocked",
+                "test_file": "tests/go/engines/website/example_test.go",
+                "test_symbol": "TestBlocked/WEB-012",
+            },
+        ]
+        self.assertEqual(
+            SCENARIO_LEDGER.selected_test_targets(scenarios, "integration"),
+            ["tests/go/main/cmd/zubrium/example_test.go|TestExample/WEB-018"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

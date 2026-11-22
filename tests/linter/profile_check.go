@@ -40,7 +40,7 @@ func isolationProfileRegistry() profileRegistry {
 		"admin.coordinator":      {id: "admin.coordinator", requires: []string{"core", "admin.files"}},
 		"admin.identity":         {id: "admin.identity", requires: []string{"core", "admin.files"}},
 		"admin.notifications":    {id: "admin.notifications", requires: []string{"admin.identity", "admin.files"}},
-		"admin.ui":               {id: "admin.ui", requires: []string{"core"}},
+		"admin.ui":               {id: "admin.ui", requires: []string{"core", "admin.files"}},
 		"public.router":          {id: "public.router", requires: []string{"engine.router"}},
 		"public.form-session":    {id: "public.form-session", requires: []string{"engine.forms", "public.router"}},
 		"public.form-submit":     {id: "public.form-submit", requires: []string{"engine.forms", "public.router"}},
@@ -88,6 +88,10 @@ var profilegenLine = regexp.MustCompile(`profilegen -profile (\S+) -out (\S+) -p
 
 func checkIsolationProfiles(root string) []string {
 	var violations []string
+	runtimeIDs, err := runtimeAllowlistIDs(root)
+	if err != nil {
+		return append(violations, fmt.Sprintf("read runtime composition allowlist: %v", err))
+	}
 	makefile, err := os.ReadFile(filepath.Join(root, "main", "Makefile"))
 	if err != nil {
 		return append(violations, fmt.Sprintf("read main/Makefile: %v", err))
@@ -115,6 +119,11 @@ func checkIsolationProfiles(root string) []string {
 		if err != nil {
 			violations = append(violations, fmt.Sprintf("resolve profile %s: %v", profileName, err))
 			continue
+		}
+		for _, component := range plan {
+			if !runtimeIDs[component] {
+				violations = append(violations, fmt.Sprintf("runtime composition allowlist omits component %q from profile %s", component, profileName))
+			}
 		}
 		generated, err := parseGeneratedProfile(outputPath)
 		if err != nil {
@@ -161,6 +170,35 @@ func checkIsolationProfiles(root string) []string {
 		}
 	}
 	return violations
+}
+
+func runtimeAllowlistIDs(root string) (map[string]bool, error) {
+	ids := make(map[string]bool)
+	path := filepath.Join(root, "main", "internal", "composition", "components.go")
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "validateRunnableComposition" {
+			continue
+		}
+		found = true
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			if literal, ok := node.(*ast.BasicLit); ok && literal.Kind == token.STRING {
+				if value, err := strconv.Unquote(literal.Value); err == nil {
+					ids[value] = true
+				}
+			}
+			return true
+		})
+	}
+	if !found {
+		return nil, fmt.Errorf("validateRunnableComposition is missing from %s", relative(root, path))
+	}
+	return ids, nil
 }
 
 func parseIsolationProfile(data []byte) (profileDocument, error) {
@@ -300,6 +338,22 @@ func isolationBuildPlan(profile profileDocument) ([]string, error) {
 		}
 		visited[id] = true
 		dependencies := append([]string(nil), registry[id].requires...)
+		// Mirror the composition generator's conditional ordering: the shared
+		// Admin listener is wired with live engine services during Start.
+		if id == "admin.files" {
+			for _, engine := range []string{"engine.forms", "engine.website", "engine.router"} {
+				if active[engine] {
+					dependencies = append(dependencies, engine)
+				}
+			}
+		}
+		if id == "engine.router" {
+			for _, engine := range []string{"engine.forms", "engine.content"} {
+				if active[engine] {
+					dependencies = append(dependencies, engine)
+				}
+			}
+		}
 		sort.Strings(dependencies)
 		for _, dependency := range dependencies {
 			visit(dependency)

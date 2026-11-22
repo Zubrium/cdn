@@ -18,6 +18,7 @@ var operationIDPattern = regexp.MustCompile(`^[a-z][a-z0-9._/-]{0,127}$`)
 var ErrWorkflowOperationUnavailable = errors.New("workflow operation is not registered")
 
 type WorkflowStore = corecoord.WorkflowRepository
+type TaskResultStore = corecoord.TaskResultRepository
 
 type WorkflowStartRequest struct {
 	OperationID     string
@@ -47,6 +48,7 @@ type WorkflowClientConfig struct {
 // cannot submit work under another engine identity or an undeclared operation.
 type WorkflowClient struct {
 	store         WorkflowStore
+	results       TaskResultStore
 	workers       *WorkerCatalog
 	ownerEngineID string
 	instanceID    uuid.UUID
@@ -64,7 +66,10 @@ func NewWorkflowClient(config WorkflowClientConfig) (*WorkflowClient, error) {
 	if !config.Workers.hasComponent(config.OwnerEngineID) {
 		return nil, ErrComponentUnavailable
 	}
-	return &WorkflowClient{store: config.Store, workers: config.Workers, ownerEngineID: config.OwnerEngineID,
+	// The result read is a separate port. Deriving it from the same Core store
+	// keeps existing WorkflowRepository implementations unchanged.
+	results, _ := config.Store.(TaskResultStore)
+	return &WorkflowClient{store: config.Store, results: results, workers: config.Workers, ownerEngineID: config.OwnerEngineID,
 		instanceID: config.InstanceID, configEpoch: config.ConfigEpoch, maxAttempts: config.MaxAttempts,
 		retention: config.Retention}, nil
 }
@@ -121,6 +126,28 @@ func (c *WorkflowClient) Get(ctx context.Context, id uuid.UUID) (corecoord.Workf
 		return corecoord.Workflow{}, err
 	}
 	return c.store.GetWorkflow(ctx, c.ownerEngineID, c.instanceID, c.configEpoch, id)
+}
+
+// GetTaskResult reads one durable task result for a workflow owned by this
+// client's statically registered component, instance and config epoch. The
+// caller supplies only workflow and task IDs; no owner or operation identity
+// can be passed in. Administrative WorkflowControl deliberately has no such
+// method.
+func (c *WorkflowClient) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (corecoord.TaskResult, error) {
+	if c == nil || isNilInterface(c.store) || isNilInterface(c.results) || ctx == nil || workflowID == uuid.Nil || taskID == uuid.Nil {
+		return corecoord.TaskResult{}, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return corecoord.TaskResult{}, err
+	}
+	result, err := c.results.GetTaskResult(ctx, c.ownerEngineID, c.instanceID, c.configEpoch, workflowID, taskID)
+	if err != nil {
+		return corecoord.TaskResult{}, err
+	}
+	if len(result.Result) > MaxTaskResultBytes {
+		return corecoord.TaskResult{}, ErrLimit
+	}
+	return result, nil
 }
 
 func (c *WorkflowClient) Cancel(ctx context.Context, id uuid.UUID) error {

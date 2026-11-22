@@ -30,7 +30,7 @@ func (s *Service) loadPageTreeRegistry(ctx context.Context, pageID string) (core
 		Revision   int64  `json:"revision"`
 	}
 	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &state) != nil || state.LastSequence < 0 ||
-		json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "page_tree_registry" || index.Revision != record.Revision {
+		json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "page_tree_registry" || index.Revision < 1 {
 		return core.ModuleDataRecord{}, pageTreeRegistry{}, websiteapi.ErrUnavailable
 	}
 	return record, state, nil

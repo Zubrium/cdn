@@ -6,10 +6,12 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,9 +26,28 @@ type openAPIDocument struct {
 	Components struct {
 		SecuritySchemes map[string]openAPISecurityScheme `yaml:"securitySchemes"`
 		Schemas         map[string]struct {
+			Required   []string             `yaml:"required"`
 			Properties map[string]yaml.Node `yaml:"properties"`
 		} `yaml:"schemas"`
 	} `yaml:"components"`
+}
+
+type openAPIParameter struct {
+	Name     string `yaml:"name"`
+	In       string `yaml:"in"`
+	Required bool   `yaml:"required"`
+	Schema   struct {
+		Type      string `yaml:"type"`
+		MinLength int    `yaml:"minLength"`
+		MaxLength int    `yaml:"maxLength"`
+	} `yaml:"schema"`
+}
+
+type openAPIBuildSchema struct {
+	Type                 string               `yaml:"type"`
+	AdditionalProperties bool                 `yaml:"additionalProperties"`
+	Required             []string             `yaml:"required"`
+	Properties           map[string]yaml.Node `yaml:"properties"`
 }
 
 type openAPIPath struct {
@@ -42,10 +63,16 @@ type openAPIPath struct {
 type openAPIOperation struct {
 	OperationID string                 `yaml:"operationId"`
 	Security    *[]map[string][]string `yaml:"security"`
-	Responses   map[string]yaml.Node   `yaml:"responses"`
-	CSRF        bool                   `yaml:"x-csrf-required-for-cookie-auth"`
-	Origin      bool                   `yaml:"x-origin-required"`
-	GroupLevel  *struct {
+	Parameters  []openAPIParameter     `yaml:"parameters"`
+	RequestBody *struct {
+		Content map[string]struct {
+			Schema openAPIBuildSchema `yaml:"schema"`
+		} `yaml:"content"`
+	} `yaml:"requestBody"`
+	Responses  map[string]yaml.Node `yaml:"responses"`
+	CSRF       bool                 `yaml:"x-csrf-required-for-cookie-auth"`
+	Origin     bool                 `yaml:"x-origin-required"`
+	GroupLevel *struct {
 		Group string `yaml:"group"`
 		Level int    `yaml:"level"`
 	} `yaml:"x-required-group-level"`
@@ -345,6 +372,75 @@ func TestAdminIdentityOpenAPIHasNoRoleOrPrincipalKindFields(t *testing.T) {
 	if contract.Paths["/api/admin/session"].Post == nil {
 		t.Fatal("Core-backed browser session endpoint is missing")
 	}
+}
+
+func TestWebsiteBuildContractFieldsMatchGoTypes(t *testing.T) {
+	contract := loadOpenAPIContract(t, "website.yaml")
+	build := contract.Paths["/api/admin/builds"].Post
+	if build == nil {
+		t.Fatal("POST /api/admin/builds is missing from the Website contract")
+	}
+	var idempotencyKey openAPIParameter
+	foundKey := false
+	for _, parameter := range build.Parameters {
+		if parameter.Name == "Idempotency-Key" && parameter.In == "header" {
+			idempotencyKey, foundKey = parameter, true
+		}
+	}
+	if !foundKey || !idempotencyKey.Required || idempotencyKey.Schema.MinLength != 16 || idempotencyKey.Schema.MaxLength != 128 {
+		t.Fatalf("Idempotency-Key header must require 16..128 characters: %+v", idempotencyKey)
+	}
+	if build.RequestBody == nil {
+		t.Fatal("POST /api/admin/builds must declare a request body")
+	}
+	body := build.RequestBody.Content["application/json"].Schema
+	if body.Type != "object" || body.AdditionalProperties || !reflect.DeepEqual(body.Required, []string{"snapshot_id", "locale"}) || len(body.Properties) != 2 {
+		t.Fatalf("build body must allow only snapshot_id and locale: %+v", body)
+	}
+	requestFields := jsonTagFields(reflect.TypeOf(websiteapi.BuildSnapshotRequest{}))
+	for field := range body.Properties {
+		if !requestFields[field] {
+			t.Errorf("OpenAPI build body field %q is missing from BuildSnapshotRequest", field)
+		}
+	}
+
+	buildJob := contract.Components.Schemas["BuildJob"]
+	wantJobFields := []string{"id", "snapshot_id", "locale", "locale_catalog_revision", "input_digest", "state", "created_at", "updated_at"}
+	if !reflect.DeepEqual(buildJob.Required, wantJobFields) {
+		t.Fatalf("BuildJob required fields = %v, want %v", buildJob.Required, wantJobFields)
+	}
+	jobFields := jsonTagFields(reflect.TypeOf(websiteapi.BuildJob{}))
+	for _, field := range wantJobFields {
+		if !jobFields[field] {
+			t.Errorf("OpenAPI BuildJob field %q is missing from the Go contract", field)
+		}
+		if _, exists := buildJob.Properties[field]; !exists {
+			t.Errorf("OpenAPI BuildJob is missing required property %q", field)
+		}
+	}
+	for field := range buildJob.Properties {
+		if !jobFields[field] {
+			t.Errorf("OpenAPI BuildJob property %q is missing from the Go contract", field)
+		}
+	}
+	var digestSchema struct {
+		Pattern string `yaml:"pattern"`
+	}
+	digestNode := buildJob.Properties["input_digest"]
+	if err := digestNode.Decode(&digestSchema); err != nil || digestSchema.Pattern != `^[a-f0-9]{64}$` {
+		t.Fatalf("BuildJob.input_digest must require 64 lowercase hex characters: pattern=%q error=%v", digestSchema.Pattern, err)
+	}
+}
+
+func jsonTagFields(value reflect.Type) map[string]bool {
+	fields := make(map[string]bool, value.NumField())
+	for index := 0; index < value.NumField(); index++ {
+		tag := strings.Split(value.Field(index).Tag.Get("json"), ",")[0]
+		if tag != "" && tag != "-" {
+			fields[tag] = true
+		}
+	}
+	return fields
 }
 
 func loadOpenAPIContract(t *testing.T, name string) openAPIDocument {

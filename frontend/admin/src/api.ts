@@ -358,6 +358,21 @@ function validateWebsiteSnapshot(value: unknown): WebsiteSnapshot {
   return value as unknown as WebsiteSnapshot;
 }
 
+function validateWebsiteBuild(value: unknown): WebsiteBuild {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id ||
+    typeof value.snapshot_id !== "string" || !value.snapshot_id ||
+    typeof value.locale !== "string" || value.locale.length < 2 || value.locale.length > 64 || hasWhitespaceOrAsciiControl(value.locale) ||
+    typeof value.locale_catalog_revision !== "number" || !Number.isSafeInteger(value.locale_catalog_revision) || value.locale_catalog_revision < 1 ||
+    typeof value.input_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.input_digest) ||
+    typeof value.state !== "string" ||
+    (value.artifact_manifest_file_id !== undefined && typeof value.artifact_manifest_file_id !== "string") ||
+    (value.error_code !== undefined && typeof value.error_code !== "string") ||
+    typeof value.created_at !== "string" || typeof value.updated_at !== "string") {
+    throw new ApiError(502, "invalid_response", "Сервер вернул некорректную задачу сборки");
+  }
+  return value as unknown as WebsiteBuild;
+}
+
 function snapshotPayloadFromWebsite(payload: { config: unknown; metadata: unknown }, expectedPageID?: string, request = false): SnapshotDetail["payload"] {
   const invalid = (message: string): never => {
     throw new ApiError(request ? 400 : 502, request ? "invalid_snapshot_payload" : "invalid_response", message);
@@ -971,13 +986,13 @@ export const api = {
       if (!Number.isSafeInteger(revision) || revision < 1) throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия снапшота");
       return request<void>(`${ADMIN_ROOT}/snapshots/${encoded(id)}`, { method: "DELETE", headers: { "If-Match": `"${revision}"` } });
     },
-    buildSnapshot(snapshotID: string, idempotencyKey: string): Promise<WebsiteBuild> {
-      return request<WebsiteBuild>(`${ADMIN_ROOT}/builds`, {
-        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { snapshot_id: snapshotID },
-      });
+    buildSnapshot(snapshotID: string, locale: string, idempotencyKey: string): Promise<WebsiteBuild> {
+      return request<unknown>(`${ADMIN_ROOT}/builds`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { snapshot_id: snapshotID, locale },
+      }).then(validateWebsiteBuild);
     },
     build(id: string, signal?: AbortSignal): Promise<WebsiteBuild> {
-      return request<WebsiteBuild>(`${ADMIN_ROOT}/builds/${encoded(id)}`, { signal });
+      return request<unknown>(`${ADMIN_ROOT}/builds/${encoded(id)}`, { signal }).then(validateWebsiteBuild);
     },
     createMediaDerivative(input: { source_file_id: string; feature_id: string; profile: string }, idempotencyKey: string): Promise<WebsiteMediaJob> {
       return request<WebsiteMediaJob>(`${ADMIN_ROOT}/media/derivatives`, {

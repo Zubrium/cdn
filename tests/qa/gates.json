@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "coverage_min_percent": 60,
+  "coverage_scope": "executable",
+  "integration": "explicit",
+  "gates": [
+    {
+      "id": "ledger",
+      "label": "Website scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/website-scenarios.json"],
+      "cwd": "."
+    },
+    {
+      "id": "core-ledger",
+      "label": "Core scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/core-scenarios.json"],
+      "cwd": "."
+    },
+    {
+      "id": "website-unit",
+      "label": "Website acceptance unit scenarios",
+      "command": ["tests/qa/run-website-red.sh", "unit"],
+      "cwd": "."
+    },
+    {
+      "id": "website-contract",
+      "label": "Website acceptance contract scenarios",
+      "command": ["tests/qa/run-website-red.sh", "contract"],
+      "cwd": "."
+    },
+    {
+      "id": "website-integration",
+      "label": "Website acceptance integration scenarios (disposable resources)",
+      "command": ["tests/qa/run-website-red.sh", "integration"],
+      "cwd": ".",
+      "requires_env": [
+        "WEBSITE_TEST_DISPOSABLE",
+        "WEBSITE_TEST_RUN_ID",
+        "WEBSITE_TEST_POSTGRES_DSN",
+        "WEBSITE_TEST_POSTGRES_MIGRATION_DSN",
+        "WEBSITE_TEST_S3_BUCKET"
+      ]
+    },
+    {
+      "id": "core-integration",
+      "label": "Core acceptance integration scenarios (disposable PostgreSQL)",
+      "command": ["tests/qa/run-core-red.sh", "integration"],
+      "cwd": ".",
+      "requires_env": [
+        "TEST_CORE_OWNER_TASK_RESULT_DATABASE_URL"
+      ]
+    },
+    {
+      "id": "boundary-lint",
+      "label": "Module boundary and profile lint",
+      "command": ["make", "lint-core-boundary"],
+      "cwd": "."
+    },
+    {
+      "id": "frontend-typecheck",
+      "label": "Admin TypeScript typecheck",
+      "command": ["pnpm", "typecheck"],
+      "cwd": "frontend"
+    },
+    {
+      "id": "frontend-lint",
+      "label": "Admin ESLint",
+      "command": ["pnpm", "lint"],
+      "cwd": "frontend"
+    },
+    {
+      "id": "frontend-test",
+      "label": "Admin Vitest suite",
+      "command": ["pnpm", "test"],
+      "cwd": "frontend"
+    },
+    {
+      "id": "frontend-build",
+      "label": "Admin production build",
+      "command": ["pnpm", "build"],
+      "cwd": "frontend",
+      "requires_opt_in": "with-build"
+    }
+  ],
+  "go_checks": [
+    {"id": "go-test", "command": ["go", "test", "./..."]},
+    {"id": "go-vet", "command": ["go", "vet", "./..."]},
+    {"id": "go-build", "command": ["go", "build", "./..."]}
+  ]
+}

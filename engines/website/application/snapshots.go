@@ -26,7 +26,7 @@ func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limi
 	if limit < 1 || limit > s.store.MaxPageSize() {
 		return websiteapi.SnapshotPage{}, websiteapi.ErrTooLarge
 	}
-	if !identifierPattern.MatchString(pageID) {
+	if pageID != "" && !identifierPattern.MatchString(pageID) {
 		return websiteapi.SnapshotPage{}, websiteapi.ErrInvalid
 	}
 	pageID = strings.ToLower(pageID)
@@ -38,8 +38,12 @@ func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limi
 		}
 		parsedCursor = &parsed
 	}
-	if _, _, err := s.loadPage(ctx, pageID); err != nil {
-		return websiteapi.SnapshotPage{}, err
+	// An empty page_id is the unfiltered Admin listing contract. A page filter
+	// must still resolve to a known Website page before records are listed.
+	if pageID != "" {
+		if _, _, err := s.loadPage(ctx, pageID); err != nil {
+			return websiteapi.SnapshotPage{}, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return websiteapi.SnapshotPage{}, err
@@ -50,7 +54,9 @@ func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limi
 	}
 	selectors := []core.ModuleDataSelector{
 		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
-		{Field: "page_id", Operator: core.SelectorEqual, Values: []any{pageID}},
+	}
+	if pageID != "" {
+		selectors = append(selectors, core.ModuleDataSelector{Field: "page_id", Operator: core.SelectorEqual, Values: []any{pageID}})
 	}
 	keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "global", "global", state.After, selectors, limit)
 	if err != nil {
@@ -62,7 +68,7 @@ func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limi
 	page := websiteapi.SnapshotPage{Items: make([]websiteapi.Snapshot, 0, len(keys))}
 	for i, record := range records {
 		snapshot, err := decodeSnapshotRecord(keys[i], record)
-		if err != nil || snapshot.PageID != pageID {
+		if err != nil || (pageID != "" && snapshot.PageID != pageID) {
 			return websiteapi.SnapshotPage{}, websiteapi.ErrUnavailable
 		}
 		page.Items = append(page.Items, snapshot)
@@ -123,7 +129,13 @@ func (s *Service) findSnapshot(ctx context.Context, snapshotID string) (websitea
 	if err != nil {
 		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, mapCoreError(err)
 	}
-	if len(keys) != len(records) || next != "" || len(keys) != 1 {
+	if len(keys) != len(records) || next != "" {
+		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
+	}
+	if len(keys) == 0 {
+		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
+	}
+	if len(keys) > 1 {
 		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
 	}
 	snapshot, err := decodeSnapshotRecord(keys[0], records[0])
@@ -171,7 +183,7 @@ func decodeSnapshotRecord(key core.ModuleDataKey, record core.ModuleDataRecord) 
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
 	if key.RecordKey != "snapshot/"+snapshot.PageID+"/"+snapshot.ID || !identifierPattern.MatchString(snapshot.PageID) ||
-		!snapshotIDPattern.MatchString(snapshot.ID) || index.SnapshotID != snapshot.ID || index.PageID != snapshot.PageID || index.State != snapshot.State || !validSnapshotState(snapshot.State) || index.Revision != record.Revision || index.ParentID != snapshot.ParentID ||
+		!snapshotIDPattern.MatchString(snapshot.ID) || index.SnapshotID != snapshot.ID || index.PageID != snapshot.PageID || index.State != snapshot.State || !validSnapshotState(snapshot.State) || index.Revision < 1 || index.ParentID != snapshot.ParentID ||
 		!validSnapshotName(snapshot.Name) || snapshot.Sequence < 1 || snapshot.Payload == nil || !validJSONObject(snapshot.Payload.Config) || !validJSONObject(snapshot.Payload.Metadata) {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
@@ -219,8 +231,16 @@ func decodeSnapshotCursor(value string) (snapshotPageCursor, error) {
 		return snapshotPageCursor{}, err
 	}
 	var cursor snapshotPageCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != snapshotPageCursorVersion || !identifierPattern.MatchString(cursor.PageID) || len(cursor.After) > 256 || (cursor.After != "" && (!strings.HasPrefix(cursor.After, "snapshot/"+cursor.PageID+"/") || !snapshotIDPattern.MatchString(strings.TrimPrefix(cursor.After, "snapshot/"+cursor.PageID+"/")))) {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != snapshotPageCursorVersion ||
+		(cursor.PageID != "" && !identifierPattern.MatchString(cursor.PageID)) || len(cursor.After) > 256 {
 		return snapshotPageCursor{}, fmt.Errorf("invalid cursor")
+	}
+	if cursor.After != "" {
+		parts := strings.Split(cursor.After, "/")
+		if len(parts) != 3 || parts[0] != "snapshot" || !identifierPattern.MatchString(parts[1]) || !snapshotIDPattern.MatchString(parts[2]) ||
+			(cursor.PageID != "" && parts[1] != cursor.PageID) {
+			return snapshotPageCursor{}, fmt.Errorf("invalid cursor")
+		}
 	}
 	return cursor, nil
 }

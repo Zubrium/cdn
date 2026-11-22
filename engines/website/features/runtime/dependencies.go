@@ -55,11 +55,16 @@ func NewResolver(catalog []Candidate) (*Resolver, error) {
 	}
 	for featureID, candidates := range index {
 		seenDigests := make(map[string]string, len(candidates))
+		seenVersions := make(map[string]struct{}, len(candidates))
 		for _, candidate := range candidates {
 			if previous, exists := seenDigests[candidate.Digest]; exists && previous != candidate.Version {
 				return nil, fmt.Errorf("%w: digest reused by %s", ErrDependency, featureID)
 			}
+			if _, exists := seenVersions[candidate.Version]; exists {
+				return nil, fmt.Errorf("%w: ambiguous version %s@%s", ErrDependency, featureID, candidate.Version)
+			}
 			seenDigests[candidate.Digest] = candidate.Version
+			seenVersions[candidate.Version] = struct{}{}
 		}
 	}
 	return &Resolver{catalog: index}, nil

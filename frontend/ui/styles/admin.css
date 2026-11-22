@@ -306,7 +306,9 @@
   }
 
   .table-wrap {
-    @apply overflow-x-auto border-y border-border bg-card;
+    /* Contains absolutely positioned screen-reader labels (sr-only) inside
+       the horizontal scroll box instead of expanding the mobile layout viewport. */
+    @apply relative overflow-x-auto border-y border-border bg-card;
   }
 
   .data-table {

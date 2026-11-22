@@ -2,6 +2,11 @@
 
 package composition
 
-import platform "github.com/Zubrium/cdn/core/presentation"
+import (
+	platform "github.com/Zubrium/cdn/core/presentation"
+	appconfig "github.com/Zubrium/cdn/main/internal/config"
+)
 
-func registerWorkerHandlers(*platform.RuntimeRegistry, map[string]struct{}) error { return nil }
+func registerWorkerHandlers(*platform.RuntimeRegistry, map[string]struct{}, appconfig.Resolved) error {
+	return nil
+}

@@ -15,6 +15,18 @@ type testApplicationReadiness bool
 
 func (ready testApplicationReadiness) Ready() bool { return bool(ready) }
 
+func assertSilentFailureStream(t *testing.T, source <-chan error) {
+	t.Helper()
+	if source == nil {
+		t.Fatal("component exposed a nil failure stream")
+	}
+	select {
+	case err, ok := <-source:
+		t.Fatalf("component emitted an unexpected failure: ok=%t err=%v", ok, err)
+	default:
+	}
+}
+
 func TestMergeProfileAccessGroupsUnionsSourcesAndPreservesYAMLLevel(t *testing.T) {
 	groups, err := mergeProfileAccessGroups(map[string]platform.AccessLevel{
 		"router_routes": platform.AccessLevelNone,
@@ -65,9 +77,7 @@ func TestComponentLifecycleAdaptersFailClosedBeforeInitialization(t *testing.T) 
 	if err := core.Stop(ctx); err != nil || core.IsReady() {
 		t.Fatalf("stopping an uninitialized Core: err=%v ready=%t", err, core.IsReady())
 	}
-	if _, open := <-core.Errors(); open {
-		t.Fatal("uninitialized Core exposed a live failure stream")
-	}
+	assertSilentFailureStream(t, core.Errors())
 
 	loader := &loaderComponent{}
 	if err := loader.Start(ctx); err == nil {
@@ -91,9 +101,7 @@ func TestComponentLifecycleAdaptersFailClosedBeforeInitialization(t *testing.T) 
 	if err := fileAPI.Stop(ctx); err != nil {
 		t.Fatalf("stopping an uninitialized File API failed: %v", err)
 	}
-	if _, open := <-fileAPI.Errors(); open {
-		t.Fatal("uninitialized File API exposed a live failure stream")
-	}
+	assertSilentFailureStream(t, fileAPI.Errors())
 	var nilFileAPI *fileAPIComponent
 	if nilFileAPI.IsReady() {
 		t.Fatal("nil File API reported ready")

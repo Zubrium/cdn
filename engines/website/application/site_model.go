@@ -114,7 +114,7 @@ func decodeContentModelRecord(record core.ModuleDataRecord) (websiteapi.ContentM
 	}
 	if record.PayloadVersion != 1 || record.Revision < 1 || json.Unmarshal(record.Payload, &stored) != nil ||
 		json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "content_model" ||
-		index.Revision != record.Revision || !sha256HexPattern.MatchString(index.Digest) || index.Digest != stored.Digest ||
+		index.Revision < 1 || !sha256HexPattern.MatchString(index.Digest) || index.Digest != stored.Digest ||
 		!validJSONObject(stored.DataModel) || validateDataModel(stored.DataModel) != nil {
 		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}

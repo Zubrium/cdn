@@ -155,7 +155,14 @@ func (f *fakeWebsite) ListFeatureCatalog(_ context.Context, cursor string, limit
 
 func (f *fakeWebsite) BuildSnapshot(_ context.Context, input website.BuildSnapshotRequest) (website.BuildJob, error) {
 	f.buildCalls, f.buildInput = f.buildCalls+1, input
-	return website.BuildJob{ID: "job-1", SnapshotID: input.SnapshotID, State: "queued"}, nil
+	return website.BuildJob{
+		ID:                    "job-1",
+		SnapshotID:            input.SnapshotID,
+		Locale:                input.Locale,
+		LocaleCatalogRevision: 4,
+		InputDigest:           strings.Repeat("a", 64),
+		State:                 "queued",
+	}, nil
 }
 
 func (f *fakeWebsite) CreateMediaDerivative(_ context.Context, input website.CreateDerivativeRequest) (website.MediaJob, error) {
@@ -439,14 +446,51 @@ func TestBuildSnapshotRequiresIdempotencyAndUsesClientSnapshotOnly(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/admin/builds", strings.NewReader(`{"snapshot_id":"snapshot-1"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/builds", strings.NewReader(`{"snapshot_id":"snapshot-1","locale":"ru-RU"}`))
 	request.Header.Set("Authorization", "Bearer user-secret")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "build-snapshot-request-0001")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusAccepted || api.buildCalls != 1 || api.buildInput.SnapshotID != "snapshot-1" || api.buildInput.IdempotencyKey != "build-snapshot-request-0001" {
+	if response.Code != http.StatusAccepted || api.buildCalls != 1 || api.buildInput.SnapshotID != "snapshot-1" || api.buildInput.Locale != "ru-RU" || api.buildInput.IdempotencyKey != "build-snapshot-request-0001" {
 		t.Fatalf("status=%d calls=%d input=%+v body=%s", response.Code, api.buildCalls, api.buildInput, response.Body.String())
+	}
+	var job website.BuildJob
+	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil || job.Locale != "ru-RU" || job.LocaleCatalogRevision != 4 || job.InputDigest != strings.Repeat("a", 64) {
+		t.Fatalf("job response=%s error=%v", response.Body.String(), err)
+	}
+}
+
+func TestBuildSnapshotRejectsInvalidLocaleWithoutCallingWebsite(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing locale", body: `{"snapshot_id":"snapshot-1"}`},
+		{name: "empty locale", body: `{"snapshot_id":"snapshot-1","locale":""}`},
+		{name: "too short", body: `{"snapshot_id":"snapshot-1","locale":"r"}`},
+		{name: "too long", body: `{"snapshot_id":"snapshot-1","locale":"` + strings.Repeat("a", 65) + `"}`},
+		{name: "space", body: `{"snapshot_id":"snapshot-1","locale":"ru RU"}`},
+		{name: "control character", body: `{"snapshot_id":"snapshot-1","locale":"ru\nRU"}`},
+		{name: "unknown field", body: `{"snapshot_id":"snapshot-1","locale":"ru-RU","extra":true}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api := &fakeWebsite{}
+			handler, err := NewHandler(api, testConfig(1024))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/admin/builds", strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer user-secret")
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", "build-snapshot-request-0001")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || api.buildCalls != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, api.buildCalls, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -466,7 +510,7 @@ func TestWriteRoutesRejectDuplicateIdempotencyHeaders(t *testing.T) {
 		{
 			name:  "snapshot build",
 			path:  "/api/admin/builds",
-			body:  `{"snapshot_id":"snapshot-1"}`,
+			body:  `{"snapshot_id":"snapshot-1","locale":"ru-RU"}`,
 			calls: func(api *fakeWebsite) int { return api.buildCalls },
 		},
 		{

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"sort"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
@@ -163,12 +165,15 @@ func (c *coreComponent) IsReady() bool {
 
 func (c *coreComponent) Errors() <-chan error {
 	if c == nil || c.runtime == nil {
-		closed := make(chan error)
-		close(closed)
-		return closed
+		return idleFailureStream()
 	}
 	return c.runtime.CoordinatorErrors()
 }
+
+// idleFailureStream satisfies the Coordinator's failure-source contract for
+// components that have no asynchronous failures to report. Closing the stream
+// would be interpreted as a fatal component failure.
+func idleFailureStream() <-chan error { return make(chan error) }
 
 type loaderComponent struct {
 	core    *coreComponent
@@ -229,6 +234,7 @@ type fileAPIComponent struct {
 	notifications       *transport.NotificationHub
 	developmentFixtures bool
 	routerAdminEnabled  bool
+	uiHandler           http.Handler
 	config              appconfig.Resolved
 	server              *transport.AdminServer
 }
@@ -261,7 +267,8 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		FormsExportMaxBytes: c.config.FormsAPI.ExportMaxBytes, WorkflowAccessGroup: c.config.Coordinator.WorkflowAccessGroup,
 		WorkflowPageDefault: c.config.Coordinator.WorkflowsPageDefault, WorkflowPageMaximum: c.config.Coordinator.WorkflowsPageMaximum,
 		AccessGroups: configuredGroupNames(c.core.config.Core.AccessGroups), RouterAdminEnabled: c.routerAdminEnabled,
-		SyntheticData: c.developmentFixtures, IdentityEnabled: c.identityAdmin,
+		UIHandler: c.uiHandler, SyntheticData: c.developmentFixtures, IdentityEnabled: c.identityAdmin,
+		BuildIdentity: os.Getenv("ZUBRIUM_BUILD_IDENTITY"),
 	}
 	var routerOperations *router.PublicOperationRegistry
 	if c.routerEngine != nil {
@@ -402,9 +409,7 @@ func (c *fileAPIComponent) setApplicationReadiness(readiness transport.Readiness
 
 func (c *fileAPIComponent) Errors() <-chan error {
 	if c == nil || c.server == nil {
-		ch := make(chan error)
-		close(ch)
-		return ch
+		return idleFailureStream()
 	}
 	return c.server.Errors()
 }
@@ -418,7 +423,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	for _, id := range plan.Components {
 		selected[id] = struct{}{}
 	}
-	if err := registerWorkerHandlers(registry, selected); err != nil {
+	if err := registerWorkerHandlers(registry, selected, resolved); err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("register worker handlers: %w", err)
 	}
 	keys := []contracts.Key{contracts.CoreReadinessOperation().Key}
@@ -513,6 +518,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		}}); err != nil {
 			return nil, nil, nil, nil, err
 		}
+		contentEngine.buildLocaleCatalog = websiteEngine.localeCatalog
 	}
 	if _, enabled := selected["admin.website"]; enabled && !fileAPI.developmentFixtures {
 		if websiteEngine == nil {
@@ -537,6 +543,21 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	}
 	if err := registry.Register(platform.RuntimeComponent{ID: "admin.files", Requires: adminFilesRequires, New: func(context.Context) (platform.ManagedComponent, error) { return fileAPI, nil }}); err != nil {
 		return nil, nil, nil, nil, err
+	}
+	if _, enabled := selected["admin.ui"]; enabled {
+		handler, err := newAdminUIHandler()
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("initialize Admin UI: %w", err)
+		}
+		if handler == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		fileAPI.uiHandler = handler
+		if err := registry.Register(platform.RuntimeComponent{ID: "admin.ui", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return &readyComponent{id: "admin.ui"}, nil
+		}}); err != nil {
+			return nil, nil, nil, nil, err
+		}
 	}
 	if _, enabled := selected["admin.coordinator"]; enabled {
 		component := &readyComponent{id: "admin.coordinator"}
@@ -678,7 +699,7 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	}
 	available := map[string]struct{}{
 		"core": {}, "engine.loader": {}, "admin.files": {}, "admin.coordinator": {}, "admin.identity": {}, "admin.notifications": {},
-		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
+		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
 		"public.form-session": {}, "public.form-submit": {},
 		"worker.archive": {}, "worker.media": {}, "worker.prerender": {},
 	}

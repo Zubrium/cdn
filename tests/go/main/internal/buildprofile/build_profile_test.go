@@ -108,6 +108,56 @@ func TestIdentityAPIRequiresSharedFileAPIServer(t *testing.T) {
 	}
 }
 
+func TestSharedAdminListenerStartsAfterSelectedEngines(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		input   string
+		earlier []string
+	}{
+		"explicit": {
+			input:   "version: 1\nengines: [forms, loader]\nworkers: []\napis:\n  admin: [files, forms]\n  public: []\n",
+			earlier: []string{"engine.forms"},
+		},
+		"full": {
+			input:   mustReadProfileFixture(t, "full.yaml"),
+			earlier: []string{"engine.forms", "engine.website", "engine.router"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan, err := ParseBuildProfile(strings.NewReader(testCase.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			positions := map[string]int{}
+			for i, id := range plan.Components {
+				positions[id] = i
+			}
+			if positions["admin.files"] == 0 {
+				t.Fatalf("profile omitted the shared Admin listener: %v", plan.Components)
+			}
+			for _, id := range testCase.earlier {
+				if positions[id] == 0 {
+					t.Fatalf("profile omitted %s: %v", id, plan.Components)
+				}
+				if positions[id] >= positions["admin.files"] {
+					t.Fatalf("%s must start before the Admin listener that wires it: %v", id, plan.Components)
+				}
+			}
+			if name == "full" && positions["engine.content"] >= positions["engine.router"] {
+				t.Fatalf("Content engine must start before Router consumes its public runtime: %v", plan.Components)
+			}
+		})
+	}
+}
+
+func mustReadProfileFixture(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "profiles", name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return string(data)
+}
+
 func TestPublicUploadIsASeparateLoaderAndRouterOperation(t *testing.T) {
 	input := "version: 1\nengines: [loader, router]\nworkers: []\napis:\n  admin: []\n  public: [router, form-upload]\n"
 	plan, err := ParseBuildProfile(strings.NewReader(input))

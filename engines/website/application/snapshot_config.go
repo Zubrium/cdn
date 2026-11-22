@@ -18,6 +18,7 @@ type snapshotConfigProjection struct {
 	FormatVersion int                      `json:"format_version"`
 	Page          *snapshotPageProjection  `json:"page"`
 	Pages         []snapshotPageProjection `json:"pages"`
+	Features      json.RawMessage          `json:"features,omitempty"`
 }
 
 type snapshotPageProjection struct {
@@ -30,6 +31,7 @@ type snapshotPageProjection struct {
 			FeatureKey string `json:"featureKey"`
 			Version    string `json:"version"`
 		} `json:"build"`
+		Arguments    json.RawMessage       `json:"arguments,omitempty"`
 		DataBindings []snapshotDataBinding `json:"dataBindings"`
 	} `json:"placements"`
 }
@@ -67,7 +69,13 @@ func snapshotPageFromConfig(raw json.RawMessage) (snapshotPageProjection, error)
 		return snapshotPageProjection{}, websiteapi.ErrInvalid
 	}
 	var config snapshotConfigProjection
-	if err := json.Unmarshal(raw, &config); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
+		return snapshotPageProjection{}, websiteapi.ErrInvalid
+	}
+	var extra any
+	if !errors.Is(decoder.Decode(&extra), io.EOF) {
 		return snapshotPageProjection{}, websiteapi.ErrInvalid
 	}
 	if config.Page != nil {

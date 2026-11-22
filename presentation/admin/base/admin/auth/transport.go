@@ -133,6 +133,36 @@ func (transport *Transport) TrustedOrigin(r *http.Request) bool {
 	return allowed
 }
 
+// TrustedReadOrigin guards read-only browser streams such as EventSource.
+// Those APIs send no Origin header on same-origin GETs, so we require an
+// explicit same-origin fetch metadata header and an allowed Referer instead.
+// State-changing requests must still use TrustedOrigin with a CSRF proof.
+func (transport *Transport) TrustedReadOrigin(r *http.Request) bool {
+	if transport == nil || r == nil {
+		return false
+	}
+	if transport.TrustedOrigin(r) {
+		return true
+	}
+	if len(r.Header.Values("Origin")) != 0 {
+		return false
+	}
+	fetchSite := r.Header.Values("Sec-Fetch-Site")
+	if len(fetchSite) != 1 || fetchSite[0] != "same-origin" {
+		return false
+	}
+	referrers := r.Header.Values("Referer")
+	if len(referrers) != 1 {
+		return false
+	}
+	parsed, err := url.Parse(referrers[0])
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	_, allowed := transport.origins[parsed.Scheme+"://"+strings.ToLower(parsed.Host)]
+	return allowed
+}
+
 func ValidCSRFProof(r *http.Request) bool {
 	if r == nil {
 		return false

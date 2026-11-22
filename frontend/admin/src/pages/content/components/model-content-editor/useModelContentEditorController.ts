@@ -173,7 +173,7 @@ export function useModelContentEditorController({
       return;
     }
     try { sessionStorage.removeItem(draftStorageKey(workspace.snapshot.id, workspace.locale)); } catch { /* storage can be disabled */ }
-  }, [dirty, draft, workspace.snapshot.id]);
+  }, [dirty, draft, workspace.locale, workspace.snapshot.id]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -204,7 +204,7 @@ export function useModelContentEditorController({
     setSaveState("conflict");
     setSaveError("Локальные изменения сохранены в этой вкладке. Скачайте копию перед загрузкой серверной ревизии.");
     void queryClient.invalidateQueries({ queryKey: modelWorkspaceQueryKey(workspace.snapshot.id, workspace.locale) });
-  }, [queryClient, workspace.revision, workspace.snapshot.id]);
+  }, [queryClient, workspace.locale, workspace.revision, workspace.snapshot.id]);
 
   const saveDraft = useCallback(async (): Promise<ModelContentWorkspace | null> => {
     if (!dirty || saveLock.current || invalidCount > 0 || saveState === "conflict") return null;
@@ -253,7 +253,7 @@ export function useModelContentEditorController({
     } finally {
       saveLock.current = false;
     }
-  }, [dirty, invalidCount, markRevisionConflict, queryClient, recordId, saveState, workspace.snapshot.id]);
+  }, [dirty, invalidCount, markRevisionConflict, queryClient, recordId, saveState, workspace.locale, workspace.snapshot.id]);
 
   useEffect(() => {
     if (!dirty || saveState !== "idle" || invalidCount > 0) return;
@@ -283,7 +283,7 @@ export function useModelContentEditorController({
       setRevisionConflict({ local: revisionRef.current, server: workspace.revision });
       setSaveError("На сервере появилась новая ревизия. Локальные изменения оставлены без перезаписи.");
     }
-  }, [dirty, initialServerDraft, workspace.revision]);
+  }, [dirty, initialServerDraft, workspace.revision, workspace.selectionRevision]);
 
   const addRecord = (): ModelContentRecord | null => {
     if (!selectedEntity || selectedEntity.cardinality === "singleton") return null;

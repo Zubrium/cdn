@@ -194,12 +194,6 @@ func TestWebsiteScenarioDataModelCardinality(t *testing.T) {
 	})
 }
 
-func TestWebsiteScenarioFeatureRuntime(t *testing.T) {
-	t.Run("WEB-016", func(t *testing.T) {
-		t.Skip("gap: no Website public-runtime renderer exposes CSP/CORS, disposal, and feature-token persistence as one testable contract")
-	})
-}
-
 func TestWebsiteScenarioTemplateMaterialization(t *testing.T) {
 	t.Run("WEB-008", func(t *testing.T) {
 		store, service, ctx := newWebsiteScenarioService(t)
@@ -312,18 +306,6 @@ func TestWebsiteScenarioArtifactValidation(t *testing.T) {
 				t.Fatalf("invalid artifact was accepted: %s", payload)
 			}
 		}
-	})
-}
-
-func TestWebsiteScenarioRenderAndSEO(t *testing.T) {
-	t.Run("WEB-015", func(t *testing.T) {
-		t.Skip("gap: no Website document renderer/public SEO composition exists for an isolated unit assertion")
-	})
-}
-
-func TestWebsiteScenarioDesignTokens(t *testing.T) {
-	t.Run("WEB-016", func(t *testing.T) {
-		t.Skip("gap: target runtime forbids per-page token overrides and exposes no light/dark token persistence contract")
 	})
 }
 

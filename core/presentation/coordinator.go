@@ -26,6 +26,7 @@ type WorkflowStartRequest = appcoord.WorkflowStartRequest
 type WorkflowReceipt = appcoord.WorkflowReceipt
 type WorkflowClient = appcoord.WorkflowClient
 type WorkflowControl = appcoord.WorkflowControl
+type TaskResult = corecoord.TaskResult
 
 // CoordinatorRuntimeConfig contains explicit operational limits. Component
 // contracts and task handlers are collected from the selected composition;

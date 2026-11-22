@@ -55,8 +55,10 @@ type AdminConfig struct {
 	AccessGroups             []string
 	RouterAdminEnabled       bool
 	Router                   routerhttp.Config
+	UIHandler                http.Handler
 	SyntheticData            bool
 	IdentityEnabled          bool
+	BuildIdentity            string
 }
 
 type AdminDependencies struct {
@@ -263,8 +265,15 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		mux.Handle("/api/admin/router", guard(handler))
 		mux.Handle("/api/admin/router/", guard(handler))
 	}
+	if s.config.UIHandler != nil {
+		mux.Handle("/admin", s.config.UIHandler)
+		mux.Handle("/admin/", s.config.UIHandler)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		if s.config.BuildIdentity != "" {
+			w.Header().Set("X-Zubrium-Build-Identity", s.config.BuildIdentity)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
