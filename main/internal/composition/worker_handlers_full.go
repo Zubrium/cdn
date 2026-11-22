@@ -5,42 +5,49 @@ package composition
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/Zubrium/cdn/workers/media"
 	"github.com/Zubrium/cdn/workers/prerender"
 )
 
 func registerWorkerHandlers(registry *core.RuntimeRegistry, selected map[string]struct{}, config appconfig.Resolved, component *coreComponent) error {
-	handlers := []struct {
-		componentID string
-		operationID string
-	}{
-		{componentID: "worker.archive", operationID: archive.OperationID},
-		{componentID: "worker.media", operationID: media.OperationID},
-		{componentID: "worker.prerender", operationID: prerender.OperationID},
-	}
-	for _, worker := range handlers {
-		if _, enabled := selected[worker.componentID]; !enabled {
+	workers := []string{"worker.archive", "worker.media", "worker.prerender"}
+	for _, componentID := range workers {
+		if _, enabled := selected[componentID]; !enabled {
 			continue
 		}
-		handler := failClosedWorker(worker.componentID)
-		if worker.componentID == archive.DataModuleID && config.FeatureImport.Enabled {
-			handler = func(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
+		handlers := map[string]core.WorkerHandler{}
+		switch componentID {
+		case archive.DataModuleID:
+			handlers[archive.OperationID+"/v1"] = func(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
+				if !config.FeatureImport.Enabled {
+					return core.TaskOutcome{}, errors.New("archive worker is not configured")
+				}
 				configured := component.archiveHandle.Load()
 				if configured == nil {
 					return core.TaskOutcome{}, errors.New("archive worker is not configured")
 				}
 				return configured.WorkerHandler(ctx, task)
 			}
+		case media.DataModuleID:
+			handlers[media.OperationID+"/v1"] = failClosedWorker(componentID)
+			handlers[media.OperationID+"/v"+strconv.Itoa(mediaprofile.WorkContractVersion)] = func(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
+				configured := component.mediaHandle.Load()
+				if configured == nil {
+					return core.TaskOutcome{}, errors.New("media worker is not configured")
+				}
+				return configured.WorkerHandler(ctx, task)
+			}
+		default:
+			handlers[prerender.OperationID+"/v1"] = failClosedWorker(componentID)
 		}
-		err := registry.RegisterWorkerHandlers(worker.componentID, map[string]core.WorkerHandler{
-			worker.operationID + "/v1": handler,
-		})
-		if err != nil {
+		if err := registry.RegisterWorkerHandlers(componentID, handlers); err != nil {
 			return err
 		}
 	}
@@ -50,7 +57,8 @@ func registerWorkerHandlers(registry *core.RuntimeRegistry, selected map[string]
 			return err
 		}
 		if err := registry.RegisterWorkerHandlers(websiteworkflow.ComponentID, map[string]core.WorkerHandler{
-			websiteworkflow.OperationID + "/v1": handler.WorkerHandler,
+			websiteworkflow.OperationID + "/v1":      handler.WorkerHandler,
+			websiteworkflow.MediaOperationID + "/v1": handler.MediaWorkerHandler,
 		}); err != nil {
 			return err
 		}

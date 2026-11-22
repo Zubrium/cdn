@@ -138,6 +138,9 @@ func validateManifestFields(manifest Manifest, files map[string]struct{}) error 
 		if err := rejectSecretKeys(input.Profile); err != nil {
 			return err
 		}
+		if err := validateMediaProfiles(input.Profile, input.Type != "", input.Type); err != nil {
+			return err
+		}
 		for _, field := range input.Fields {
 			var port struct {
 				Path    string         `json:"path"`
@@ -151,6 +154,9 @@ func validateManifestFields(manifest Manifest, files map[string]struct{}) error 
 				return fmt.Errorf("%w: dataInput field", ErrManifest)
 			}
 			if err := rejectSecretKeys(port.Profile); err != nil {
+				return err
+			}
+			if err := validateMediaProfiles(port.Profile, true, port.Type); err != nil {
 				return err
 			}
 		}

@@ -317,17 +317,17 @@
       "source": "spec/engines/website/SPEC-website-engine.md §§Декларативные media-профили и производные файлы, Приёмочные проверки item 9; SPEC-feature-runtime.md §Media declarations",
       "level": "integration",
       "preconditions": [
-        "A disposable Core file store and supervised worker.media fixture are configured with explicit resource limits."
+        "A disposable Core file store, PostgreSQL, S3, and a Docker/Linux kernel-enforced media sandbox are configured with explicit resource limits."
       ],
-      "input": "Invalid source/profile, client profile override, MIME/size/checksum failure, timeout/cancellation/retry and profile or processor-version change.",
-      "action": "Launch the manifest-pinned media derivative workflow.",
-      "expected_result": "Website accepts only the pinned x-media profile and updates the field only after all outputs validate; retry identity includes source checksum/profile/processor.",
-      "expected_state": "Original and prior field value survive failure/cancellation; derivatives are immutable, inherit groups/FileSets and partial outputs are not ready.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-019",
-      "coverage_status": "blocked",
-      "execution_status": "blocked",
-      "blocker": "Нет OS-enforced media supervision, resource limits и изолированного DTO/OpenAPI-backed derivative fixture; shared или live media resources использовать запрещено."
+      "input": "Invalid source/profile, client profile override, MIME/size/checksum failure, cancellation/retry/restart, profile or processor-version change, and a fresh source under the same caller key.",
+      "action": "Launch the manifest-pinned media derivative workflow in the disposable stack and probe sandbox isolation from inside the container.",
+      "expected_result": "Website accepts only the pinned x-media profile and updates the field only after all outputs validate; retry identity includes source checksum/profile/processor; network and cgroup limits are enforced by the kernel.",
+      "expected_state": "Original and prior field value survive failure/cancellation/restart; derivatives are immutable, inherit groups/FileSets and partial outputs are not ready.",
+      "test_file": "tests/go/main/cmd/zubrium/website_media_derivative_acceptance_test.go",
+      "test_symbol": "TestWebsiteMediaDerivativeAcceptance/WEB-019",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-020",

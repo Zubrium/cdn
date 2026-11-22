@@ -901,7 +901,7 @@ func (h *Handler) createMediaDerivative(w http.ResponseWriter, r *http.Request) 
 		writeDecodeError(w, err)
 		return
 	}
-	if !validID(input.SourceFileID) || !validID(input.FeatureID) || !validID(input.Profile) {
+	if !validUUID(input.SnapshotID) || !validID(input.PlacementID) || !validFieldPath(input.FieldPath) || !validUUID(input.SourceFileID) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -1102,6 +1102,25 @@ func validID(value string) bool {
 func validUUID(value string) bool {
 	return uuidPattern.MatchString(value)
 }
+
+func validFieldPath(value string) bool {
+	if value == "" || len(value) > 512 || value[0] != '/' || strings.Contains(value, "//") ||
+		strings.Contains(value, "..") || strings.ContainsAny(value, "\x00\r\n\\") {
+		return false
+	}
+	segments := strings.Split(strings.TrimPrefix(value, "/"), "/")
+	if len(segments) == 0 || len(segments) > 2 {
+		return false
+	}
+	for _, segment := range segments {
+		if segment == "" || !fieldPathSegmentPattern.MatchString(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+var fieldPathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 
 var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 

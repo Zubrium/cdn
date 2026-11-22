@@ -7,6 +7,7 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	websiteengine "github.com/Zubrium/cdn/engines/website"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
+	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/workers/archive"
@@ -62,6 +63,27 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		serviceConfig.Workflow = workflow
 		serviceConfig.Sessions = component.core.runtime.Sessions()
 	}
+	if component.config.Media.Enabled {
+		workflowClient, err := component.core.runtime.NewWorkflowClient(websiteworkflow.ComponentID)
+		if err != nil {
+			return err
+		}
+		state, err := component.core.MediaSandboxState()
+		if err != nil {
+			return err
+		}
+		workflowControl, err := component.core.runtime.NewWorkflowControl()
+		if err != nil {
+			return err
+		}
+		serviceConfig.MediaWorkflow = newWebsiteBuildWorkflowClient(workflowClient, workflowClient, workflowClient,
+			workflowControl, component.config.Coordinator.MaxWorkflowTasks)
+		serviceConfig.MediaFiles = component.core.runtime.EngineFiles()
+		serviceConfig.MediaOperationID = websiteworkflow.MediaOperationID
+		serviceConfig.MediaContractVersion = websiteworkflow.MediaContractVersion
+		serviceConfig.MediaProcessorVersion = component.config.Media.ProcessorVersion
+		serviceConfig.MediaSandbox = staticMediaSandboxProbe{state: state}
+	}
 	service, err := websiteapp.NewService(serviceConfig, data, component.core.runtime.GroupAuthorization(), component.core.runtime.Sessions())
 	if err != nil {
 		return err
@@ -69,6 +91,14 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	component.service = service
 	component.localeCatalog = localeCatalog
 	return nil
+}
+
+type staticMediaSandboxProbe struct {
+	state websiteapi.MediaSandboxState
+}
+
+func (probe staticMediaSandboxProbe) MediaSandboxState() websiteapi.MediaSandboxState {
+	return probe.state
 }
 
 func (component *websiteEngineComponent) Ready(context.Context) error {

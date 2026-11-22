@@ -158,9 +158,10 @@ export interface WebsiteBuild {
 export interface WebsiteMediaJob {
   id: string;
   source_file_id: string;
-  derivative_file_id?: string;
-  profile: string;
-  state: string;
+  profile_digest: string;
+  processor_version: string;
+  state: "queued" | "running" | "ready" | "retryable_failed" | "rejected" | "cancelled";
+  outputs?: Record<string, string>;
   error_code?: string;
   created_at: string;
   updated_at: string;

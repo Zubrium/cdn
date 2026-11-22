@@ -32,23 +32,6 @@ func (s *Service) GetFeatureVersion(ctx context.Context, _, _ string) (websiteap
 	return websiteapi.FeatureVersion{}, websiteapi.ErrUnavailable
 }
 
-func (s *Service) CreateMediaDerivative(ctx context.Context, _ websiteapi.CreateDerivativeRequest) (websiteapi.MediaJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
-		return websiteapi.MediaJob{}, err
-	}
-	if err := s.requireCoordinatorWrite(ctx); err != nil {
-		return websiteapi.MediaJob{}, err
-	}
-	return websiteapi.MediaJob{}, websiteapi.ErrUnavailable
-}
-
-func (s *Service) GetMediaJob(ctx context.Context, _ string) (websiteapi.MediaJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
-		return websiteapi.MediaJob{}, err
-	}
-	return websiteapi.MediaJob{}, websiteapi.ErrUnavailable
-}
-
 func validBuildLocale(locale string) bool {
 	if len(locale) < 2 || len(locale) > 64 {
 		return false

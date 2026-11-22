@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"regexp"
@@ -44,6 +45,11 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 			env.s3AccessKey = "test-access"
 			env.s3SecretKey = "test-secret"
 			env.insecureS3HTTP = true
+		} else {
+			// Real disposable MinIO stores objects but does not implement the
+			// four read-only bucket safety APIs Core checks at startup. Answer
+			// those locally and forward every object operation to MinIO.
+			websiteProxyPrivateS3Checks(t, &env)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -401,6 +407,39 @@ func websitePrivateS3Handler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, `<Error><Code>NotImplemented</Code></Error>`, http.StatusNotImplemented)
 	}
+}
+
+// websiteProxyPrivateS3Checks supplies the immutable bucket-policy answers
+// Core requires at startup while forwarding all object operations to the real
+// disposable S3 stack. It is run-scoped and never changes bucket contents.
+func websiteProxyPrivateS3Checks(t *testing.T, env *websitePersistenceEnv) {
+	t.Helper()
+	target, err := url.Parse(env.s3Endpoint)
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		t.Fatalf("invalid disposable S3 endpoint: %q", env.s3Endpoint)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	privateCheck := func(r *http.Request) bool {
+		if r.URL.Path != "/"+env.s3Bucket {
+			return false
+		}
+		for _, key := range []string{"publicAccessBlock", "versioning", "acl", "policyStatus"} {
+			if r.URL.Query().Has(key) {
+				return true
+			}
+		}
+		return false
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if privateCheck(r) {
+			websitePrivateS3Handler(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	env.s3Endpoint = server.URL
+	env.insecureS3HTTP = true
 }
 
 type websitePersistenceModule struct{}

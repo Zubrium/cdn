@@ -150,6 +150,23 @@ type FeatureImport struct {
 	MaxCompressionRatio  uint64   `yaml:"max_compression_ratio"`
 }
 
+// Media supplies trusted, server-side inputs for the supervised media worker
+// and the Website derivative API. It is never populated from an HTTP request.
+type Media struct {
+	ServiceCredentialEnv string `yaml:"service_credential_env"`
+	SandboxImage         string `yaml:"sandbox_image"`
+	DockerBinary         string `yaml:"docker_binary"`
+	StagingDirectory     string `yaml:"staging_directory"`
+	ProcessorVersion     string `yaml:"processor_version"`
+	CPUs                 string `yaml:"cpus"`
+	MemoryLimitBytes     int64  `yaml:"memory_limit_bytes"`
+	PIDsLimit            int64  `yaml:"pids_limit"`
+	MaxInputBytes        int64  `yaml:"max_input_bytes"`
+	MaxOutputBytes       int64  `yaml:"max_output_bytes"`
+	MaxConcurrency       int    `yaml:"max_concurrency"`
+	Timeout              string `yaml:"timeout"`
+}
+
 type HTTP struct {
 	ListenAddress     string `yaml:"listen_address"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
@@ -253,6 +270,22 @@ type FeatureImportSettings struct {
 	Limits            archive.Limits
 }
 
+type MediaSettings struct {
+	Enabled           bool
+	ServiceCredential string
+	SandboxImage      string
+	DockerBinary      string
+	StagingDirectory  string
+	ProcessorVersion  string
+	CPUs              string
+	MemoryLimitBytes  int64
+	PIDsLimit         int64
+	MaxInputBytes     int64
+	MaxOutputBytes    int64
+	MaxConcurrency    int
+	Timeout           time.Duration
+}
+
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -262,6 +295,7 @@ type Resolved struct {
 	FormsAPI               FormsAPISettings
 	ContentAPI             ContentAPISettings
 	FeatureImport          FeatureImportSettings
+	Media                  MediaSettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
@@ -568,6 +602,19 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			}
 		}
 	}
+	mediaConfigured := c.Media.ServiceCredentialEnv != "" || c.Media.SandboxImage != "" || c.Media.DockerBinary != "" ||
+		c.Media.StagingDirectory != "" || c.Media.ProcessorVersion != "" || c.Media.CPUs != "" || c.Media.MemoryLimitBytes != 0 ||
+		c.Media.PIDsLimit != 0 || c.Media.MaxInputBytes != 0 || c.Media.MaxOutputBytes != 0 || c.Media.MaxConcurrency != 0 || c.Media.Timeout != ""
+	if mediaConfigured {
+		settings := c.Media
+		if !envName.MatchString(settings.ServiceCredentialEnv) || !strings.Contains(settings.SandboxImage, "@sha256:") ||
+			strings.TrimSpace(settings.DockerBinary) == "" || !filepath.IsAbs(settings.StagingDirectory) ||
+			filepath.Clean(settings.StagingDirectory) != settings.StagingDirectory || settings.StagingDirectory == string(filepath.Separator) ||
+			settings.ProcessorVersion == "" || settings.CPUs == "" || settings.MemoryLimitBytes <= 0 || settings.PIDsLimit <= 0 ||
+			settings.MaxInputBytes <= 0 || settings.MaxOutputBytes <= 0 || settings.MaxConcurrency <= 0 {
+			return Resolved{}, errors.New("media requires a sandbox image digest, service credential, staging directory, processor version and explicit limits")
+		}
+	}
 	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
 		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
 	}
@@ -615,6 +662,19 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		if featureImportCredential == "" || strings.ContainsRune(featureImportCredential, '\x00') {
 			return Resolved{}, errors.New("configured FeatureImport service credential is empty or invalid")
 		}
+	}
+	var mediaCredential string
+	var mediaTimeout time.Duration
+	if mediaConfigured {
+		mediaCredential = getenv(c.Media.ServiceCredentialEnv)
+		if mediaCredential == "" || strings.ContainsRune(mediaCredential, '\x00') {
+			return Resolved{}, errors.New("configured media service credential is empty or invalid")
+		}
+		parsed, err := time.ParseDuration(c.Media.Timeout)
+		if err != nil || parsed <= 0 {
+			return Resolved{}, errors.New("media requires an explicit positive timeout")
+		}
+		mediaTimeout = parsed
 	}
 	if c.Core.AccessGroups == nil {
 		return Resolved{}, errors.New("Core access_groups must be configured explicitly")
@@ -674,6 +734,11 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			Limits: archive.Limits{MaxArchiveBytes: c.FeatureImport.MaxArchiveBytes, MaxEntries: c.FeatureImport.MaxEntries,
 				MaxEntryBytes: c.FeatureImport.MaxEntryBytes, MaxExpandedBytes: c.FeatureImport.MaxExpandedBytes,
 				MaxCompressionRatio: c.FeatureImport.MaxCompressionRatio}},
+		Media: MediaSettings{Enabled: mediaConfigured, ServiceCredential: mediaCredential,
+			SandboxImage: c.Media.SandboxImage, DockerBinary: c.Media.DockerBinary, StagingDirectory: c.Media.StagingDirectory,
+			ProcessorVersion: c.Media.ProcessorVersion, CPUs: c.Media.CPUs, MemoryLimitBytes: c.Media.MemoryLimitBytes,
+			PIDsLimit: c.Media.PIDsLimit, MaxInputBytes: c.Media.MaxInputBytes, MaxOutputBytes: c.Media.MaxOutputBytes,
+			MaxConcurrency: c.Media.MaxConcurrency, Timeout: mediaTimeout},
 		Coordinator: CoordinatorSettings{
 			WorkflowAccessGroup:  c.Coordinator.WorkflowAccessGroup,
 			WorkflowsPageDefault: c.Coordinator.WorkflowsPageDefault, WorkflowsPageMaximum: c.Coordinator.WorkflowsPageMaximum,
@@ -696,6 +761,7 @@ type Config struct {
 	FormsAPI      FormsAPI          `yaml:"forms_api"`
 	ContentAPI    ContentAPI        `yaml:"content_api"`
 	FeatureImport FeatureImport     `yaml:"feature_import"`
+	Media         Media             `yaml:"media"`
 	HTTP          HTTP              `yaml:"http"`
 	Coordinator   CoordinatorConfig `yaml:"coordinator"`
 }

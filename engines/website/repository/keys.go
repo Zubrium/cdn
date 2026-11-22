@@ -16,6 +16,7 @@ const (
 	SnapshotNamespace = "website/snapshots"
 	TemplateNamespace = "website/page-templates"
 	BuildNamespace    = "website/builds"
+	MediaNamespace    = "website/media"
 	ImportNamespace   = "features/imports"
 	FeatureCatalogNS  = "features/catalog"
 	ImportScopeID     = "import"
@@ -24,7 +25,10 @@ const (
 
 // BuildScopeID is shared by a job and its idempotency receipts so their
 // creation can be committed in one scoped Core batch.
-const BuildScopeID = "build"
+const (
+	BuildScopeID = "build"
+	MediaScopeID = "media"
+)
 
 func PageKey(pageID string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: SnapshotNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "page/" + strings.ToLower(pageID)}
@@ -49,6 +53,16 @@ func BuildKey(id string) core.ModuleDataKey {
 
 func BuildIdempotencyKey(key string) core.ModuleDataKey {
 	return core.ModuleDataKey{Namespace: BuildNamespace, ScopeType: "job", ScopeID: BuildScopeID,
+		RecordKey: "idempotency/" + digestKey(key)}
+}
+
+func MediaJobKey(jobID string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: MediaNamespace, ScopeType: "job", ScopeID: MediaScopeID,
+		RecordKey: "job/" + strings.ToLower(jobID)}
+}
+
+func MediaIdempotencyKey(key string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: MediaNamespace, ScopeType: "job", ScopeID: MediaScopeID,
 		RecordKey: "idempotency/" + digestKey(key)}
 }
 

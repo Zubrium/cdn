@@ -194,7 +194,13 @@ run_integration_targets() {
 run_integration() {
 	printf '%s\n' "==> checking disposable integration prerequisites"
 	require_integration_prerequisites || return $?
-	run_integration_targets
+	run_integration_targets || return $?
+	# WEB-019 is only complete when the exact executable scenario subtest passes
+	# against the disposable stack; a ledger-only pass is not sufficient.
+	if ! grep -qF -- "--- PASS: TestWebsiteMediaDerivativeAcceptance/WEB-019" "$work_dir"/*.log; then
+		printf '%s\n' "WEB-019 integration did not produce the required PASS subtest line; refusing a zero-test success" >&2
+		return 1
+	fi
 }
 
 python3 "$root/tests/go-overlay.py" > "$overlay" || exit $?

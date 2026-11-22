@@ -994,7 +994,12 @@ export const api = {
     build(id: string, signal?: AbortSignal): Promise<WebsiteBuild> {
       return request<unknown>(`${ADMIN_ROOT}/builds/${encoded(id)}`, { signal }).then(validateWebsiteBuild);
     },
-    createMediaDerivative(input: { source_file_id: string; feature_id: string; profile: string }, idempotencyKey: string): Promise<WebsiteMediaJob> {
+    createMediaDerivative(input: {
+      snapshot_id: string;
+      placement_id: string;
+      field_path: string;
+      source_file_id: string;
+    }, idempotencyKey: string): Promise<WebsiteMediaJob> {
       return request<WebsiteMediaJob>(`${ADMIN_ROOT}/media/derivatives`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       });

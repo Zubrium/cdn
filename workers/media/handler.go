@@ -11,6 +11,7 @@ import (
 	"time"
 
 	core "github.com/Zubrium/cdn/core/presentation"
+	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 )
 
 const (
@@ -30,7 +31,10 @@ var _ core.ComponentDescriptorProvider = Descriptor{}
 
 func ComponentDescriptor() core.ComponentDescriptor {
 	return core.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
-		Operations: []core.ComponentOperation{{ID: OperationID, ContractVersion: 1}}}
+		Operations: []core.ComponentOperation{
+			{ID: OperationID, ContractVersion: 1},
+			{ID: OperationID, ContractVersion: mediaprofile.WorkContractVersion},
+		}}
 }
 
 // DataDescriptor declares media records under this worker's own Core module

@@ -62,6 +62,33 @@ type ImportWorkflowClient interface {
 	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
 }
 
+// MediaWorkflowClient is the owner-scoped Coordinator capability used by the
+// durable Website media derivative workflow. Resolution of child tasks is
+// required because Core assigns their IDs only when the root result commits.
+type MediaWorkflowClient interface {
+	Start(context.Context, core.WorkflowStartRequest) (core.WorkflowReceipt, error)
+	Get(context.Context, uuid.UUID) (core.Workflow, error)
+	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
+	ResolveTaskID(context.Context, uuid.UUID, string) (uuid.UUID, error)
+}
+
+// MediaFilesCapability is the narrow Core file surface used by media jobs.
+// FileSet membership is enumerated through existing Core capabilities; Website
+// never receives SQL, S3 or arbitrary storage paths.
+type MediaFilesCapability interface {
+	StatFile(context.Context, core.Session, string) (core.File, error)
+	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
+	CreateFileVerified(context.Context, core.Session, string, []string, map[string]string, string, int64, string, io.Reader) (string, error)
+	ListManagedFileSets(context.Context, core.Session, string, string, string, int) ([]core.FileSet, string, error)
+	ListFileSet(context.Context, core.Session, string, string, int) ([]core.File, string, error)
+}
+
+// MediaSandboxProbe exposes the already verified OS isolation state of the
+// composition-supplied media runner. It is not derived from request data.
+type MediaSandboxProbe interface {
+	MediaSandboxState() websiteapi.MediaSandboxState
+}
+
 type Config struct {
 	AccessGroup                  string
 	CoordinatorAccessGroup       string
@@ -75,6 +102,12 @@ type Config struct {
 	FeatureImportOperationID     string
 	FeatureImportContractVersion int
 	FeatureImportFileSetID       string
+	MediaWorkflow                MediaWorkflowClient
+	MediaFiles                   MediaFilesCapability
+	MediaOperationID             string
+	MediaContractVersion         int
+	MediaProcessorVersion        string
+	MediaSandbox                 MediaSandboxProbe
 }
 
 type Service struct {
@@ -102,6 +135,20 @@ func NewService(config Config, store RecordStore, authority core.GroupAuthorizat
 		config.FeatureImportContractVersion = importContractVersion
 	}
 	return &Service{config: config, store: store, authority: authority, sessions: sessions}, nil
+}
+
+// MediaSandbox returns the verified isolation state of the configured media
+// runner. It fails closed when composition did not supply a verified backend.
+func (s *Service) MediaSandbox() (websiteapi.MediaSandboxState, error) {
+	if s == nil || !validInterface(s.config.MediaSandbox) {
+		return websiteapi.MediaSandboxState{}, websiteapi.ErrUnavailable
+	}
+	state := s.config.MediaSandbox.MediaSandboxState()
+	if state.Backend == "" || !state.NetworkDenied || !state.ReadOnlyRootFS || !state.NoNewPrivs ||
+		state.SeccompMode < 2 || state.CapEff == "" || state.CPUQuota == "" || state.MemoryLimitBytes <= 0 || state.PIDsLimit <= 0 || state.VerifiedAt.IsZero() {
+		return websiteapi.MediaSandboxState{}, websiteapi.ErrUnavailable
+	}
+	return state, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, credential string) (context.Context, error) {

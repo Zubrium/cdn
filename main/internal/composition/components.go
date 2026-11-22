@@ -12,12 +12,14 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
+	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/workers/archive"
+	"github.com/Zubrium/cdn/workers/media"
 	"github.com/google/uuid"
 )
 
@@ -29,6 +31,8 @@ type coreComponent struct {
 	selected      map[string]struct{}
 	dispatcher    *bus.Dispatcher
 	archiveHandle atomic.Pointer[archive.Handler]
+	mediaHandle   atomic.Pointer[media.V2Handler]
+	mediaSandbox  atomic.Pointer[media.DockerSandbox]
 }
 
 func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descriptors []platform.ComponentDescriptor) (map[string]platform.AccessLevel, error) {
@@ -78,6 +82,12 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		if err := c.configureArchiveImport(ctx, runtime); err != nil {
 			_ = runtime.Close()
 			return fmt.Errorf("configure archive import worker: %w", err)
+		}
+	}
+	if c.config.Media.Enabled {
+		if err := c.configureMedia(ctx, runtime); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("configure media worker: %w", err)
 		}
 	}
 	settings := c.config.Coordinator
@@ -146,6 +156,54 @@ func (c *coreComponent) configureArchiveImport(ctx context.Context, runtime *pla
 	}
 	c.archiveHandle.Store(handler)
 	return nil
+}
+
+// configureMedia issues only narrow Core capabilities to the supervised media
+// worker. The OS sandbox is constructed through a real in-container preflight;
+// a failed probe prevents worker registration instead of falling back.
+func (c *coreComponent) configureMedia(ctx context.Context, runtime *platform.Runtime) error {
+	settings := c.config.Media
+	session, _, err := runtime.EngineIdentity().Authenticate(ctx, settings.ServiceCredential)
+	if err != nil {
+		return err
+	}
+	progress, err := runtime.RegisterDataModule(media.DataDescriptor())
+	if err != nil {
+		return err
+	}
+	sandbox, err := media.NewDockerSandbox(ctx, media.DockerSandboxConfig{
+		Image: settings.SandboxImage, DockerBinary: settings.DockerBinary, StagingRoot: settings.StagingDirectory,
+		CPUs: settings.CPUs, MemoryLimitBytes: settings.MemoryLimitBytes, PIDsLimit: settings.PIDsLimit,
+		MaxInputBytes: settings.MaxInputBytes, MaxOutputBytes: settings.MaxOutputBytes, Timeout: settings.Timeout,
+	})
+	if err != nil {
+		return err
+	}
+	handler, err := media.NewV2Handler(runtime.EngineFiles(), session, progress, sandbox,
+		settings.MaxConcurrency, settings.MaxInputBytes+settings.MaxOutputBytes)
+	if err != nil {
+		return err
+	}
+	c.mediaSandbox.Store(sandbox)
+	c.mediaHandle.Store(handler)
+	return nil
+}
+
+// MediaSandboxState exposes the verified probe result to Website. It is not
+// derived from a client request and never appears in a public DTO.
+func (c *coreComponent) MediaSandboxState() (websiteapi.MediaSandboxState, error) {
+	sandbox := c.mediaSandbox.Load()
+	if sandbox == nil || !sandbox.Isolated() {
+		return websiteapi.MediaSandboxState{}, errors.New("media sandbox is not verified")
+	}
+	state := sandbox.SandboxState()
+	return websiteapi.MediaSandboxState{
+		Backend: state.Backend, Image: state.Image, SeccompMode: state.SeccompMode,
+		CapEff: state.CapEff, NoNewPrivs: state.NoNewPrivs, CPUQuota: state.CPUQuota,
+		MemoryLimitBytes: state.MemoryLimitBytes, PIDsLimit: state.PIDsLimit,
+		ReadOnlyRootFS: state.ReadOnlyRootFS, NetworkDenied: state.NetworkDenied,
+		PrivateStaging0700: state.PrivateStaging0700, VerifiedAt: state.VerifiedAt,
+	}, nil
 }
 
 func (c *coreComponent) Ready(ctx context.Context) error {

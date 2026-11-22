@@ -394,22 +394,44 @@ type BuildJob struct {
 	UpdatedAt              time.Time `json:"updated_at"`
 }
 
+// CreateDerivativeRequest is the strict OpenAPI request. A client can choose
+// only the file and its pinned placement/field identity; the profile is always
+// resolved by Website from the exact feature version in the snapshot.
 type CreateDerivativeRequest struct {
+	SnapshotID     string `json:"snapshot_id"`
+	PlacementID    string `json:"placement_id"`
+	FieldPath      string `json:"field_path"`
 	SourceFileID   string `json:"source_file_id"`
-	FeatureID      string `json:"feature_id"`
-	Profile        string `json:"profile"`
 	IdempotencyKey string `json:"-"`
 }
 
 type MediaJob struct {
-	ID           string    `json:"id"`
-	SourceFileID string    `json:"source_file_id"`
-	DerivativeID string    `json:"derivative_file_id,omitempty"`
-	Profile      string    `json:"profile"`
-	State        string    `json:"state"`
-	ErrorCode    string    `json:"error_code,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID               string            `json:"id"`
+	SourceFileID     string            `json:"source_file_id"`
+	ProfileDigest    string            `json:"profile_digest"`
+	ProcessorVersion string            `json:"processor_version"`
+	State            string            `json:"state"`
+	Outputs          map[string]string `json:"outputs,omitempty"`
+	ErrorCode        string            `json:"error_code,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+// MediaSandboxState is the read-only result of the media runner's pre-flight
+// proof. It is deliberately not part of a client request or MediaJob response.
+type MediaSandboxState struct {
+	Backend            string
+	Image              string
+	SeccompMode        int
+	CapEff             string
+	NoNewPrivs         bool
+	CPUQuota           string
+	MemoryLimitBytes   int64
+	PIDsLimit          int64
+	ReadOnlyRootFS     bool
+	NetworkDenied      bool
+	PrivateStaging0700 bool
+	VerifiedAt         time.Time
 }
 
 type Descriptor struct{}

@@ -167,7 +167,7 @@ func (f *fakeWebsite) BuildSnapshot(_ context.Context, input website.BuildSnapsh
 
 func (f *fakeWebsite) CreateMediaDerivative(_ context.Context, input website.CreateDerivativeRequest) (website.MediaJob, error) {
 	f.mediaCalls, f.mediaInput = f.mediaCalls+1, input
-	return website.MediaJob{ID: "media-job-1", SourceFileID: input.SourceFileID, Profile: input.Profile, State: "queued"}, nil
+	return website.MediaJob{ID: "media-job-1", SourceFileID: input.SourceFileID, ProfileDigest: "0000000000000000000000000000000000000000000000000000000000000000", ProcessorVersion: "test-processor", State: "queued"}, nil
 }
 
 func (f *fakeWebsite) ListPages(_ context.Context, cursor string, limit int) (website.PagePage, error) {
@@ -516,7 +516,7 @@ func TestWriteRoutesRejectDuplicateIdempotencyHeaders(t *testing.T) {
 		{
 			name:  "media derivative",
 			path:  "/api/admin/media/derivatives",
-			body:  `{"source_file_id":"11111111-1111-4111-8111-111111111111","feature_id":"feature-a","profile":"thumbnail"}`,
+			body:  `{"snapshot_id":"11111111-1111-4111-8111-111111111111","placement_id":"placement-a","field_path":"/hero","source_file_id":"22222222-2222-4222-8222-222222222222"}`,
 			calls: func(api *fakeWebsite) int { return api.mediaCalls },
 		},
 	}
