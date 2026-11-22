@@ -54,5 +54,12 @@ describe("admin navigation permissions", () => {
 
     expect(rendered).toContain('role="status"');
     expect(rendered).toContain("Данные сайта, контента и форм демонстрационные; изменения не сохраняются.");
+    expect(rendered).toContain("pl-16");
+  });
+
+  it("keeps the mobile menu trigger labelled", () => {
+    const rendered = renderShell({ group_access: { features: 1 }, can_manage_administrators: false });
+
+    expect(rendered).toContain('aria-label="Открыть меню"');
   });
 });

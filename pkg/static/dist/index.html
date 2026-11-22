@@ -4,10 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f7f7f7" />
+    <meta name="description" content="Zubrium — администрирование сайта: страницы, контент, формы, заявки, файлы и публичные маршруты." />
+    <!-- Mirrors the --background tokens from admin.css before first paint. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("we_admin_theme");
+          var mode = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+          var dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.classList.toggle("dark", dark);
+          root.classList.toggle("light", !dark);
+          root.style.colorScheme = dark ? "dark" : "light";
+          var themeColor = document.querySelector('meta[name="theme-color"]');
+          if (themeColor) themeColor.setAttribute("content", dark ? "#141414" : "#f7f7f7");
+        } catch (error) {
+          // Keep the default light theme when storage or matchMedia is unavailable.
+        }
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/admin/favicon.svg" />
     <title>Zubrium — администрирование</title>
-    <script type="module" crossorigin src="/admin/assets/admin-Ct7331x-.js"></script>
-    <link rel="stylesheet" crossorigin href="/admin/assets/admin-C5BJ-bU7.css">
+    <script type="module" crossorigin src="/admin/assets/admin-CJWRDhlL.js"></script>
+    <link rel="stylesheet" crossorigin href="/admin/assets/admin-BlaqRGzB.css">
   </head>
   <body>
     <div id="root"></div>

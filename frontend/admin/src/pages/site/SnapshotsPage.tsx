@@ -23,6 +23,7 @@ export default function SnapshotsPage() {
   const snapshots = useQuery({
     queryKey: ["site", "snapshot-choices", pageID],
     queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, pageID || undefined),
+    refetchInterval: (query) => query.state.data?.items.some((item) => item.state === "provisioning") ? 5000 : false,
   });
 
   const create = async (parentSnapshotId: string) => {

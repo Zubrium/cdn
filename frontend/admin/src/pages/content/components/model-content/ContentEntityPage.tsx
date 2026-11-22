@@ -100,10 +100,10 @@ export function ContentEntityPage({
             >
               <span className="min-w-0">
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="truncate text-sm font-medium">{title}</span>
+                  <span className="truncate text-sm font-medium" title={title}>{title}</span>
                   {issues > 0 && <Badge variant="destructive"><CircleAlert size={12} />{issues}</Badge>}
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-muted-foreground">{recordPreview(record)}</span>
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={recordPreview(record)}>{recordPreview(record)}</span>
               </span>
               <span className="flex items-center justify-end gap-2 text-xs text-muted-foreground">Открыть запись<ArrowRight className="size-4" /></span>
             </Link>

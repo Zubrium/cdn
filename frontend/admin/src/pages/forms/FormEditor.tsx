@@ -51,6 +51,59 @@ function sameValue(left: unknown, right: unknown): boolean {
   return false;
 }
 
+const fieldIDPattern = /^[a-z][a-z0-9_]{0,63}$/u;
+
+/** Shared text limits survive a type switch even when the constraints are temporarily hidden. */
+export function changeFormFieldType(field: FormFieldDraft, type: FormFieldType): FormFieldDraft {
+  return {
+    ...newFormFieldDraft(field.id),
+    type,
+    required: field.required,
+    minLength: field.minLength,
+    maxLength: field.maxLength,
+    pattern: field.pattern,
+  };
+}
+
+function fieldConstraintError(field: FormFieldDraft): string {
+  switch (field.type) {
+    case "text":
+    case "email":
+      return "Проверьте длину и шаблон RE2 поля: минимум не больше максимума, шаблон не длиннее 256 символов.";
+    case "number":
+      return "Проверьте числовые границы поля: минимум не должен превышать максимум.";
+    case "select":
+      return "Проверьте варианты поля: хотя бы один уникальный вариант длиной до 256 символов.";
+    case "file":
+      return "Проверьте лимиты и MIME-типы поля: исполняемые типы запрещены.";
+    default:
+      return "Проверьте ограничения поля.";
+  }
+}
+
+/** Minimal field-indexed error map for the existing string-only validation model. */
+export function formFieldErrors(fields: FormFieldDraft[]): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const firstIndexByID = new Map<string, number>();
+  fields.forEach((field, index) => {
+    const key = String(index);
+    if (!fieldIDPattern.test(field.id)) {
+      errors[key] = "Проверьте идентификатор: строчные латинские буквы, цифры и «_», до 64 символов.";
+      return;
+    }
+    const firstIndex = firstIndexByID.get(field.id);
+    if (firstIndex !== undefined) {
+      const message = "Проверьте идентификатор: он должен быть уникальным в схеме.";
+      errors[key] = message;
+      errors[String(firstIndex)] = message;
+      return;
+    }
+    firstIndexByID.set(field.id, index);
+    if (!buildFormFieldDefinitions([field])) errors[key] = fieldConstraintError(field);
+  });
+  return errors;
+}
+
 export function FormSchemaEditor({
   schema,
   canManage,
@@ -68,6 +121,7 @@ export function FormSchemaEditor({
   const [key, setKey] = useState(schema?.key ?? "");
   const [fields, setFields] = useState<FormFieldDraft[]>(() => schema ? schemaFields(schema) : [newFormFieldDraft("field_1")]);
   const [validationMessage, setValidationMessage] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const baselineKey = schema?.key ?? "";
   const baselineFields = useMemo(() => schema ? schemaFields(schema) : [newFormFieldDraft("field_1")], [schema]);
   const definitions = useMemo(() => buildFormFieldDefinitions(fields), [fields]);
@@ -103,14 +157,14 @@ export function FormSchemaEditor({
 
   const updateField = (index: number, change: Partial<FormFieldDraft>) => {
     setValidationMessage("");
+    setFieldErrors({});
     setFields((current) => current.map((field, fieldIndex) => fieldIndex === index ? { ...field, ...change } : field));
   };
 
   const changeFieldType = (index: number, type: FormFieldType) => {
     setValidationMessage("");
-    setFields((current) => current.map((field, fieldIndex) => fieldIndex === index
-      ? { ...newFormFieldDraft(field.id), type, required: field.required }
-      : field));
+    setFieldErrors({});
+    setFields((current) => current.map((field, fieldIndex) => fieldIndex === index ? changeFormFieldType(field, type) : field));
   };
 
   const addField = () => {
@@ -119,6 +173,7 @@ export function FormSchemaEditor({
       return;
     }
     setValidationMessage("");
+    setFieldErrors({});
     setFields((current) => [...current, newFormFieldDraft(nextFieldKey(current))]);
   };
 
@@ -135,10 +190,12 @@ export function FormSchemaEditor({
     }))) return;
     setFields((current) => current.filter((item) => item !== field));
     setValidationMessage("");
+    setFieldErrors({});
   };
 
   const submit = async () => {
     if (!validFormKey(key) || !definitions) {
+      setFieldErrors(formFieldErrors(fields));
       setValidationMessage("Проверьте ключ формы, уникальные идентификаторы полей и ограничения каждого типа. Ключ не может быть пустым, начинаться или заканчиваться пробелом, содержать NUL и превышать 128 байт в UTF-8.");
       return;
     }
@@ -151,6 +208,7 @@ export function FormSchemaEditor({
       if (!accepted) return;
     }
     setValidationMessage("");
+    setFieldErrors({});
     save.mutate();
   };
 
@@ -174,7 +232,7 @@ export function FormSchemaEditor({
       <div className="space-y-5 py-5">
         {canManage ? <label className="block max-w-xl space-y-1.5 text-sm">
           <span>Ключ формы</span>
-          <Input id="form-schema-key" value={key} maxLength={128} disabled={save.isPending} aria-invalid={key.length > 0 && !validFormKey(key)} onChange={(event) => { setKey(event.currentTarget.value); setValidationMessage(""); }} placeholder="Например, Contact.Request-2026" />
+          <Input id="form-schema-key" value={key} maxLength={128} disabled={save.isPending} aria-invalid={key.length > 0 && !validFormKey(key)} onChange={(event) => { setKey(event.currentTarget.value); setValidationMessage(""); setFieldErrors({}); }} placeholder="Например, Contact.Request-2026" />
           <span className="block text-xs text-muted-foreground">Глобально уникальное имя для интеграций и маршрутов.</span>
         </label> : <p className="text-sm"><span className="text-muted-foreground">Ключ формы: </span>{schema?.key}</p>}
 
@@ -191,48 +249,60 @@ export function FormSchemaEditor({
         </div>
 
         {fields.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">Добавьте хотя бы одно поле.</p> : <ol className="divide-y divide-border">
-          {fields.map((field, index) => <li key={`${index}-${field.id}`} className="space-y-3 py-4">
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_13rem_auto] sm:items-end">
-              <label className="min-w-0 space-y-1.5 text-sm">
-                <span>Идентификатор поля</span>
-                <Input id={`form-field-key-${index}`} value={field.id} maxLength={64} disabled={!canManage || save.isPending} aria-invalid={field.id.length > 0 && !/^[a-z][a-z0-9_]{0,63}$/u.test(field.id)} onChange={(event) => updateField(index, { id: event.currentTarget.value })} placeholder="email" />
+          {fields.map((field, index) => {
+            const error = fieldErrors[String(index)];
+            const errorId = error ? `form-field-error-${index}` : undefined;
+            const errorProps = { "aria-invalid": Boolean(error) || undefined, "aria-describedby": errorId };
+            const keyErrorProps = { ...errorProps, "aria-invalid": Boolean(error) || (field.id.length > 0 && !fieldIDPattern.test(field.id)) || undefined };
+            const deleteHint = fields.length === 1 ? "В схеме должно остаться хотя бы одно поле" : null;
+            return <li key={`${index}-${field.id}`} className="space-y-3 py-4">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_13rem_auto] sm:items-end">
+                <label className="min-w-0 space-y-1.5 text-sm">
+                  <span>Идентификатор поля</span>
+                  <Input id={`form-field-key-${index}`} value={field.id} maxLength={64} disabled={!canManage || save.isPending} {...keyErrorProps} onChange={(event) => updateField(index, { id: event.currentTarget.value })} placeholder="email" />
+                </label>
+                <label className="space-y-1.5 text-sm">
+                  <span>Тип</span>
+                  <select id={`form-field-type-${index}`} className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={field.type} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => changeFieldType(index, event.currentTarget.value as FormFieldType)}>
+                    {fieldTypes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </label>
+                {canManage && <Button type="button" variant="ghost" size="icon" className="size-11 justify-self-end text-destructive" aria-label={`Удалить поле ${field.id || index + 1}`} title={deleteHint ?? `Удалить поле ${field.id || index + 1}`} disabled={fields.length === 1 || save.isPending} aria-describedby={deleteHint ? `form-field-delete-hint-${index}` : undefined} onClick={() => void removeField(field)}>
+                  <Trash2 />
+                  {deleteHint && <span id={`form-field-delete-hint-${index}`} className="sr-only">{deleteHint}</span>}
+                </Button>}
+              </div>
+
+              <label className="flex min-h-11 w-fit items-center gap-2 text-sm">
+                <Checkbox id={`form-field-required-${index}`} checked={field.required} disabled={!canManage || save.isPending} onCheckedChange={(checked) => updateField(index, { required: checked === true })} />
+                Обязательное поле
               </label>
-              <label className="space-y-1.5 text-sm">
-                <span>Тип</span>
-                <select id={`form-field-type-${index}`} className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={field.type} disabled={!canManage || save.isPending} onChange={(event) => changeFieldType(index, event.currentTarget.value as FormFieldType)}>
-                  {fieldTypes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              {canManage && <Button type="button" variant="ghost" size="icon" className="size-11 justify-self-end text-destructive" aria-label={`Удалить поле ${field.id || index + 1}`} disabled={save.isPending} onClick={() => void removeField(field)}><Trash2 /></Button>}
-            </div>
 
-            <label className="flex min-h-11 w-fit items-center gap-2 text-sm">
-              <Checkbox id={`form-field-required-${index}`} checked={field.required} disabled={!canManage || save.isPending} onCheckedChange={(checked) => updateField(index, { required: checked === true })} />
-              Обязательное поле
-            </label>
+              {(field.type === "text" || field.type === "email") && <div className="grid gap-3 sm:grid-cols-3">
+                <label className="space-y-1.5 text-sm"><span>Минимум символов</span><Input id={`form-field-min-${index}`} type="number" min={0} max={1048576} value={field.minLength} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { minLength: event.currentTarget.value })} /></label>
+                <label className="space-y-1.5 text-sm"><span>Максимум символов</span><Input id={`form-field-max-${index}`} type="number" min={1} max={1048576} value={field.maxLength} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { maxLength: event.currentTarget.value })} /></label>
+                <label className="space-y-1.5 text-sm"><span>Шаблон Go RE2</span><Input id={`form-field-pattern-${index}`} value={field.pattern} maxLength={256} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { pattern: event.currentTarget.value })} placeholder="Оставьте пустым без проверки" /></label>
+              </div>}
 
-            {(field.type === "text" || field.type === "email") && <div className="grid gap-3 sm:grid-cols-3">
-              <label className="space-y-1.5 text-sm"><span>Минимум символов</span><Input id={`form-field-min-${index}`} type="number" min={0} max={1048576} value={field.minLength} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { minLength: event.currentTarget.value })} /></label>
-              <label className="space-y-1.5 text-sm"><span>Максимум символов</span><Input id={`form-field-max-${index}`} type="number" min={1} max={1048576} value={field.maxLength} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { maxLength: event.currentTarget.value })} /></label>
-              <label className="space-y-1.5 text-sm"><span>Шаблон Go RE2</span><Input id={`form-field-pattern-${index}`} value={field.pattern} maxLength={256} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { pattern: event.currentTarget.value })} placeholder="Оставьте пустым без проверки" /></label>
-            </div>}
+              {field.type === "number" && <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1.5 text-sm"><span>Минимум</span><Input id={`form-field-minimum-${index}`} type="number" step="any" value={field.minimum} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { minimum: event.currentTarget.value })} /></label>
+                <label className="space-y-1.5 text-sm"><span>Максимум</span><Input id={`form-field-maximum-${index}`} type="number" step="any" value={field.maximum} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { maximum: event.currentTarget.value })} /></label>
+              </div>}
 
-            {field.type === "number" && <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1.5 text-sm"><span>Минимум</span><Input id={`form-field-minimum-${index}`} type="number" step="any" value={field.minimum} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { minimum: event.currentTarget.value })} /></label>
-              <label className="space-y-1.5 text-sm"><span>Максимум</span><Input id={`form-field-maximum-${index}`} type="number" step="any" value={field.maximum} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { maximum: event.currentTarget.value })} /></label>
-            </div>}
+              {field.type === "select" && <label className="block space-y-1.5 text-sm">
+                <span>Варианты · по одному на строку</span>
+                <Textarea id={`form-field-options-${index}`} value={field.options} rows={4} maxLength={32768} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { options: event.currentTarget.value })} />
+              </label>}
 
-            {field.type === "select" && <label className="block space-y-1.5 text-sm">
-              <span>Варианты · по одному на строку</span>
-              <Textarea id={`form-field-options-${index}`} value={field.options} rows={4} maxLength={32768} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { options: event.currentTarget.value })} />
-            </label>}
+              {field.type === "file" && <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1.5 text-sm"><span>Максимум файлов</span><Input id={`form-field-max-files-${index}`} type="number" min={1} max={20} step={1} value={field.maxFiles} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { maxFiles: event.currentTarget.value })} /></label>
+                <label className="space-y-1.5 text-sm"><span>Максимум байт на файл</span><Input id={`form-field-max-bytes-${index}`} type="number" min={1} step={1} value={field.maxFileBytes} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { maxFileBytes: event.currentTarget.value })} /></label>
+                <label className="space-y-1.5 text-sm sm:col-span-2"><span>Разрешённые MIME-типы · точные значения, по одному на строку</span><Textarea id={`form-field-mime-${index}`} value={field.allowedContentTypes} rows={3} maxLength={4096} disabled={!canManage || save.isPending} {...errorProps} onChange={(event) => updateField(index, { allowedContentTypes: event.currentTarget.value })} /><span className="block text-xs text-muted-foreground">Исполняемые типы, включая HTML, SVG, XML и JavaScript, запрещены.</span></label>
+              </div>}
 
-            {field.type === "file" && <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1.5 text-sm"><span>Максимум файлов</span><Input id={`form-field-max-files-${index}`} type="number" min={1} max={20} step={1} value={field.maxFiles} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { maxFiles: event.currentTarget.value })} /></label>
-              <label className="space-y-1.5 text-sm"><span>Максимум байт на файл</span><Input id={`form-field-max-bytes-${index}`} type="number" min={1} step={1} value={field.maxFileBytes} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { maxFileBytes: event.currentTarget.value })} /></label>
-              <label className="space-y-1.5 text-sm sm:col-span-2"><span>Разрешённые MIME-типы · точные значения, по одному на строку</span><Textarea id={`form-field-mime-${index}`} value={field.allowedContentTypes} rows={3} maxLength={4096} disabled={!canManage || save.isPending} onChange={(event) => updateField(index, { allowedContentTypes: event.currentTarget.value })} /><span className="block text-xs text-muted-foreground">Исполняемые типы, включая HTML, SVG, XML и JavaScript, запрещены.</span></label>
-            </div>}
-          </li>)}
+              {error && <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>}
+            </li>;
+          })}
         </ol>}
 
         {validationMessage && <p role="alert" className="text-sm text-destructive">{validationMessage}</p>}
@@ -250,19 +320,21 @@ export function PublishFormDialog({
   schema,
   operations,
   routes,
+  initialBasePath,
   onClose,
   onPublished,
 }: {
   schema: FormSchema;
   operations: RouterPublicOperation[];
   routes: RouterRoute[];
+  initialBasePath?: string;
   onClose: () => void;
   onPublished: (host: string, basePath: string, version: number) => void;
 }) {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
-  const [host, setHost] = useState("forms.example.test");
-  const [basePath, setBasePath] = useState(normalizedFormBasePath(schema.key));
+  const [host, setHost] = useState("");
+  const [basePath, setBasePath] = useState(initialBasePath ?? normalizedFormBasePath(schema.key));
   const fileField = Object.values(schema.fields).find((field) => field.type === "file");
   const [accessGroup, setAccessGroup] = useState("");
   const [fileSetID, setFileSetID] = useState("");
@@ -279,12 +351,13 @@ export function PublishFormDialog({
   } : undefined, [fileField, accessGroup, fileSetID, maxBytes, allowedTypes]);
   const uploadError = fileField ? formUploadSettingsError(upload, operations) : null;
   const hostError = validRouterHost(host.trim()) ? null : "Укажите hostname без порта, например forms.example.test.";
+  const basePathError = basePath.trim().startsWith("/") ? null : "Базовый путь должен начинаться с «/».";
   const steps = useMemo(() => formPublicationSteps({ schema, host: host.trim(), basePath: normalizedFormBasePath(schema.key, basePath), operations, existingRoutes: routes, upload, decisions }), [schema, host, basePath, operations, routes, upload, decisions]);
   const warnings = formPublicationWarnings(steps, schema.version);
   const pending = steps.filter((step) => step.action !== "skip");
 
   const publish = async () => {
-    if (hostError || !basePath.trim().startsWith("/") || pending.length === 0 || uploadError) return;
+    if (hostError || basePathError || pending.length === 0 || uploadError) return;
     if (pending.some((step) => step.action === "update")) {
       const accepted = await confirm({
         title: "Обновить привязку маршрутов?",
@@ -322,20 +395,21 @@ export function PublishFormDialog({
       </DialogHeader>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5 text-sm"><span>Host</span><Input value={host} maxLength={253} disabled={busy} aria-invalid={Boolean(hostError)} onChange={(event) => { setHost(event.currentTarget.value); setError(""); }} placeholder="forms.example.com" /></label>
-          <label className="space-y-1.5 text-sm"><span>Базовый путь</span><Input value={basePath} maxLength={1024} disabled={busy} onChange={(event) => setBasePath(event.currentTarget.value)} placeholder={normalizedFormBasePath(schema.key)} /></label>
+          <label className="space-y-1.5 text-sm"><span>Host</span><Input id="form-publish-host" value={host} maxLength={253} disabled={busy} aria-invalid={Boolean(hostError)} aria-describedby={hostError ? "form-publish-host-error" : undefined} onChange={(event) => { setHost(event.currentTarget.value); setError(""); }} placeholder="forms.example.com" /></label>
+          <label className="space-y-1.5 text-sm"><span>Базовый путь</span><Input id="form-publish-base-path" value={basePath} maxLength={1024} disabled={busy} aria-invalid={Boolean(basePathError)} aria-describedby={basePathError ? "form-publish-base-path-error" : undefined} onChange={(event) => { setBasePath(event.currentTarget.value); setError(""); }} placeholder={normalizedFormBasePath(schema.key)} /></label>
         </div>
-        {hostError && <p role="alert" className="text-sm text-destructive">{hostError}</p>}
+        {hostError && <p id="form-publish-host-error" role="alert" className="text-sm text-destructive">{hostError}</p>}
+        {basePathError && <p id="form-publish-base-path-error" role="alert" className="text-sm text-destructive">{basePathError}</p>}
         {fileField && <fieldset className="space-y-3 rounded-md border border-border p-3" disabled={busy}>
           <legend className="px-1 text-sm font-medium">Настройки загрузки вложений</legend>
           <p className="text-xs leading-5 text-muted-foreground">Маршрут загрузки создаётся только для форм с файловыми полями. Backend отклоняет его без группы доступа, набора файлов, лимита и MIME-типов.</p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1.5 text-sm"><span>Группа доступа</span><Input value={accessGroup} maxLength={64} onChange={(event) => setAccessGroup(event.currentTarget.value)} placeholder="uploads" /></label>
-            <label className="space-y-1.5 text-sm"><span>UUID набора файлов</span><Input value={fileSetID} maxLength={36} onChange={(event) => setFileSetID(event.currentTarget.value)} placeholder="01938f7a-68af-7c10-a51d-78b6ca125399" /></label>
-            <label className="space-y-1.5 text-sm"><span>Лимит файла, байт</span><Input type="number" min={1} max={operations.find((operation) => operation.id === "public.form-upload")?.max_request_bytes} value={maxBytes} onChange={(event) => setMaxBytes(event.currentTarget.value)} /></label>
-            <label className="space-y-1.5 text-sm"><span>Разрешённые MIME-типы</span><Input value={allowedTypes} onChange={(event) => setAllowedTypes(event.currentTarget.value)} placeholder="application/pdf, image/png" /></label>
+            <label className="space-y-1.5 text-sm"><span>Группа доступа</span><Input value={accessGroup} maxLength={64} aria-describedby={uploadError ? "form-publish-upload-error" : undefined} onChange={(event) => { setAccessGroup(event.currentTarget.value); setError(""); }} placeholder="uploads" /></label>
+            <label className="space-y-1.5 text-sm"><span>UUID набора файлов</span><Input value={fileSetID} maxLength={36} aria-describedby={uploadError ? "form-publish-upload-error" : undefined} onChange={(event) => { setFileSetID(event.currentTarget.value); setError(""); }} placeholder="01938f7a-68af-7c10-a51d-78b6ca125399" /></label>
+            <label className="space-y-1.5 text-sm"><span>Лимит файла, байт</span><Input type="number" min={1} max={operations.find((operation) => operation.id === "public.form-upload")?.max_request_bytes} value={maxBytes} aria-describedby={uploadError ? "form-publish-upload-error" : undefined} onChange={(event) => { setMaxBytes(event.currentTarget.value); setError(""); }} /></label>
+            <label className="space-y-1.5 text-sm"><span>Разрешённые MIME-типы</span><Input value={allowedTypes} aria-describedby={uploadError ? "form-publish-upload-error" : undefined} onChange={(event) => { setAllowedTypes(event.currentTarget.value); setError(""); }} placeholder="application/pdf, image/png" /></label>
           </div>
-          {uploadError && <p role="alert" className="text-xs text-destructive">{uploadError}</p>}
+          {uploadError && <p id="form-publish-upload-error" role="alert" className="text-xs text-destructive">{uploadError}</p>}
         </fieldset>}
         {warnings.map((warning, index) => <p key={index} role="note" className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">{warning}</p>)}
         <ul className="divide-y divide-border rounded-md border border-border text-sm">
@@ -353,7 +427,7 @@ export function PublishFormDialog({
         </ul>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
-      <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={onClose}>Отмена</Button><Button type="button" disabled={busy || pending.length === 0 || Boolean(hostError) || !basePath.trim().startsWith("/") || Boolean(uploadError)} loading={busy} onClick={() => void publish()}>Опубликовать</Button></div>
+      <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={onClose}>Отмена</Button><Button type="button" disabled={busy || pending.length === 0 || Boolean(hostError) || Boolean(basePathError) || Boolean(uploadError)} loading={busy} onClick={() => void publish()}>Опубликовать</Button></div>
     </DialogContent>
   </Dialog>;
 }

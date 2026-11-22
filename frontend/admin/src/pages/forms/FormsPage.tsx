@@ -62,7 +62,7 @@ export default function FormsPage() {
             onClick={() => navigate(`/forms/${schema.id}`)}
           >
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{schema.key}</span>
+              <span className="block truncate text-sm font-medium" title={schema.key}>{schema.key}</span>
               <span className="mt-0.5 block text-xs text-muted-foreground">Версия {schema.version} · ревизия {schema.revision} · ID {schema.id}</span>
             </span>
             <Badge variant="outline">{Object.keys(schema.fields).length} поле(й)</Badge>

@@ -34,7 +34,7 @@ export default function FeatureEditorPage() {
   }
 
   return <div className="h-full overflow-y-auto bg-background">
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-7 sm:py-7">
+    <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-7 sm:py-7">
       <Link to={pageURL} className="inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />К странице «{page.name}»</Link>
       <header className="mt-3 border-b border-border pb-5">
         <p className="text-xs text-muted-foreground">Настройки размещения</p>

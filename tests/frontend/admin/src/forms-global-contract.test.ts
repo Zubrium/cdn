@@ -218,6 +218,7 @@ describe("global forms publication helpers", () => {
 
   it("explains a globally duplicated form key as a validation error", () => {
     expect(formSaveErrorMessage(new ApiError(409, "conflict", "conflict"))).toContain("уже используется");
+    expect(formSaveErrorMessage(new ApiError(400, "invalid_request", "invalid_request"))).toContain("Некорректный запрос");
     expect(formSaveErrorMessage(new Error("network"))).toBe("network");
   });
 

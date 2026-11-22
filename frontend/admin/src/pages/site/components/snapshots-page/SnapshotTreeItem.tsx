@@ -47,7 +47,14 @@ export function SnapshotTreeItem({ snapshot, canCreate, busy, onCreateChild, onD
             </div>
           </div>
           <div role="group" aria-label={`Действия для снапшота #${snapshot.sequence}`} className="mt-3 flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="outline" disabled={!ready || !canCreate || busy} onClick={() => onCreateChild(snapshot.id)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!ready || !canCreate || busy}
+              title={!canCreate ? "Введите название дочернего снапшота" : undefined}
+              onClick={() => onCreateChild(snapshot.id)}
+            >
               {busy ? "Создаём…" : "Создать потомка"}
             </Button>
             {ready && <>
@@ -55,7 +62,7 @@ export function SnapshotTreeItem({ snapshot, canCreate, busy, onCreateChild, onD
               <Button type="button" size="sm" variant="outline" asChild><Link to={`/site/features?${context}`}>Состав фичей</Link></Button>
               <Button type="button" size="sm" variant="outline" asChild><Link to={`/content?${context}`}>Контент</Link></Button>
             </>}
-            <Button type="button" size="sm" variant="ghost" disabled={busy || snapshot.state === "provisioning"} title="Проверки защиты удаления выполняет сервер" onClick={() => onDelete(snapshot.id)}>Удалить</Button>
+            <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive" disabled={busy || snapshot.state === "provisioning"} title="Проверки защиты удаления выполняет сервер" onClick={() => onDelete(snapshot.id)}>Удалить</Button>
           </div>
         </div>
       </details>

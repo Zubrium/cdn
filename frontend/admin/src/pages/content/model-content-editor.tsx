@@ -3,6 +3,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useDocumentTitle } from "@/components/common/page";
+import { scrollToEntryField } from "@/domains/content-editor/EntryForm";
 import type { ModelContentRecord, ModelContentWorkspace, WebsiteSnapshot } from "@/types";
 import { ContentEntityPage } from "./components/model-content/ContentEntityPage";
 import { ContentOverview } from "./components/model-content/ContentOverview";
@@ -17,6 +18,7 @@ import {
   useModelContentEditorController,
 } from "./components/model-content-editor/useModelContentEditorController";
 import { contentHref, entityPath, recordPath } from "./model-content-paths";
+import { modelEntityFields } from "./model-content-workspace";
 
 export { PlacementSelections, modelWorkspaceQueryKey };
 
@@ -97,6 +99,10 @@ export function ModelContentEditor({
         invalidCount={invalidCount}
         publishPending={publishPending}
         canPublish={canPublish}
+        validation={validation}
+        fields={selectedEntity ? modelEntityFields(selectedEntity) : model.entities.flatMap(modelEntityFields)}
+        selectedRecordId={recordId}
+        onFocusField={(fieldPath) => scrollToEntryField(fieldPath)}
         onSnapshotChange={onSnapshotChange}
         onOpenHistory={() => setHistoryOpen(true)}
         onSave={() => void saveDraft()}

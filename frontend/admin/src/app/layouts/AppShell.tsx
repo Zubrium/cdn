@@ -446,7 +446,6 @@ export function AppShell() {
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent
           side="left"
-          hideClose
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             mobileMenuButton.current?.focus();
@@ -484,7 +483,7 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {isSyntheticData && (
-          <div role="status" className="border-b border-border bg-muted px-4 py-2 text-center text-xs text-muted-foreground">
+          <div role="status" className="border-b border-border bg-muted py-2 pl-16 pr-4 text-center text-xs text-muted-foreground lg:pl-4 lg:pr-4">
             Данные сайта, контента и форм демонстрационные; изменения не сохраняются.
           </div>
         )}

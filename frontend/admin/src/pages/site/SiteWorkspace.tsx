@@ -60,6 +60,22 @@ function childSnapshotName(snapshot: SiteSnapshot): string {
   return `${shortBase}${suffix}`;
 }
 
+export function SnapshotStateNotice({ snapshot, onRefresh }: { snapshot: SiteSnapshot; onRefresh: () => void }) {
+  const treeURL = snapshot.pageId
+    ? `/snapshots/tree?${new URLSearchParams({ page_id: snapshot.pageId })}`
+    : "/snapshots/tree";
+  const provisioning = snapshot.state === "provisioning";
+
+  return <div className="page-grid p-6">
+    <h1 className="text-lg font-semibold">{provisioning ? "Снапшот готовится" : "Не удалось подготовить снапшот"}</h1>
+    <p role="status" className="text-sm text-muted-foreground">{provisioning ? "Копируются записи, публикации и выборы контента. Редактирование станет доступно после завершения." : "Этот снапшот нельзя редактировать или назначать ветке. Проверьте его состояние в дереве снапшотов."}</p>
+    <div className="flex flex-wrap gap-2">
+      <Button type="button" variant="outline" className="w-fit" onClick={onRefresh}>Обновить состояние</Button>
+      <Button asChild variant="outline" className="w-fit"><Link to={treeURL}>К дереву снапшотов</Link></Button>
+    </div>
+  </div>;
+}
+
 export function useSiteWorkspace() {
   const value = useContext(WorkspaceContext);
   if (!value) throw new Error("useSiteWorkspace must be used inside SiteWorkspace");
@@ -443,11 +459,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   if (loading || snapshots.isLoading || (!selected && readySnapshotItems.length > 0)) return <p className="p-8 text-sm text-muted-foreground">Загружаем снапшот…</p>;
   if (error || !config) return <ErrorState error={error} title="Не удалось загрузить снапшот" onRetry={() => void reload()} />;
   if (snapshot && snapshot.state !== "ready") {
-    return <div className="page-grid p-6">
-      <h1 className="text-lg font-semibold">{snapshot.state === "provisioning" ? "Снапшот готовится" : "Не удалось подготовить снапшот"}</h1>
-      <p role="status" className="text-sm text-muted-foreground">{snapshot.state === "provisioning" ? "Копируются записи, публикации и выборы контента. Редактирование станет доступно после завершения." : "Этот снапшот нельзя редактировать или назначать ветке. Проверьте его состояние в дереве снапшотов."}</p>
-      <Button type="button" variant="outline" className="w-fit" onClick={() => void snapshots.refetch()}>Обновить состояние</Button>
-    </div>;
+    return <SnapshotStateNotice snapshot={snapshot} onRefresh={() => void snapshots.refetch()} />;
   }
 
   const canvas = location.pathname.startsWith("/site/pages")
@@ -496,22 +508,22 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
               {readySnapshotItems.map((item) => <SelectItem key={item.id} value={item.id}>#{item.sequence} · {item.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button type="button" size="sm" variant="outline" onClick={() => void snapshots.refetch()} disabled={snapshots.isFetching}>Обновить список</Button>
+          <Button type="button" size="sm" className="h-11 sm:h-9" variant="outline" onClick={() => void snapshots.refetch()} disabled={snapshots.isFetching}>Обновить список</Button>
           {!selected && readySnapshotItems.length === 0 && <span role="status" className="text-xs text-muted-foreground">Нет снапшотов. Создайте страницу, чтобы получить корневой снапшот.</span>}
           <nav aria-label="Режим редактора сайта" className="flex flex-wrap gap-1 rounded-md border border-border p-1">
             {visibleModes.map(([path, label]) => {
               const active = location.pathname === path
                 || path === "/site/pages" && location.pathname.startsWith("/site/pages/")
                 || path === "/site/data-model" && location.pathname.startsWith("/site/data-model/");
-              return <Link key={path} to={`${path}${siteContextQuery(selected, snapshot?.pageId ?? requestedPageID)}`} aria-current={active ? "page" : undefined} className={`rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
+              return <Link key={path} to={`${path}${siteContextQuery(selected, snapshot?.pageId ?? requestedPageID)}`} aria-current={active ? "page" : undefined} className={`inline-flex min-h-11 items-center rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-0 ${active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</Link>;
             })}
           </nav>
-          <span role="status" aria-live="polite" className={`ml-auto text-xs ${allDirty ? "text-warning" : "text-success"}`}>{allDirty ? "Есть изменения" : "Сохранено"}</span>
+          <span role="status" aria-live="polite" className={`text-xs ${allDirty ? "text-warning" : "text-success"}`}>{allDirty ? "Есть изменения" : "Сохранено"}</span>
           {(conflict || modelConflict) && <Button type="button" size="sm" variant="outline" disabled={saving} onClick={async () => {
             if (allDirty && !(await confirm({ title: "Загрузить актуальную версию?", description: "Несохранённые изменения локальной рабочей копии будут заменены.", confirmLabel: "Загрузить", cancelLabel: "Остаться", destructive: true }))) return;
             await reload();
           }}>Загрузить актуальную версию</Button>}
-          {canManageSite && <Button type="button" size="sm" className="ml-auto" disabled={!allDirty || saving || !snapshot} onClick={() => void save()}>{saving ? "Сохраняем…" : "Сохранить"}</Button>}
+          {canManageSite && <Button type="button" size="sm" className="ml-auto h-11 sm:h-9" disabled={!allDirty || saving || !snapshot} onClick={() => void save()}>{saving ? "Сохраняем…" : "Сохранить"}</Button>}
           {localSaveError && <span role="alert" className="text-xs text-destructive">Локальное автосохранение недоступно или копия изменена в другой вкладке. Сохраните изменения в снапшот.</span>}
         </div>
         {snapshot?.warnings && snapshot.warnings.length > 0 && (

@@ -12,6 +12,7 @@ import {
 export type ThemeMode = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
 
+// Keep in sync with the inline theme script in index.html.
 const STORAGE_KEY = "we_admin_theme";
 
 interface ThemeContextValue {
@@ -40,6 +41,29 @@ function systemTheme(): ResolvedTheme {
     : "light";
 }
 
+/** Reuses the semantic --background token so the browser chrome follows the resolved theme. */
+function syncThemeColor() {
+  const background = getComputedStyle(document.documentElement)
+    .getPropertyValue("--background")
+    .trim();
+  const match = /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%$/.exec(background);
+  if (!match) return;
+
+  const [hue, saturation, lightness] = match.slice(1).map(Number);
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const chroma = s * Math.min(l, 1 - l);
+  const channel = (offset: number) => {
+    const k = (offset + hue / 30) % 12;
+    return Math.round(255 * (l - chroma * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  const color = `#${[channel(0), channel(8), channel(4)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("")}`;
+
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", color);
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(readStoredMode);
   const [system, setSystem] = useState<ResolvedTheme>(systemTheme);
@@ -58,6 +82,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.classList.toggle("dark", resolved === "dark");
     root.classList.toggle("light", resolved === "light");
     root.style.colorScheme = resolved;
+    syncThemeColor();
   }, [resolved]);
 
   const setMode = useCallback((next: ThemeMode) => {

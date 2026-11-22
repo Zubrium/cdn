@@ -110,6 +110,7 @@ export function ArrayCards({
             const rowError = errorsByPath.has(rowPath);
             const headingId = `${entryFieldAnchorId(rowPath)}-heading`;
             const itemKey = itemIDs[index]!;
+            const title = rowTitle(row, index);
             return <SortableItem key={itemKey} id={itemKey} disabled={disabled}>
               {(handle) => <section
                 data-array-item-index={`${path}:${index}`}
@@ -126,13 +127,13 @@ export function ArrayCards({
                     variant="ghost"
                     size="icon-sm"
                     className="touch-none cursor-grab text-muted-foreground active:cursor-grabbing"
-                    aria-label={`Перетащить ${rowTitle(row, index)}`}
+                    aria-label={`Перетащить ${title}`}
                     disabled={disabled}
                     {...handle.attributes}
                     {...handle.listeners}
                   ><GripVertical className="h-4 w-4" /></Button>
-                  <h4 id={headingId} className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {rowTitle(row, index)}
+                  <h4 id={headingId} className="min-w-0 flex-1 truncate text-sm font-medium" title={title}>
+                    {title}
                   </h4>
                   {rowError && <Badge variant="destructive">Ошибки</Badge>}
                   <div className="flex shrink-0 items-center gap-0.5">

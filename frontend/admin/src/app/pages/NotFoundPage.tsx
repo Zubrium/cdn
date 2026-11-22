@@ -23,6 +23,7 @@ export default function NotFoundPage() {
 }
 
 export function RouteErrorPage() {
+  useDocumentTitle("Ошибка интерфейса");
   const error = useRouteError();
   const message =
     error instanceof Error
@@ -32,7 +33,7 @@ export function RouteErrorPage() {
         : "Не удалось отобразить раздел.";
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
-      <div className="w-full max-w-lg rounded-lg border border-destructive/30 bg-card p-6">
+      <div role="alert" className="w-full max-w-lg rounded-lg border border-destructive/30 bg-card p-6">
         <p className="text-2xs font-medium uppercase tracking-wider text-destructive">
           Ошибка интерфейса
         </p>
@@ -40,7 +41,7 @@ export function RouteErrorPage() {
         <p className="mt-2 break-words text-sm leading-6 text-muted-foreground">
           {message}
         </p>
-        <div className="mt-5 flex gap-2">
+        <div className="mt-5 flex flex-wrap gap-2">
           <Button onClick={() => window.location.reload()}>Перезагрузить</Button>
           <Button variant="outline" asChild>
             <Link to="/">На главную</Link>

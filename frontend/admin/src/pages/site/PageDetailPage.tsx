@@ -113,6 +113,7 @@ export default function PageDetailPage() {
             <input
               className="mt-1 block w-full min-w-0 rounded-sm border-0 bg-transparent p-0 text-2xl font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Название страницы"
+              maxLength={120}
               value={page.name}
               onChange={(event) => changePage({ name: event.currentTarget.value })}
             />

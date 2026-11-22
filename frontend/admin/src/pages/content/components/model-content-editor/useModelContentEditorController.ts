@@ -9,6 +9,12 @@ import { errorMessage } from "@/lib/errors";
 import { canPublishContent } from "@/lib/permissions";
 import type { DataModelEntity, JsonValue, ModelContentRecord, ModelContentSelection, ModelContentWorkspace } from "@/types";
 import type { ModelContentDraft, ModelContentRevisionConflict, ModelContentSaveState } from "../model-content/types";
+
+export function changesSnapshotOrLocale(currentSearch: string, nextSearch: string): boolean {
+  const current = new URLSearchParams(currentSearch);
+  const next = new URLSearchParams(nextSearch);
+  return current.get("snapshot") !== next.get("snapshot") || current.get("locale") !== next.get("locale");
+}
 import { useModelContentEditorModel } from "./useModelContentEditorModel";
 import {
   apiModelRecordInput,
@@ -261,7 +267,10 @@ export function useModelContentEditorController({
     return () => window.clearTimeout(timer);
   }, [dirty, draft, invalidCount, saveDraft, saveState]);
 
-  const { dialog: unsavedDialog } = useUnsavedChangesGuard(dirty, bypassGuard);
+  const { dialog: unsavedDialog } = useUnsavedChangesGuard(dirty, bypassGuard, {
+    protectSearch: changesSnapshotOrLocale,
+    description: "Изменения хранятся в черновике этой вкладки. После перехода можно вернуться к ним, но они ещё не опубликованы.",
+  });
 
   useEffect(() => {
     if (workspace.revision <= revisionRef.current) return;

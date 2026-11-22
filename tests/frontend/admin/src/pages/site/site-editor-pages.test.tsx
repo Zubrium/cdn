@@ -164,6 +164,7 @@ describe("deep-link pages workflow", () => {
     );
 
     expect(markup).toContain("Главная");
+    expect(markup).toContain('maxLength="120"');
     expect(markup).toContain('href="/site/pages?snapshot=snapshot-42"');
     expect(markup).toContain('href="/site/pages/home/features/home-hero?snapshot=snapshot-42"');
     expect(markup).toMatch(/aria-current="page"[^>]*>Фичи</);
@@ -192,6 +193,7 @@ describe("deep-link pages workflow", () => {
     );
 
     expect(markup).toContain("Первый экран");
+    expect(markup).toContain("max-w-5xl");
     expect(markup).toContain("Версия 3.2.1");
     expect(markup).toContain("слот main");
     expect(markup).toContain('href="/site/pages/home?snapshot=snapshot-42"');

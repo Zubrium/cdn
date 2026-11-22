@@ -38,6 +38,8 @@ function ThemedToaster() {
       position="top-right"
       closeButton
       richColors
+      visibleToasts={2}
+      className="admin-toaster"
       toastOptions={{ duration: 5000 }}
     />
   );

@@ -389,4 +389,26 @@
   button[data-ui-button][data-button-size="icon-sm"] {
     min-width: 44px;
   }
+
+  [data-sonner-toast] button[data-close-button] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 600px) {
+  [data-sonner-toaster].admin-toaster {
+    /* Sonner writes --width inline; override it so toasts stay inside the viewport. */
+    --width: calc(100vw - 2rem) !important;
+    right: 1rem;
+  }
+
+  [data-sonner-toast] button[data-close-button] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  [data-sonner-toaster].admin-toaster[data-y-position="top"] {
+    top: calc(var(--header-height) + 0.5rem);
+  }
 }

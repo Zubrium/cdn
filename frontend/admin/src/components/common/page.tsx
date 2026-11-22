@@ -69,8 +69,7 @@ export function ContextHelp({
           size="icon"
           aria-label={label}
           aria-describedby={tooltipId}
-          aria-expanded={open}
-          onClick={() => setOpen(true)}
+          onClick={() => setOpen((value) => !value)}
           className={cn(
             "shrink-0 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground",
             buttonClassName,
@@ -254,7 +253,10 @@ export function InlineAlert({
 }) {
   const AlertIcon = tone === "success" ? Check : tone === "info" ? Info : AlertTriangle;
   return (
-    <div className={cn("rounded-lg border p-3.5 sm:p-4", inlineAlertToneClasses[tone], className)}>
+    <div
+      role={tone === "danger" || tone === "warning" ? "alert" : "status"}
+      className={cn("rounded-lg border p-3.5 sm:p-4", inlineAlertToneClasses[tone], className)}
+    >
       <div className="flex gap-3">
         <AlertIcon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1 text-foreground">
@@ -282,7 +284,7 @@ export function LoadingPage({ label = "Загрузка…" }: { label?: string 
 
 export function TableSkeleton({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="space-y-2" aria-hidden="true">
+    <div className="space-y-2" role="status" aria-label="Загрузка">
       {Array.from({ length: rows }).map((_, index) => (
         <Skeleton key={index} className="h-11 w-full" />
       ))}
@@ -352,6 +354,7 @@ export function useUnsavedChangesGuard(
   options?: {
     allowPathChange?: (currentPath: string, nextPath: string) => boolean;
     protectSearch?: (currentSearch: string, nextSearch: string) => boolean;
+    description?: string;
   },
 ) {
   const dirtyRef = useRef(dirty);
@@ -388,7 +391,7 @@ export function useUnsavedChangesGuard(
         <AlertDialogHeader>
           <AlertDialogTitle>Есть несохранённые изменения</AlertDialogTitle>
           <AlertDialogDescription>
-            Если уйти сейчас, несохранённые изменения будут потеряны. Останьтесь и сохраните их или покиньте страницу.
+            {options?.description ?? "Если уйти сейчас, несохранённые изменения будут потеряны. Останьтесь и сохраните их или покиньте страницу."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

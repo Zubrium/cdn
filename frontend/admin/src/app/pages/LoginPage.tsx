@@ -64,7 +64,7 @@ export function LoginPage() {
   if (auth.status === "checking") {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-background">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div role="status" aria-label="Проверка сессии" className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Проверяем сессию…
         </div>
@@ -168,7 +168,7 @@ export function LoginPage() {
             </div>
 
             {auth.notice && (
-              <div className="mb-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2.5 text-xs leading-5 text-warning">
+              <div role="status" className="mb-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2.5 text-xs leading-5 text-warning">
                 {auth.notice}
               </div>
             )}
@@ -203,6 +203,7 @@ export function LoginPage() {
                     aria-describedby={errors.credential ? "credential-error" : undefined}
                     {...register("credential", {
                       onChange: () => {
+                        setSubmitError(null);
                         if (auth.notice) auth.clearNotice();
                       },
                     })}
@@ -219,7 +220,7 @@ export function LoginPage() {
                   </Button>
                 </div>
                 {errors.credential && (
-                  <p id="credential-error" className="text-xs text-destructive">
+                  <p id="credential-error" role="alert" className="text-xs text-destructive">
                     {errors.credential.message}
                   </p>
                 )}

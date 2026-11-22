@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { File as FileIcon, ImagePlus, Lock, X } from "lucide-react";
 import type { JsonValue, MediaRenditionContext } from "@/types";
@@ -54,7 +54,7 @@ export function FieldCard({
           className="text-sm leading-5"
         >
           {field.label || field.key}
-          {field.required && <span className="ml-0.5 text-destructive">*</span>}
+          {field.required && <><span className="ml-0.5 text-destructive" aria-hidden="true">*</span><span className="sr-only"> (обязательное)</span></>}
         </Label>
         <div className="flex shrink-0 items-center gap-1">
           {action}
@@ -88,6 +88,9 @@ export function MediaValue({
   onClear,
   disabled,
   compact,
+  invalid,
+  describedBy,
+  accessibleLabel,
 }: {
   mediaId: string;
   variant?: "image" | "file";
@@ -95,6 +98,9 @@ export function MediaValue({
   onClear: () => void;
   disabled?: boolean;
   compact?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
+  accessibleLabel?: string;
 }) {
   const mediaQuery = useQuery({
     queryKey: queryKeys.media.detail(mediaId),
@@ -103,7 +109,7 @@ export function MediaValue({
     staleTime: 5 * 60 * 1000,
   });
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" role="group" aria-label={accessibleLabel} aria-invalid={invalid || undefined} aria-describedby={describedBy}>
       {mediaId ? (
         <div className="overflow-hidden rounded-md border border-border">
           {variant === "image" ? (
@@ -128,7 +134,7 @@ export function MediaValue({
               {mediaQuery.data?.original_filename ?? mediaId}
             </span>
             <div className="flex gap-1">
-              <Button type="button" variant="ghost" size="sm" onClick={onPick} disabled={disabled}>
+              <Button type="button" variant="ghost" size="sm" aria-label={`Заменить ${accessibleLabel ?? "файл"}`} onClick={onPick} disabled={disabled}>
                 Заменить
               </Button>
               <Button
@@ -136,7 +142,7 @@ export function MediaValue({
                 variant="ghost"
                 size="sm"
                 className="text-destructive hover:text-destructive"
-                aria-label="Удалить выбранный файл"
+                aria-label={`Удалить выбранный файл ${accessibleLabel ?? ""}`.trim()}
                 onClick={onClear}
                 disabled={disabled}
               >
@@ -148,6 +154,7 @@ export function MediaValue({
       ) : (
         <button
           type="button"
+          aria-label={`${variant === "image" ? "Выбрать изображение" : "Выбрать файл"} ${accessibleLabel ?? ""}`.trim()}
           onClick={onPick}
           disabled={disabled}
           className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-3 py-5 text-xs text-muted-foreground hover:border-primary/40 hover:bg-muted/30 disabled:opacity-50"
@@ -172,6 +179,17 @@ function enumSelect(field: SchemaFieldNode): {
       label: option.label || option.value,
       id: option.id,
     }));
+}
+
+/**
+ * Returns the committed value for a complete numeric input, `null` for an empty
+ * value, and `undefined` while the user is still typing an intermediate string.
+ */
+export function numericDraftValue(raw: string, integer = false): number | null | undefined {
+  if (raw === "") return null;
+  if (!/^-?\d*\.?\d*$/u.test(raw) || (integer && raw.includes("."))) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export function ScalarControl({
@@ -205,10 +223,12 @@ export function ScalarControl({
   accessibleLabel?: string;
   mediaLabel?: string;
 }) {
+  const [numericDraft, setNumericDraft] = useState<string | null>(null);
   const accessibilityProps = {
     id: controlId,
     "aria-labelledby": labelId,
     "aria-label": accessibleLabel,
+    "aria-required": field.required || undefined,
     "aria-invalid": errorId ? true : undefined,
     "aria-describedby": errorId,
   };
@@ -243,7 +263,8 @@ export function ScalarControl({
       );
     }
     case "number":
-    case "integer":
+    case "integer": {
+      const display = numericDraft ?? (typeof value === "number" ? String(value) : "");
       return (
         <Input
           type="number"
@@ -254,20 +275,18 @@ export function ScalarControl({
           step={field.type === "integer" ? 1 : field.step ?? "any"}
           min={field.min}
           max={field.max}
-          value={typeof value === "number" ? value : ""}
+          value={display}
           disabled={disabled}
           onChange={(event) => {
             const raw = event.target.value;
-            if (raw === "") {
-              onChange(null);
-              return;
-            }
-            const parsed = Number(raw);
-            if (!Number.isFinite(parsed)) return;
-            onChange(parsed);
+            setNumericDraft(raw);
+            const parsed = numericDraftValue(raw, field.type === "integer");
+            if (parsed !== undefined) onChange(parsed);
           }}
+          onBlur={() => setNumericDraft(null)}
         />
       );
+    }
     case "boolean":
       return (
         <label className="flex min-h-9 w-fit cursor-pointer items-center gap-2">
@@ -338,6 +357,9 @@ export function ScalarControl({
           variant={field.type === "file" ? "file" : "image"}
           disabled={disabled}
           compact={compact}
+          invalid={Boolean(errorId)}
+          describedBy={errorId}
+          accessibleLabel={mediaLabel || accessibleLabel || field.label || field.key}
           onPick={() =>
             onPickMedia({
               label: mediaLabel || field.label || field.key,

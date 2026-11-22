@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Download, Trash2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -33,6 +33,22 @@ function dateTime(value: string): string {
   return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+type SubmissionFilter = "form" | "key" | "state";
+type SetSubmissionParams = ReturnType<typeof useSearchParams>[1];
+
+/** Filters update in place so back navigation does not step through every keystroke. */
+export function updateSubmissionFilter(
+  current: URLSearchParams,
+  name: SubmissionFilter,
+  value: string,
+  setParams: SetSubmissionParams,
+): void {
+  const next = new URLSearchParams(current);
+  if (value) next.set(name, value);
+  else next.delete(name);
+  setParams(next, { replace: true });
+}
+
 export default function SubmissionsPage() {
   useDocumentTitle("Заявки");
   const { submissionId = "" } = useParams();
@@ -44,6 +60,8 @@ export default function SubmissionsPage() {
   const confirm = useConfirm();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const [pendingStatusId, setPendingStatusId] = useState("");
+  const [statusError, setStatusError] = useState("");
   const schemas = useInfiniteQuery({
     queryKey: ["formsEngine", "schemas"],
     queryFn: ({ pageParam, signal }) => api.formsEngine.schemas(pageParam ?? undefined, pageSize, signal),
@@ -94,12 +112,21 @@ export default function SubmissionsPage() {
       if (!current) throw new Error("Заявка ещё не загружена");
       return api.formsEngine.setSubmissionStatus(current.id, next, current.revision);
     },
+    onMutate: () => {
+      setStatusError("");
+      setPendingStatusId(detail.data?.id ?? "");
+    },
     onSuccess: async (updated) => {
       queryClient.setQueryData(["formsEngine", "submission", updated.id], updated);
       await queryClient.invalidateQueries({ queryKey: ["formsEngine", "submissions", formID] });
       toast.success("Статус заявки изменён");
     },
-    onError: (error) => toast.error(errorMessage(error)),
+    onError: (error) => {
+      const message = errorMessage(error);
+      setStatusError(message);
+      toast.error(message);
+    },
+    onSettled: () => setPendingStatusId(""),
   });
 
   const deleteMutation = useMutation({
@@ -136,7 +163,8 @@ export default function SubmissionsPage() {
     const submission = detail.data;
     return <div className="page-grid">
       <PageHeader title="Заявка" description={`${selectedForm?.key ?? submission.form_id} · ${dateTime(submission.created_at)}`} backTo={`/submissions?form=${encodeURIComponent(formID)}`} backLabel="К списку заявок" actions={<Badge variant="outline">{submission.state}</Badge>} />
-      {canManage && <div className="flex flex-wrap items-end gap-2"><label className="space-y-1 text-sm"><span className="text-muted-foreground">Статус</span><select className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={submission.state} disabled={statusMutation.isPending} onChange={(event) => statusMutation.mutate(event.currentTarget.value)}>{[...new Set([...statusValues, submission.state])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><Button type="button" variant="destructive" className="min-h-11" loading={deleteMutation.isPending} onClick={() => void deleteMutation.mutate(submission)}><Trash2 />Удалить</Button></div>}
+      {canManage && <div className="flex flex-wrap items-end gap-2"><label className="space-y-1 text-sm"><span className="text-muted-foreground">Статус</span><select aria-label="Статус заявки" aria-busy={pendingStatusId === submission.id} className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={submission.state} disabled={statusMutation.isPending} onChange={(event) => statusMutation.mutate(event.currentTarget.value)}>{[...new Set([...statusValues, submission.state])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><Button type="button" variant="destructive" className="min-h-11" loading={deleteMutation.isPending} onClick={() => void deleteMutation.mutate(submission)}><Trash2 />Удалить</Button></div>}
+      {statusError && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">Не удалось изменить статус: {statusError}</p>}
       <section className="overflow-hidden rounded-lg border border-border bg-card"><h2 className="border-b border-border px-4 py-3 text-sm font-semibold">Ответы</h2><dl className="divide-y divide-border">{Object.entries(submission.values).map(([key, value]) => <div key={key} className="grid gap-1 px-4 py-3 sm:grid-cols-[14rem_minmax(0,1fr)] sm:gap-4"><dt className="break-words text-xs font-medium text-muted-foreground">{key}</dt><dd className="min-w-0 whitespace-pre-wrap break-words text-sm">{displayValue(value)}</dd></div>)}</dl></section>
       <p className="text-xs text-muted-foreground">Ответ неизменяем. Ревизия метаданных: {submission.revision}.</p>
     </div>;
@@ -145,11 +173,11 @@ export default function SubmissionsPage() {
   return <div className="page-grid">
     <PageHeader title="Заявки" description="Ответы на опубликованные формы. Содержание заявки неизменяемо." actions={<>
       <Button type="button" variant="outline" className="min-h-11" disabled={!formID || !canView} loading={exportMutation.isPending} onClick={() => exportMutation.mutate()}><Download />Экспорт CSV</Button>
-      {canReadSchemas && <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => { const next = new URLSearchParams(params); next.set("form", event.currentTarget.value); setParams(next); }}>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>}
-      <label className="space-y-1.5 text-sm"><span className="sr-only">Ключ формы</span><Input aria-label="Ключ формы" className="h-11 w-40" value={key} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("key", event.currentTarget.value); else next.delete("key"); setParams(next); }} placeholder="Ключ формы" /></label>
-      <label className="space-y-1.5 text-sm"><span className="sr-only">Статус</span><select aria-label="Статус" className="h-11 min-w-36 rounded-md border border-input bg-background px-3" value={state} onChange={(event) => { const next = new URLSearchParams(params); if (event.currentTarget.value) next.set("state", event.currentTarget.value); else next.delete("state"); setParams(next); }}><option value="">Все статусы</option>{[...new Set([...statusValues, ...submissionItems.map((item) => item.state)])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      {canReadSchemas && <label className="space-y-1.5 text-sm"><span className="sr-only">Форма</span><select aria-label="Форма" className="h-11 min-w-48 rounded-md border border-input bg-background px-3" value={formID} onChange={(event) => updateSubmissionFilter(params, "form", event.currentTarget.value, setParams)}>{schemaItems.map((schema) => <option key={schema.id} value={schema.id}>{schema.key}</option>)}</select></label>}
+      <label className="space-y-1.5 text-sm"><span className="sr-only">Ключ формы</span><Input aria-label="Ключ формы" className="h-11 w-40" value={key} onChange={(event) => updateSubmissionFilter(params, "key", event.currentTarget.value, setParams)} placeholder="Ключ формы" /></label>
+      <label className="space-y-1.5 text-sm"><span className="sr-only">Статус</span><select aria-label="Статус" className="h-11 min-w-36 rounded-md border border-input bg-background px-3" value={state} onChange={(event) => updateSubmissionFilter(params, "state", event.currentTarget.value, setParams)}><option value="">Все статусы</option>{[...new Set([...statusValues, ...submissionItems.map((item) => item.state)])].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
     </>} />
     {canReadSchemas && schemas.hasNextPage && <div className="-mt-5"><Button type="button" variant="ghost" size="sm" onClick={() => void schemas.fetchNextPage()} loading={schemas.isFetchingNextPage}>Загрузить ещё формы</Button></div>}
-    {submissions.isLoading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">Загружаем заявки…</p> : submissions.error ? <ErrorState error={submissions.error} title="Не удалось загрузить заявки" onRetry={() => void submissions.refetch()} /> : submissionItems.length === 0 ? <EmptyState title="Заявок пока нет" description="Новые ответы появятся после отправки опубликованной формы." /> : <div className="overflow-hidden rounded-lg border border-border bg-card"><ul className="divide-y divide-border">{submissionItems.map((submission) => <li key={submission.id}><button type="button" className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => navigate(`/submissions/${encodeURIComponent(submission.id)}?form=${encodeURIComponent(formID)}`)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{summary(submission.values) || selectedForm?.key || submission.form_id}</span><span className="mt-1 block text-xs text-muted-foreground">{dateTime(submission.created_at)} · {selectedForm?.key ?? submission.form_id}</span></span><Badge variant="outline">{submission.state}</Badge></button></li>)}</ul>{submissions.hasNextPage && <div className="border-t border-border p-3 text-center"><Button type="button" variant="outline" onClick={() => void submissions.fetchNextPage()} loading={submissions.isFetchingNextPage}>Загрузить ещё</Button></div>}</div>}
+    {submissions.isLoading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">Загружаем заявки…</p> : submissions.error ? <ErrorState error={submissions.error} title="Не удалось загрузить заявки" onRetry={() => void submissions.refetch()} /> : submissionItems.length === 0 ? <EmptyState title="Заявок пока нет" description="Новые ответы появятся после отправки опубликованной формы." /> : <div className="overflow-hidden rounded-lg border border-border bg-card"><ul className="divide-y divide-border">{submissionItems.map((submission) => <li key={submission.id}><button type="button" className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => navigate(`/submissions/${encodeURIComponent(submission.id)}?form=${encodeURIComponent(formID)}`)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{summary(submission.values) || selectedForm?.key || submission.form_id}</span><span className="mt-1 block text-xs text-muted-foreground">{dateTime(submission.created_at)} · {selectedForm?.key ?? submission.form_id}</span></span><Badge variant="outline">{submission.state}</Badge></button></li>)}</ul>{submissions.hasNextPage && <div className="border-t border-border p-3 text-center"><Button type="button" variant="outline" onClick={() => void submissions.fetchNextPage()} loading={submissions.isFetchingNextPage}>Загрузить ещё</Button></div>}</div>}
   </div>;
 }

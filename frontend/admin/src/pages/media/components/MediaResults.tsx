@@ -82,7 +82,7 @@ export function MediaTable({
                     onClick={() => onOpen(media)}
                     className="min-w-0 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <span className="block max-w-[22rem] truncate text-sm font-medium hover:text-primary">
+                    <span className="block max-w-[22rem] truncate text-sm font-medium hover:text-primary" title={media.original_filename}>
                       {media.original_filename}
                     </span>
                     <code className="block truncate text-2xs text-muted-foreground">

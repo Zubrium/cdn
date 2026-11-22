@@ -275,81 +275,91 @@ export function UploadDialog({
 
         {tasks.length > 0 && (
           <div className="max-h-64 space-y-2 overflow-y-auto thin-scrollbar">
-            {tasks.map((task) => (
-              <div
-                key={task.id}
-                className="rounded-md border border-border bg-card px-3 py-2"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium" title={task.file.name}>
-                      {task.file.name}
-                    </p>
-                    <p className="text-2xs text-muted-foreground">
-                      {formatBytes(task.file.size)} · группа {task.group}
-                      {task.error ? ` · ${task.error}` : ""}
-                    </p>
+            {tasks.map((task) => {
+              const indeterminate = task.status === "uploading" && task.progress === null;
+              const progressValue = task.status === "success" ? 100 : task.progress;
+              return (
+                <div
+                  key={task.id}
+                  className="rounded-md border border-border bg-card px-3 py-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium" title={task.file.name}>
+                        {task.file.name}
+                      </p>
+                      <p className="text-2xs text-muted-foreground">
+                        {formatBytes(task.file.size)} · группа {task.group}
+                        {task.error ? ` · ${task.error}` : ""}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-2xs text-muted-foreground">
+                      {task.status === "success"
+                        ? "Готово"
+                        : task.status === "error"
+                          ? "Ошибка"
+                          : task.status === "canceled"
+                            ? "Отменено"
+                            : task.status === "pending"
+                              ? "В очереди"
+                              : task.progress === null
+                                ? "Загрузка…"
+                                : `${task.progress}%`}
+                    </span>
+                    {task.status === "uploading" && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => cancelTask(task.id)}
+                        aria-label={`Отменить загрузку ${task.file.name}`}
+                      >
+                        <X />
+                      </Button>
+                    )}
+                    {(task.status === "error" || task.status === "canceled") && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => retry(task)}
+                        aria-label={`Повторить загрузку ${task.file.name}`}
+                      >
+                        <RefreshCw />
+                      </Button>
+                    )}
+                    {task.status === "success" && (
+                      <Check className="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+                    )}
                   </div>
-                  <span className="shrink-0 text-2xs text-muted-foreground">
-                    {task.status === "success"
-                      ? "Готово"
-                      : task.status === "error"
-                        ? "Ошибка"
-                        : task.status === "canceled"
-                          ? "Отменено"
-                          : task.status === "pending"
-                            ? "В очереди"
-                            : task.progress === null
-                              ? "Загрузка…"
-                              : `${task.progress}%`}
-                  </span>
-                  {task.status === "uploading" && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => cancelTask(task.id)}
-                      aria-label={`Отменить загрузку ${task.file.name}`}
+                  {(task.status === "uploading" || task.status === "success") && (
+                    <div
+                      role="progressbar"
+                      aria-label={`Загрузка ${task.file.name}`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={progressValue ?? undefined}
+                      aria-valuetext={indeterminate ? "Загрузка…" : undefined}
+                      aria-busy={indeterminate || undefined}
+                      className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border"
                     >
-                      <X />
-                    </Button>
-                  )}
-                  {(task.status === "error" || task.status === "canceled") && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => retry(task)}
-                      aria-label={`Повторить загрузку ${task.file.name}`}
-                    >
-                      <RefreshCw />
-                    </Button>
-                  )}
-                  {task.status === "success" && (
-                    <Check className="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+                      {indeterminate ? (
+                        <div className="h-full w-full animate-pulse bg-primary/60" aria-hidden="true" />
+                      ) : (
+                        <div
+                          className={cn(
+                            "h-full transition-[width]",
+                            task.status === "success" ? "bg-success" : "bg-primary",
+                          )}
+                          style={{ width: `${progressValue ?? 0}%` }}
+                          aria-hidden="true"
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
-                {(task.status === "uploading" || task.status === "success") && (
-                  <div
-                    role="progressbar"
-                    aria-label={`Загрузка ${task.file.name}`}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={task.status === "success" ? 100 : task.progress ?? 15}
-                    className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border"
-                  >
-                    <div
-                      className={cn(
-                        "h-full transition-[width]",
-                        task.status === "success" ? "bg-success" : "bg-primary",
-                      )}
-                      style={{ width: `${task.status === "success" ? 100 : task.progress ?? 15}%` }}
-                      aria-hidden="true"
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

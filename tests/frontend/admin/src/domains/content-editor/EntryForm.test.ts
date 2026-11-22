@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { JsonObject } from "@/types";
 import { parsedSchema, schemaFromFields } from "@/domains/content-schema/schema";
 import { assignArrayItemRecordID, normalizeEngineRecordIDs } from "@/domains/content-schema/record-identity";
-import { clearMediaArraySelection, EntryFieldsForm, validateEntryFields } from "../../../../../../frontend/admin/src/domains/content-editor/EntryForm";
+import { clearMediaArraySelection, EntryFieldsForm, scrollToEntryField, validateEntryFields } from "../../../../../../frontend/admin/src/domains/content-editor/EntryForm";
 
 describe("validation of manifest fields", () => {
   const fields = parsedSchema({
@@ -26,6 +26,25 @@ describe("validation of manifest fields", () => {
     expect(validateEntryFields(fields, { title: "", links: ["x"], count: 1.5 }).map((issue) => issue.path)).toEqual(["title", "links", "count"]);
     expect(validateEntryFields(fields, {}).map((issue) => issue.path)).toEqual(["title", "links"]);
   });
+});
+
+it("focuses the nearest rendered control when a validation issue is selected", () => {
+  const focus = vi.fn();
+  const scrollIntoView = vi.fn();
+  const ids = new Set(["entry-field-title", "entry-field-title-control"]);
+  const previous = globalThis.document;
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: { getElementById: (id: string) => ids.has(id) ? { focus, scrollIntoView } : null },
+  });
+
+  try {
+    scrollToEntryField("title");
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  } finally {
+    Object.defineProperty(globalThis, "document", { configurable: true, value: previous });
+  }
 });
 
 it("renders nested objects and arrays inside object-array rows", () => {

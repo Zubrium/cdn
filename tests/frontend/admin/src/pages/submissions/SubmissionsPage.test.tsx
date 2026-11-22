@@ -14,7 +14,7 @@ vi.mock("@/api", () => ({ api: mocks.api }));
 vi.mock("@/app/auth", () => ({ useAuth: mocks.useAuth }));
 vi.mock("@/components/common/confirm", () => ({ useConfirm: mocks.useConfirm }));
 
-import SubmissionsPage from "../../../../../../frontend/admin/src/pages/submissions/SubmissionsPage";
+import SubmissionsPage, { updateSubmissionFilter } from "../../../../../../frontend/admin/src/pages/submissions/SubmissionsPage";
 
 const schema = { id: "form-1", key: "contact", version: 1, fields: {}, revision: 1 };
 const submission = {
@@ -65,5 +65,33 @@ describe("global Forms submissions", () => {
     expect(rendered).toContain("Удалить");
     expect(rendered).toContain("Статус");
     expect(rendered).not.toContain("snapshot=");
+  });
+
+  it("keeps the focused list row visible inside its bounds", () => {
+    const rendered = renderPage("/submissions?form=form-1", 1);
+    expect(rendered).toContain("focus-visible:ring-inset");
+  });
+
+  it("replaces the URL history entry when a filter changes", () => {
+    const setParams = vi.fn();
+    const params = new URLSearchParams("form=form-1&key=old&state=new");
+
+    updateSubmissionFilter(params, "key", "person", setParams);
+
+    expect(setParams).toHaveBeenCalledTimes(1);
+    const [next, options] = setParams.mock.calls[0]!;
+    expect(next.get("key")).toBe("person");
+    expect(next.get("form")).toBe("form-1");
+    expect(options).toEqual({ replace: true });
+  });
+
+  it("removes an empty optional filter without adding a history entry", () => {
+    const setParams = vi.fn();
+
+    updateSubmissionFilter(new URLSearchParams("form=form-1&state=processed"), "state", "", setParams);
+
+    const [next, options] = setParams.mock.calls[0]!;
+    expect(next.has("state")).toBe(false);
+    expect(options).toEqual({ replace: true });
   });
 });

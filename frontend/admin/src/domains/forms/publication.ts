@@ -1,5 +1,6 @@
 import type { FormSchema, FormSubmissionFilter, RouterPublicOperation, RouterRoute } from "@/types";
 import { ApiError } from "@/api";
+import { errorMessage } from "@/lib/errors";
 
 export interface FormRouteSuggestion {
   id: string;
@@ -224,8 +225,7 @@ export function formSaveErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 409) {
     return "Ключ формы уже используется другой формой. Выберите уникальный ключ.";
   }
-  if (error instanceof Error && error.message) return error.message;
-  return "Не удалось сохранить форму";
+  return errorMessage(error);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

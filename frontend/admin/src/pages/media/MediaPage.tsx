@@ -126,7 +126,8 @@ export default function MediaPage() {
             <div className="flex rounded-md border border-border p-0.5">
               <Button
                 variant={view === "grid" ? "secondary" : "ghost"}
-                size="icon-sm"
+                size="icon"
+                className="size-11"
                 onClick={() => update({ view: null })}
                 aria-label="Сетка"
                 aria-pressed={view === "grid"}
@@ -135,7 +136,8 @@ export default function MediaPage() {
               </Button>
               <Button
                 variant={view === "list" ? "secondary" : "ghost"}
-                size="icon-sm"
+                size="icon"
+                className="size-11"
                 onClick={() => update({ view: "list" })}
                 aria-label="Список"
                 aria-pressed={view === "list"}
@@ -185,12 +187,6 @@ export default function MediaPage() {
         onLoadMore={() => void mediaQuery.fetchNextPage()}
         onUpload={() => setUploadOpen(true)}
       />
-      {group !== "all" && items.length === 0 && mediaQuery.hasNextPage && (
-        <div className="flex justify-center">
-          <Button variant="outline" onClick={() => void mediaQuery.fetchNextPage()} loading={mediaQuery.isFetchingNextPage}>Показать ещё</Button>
-        </div>
-      )}
-
       <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       <MediaDetailDialog
         key={selected ? `${selected.id}:${selected.revision}` : "none"}

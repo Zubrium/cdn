@@ -36,11 +36,12 @@ export function ModelContentRecordDetailsPanel({
 }: ModelContentRecordDetailsPanelProps) {
   const recordValidation = validation.find((item) => item.recordId === selectedRecord.id);
   const orphaned = orphanedModelRecordData(selectedRecord, model);
+  const recordTitle = modelRecordTitle(selectedRecord, selectedEntity);
 
   return <section className="min-w-0 space-y-5 rounded-xl border border-border bg-card p-4 sm:p-5">
     <header className="flex min-w-0 flex-wrap items-center justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="truncate text-lg font-semibold">{modelRecordTitle(selectedRecord, selectedEntity)}</h1>
+        <h1 className="truncate text-lg font-semibold" title={recordTitle}>{recordTitle}</h1>
         <p className="text-xs text-muted-foreground">{selectedEntity.name} · {selectedEntity.cardinality === "singleton" ? "единственная запись" : `порядковый номер ${selectedRecord.sortOrder + 1}`}</p>
       </div>
       {selectedEntity.cardinality === "singleton"

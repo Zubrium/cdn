@@ -115,10 +115,10 @@ function EntityGroup({
         >
           <span className="min-w-0">
             <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-medium">{entity.name}</span>
+              <span className="truncate text-sm font-medium" title={entity.name}>{entity.name}</span>
               {issues > 0 && <Badge variant="destructive">Ошибок: {issues}</Badge>}
             </span>
-            <span className="mt-1 block truncate text-xs text-muted-foreground">{preview || "Записей пока нет"}</span>
+            <span className="mt-1 block truncate text-xs text-muted-foreground" title={preview || "Записей пока нет"}>{preview || "Записей пока нет"}</span>
           </span>
           <span className="font-mono text-xs text-muted-foreground">{entityRecords.length} {pluralRu(entityRecords.length, ["запись", "записи", "записей"])}</span>
           <span className="flex items-center justify-end gap-2 text-sm text-muted-foreground group-hover:text-foreground">Открыть<ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" /></span>

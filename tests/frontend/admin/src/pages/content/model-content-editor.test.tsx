@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { DataModel, ModelContentRecord, ModelContentSelection, ModelContentWorkspace } from "@/types";
 import { PlacementSelections } from "../../../../../../frontend/admin/src/pages/content/model-content-editor";
+import { ContentPlacementsPage, placementSectionDefaults } from "../../../../../../frontend/admin/src/pages/content/components/model-content/ContentPlacementsPage";
 import { ContentRecordPage } from "../../../../../../frontend/admin/src/pages/content/components/model-content/ContentRecordPage";
 
 const model: DataModel = {
@@ -166,6 +167,17 @@ describe("model content placement selections", () => {
     expect(html).toContain("Очистить некорректный выбор");
   });
 
+  it("keeps the record list keyboard reachable and highlights focused rows", () => {
+    const html = placementMarkup([savedRecord, unsavedRecord], [{
+      placementId: "collection-placement",
+      inputKey: "products",
+      mode: "ids",
+      recordIds: [],
+    }]);
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain("focus-within:bg-muted/50");
+  });
+
   it("auto-binds singleton scalar and record inputs while keeping collection input as zero-or-one", () => {
     const singletonModel = { ...model, entities: model.entities.map((entity) => ({ ...entity, cardinality: "singleton" as const })) };
     const html = placementMarkup([savedRecord], [{ placementId: "collection-placement", inputKey: "products", mode: "ids", recordIds: [] }], singletonModel);
@@ -174,6 +186,31 @@ describe("model content placement selections", () => {
     expect(html).toContain("Единственная опубликованная запись связывается автоматически.");
     expect(html).toContain("Выбрать 0–1 запись");
     expect((html.match(/type="checkbox"/g) ?? []).length).toBe(1);
+  });
+});
+
+describe("placement sections", () => {
+  it("opens only initial sections and does not derive disclosure state from search", () => {
+    expect(placementSectionDefaults(workspace.placements)).toEqual({
+      "page:home": true,
+      "placement:scalar-placement": false,
+      "placement:record-placement": false,
+      "page:product-detail": false,
+      "placement:lookup-placement": true,
+      "page:catalog": false,
+      "placement:collection-placement": true,
+    });
+
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ContentPlacementsPage, {
+      model,
+      workspace: { ...workspace, snapshot: { id: "snapshot-1" } } as ModelContentWorkspace,
+      draft: { records: [savedRecord], selections: [] },
+      savedDraft: { records: [savedRecord], selections: [] },
+      disabled: false,
+      updateDraft: () => {},
+    })));
+    expect(html.match(/<details[^>]*>/u)?.[0]).toContain('open=""');
+    expect(html).toContain('class="group/page"');
   });
 });
 
@@ -209,5 +246,16 @@ describe("flat model record form", () => {
     expect(html).toContain("Очистить поля");
     expect(html).not.toContain("Очистить поля и связи");
     expect(html).not.toContain("Добавить");
+  });
+});
+
+describe("content editor unsaved guard context", () => {
+  it("protects snapshot and locale changes but not unrelated query changes", async () => {
+    const { changesSnapshotOrLocale } = await import("../../../../../../frontend/admin/src/pages/content/components/model-content-editor/useModelContentEditorController");
+    const current = "snapshot=one&locale=ru&page_id=home";
+
+    expect(changesSnapshotOrLocale(current, "snapshot=two&locale=ru&page_id=home")).toBe(true);
+    expect(changesSnapshotOrLocale(current, "snapshot=one&locale=en&page_id=home")).toBe(true);
+    expect(changesSnapshotOrLocale(current, "snapshot=one&locale=ru&page_id=other")).toBe(false);
   });
 });

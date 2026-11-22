@@ -112,7 +112,7 @@ export function MediaDetailDialog({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle className="truncate">{media.original_filename}</DialogTitle>
+          <DialogTitle className="truncate" title={media.original_filename}>{media.original_filename}</DialogTitle>
           <DialogDescription>{mimeLabel(media.content_type)} · {media.content_type} · {formatBytes(media.size_bytes)}</DialogDescription>
         </DialogHeader>
 
@@ -181,7 +181,7 @@ export function MediaActions({ media, onOpen }: { media: Media; onOpen: () => vo
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={`Действия с ${media.original_filename}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-11 sm:size-9" aria-label={`Действия с ${media.original_filename}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuItem onSelect={onOpen}><Pencil className="h-4 w-4" />Подробности</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => copyFileAddress(media)}><Copy className="h-4 w-4" />Скопировать адрес для авторизованного доступа</DropdownMenuItem>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Check, ImagePlus, Search, Upload } from "lucide-react";
+import { Check, ExternalLink, ImagePlus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api";
@@ -168,7 +168,7 @@ export function MediaPickerDialog({
           </div>
           <Button asChild variant="outline">
             <Link to="/media" target="_blank" rel="noreferrer">
-              <Upload />Открыть медиатеку
+              <ExternalLink />Открыть медиатеку
             </Link>
           </Button>
         </div>
@@ -193,7 +193,7 @@ export function MediaPickerDialog({
               action={
                 <Button asChild variant="outline">
                   <Link to="/media" target="_blank" rel="noreferrer">
-                    <Upload />Открыть медиатеку
+                    <ExternalLink />Открыть медиатеку
                   </Link>
                 </Button>
               }

@@ -11,6 +11,21 @@ import type { ModelContentDraft, ModelContentDraftUpdater } from "./types";
 
 type Placement = ModelContentWorkspace["placements"][number];
 
+/** Initial disclosure state; later user choices are kept across searches. */
+export function placementSectionDefaults(placements: Placement[]): Record<string, boolean> {
+  const defaults: Record<string, boolean> = {};
+  const firstPageId = placements[0]?.pageId;
+  const countByPage = new Map<string, number>();
+  for (const placement of placements) {
+    countByPage.set(placement.pageId, (countByPage.get(placement.pageId) ?? 0) + 1);
+  }
+  for (const placement of placements) {
+    defaults[`placement:${placement.id}`] = countByPage.get(placement.pageId) === 1;
+    defaults[`page:${placement.pageId}`] = placement.pageId === firstPageId;
+  }
+  return defaults;
+}
+
 export function ContentPlacementsPage({
   model,
   workspace,
@@ -29,6 +44,7 @@ export function ContentPlacementsPage({
   confirmCleanup?: (title: string, description: string) => Promise<boolean>;
 }) {
   const [search, setSearch] = useState("");
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => placementSectionDefaults(workspace.placements));
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase("ru"));
   const grouped = useMemo(() => {
     const entities = new Map(model.entities.map((entity) => [entity.id, entity.name]));
@@ -80,34 +96,38 @@ export function ContentPlacementsPage({
       <h2 className="mt-3 font-medium">Нет размещений с данными</h2>
       <p className="mt-1 text-sm text-muted-foreground">Добавьте в фичи входы данных и разместите их на страницах сайта.</p>
     </section> : grouped.length === 0 ? <p className="border-y border-dashed border-border py-12 text-center text-sm text-muted-foreground">Совпадений нет.</p> : <div className="divide-y divide-border border-y border-border">
-      {grouped.map((page, pageIndex) => {
+      {grouped.map((page) => {
         const pageInputCount = page.placements.reduce((sum, placement) => sum + placement.inputs.length, 0);
-        return <details key={page.id} open={!deferredSearch && pageIndex === 0} className="group/page">
-        <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-1 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open/page:rotate-180" />
-          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{page.name}</span><span className="mt-0.5 block text-xs text-muted-foreground">{page.placements.length} {pluralRu(page.placements.length, ["фича", "фичи", "фич"])} · {pageInputCount} {pluralRu(pageInputCount, ["вход", "входа", "входов"])}</span></span>
-        </summary>
-        <div className="space-y-2 pb-4 pl-7">
-          {page.placements.map((placement, placementIndex) => <details key={placement.id} open={!deferredSearch && page.placements.length === 1} className="border-t border-border/70">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{placement.featureName}</span><span className="mt-0.5 block text-xs text-muted-foreground">Версия {placement.version} · {placement.inputs.length} {pluralRu(placement.inputs.length, ["вход", "входа", "входов"])}</span></span>
-              {placementIndex === 0 && <Badge variant="muted">первая на странице</Badge>}
-            </summary>
-            <div className="pb-3 pl-6">
-              <PlacementSelections
-                model={model}
-                workspace={{ ...workspace, placements: [placement] }}
-                draft={draft}
-                savedDraft={savedDraft}
-                disabled={disabled}
-                updateDraft={updateDraft}
-                confirmCleanup={confirmCleanup}
-              />
-            </div>
-          </details>)}
-        </div>
-      </details>;
+        const pageKey = `page:${page.id}`;
+        return <details key={page.id} open={openSections[pageKey] ?? false} onToggle={(event) => setOpenSections((current) => ({ ...current, [pageKey]: event.currentTarget.open }))} className="group/page">
+          <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-1 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+            <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open/page:rotate-180" />
+            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{page.name}</span><span className="mt-0.5 block text-xs text-muted-foreground">{page.placements.length} {pluralRu(page.placements.length, ["фича", "фичи", "фич"])} · {pageInputCount} {pluralRu(pageInputCount, ["вход", "входа", "входов"])}</span></span>
+          </summary>
+          <div className="space-y-2 pb-4 pl-7">
+            {page.placements.map((placement, placementIndex) => {
+              const placementKey = `placement:${placement.id}`;
+              return <details key={placement.id} open={openSections[placementKey] ?? false} onToggle={(event) => setOpenSections((current) => ({ ...current, [placementKey]: event.currentTarget.open }))} className="border-t border-border/70">
+                <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                  <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{placement.featureName}</span><span className="mt-0.5 block text-xs text-muted-foreground">Версия {placement.version} · {placement.inputs.length} {pluralRu(placement.inputs.length, ["вход", "входа", "входов"])}</span></span>
+                  {placementIndex === 0 && <Badge variant="muted">первая на странице</Badge>}
+                </summary>
+                <div className="pb-3 pl-6">
+                  <PlacementSelections
+                    model={model}
+                    workspace={{ ...workspace, placements: [placement] }}
+                    draft={draft}
+                    savedDraft={savedDraft}
+                    disabled={disabled}
+                    updateDraft={updateDraft}
+                    confirmCleanup={confirmCleanup}
+                  />
+                </div>
+              </details>;
+            })}
+          </div>
+        </details>;
       })}
     </div>}
   </div>;

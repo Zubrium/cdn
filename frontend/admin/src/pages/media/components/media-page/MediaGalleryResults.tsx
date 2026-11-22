@@ -30,7 +30,10 @@ export function MediaGalleryResults({ state, error, items, view, hasNextPage, fe
       ) : state === "error" ? (
         <ErrorState error={error} onRetry={onRetry} />
       ) : state === "empty" || state === "empty-filtered" ? (
-        <EmptyState icon={ImagePlus} title={state === "empty-filtered" ? "Файлы не найдены" : "Медиатека пуста"} description={state === "empty-filtered" ? "Измените фильтры или загрузите новый файл." : "Загрузите изображения, PDF или видео, чтобы использовать их в контенте и формах."} action={<Button onClick={onUpload}><Upload />Загрузить файлы</Button>} />
+        <>
+          <EmptyState icon={ImagePlus} title={state === "empty-filtered" ? "Файлы не найдены" : "Медиатека пуста"} description={state === "empty-filtered" ? "Измените фильтры или загрузите новый файл." : "Загрузите изображения, PDF или видео, чтобы использовать их в контенте и формах."} action={<Button onClick={onUpload}><Upload />Загрузить файлы</Button>} />
+          {state === "empty-filtered" && hasNextPage && <div className="mt-4 flex justify-center"><Button variant="outline" onClick={onLoadMore} loading={fetchingNextPage}>Показать ещё</Button></div>}
+        </>
       ) : (
         <>
           {state === "results-with-error" && <InlineAlert tone="warning"><div className="flex flex-wrap items-center justify-between gap-2"><span>Не удалось обновить список. Уже загруженные файлы доступны.</span><Button variant="outline" size="sm" onClick={onRetry}>Повторить</Button></div></InlineAlert>}
