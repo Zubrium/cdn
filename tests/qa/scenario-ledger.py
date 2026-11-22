@@ -31,8 +31,8 @@ REQUIRED_FIELDS = frozenset(
         "blocker",
     }
 )
-ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-[0-9]{3}$")
-SYMBOL_PATTERN = re.compile(r"^(Test[A-Za-z0-9_]+)(?:/([A-Z][A-Z0-9]*-[0-9]{3}))?$")
+ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}$")
+SYMBOL_PATTERN = re.compile(r"^(Test[A-Za-z0-9_]+)(?:/([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}))?$")
 
 
 class LedgerError(ValueError):

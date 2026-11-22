@@ -13,6 +13,9 @@ python3 tests/qa/run-test-suite.py ci --with-build
 python3 tests/qa/run-test-suite.py status
 python3 tests/qa/run-test-suite.py diagnose
 python3 tests/qa/run-test-suite.py diagnose --gate website-unit
+tests/qa/run-release-checks.sh
+tests/qa/run-release-checks.sh --integration-env /path/to/private-disposable.env
+tests/qa/run-release-checks.sh --integration-env /path/to/private-disposable.env --with-e2e
 ```
 
 - `run` и `ci` выполняют гейты из `tests/qa/gates.json` плюс `go test`, `go vet`,
@@ -29,6 +32,11 @@ python3 tests/qa/run-test-suite.py diagnose --gate website-unit
   перед write-сценариями обязателен `tests/qa/browser/verify-target.sh`.
 - `--only PREFIX` / `--skip PREFIX` фильтруют гейты по префиксу ID.
 - `--strict-scenarios` требует `pass` для всех сценариев всех ledger, включая integration.
+- `run-release-checks.sh` выполняет полный sweep репозитория: boundary lint, Go
+  test/vet/build по всем профилям, binary smoke build, frontend
+  typecheck/lint/test/build, ledger-валидаторы, unified gates и, по явным
+  флагам, disposable integration и live E2E. Отсутствие E2E-harness при
+  `--with-e2e` считается жёстким prerequisite failure, а не пропуском.
 - `status` печатает краткую сводку последнего отчёта, `diagnose` — причины
   провалов и заблокированные сценарии.
 

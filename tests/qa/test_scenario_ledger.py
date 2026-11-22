@@ -153,6 +153,20 @@ class ExactSubtestReceiverTests(unittest.TestCase):
         )
 
 
+class ScenarioIdentifierTests(unittest.TestCase):
+    def test_accepts_hyphenated_e2e_scenario_ids(self) -> None:
+        for scenario_id in ("E2E-PUB-001", "E2E-RETIRE-001", "E2E-WEB-001", "WEB-012", "CORE-001"):
+            with self.subTest(scenario_id=scenario_id):
+                self.assertIsNotNone(SCENARIO_LEDGER.ID_PATTERN.fullmatch(scenario_id))
+
+    def test_accepts_hyphenated_e2e_test_symbols(self) -> None:
+        match = SCENARIO_LEDGER.SYMBOL_PATTERN.fullmatch("TestPublication/E2E-PUB-001")
+        self.assertIsNotNone(match)
+        if match is not None:
+            self.assertEqual(match.group(1), "TestPublication")
+            self.assertEqual(match.group(2), "E2E-PUB-001")
+
+
 class TestTargetSelectionTests(unittest.TestCase):
     def test_targets_pair_test_file_with_exact_symbol(self) -> None:
         scenarios = [
