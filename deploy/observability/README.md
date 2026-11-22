@@ -8,6 +8,7 @@
 
 - Docker Compose v2, свободные порты `18080` (Admin), `18081` (публичный Router), `15080` (OpenObserve UI), `14317/14318` (OTLP gRPC/HTTP), `15900/15901` (MinIO API/console), `15432` (PostgreSQL).
 - Только disposable-данные. PostgreSQL и MinIO живут в tmpfs и исчезают при остановке контейнеров; OpenObserve хранит сигналы в named volume `openobserve-data`.
+- Образ OpenObserve зафиксирован как `public.ecr.aws/zinclabs/openobserve:v1.1.2`: тег `latest` в этом реестре нестабилен для повторяемого прогона.
 - Не направляйте запросы на рабочий API. Для write-сценариев используйте только этот стек.
 
 ## 2. Переменные окружения
