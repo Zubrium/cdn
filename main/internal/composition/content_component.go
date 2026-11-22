@@ -2,13 +2,16 @@ package composition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
+	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
 type contentEngineComponent struct {
@@ -20,6 +23,7 @@ type contentEngineComponent struct {
 	serviceCtx         context.Context
 	cancel             context.CancelFunc
 	buildLocaleCatalog *websiteLocaleCatalog
+	buildProjection    *websiteContentBuildProjection
 }
 
 func newContentEngineComponent(core *coreComponent, config appconfig.Resolved, website websiteapi.API) *contentEngineComponent {
@@ -83,10 +87,15 @@ func (component *contentEngineComponent) Activate(context.Context) error {
 	if component == nil {
 		return errors.New("Content Engine is not initialized")
 	}
-	if component.buildLocaleCatalog == nil || component.engine == nil || component.serviceCtx == nil {
+	if component.engine == nil || component.serviceCtx == nil {
 		return nil
 	}
-	component.buildLocaleCatalog.setSource(component.serviceCtx, component.engine)
+	if component.buildLocaleCatalog != nil {
+		component.buildLocaleCatalog.setSource(component.serviceCtx, component.engine)
+	}
+	if component.buildProjection != nil {
+		component.buildProjection.setSource(component.serviceCtx, component)
+	}
 	return nil
 }
 
@@ -134,6 +143,31 @@ func (component *contentEngineComponent) ReadPublishedContent(ctx context.Contex
 		return contentapi.PublishedContent{}, errors.New("invalid Content projection scope")
 	}
 	return component.engine.ReadPublishedContent(ctx, projections)
+}
+
+// ResolveContentBuildProjection pins the published Content revision and the
+// locale-specific editorial selection for one page snapshot. It uses only
+// trusted projections derived from the Website-owned snapshot.
+func (component *contentEngineComponent) ResolveContentBuildProjection(ctx context.Context, pageSnapshotID, locale string) (websiteapp.ContentBuildProjection, error) {
+	if component == nil || ctx == nil || component.engine == nil || component.projections == nil || pageSnapshotID == "" || locale == "" {
+		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+	}
+	projections, err := component.projections.GetContentProjectionsForLocale(ctx, pageSnapshotID, locale)
+	if err != nil || !projections.VerifyScope(pageSnapshotID) || projections.Locale != locale {
+		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+	}
+	workspace, err := component.engine.GetWorkspace(ctx, projections)
+	if err != nil || workspace.PublishedRevision < 0 || workspace.Selections == nil {
+		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+	}
+	encoded, err := json.Marshal(workspace.Selections)
+	if err != nil {
+		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+	}
+	return websiteapp.ContentBuildProjection{
+		PublicationRevision: workspace.PublishedRevision,
+		SelectionDigest:     prerendercontract.HexDigest(encoded),
+	}, nil
 }
 
 var (

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
 var (
@@ -37,9 +39,9 @@ func (limits Limits) Validate() error {
 	return nil
 }
 
-// ValidatePlan verifies the bounded serialized plan envelope and its exact
-// byte digest before any renderer is started. The plan body remains opaque;
-// this package does not claim that it enforces semantic input projection.
+// ValidatePlan verifies the bounded serialized plan envelope, rejects
+// ambiguous duplicate keys, and checks that its trusted input recomputes the
+// exact digest pinned by the Website build workflow.
 func ValidatePlan(request Request, limits Limits) error {
 	if limits.Validate() != nil || !utf8.Valid(request.Plan) || !validIdentifier(request.TaskID) || !validIdentifier(request.IdempotencyKey) || len(request.Plan) == 0 || len(request.Plan) > limits.MaxPlanBytes ||
 		!digestPattern.MatchString(request.PlanDigest) || !digestPattern.MatchString(request.InputDigest) {
@@ -51,22 +53,23 @@ func ValidatePlan(request Request, limits Limits) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(request.Plan))
 	decoder.UseNumber()
-	value, err := readUniqueJSONValue(decoder, 0)
-	if err != nil {
+	if _, err := readUniqueJSONValue(decoder, 0); err != nil {
 		return ErrInvalidPlan
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return ErrInvalidPlan
 	}
-	envelope, ok := value.(map[string]any)
-	if !ok || len(envelope) != 3 {
+	var plan prerendercontract.Plan
+	typed := json.NewDecoder(bytes.NewReader(request.Plan))
+	typed.DisallowUnknownFields()
+	if err := typed.Decode(&plan); err != nil {
 		return ErrInvalidPlan
 	}
-	version, versionOK := envelope["version"].(string)
-	inputDigest, digestOK := envelope["input_digest"].(string)
-	payload, payloadOK := envelope["payload"].(map[string]any)
-	if !versionOK || version != RenderPlanVersion || !digestOK || inputDigest != request.InputDigest || !payloadOK || payload == nil {
+	if err := typed.Decode(&trailing); err != io.EOF {
+		return ErrInvalidPlan
+	}
+	if plan.Version != RenderPlanVersion || plan.InputDigest != request.InputDigest || prerendercontract.ValidatePlan(plan) != nil {
 		return ErrInvalidPlan
 	}
 	return nil
@@ -135,7 +138,8 @@ func readUniqueJSONValue(decoder *json.Decoder, depth int) (any, error) {
 // ValidateResult checks that a completed artifact set is bounded, unique,
 // checksummed, and tied to this exact input digest. It does not activate it.
 func ValidateResult(limits Limits, expectedInputDigest string, result Result) error {
-	if limits.Validate() != nil || !digestPattern.MatchString(expectedInputDigest) || !validIdentifier(result.Manifest.FileID) || result.Manifest.ContentType != "application/json" ||
+	if limits.Validate() != nil || !digestPattern.MatchString(expectedInputDigest) || !validIdentifier(result.Manifest.FileID) ||
+		result.Manifest.ContentType != prerendercontract.ArtifactMediaType ||
 		result.InputDigest != expectedInputDigest || len(result.Artifacts)+1 > limits.MaxArtifacts {
 		return ErrInvalidResult
 	}
@@ -175,6 +179,7 @@ func validArtifactContentType(value string) bool {
 	}
 	switch mediaType {
 	case "text/html", "text/css", "text/javascript", "application/javascript", "application/json",
+		prerendercontract.ArtifactMediaType,
 		"image/jpeg", "image/png", "image/webp", "image/avif", "image/gif",
 		"font/woff", "font/woff2", "application/font-woff":
 	default:

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	core "github.com/Zubrium/cdn/core/presentation"
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/google/uuid"
 )
 
@@ -19,8 +20,8 @@ const (
 	ComponentID      = "engine.website"
 	OperationID      = "build-page"
 	ContractVersion  = 1
-	RootFormat       = "website.build-root/v1"
-	RenderPlanFormat = "render-plan/v1"
+	RootFormat       = "website.build-root/v2"
+	RenderPlanFormat = prerendercontract.PlanVersion
 
 	prerenderComponentID     = "worker.prerender"
 	prerenderOperationID     = "render-page"
@@ -33,25 +34,19 @@ var (
 	ErrInvalidTask          = errors.New("website build task is invalid")
 	ErrInvalidPayload       = errors.New("website build payload is invalid")
 
-	digestPattern        = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	localePattern        = regexp.MustCompile(`^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$`)
-	emissionPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
-	idempotencyKeyPrefix = "build:"
+	digestPattern   = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	emissionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 )
 
 // Request is the immutable, typed workflow input created by Website
 // application. It deliberately contains no route, URL, branch, record value,
 // executable, command or storage path.
 type Request struct {
-	Version               int       `json:"version"`
-	BuildID               uuid.UUID `json:"build_id"`
-	SnapshotID            uuid.UUID `json:"snapshot_id"`
-	SnapshotRevision      int64     `json:"snapshot_revision"`
-	SnapshotDigest        string    `json:"snapshot_digest"`
-	ContentRevision       int64     `json:"content_revision"`
-	Locale                string    `json:"locale"`
-	LocaleCatalogRevision int64     `json:"locale_catalog_revision"`
-	InputDigest           string    `json:"input_digest"`
+	Version     int                            `json:"version"`
+	BuildID     uuid.UUID                      `json:"build_id"`
+	Input       prerendercontract.TrustedInput `json:"input"`
+	Page        prerendercontract.PagePlan     `json:"page"`
+	InputDigest string                         `json:"input_digest"`
 }
 
 // RootResult carries only the stable emission identity needed to reconcile the
@@ -79,20 +74,11 @@ func NewHandler(config Config) (*Handler, error) {
 	return &Handler{config: config}, nil
 }
 
-type renderPlanPayload struct {
-	BuildID               uuid.UUID `json:"build_id"`
-	SnapshotID            uuid.UUID `json:"snapshot_id"`
-	SnapshotRevision      int64     `json:"snapshot_revision"`
-	SnapshotDigest        string    `json:"snapshot_digest"`
-	ContentRevision       int64     `json:"content_revision"`
-	Locale                string    `json:"locale"`
-	LocaleCatalogRevision int64     `json:"locale_catalog_revision"`
-}
-
 type renderPlan struct {
-	Version     string            `json:"version"`
-	InputDigest string            `json:"input_digest"`
-	Payload     renderPlanPayload `json:"payload"`
+	Version     string                         `json:"version"`
+	InputDigest string                         `json:"input_digest"`
+	Input       prerendercontract.TrustedInput `json:"input"`
+	Page        prerendercontract.PagePlan     `json:"page"`
 }
 
 type prerenderRequest struct {
@@ -130,18 +116,18 @@ func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskO
 
 	plan, err := json.Marshal(renderPlan{
 		Version: RenderPlanFormat, InputDigest: request.InputDigest,
-		Payload: renderPlanPayload{
-			BuildID: request.BuildID, SnapshotID: request.SnapshotID, SnapshotRevision: request.SnapshotRevision,
-			SnapshotDigest: request.SnapshotDigest, ContentRevision: request.ContentRevision,
-			Locale: request.Locale, LocaleCatalogRevision: request.LocaleCatalogRevision,
-		},
+		Input: request.Input, Page: request.Page,
 	})
 	if err != nil || len(plan) == 0 || len(plan) > maxPayloadBytes {
 		return core.TaskOutcome{}, ErrInvalidPayload
 	}
 	planDigest := PlanDigest(plan)
 	emissionKey := "prerender:" + request.BuildID.String()
-	idempotencyKey := idempotencyKeyPrefix + request.BuildID.String() + ":prerender"
+	// Core carries the workflow idempotency key on Task.IdempotencyKey; the
+	// child render identity is the emission key. Keeping both identical lets
+	// the worker bind the exact emitted task without accepting task payloads
+	// that select a different identity.
+	idempotencyKey := emissionKey
 	if !emissionPattern.MatchString(emissionKey) || !emissionPattern.MatchString(idempotencyKey) {
 		return core.TaskOutcome{}, ErrInvalidPayload
 	}
@@ -182,13 +168,16 @@ func decodeRequest(raw json.RawMessage) (Request, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return Request{}, ErrInvalidPayload
 	}
-	if request.Version != 1 || request.BuildID == uuid.Nil || request.SnapshotID == uuid.Nil ||
-		request.SnapshotRevision < 1 || request.ContentRevision < 0 ||
-		!digestPattern.MatchString(request.SnapshotDigest) || !digestPattern.MatchString(request.InputDigest) ||
-		!localePattern.MatchString(request.Locale) || request.LocaleCatalogRevision < 1 {
+	if request.Version != 2 || request.BuildID == uuid.Nil || !digestPattern.MatchString(request.InputDigest) ||
+		prerendercontract.ValidateTrustedInput(request.Input) != nil ||
+		request.Input.Locale != request.Page.Title || request.Page.BodyHTML == "" || len(request.Page.BodyHTML) > 1<<20 {
 		return Request{}, ErrInvalidPayload
 	}
-	if strings.ContainsAny(request.Locale, "\x00\r\n") || strings.ContainsAny(request.SnapshotDigest+request.InputDigest, "\x00\r\n") {
+	expected, err := prerendercontract.InputDigest(request.Input)
+	if err != nil || expected != request.InputDigest {
+		return Request{}, ErrInvalidPayload
+	}
+	if strings.ContainsAny(request.Input.Locale+request.InputDigest, "\x00\r\n") {
 		return Request{}, ErrInvalidPayload
 	}
 	return request, nil

@@ -336,15 +336,15 @@
       "preconditions": [
         "A disposable worker.prerender sandbox, Core artifact store and explicit network policy fixture are configured."
       ],
-      "input": "render-plan/v1 with changed locale/catalog/content revision, invalid plan, loopback/private/link-local/metadata request, timeout/cancellation/restart and stale result.",
-      "action": "Run locale-bound prerender and artifact verification workflow.",
+      "input": "render-plan/v2 with changed locale/catalog/content revision, invalid plan, duplicate keys, digest mismatch, loopback/private/link-local/metadata request, timeout/cancellation/restart and stale result.",
+      "action": "Run locale-bound prerender and artifact verification workflow in a kernel-enforced disposable Docker/Linux sandbox with real headless Chromium.",
       "expected_result": "Build identity contains trusted revisions/digests; sandbox rejects forbidden network and stale result; only verified artifact is ready for outer orchestration.",
       "expected_state": "Prior active artifact survives failure; worker writes only through Core and no partial artifact is activated.",
-      "test_file": "tests/go/engines/website/application/acceptance_ledger_test.go",
-      "test_symbol": "TestWebsiteScenarioLedger/WEB-020",
-      "coverage_status": "blocked",
-      "execution_status": "blocked",
-      "blocker": "Нет Chromium sandbox, network policy, production artifact writer и полного buildInputFingerprint; production browser/worker infrastructure использовать запрещено."
+      "test_file": "tests/go/main/cmd/zubrium/website_prerender_acceptance_test.go",
+      "test_symbol": "TestWebsitePrerenderAcceptance/WEB-020",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-021",

@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	core "github.com/Zubrium/cdn/core/presentation"
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
 var (
@@ -14,7 +15,7 @@ var (
 )
 
 const (
-	RenderPlanVersion = "render-plan/v1"
+	RenderPlanVersion = prerendercontract.PlanVersion
 	DataModuleID      = "worker.prerender"
 	OperationID       = "render-page"
 )
@@ -35,6 +36,7 @@ type Artifact struct {
 }
 
 type Result struct {
+	Format      string     `json:"format"`
 	Manifest    Artifact   `json:"manifest"`
 	InputDigest string     `json:"input_digest"`
 	Artifacts   []Artifact `json:"artifacts"`

@@ -14,10 +14,11 @@ import (
 )
 
 type websiteEngineComponent struct {
-	core          *coreComponent
-	config        appconfig.Resolved
-	service       *websiteapp.Service
-	localeCatalog *websiteLocaleCatalog
+	core             *coreComponent
+	config           appconfig.Resolved
+	service          *websiteapp.Service
+	localeCatalog    *websiteLocaleCatalog
+	contentBuildView *websiteContentBuildProjection
 }
 
 func (component *websiteEngineComponent) Start(ctx context.Context) error {
@@ -45,11 +46,19 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 			component.config.Coordinator.MaxWorkflowTasks)
 	}
 	localeCatalog := newWebsiteLocaleCatalog()
+	contentBuildView := newWebsiteContentBuildProjection()
+	buildInputResolver, err := websiteapp.NewModuleBuildInputResolver(data, contentBuildView, component.config.Prerender.SandboxImage)
+	if err != nil {
+		return err
+	}
 	serviceConfig := websiteapp.Config{
 		AccessGroup:            "features",
 		CoordinatorAccessGroup: component.config.Coordinator.WorkflowAccessGroup,
 		BuildWorkflow:          buildWorkflow,
 		LocaleCatalog:          localeCatalog,
+		BuildInputResolver:     buildInputResolver,
+		BuildFiles:             component.core.runtime.EngineFiles(),
+		PrerenderImageDigest:   component.config.Prerender.SandboxImage,
 		BuildOperationID:       websiteworkflow.OperationID,
 		BuildContractVersion:   websiteworkflow.ContractVersion,
 		FeatureImportFileSetID: component.config.FeatureImport.TargetFileSetID,
@@ -90,6 +99,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	}
 	component.service = service
 	component.localeCatalog = localeCatalog
+	component.contentBuildView = contentBuildView
 	return nil
 }
 

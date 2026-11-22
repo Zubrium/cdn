@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -20,19 +21,21 @@ import (
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/Zubrium/cdn/workers/media"
+	"github.com/Zubrium/cdn/workers/prerender"
 	"github.com/google/uuid"
 )
 
 type coreComponent struct {
-	config        appconfig.Resolved
-	runtime       *platform.Runtime
-	secret        string
-	catalog       *platform.WorkerCatalog
-	selected      map[string]struct{}
-	dispatcher    *bus.Dispatcher
-	archiveHandle atomic.Pointer[archive.Handler]
-	mediaHandle   atomic.Pointer[media.V2Handler]
-	mediaSandbox  atomic.Pointer[media.DockerSandbox]
+	config          appconfig.Resolved
+	runtime         *platform.Runtime
+	secret          string
+	catalog         *platform.WorkerCatalog
+	selected        map[string]struct{}
+	dispatcher      *bus.Dispatcher
+	archiveHandle   atomic.Pointer[archive.Handler]
+	mediaHandle     atomic.Pointer[media.V2Handler]
+	mediaSandbox    atomic.Pointer[media.DockerSandbox]
+	prerenderHandle atomic.Pointer[prerender.DockerWorker]
 }
 
 func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descriptors []platform.ComponentDescriptor) (map[string]platform.AccessLevel, error) {
@@ -88,6 +91,12 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		if err := c.configureMedia(ctx, runtime); err != nil {
 			_ = runtime.Close()
 			return fmt.Errorf("configure media worker: %w", err)
+		}
+	}
+	if c.config.Prerender.Enabled {
+		if err := c.configurePrerender(ctx, runtime); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("configure prerender worker: %w", err)
 		}
 	}
 	settings := c.config.Coordinator
@@ -187,6 +196,52 @@ func (c *coreComponent) configureMedia(ctx context.Context, runtime *platform.Ru
 	c.mediaSandbox.Store(sandbox)
 	c.mediaHandle.Store(handler)
 	return nil
+}
+
+// configurePrerender issues only a Core file-writing capability to the
+// sandboxed renderer. The container image, limits, and staging path are
+// trusted startup configuration; the in-container preflight is mandatory.
+func (c *coreComponent) configurePrerender(ctx context.Context, runtime *platform.Runtime) error {
+	settings := c.config.Prerender
+	session, _, err := runtime.EngineIdentity().Authenticate(ctx, c.secret)
+	if err != nil {
+		return err
+	}
+	worker, err := prerender.NewDockerWorker(ctx, prerender.Config{
+		Sandbox: prerender.DockerSandboxConfig{
+			Image: settings.SandboxImage, Platform: settings.SandboxPlatform, DockerBinary: settings.DockerBinary,
+			StagingRoot: settings.StagingDirectory, CPUs: settings.CPUs,
+			MemoryLimitBytes: settings.MemoryLimitBytes, PIDsLimit: settings.PIDsLimit,
+			MaxDocumentBytes: settings.MaxDocumentBytes, Timeout: settings.Timeout,
+		},
+		Limits: prerender.Limits{
+			MaxPlanBytes: settings.MaxPlanBytes, MaxArtifacts: settings.MaxArtifacts,
+			MaxArtifactBytes: settings.MaxArtifactBytes, MaxTotalBytes: settings.MaxTotalBytes,
+		},
+		Files: corePrerenderArtifactWriter{files: runtime.EngineFiles(), session: session},
+	})
+	if err != nil {
+		return err
+	}
+	c.prerenderHandle.Store(worker)
+	return nil
+}
+
+type corePrerenderArtifactWriter struct {
+	files   platform.EngineFilesCapability
+	session platform.Session
+}
+
+func (w corePrerenderArtifactWriter) WriteArtifact(ctx context.Context, requestKey, path, contentType string, size int64, checksum string, body io.Reader) (string, error) {
+	if w.files == nil {
+		return "", errors.New("Core artifact writer is not configured")
+	}
+	// Core requires an opaque UUID request key. Derive it from the stable task
+	// identity and artifact path so retries remain idempotent without letting
+	// task payloads choose the key.
+	key := uuid.NewSHA1(uuid.NameSpaceURL, []byte("website-prerender/"+requestKey)).String()
+	return w.files.CreateFileVerified(ctx, w.session, key, []string{"features"},
+		map[string]string{"artifact_path": path, "artifact_kind": "website_prerender"}, contentType, size, checksum, body)
 }
 
 // MediaSandboxState exposes the verified probe result to Website. It is not
@@ -615,6 +670,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, err
 		}
 		contentEngine.buildLocaleCatalog = websiteEngine.localeCatalog
+		contentEngine.buildProjection = websiteEngine.contentBuildView
 	}
 	if _, enabled := selected["admin.website"]; enabled && !fileAPI.developmentFixtures {
 		if websiteEngine == nil {

@@ -44,8 +44,14 @@ func registerWorkerHandlers(registry *core.RuntimeRegistry, selected map[string]
 				}
 				return configured.WorkerHandler(ctx, task)
 			}
-		default:
-			handlers[prerender.OperationID+"/v1"] = failClosedWorker(componentID)
+		case prerender.DataModuleID:
+			handlers[prerender.OperationID+"/v1"] = func(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
+				configured := component.prerenderHandle.Load()
+				if configured == nil {
+					return core.TaskOutcome{}, errors.New("prerender worker is not configured")
+				}
+				return configured.WorkerHandler(ctx, task)
+			}
 		}
 		if err := registry.RegisterWorkerHandlers(componentID, handlers); err != nil {
 			return err

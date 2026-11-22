@@ -167,6 +167,24 @@ type Media struct {
 	Timeout              string `yaml:"timeout"`
 }
 
+// Prerender supplies trusted, server-side inputs for the sandboxed Chromium
+// renderer. No field can be set by an HTTP request.
+type Prerender struct {
+	SandboxImage     string `yaml:"sandbox_image"`
+	SandboxPlatform  string `yaml:"sandbox_platform"`
+	DockerBinary     string `yaml:"docker_binary"`
+	StagingDirectory string `yaml:"staging_directory"`
+	CPUs             string `yaml:"cpus"`
+	MemoryLimitBytes int64  `yaml:"memory_limit_bytes"`
+	PIDsLimit        int64  `yaml:"pids_limit"`
+	MaxDocumentBytes int64  `yaml:"max_document_bytes"`
+	MaxPlanBytes     int    `yaml:"max_plan_bytes"`
+	MaxArtifacts     int    `yaml:"max_artifacts"`
+	MaxArtifactBytes int64  `yaml:"max_artifact_bytes"`
+	MaxTotalBytes    int64  `yaml:"max_total_bytes"`
+	Timeout          string `yaml:"timeout"`
+}
+
 type HTTP struct {
 	ListenAddress     string `yaml:"listen_address"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
@@ -286,6 +304,23 @@ type MediaSettings struct {
 	Timeout           time.Duration
 }
 
+type PrerenderSettings struct {
+	Enabled          bool
+	SandboxImage     string
+	SandboxPlatform  string
+	DockerBinary     string
+	StagingDirectory string
+	CPUs             string
+	MemoryLimitBytes int64
+	PIDsLimit        int64
+	MaxDocumentBytes int64
+	MaxPlanBytes     int
+	MaxArtifacts     int
+	MaxArtifactBytes int64
+	MaxTotalBytes    int64
+	Timeout          time.Duration
+}
+
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -296,6 +331,7 @@ type Resolved struct {
 	ContentAPI             ContentAPISettings
 	FeatureImport          FeatureImportSettings
 	Media                  MediaSettings
+	Prerender              PrerenderSettings
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
@@ -615,6 +651,21 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			return Resolved{}, errors.New("media requires a sandbox image digest, service credential, staging directory, processor version and explicit limits")
 		}
 	}
+	prerenderConfigured := c.Prerender.SandboxImage != "" || c.Prerender.SandboxPlatform != "" || c.Prerender.DockerBinary != "" ||
+		c.Prerender.StagingDirectory != "" || c.Prerender.CPUs != "" || c.Prerender.MemoryLimitBytes != 0 || c.Prerender.PIDsLimit != 0 ||
+		c.Prerender.MaxDocumentBytes != 0 || c.Prerender.MaxPlanBytes != 0 || c.Prerender.MaxArtifacts != 0 ||
+		c.Prerender.MaxArtifactBytes != 0 || c.Prerender.MaxTotalBytes != 0 || c.Prerender.Timeout != ""
+	if prerenderConfigured {
+		settings := c.Prerender
+		if !strings.Contains(settings.SandboxImage, "@sha256:") ||
+			(settings.SandboxPlatform != "linux/amd64" && settings.SandboxPlatform != "linux/arm64") ||
+			strings.TrimSpace(settings.DockerBinary) == "" || !filepath.IsAbs(settings.StagingDirectory) ||
+			filepath.Clean(settings.StagingDirectory) != settings.StagingDirectory || settings.StagingDirectory == string(filepath.Separator) ||
+			settings.CPUs == "" || settings.MemoryLimitBytes <= 0 || settings.PIDsLimit <= 0 || settings.MaxDocumentBytes <= 0 ||
+			settings.MaxPlanBytes <= 0 || settings.MaxArtifacts <= 0 || settings.MaxArtifactBytes <= 0 || settings.MaxTotalBytes < settings.MaxArtifactBytes {
+			return Resolved{}, errors.New("prerender requires a digest-pinned image, platform, docker binary, private staging directory and explicit limits")
+		}
+	}
 	if int64(moduleDataLimits.MaxPayloadBytes) < c.FileAPI.MaxAttributeBytes+int64(c.FileAPI.MaxGroupsPerFile*68)+4096 {
 		return Resolved{}, errors.New("Core module-data payload limit is too small for configured Loader sessions")
 	}
@@ -662,6 +713,14 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		if featureImportCredential == "" || strings.ContainsRune(featureImportCredential, '\x00') {
 			return Resolved{}, errors.New("configured FeatureImport service credential is empty or invalid")
 		}
+	}
+	var prerenderTimeout time.Duration
+	if prerenderConfigured {
+		parsed, err := time.ParseDuration(c.Prerender.Timeout)
+		if err != nil || parsed <= 0 {
+			return Resolved{}, errors.New("prerender requires an explicit positive timeout")
+		}
+		prerenderTimeout = parsed
 	}
 	var mediaCredential string
 	var mediaTimeout time.Duration
@@ -734,6 +793,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			Limits: archive.Limits{MaxArchiveBytes: c.FeatureImport.MaxArchiveBytes, MaxEntries: c.FeatureImport.MaxEntries,
 				MaxEntryBytes: c.FeatureImport.MaxEntryBytes, MaxExpandedBytes: c.FeatureImport.MaxExpandedBytes,
 				MaxCompressionRatio: c.FeatureImport.MaxCompressionRatio}},
+		Prerender: PrerenderSettings{Enabled: prerenderConfigured, SandboxImage: c.Prerender.SandboxImage,
+			SandboxPlatform: c.Prerender.SandboxPlatform, DockerBinary: c.Prerender.DockerBinary,
+			StagingDirectory: c.Prerender.StagingDirectory, CPUs: c.Prerender.CPUs,
+			MemoryLimitBytes: c.Prerender.MemoryLimitBytes, PIDsLimit: c.Prerender.PIDsLimit,
+			MaxDocumentBytes: c.Prerender.MaxDocumentBytes, MaxPlanBytes: c.Prerender.MaxPlanBytes,
+			MaxArtifacts: c.Prerender.MaxArtifacts, MaxArtifactBytes: c.Prerender.MaxArtifactBytes,
+			MaxTotalBytes: c.Prerender.MaxTotalBytes, Timeout: prerenderTimeout},
 		Media: MediaSettings{Enabled: mediaConfigured, ServiceCredential: mediaCredential,
 			SandboxImage: c.Media.SandboxImage, DockerBinary: c.Media.DockerBinary, StagingDirectory: c.Media.StagingDirectory,
 			ProcessorVersion: c.Media.ProcessorVersion, CPUs: c.Media.CPUs, MemoryLimitBytes: c.Media.MemoryLimitBytes,
@@ -762,6 +828,7 @@ type Config struct {
 	ContentAPI    ContentAPI        `yaml:"content_api"`
 	FeatureImport FeatureImport     `yaml:"feature_import"`
 	Media         Media             `yaml:"media"`
+	Prerender     Prerender         `yaml:"prerender"`
 	HTTP          HTTP              `yaml:"http"`
 	Coordinator   CoordinatorConfig `yaml:"coordinator"`
 }

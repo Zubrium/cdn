@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,23 +13,24 @@ import (
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/google/uuid"
 )
 
 const (
-	buildPayloadVersion  = 1
-	buildStateQueued     = "queued"
-	buildStateResolving  = "resolving"
-	buildStatePrerender  = "prerendering"
-	buildStatePackaging  = "packaging"
-	buildStateVerifying  = "verifying"
-	buildStateReady      = "ready"
-	buildStateFailed     = "failed"
-	buildRootFormat      = "website.build-root/v1"
-	buildTaskFormat      = "website.build-result/v1"
-	buildManifestType    = "application/json"
-	buildPrerenderWorker = "worker.prerender"
-	buildPrerenderOp     = "render-page"
+	buildPayloadVersion    = 1
+	workflowPayloadVersion = 2
+	buildStateQueued       = "queued"
+	buildStateResolving    = "resolving"
+	buildStatePrerender    = "prerendering"
+	buildStatePackaging    = "packaging"
+	buildStateVerifying    = "verifying"
+	buildStateReady        = "ready"
+	buildStateFailed       = "failed"
+	buildRootFormat        = "website.build-root/v2"
+	buildManifestType      = prerendercontract.ArtifactMediaType
+	buildPrerenderWorker   = "worker.prerender"
+	buildPrerenderOp       = "render-page"
 )
 
 var (
@@ -41,19 +41,20 @@ var (
 // buildRecord is the versioned Website-owned job payload. Workflow identities
 // are pinned as strings; the public BuildJob intentionally does not expose them.
 type buildRecord struct {
-	ID                     string    `json:"id"`
-	SnapshotID             string    `json:"snapshot_id"`
-	Locale                 string    `json:"locale"`
-	LocaleCatalogRevision  int64     `json:"locale_catalog_revision"`
-	InputDigest            string    `json:"input_digest"`
-	State                  string    `json:"state"`
-	WorkflowID             string    `json:"workflow_id"`
-	RootTaskID             string    `json:"root_task_id"`
-	PrerenderTaskID        string    `json:"prerender_task_id"`
-	ArtifactManifestFileID string    `json:"artifact_manifest_file_id"`
-	ErrorCode              string    `json:"error_code"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	ID                     string                         `json:"id"`
+	SnapshotID             string                         `json:"snapshot_id"`
+	Locale                 string                         `json:"locale"`
+	LocaleCatalogRevision  int64                          `json:"locale_catalog_revision"`
+	InputDigest            string                         `json:"input_digest"`
+	TrustedInput           prerendercontract.TrustedInput `json:"trusted_input"`
+	State                  string                         `json:"state"`
+	WorkflowID             string                         `json:"workflow_id"`
+	RootTaskID             string                         `json:"root_task_id"`
+	PrerenderTaskID        string                         `json:"prerender_task_id"`
+	ArtifactManifestFileID string                         `json:"artifact_manifest_file_id"`
+	ErrorCode              string                         `json:"error_code"`
+	CreatedAt              time.Time                      `json:"created_at"`
+	UpdatedAt              time.Time                      `json:"updated_at"`
 }
 
 type buildState struct {
@@ -76,31 +77,19 @@ type buildIndex struct {
 	Revision   int64  `json:"revision"`
 }
 
-type buildInputFingerprint struct {
-	SnapshotID            string `json:"snapshot_id"`
-	SnapshotRevision      int64  `json:"snapshot_revision"`
-	SnapshotDigest        string `json:"snapshot_digest"`
-	ContentRevision       int64  `json:"content_revision"`
-	Locale                string `json:"locale"`
-	LocaleCatalogRevision int64  `json:"locale_catalog_revision"`
-}
-
 // buildWorkflowPayload contains only immutable, pinned build inputs. Operation
 // selection belongs to Config and is passed as a typed Core start field.
 type buildWorkflowPayload struct {
-	Version               int    `json:"version"`
-	BuildID               string `json:"build_id"`
-	SnapshotID            string `json:"snapshot_id"`
-	SnapshotRevision      int64  `json:"snapshot_revision"`
-	SnapshotDigest        string `json:"snapshot_digest"`
-	ContentRevision       int64  `json:"content_revision"`
-	Locale                string `json:"locale"`
-	LocaleCatalogRevision int64  `json:"locale_catalog_revision"`
-	InputDigest           string `json:"input_digest"`
+	Version     int                            `json:"version"`
+	BuildID     string                         `json:"build_id"`
+	Input       prerendercontract.TrustedInput `json:"input"`
+	Page        prerendercontract.PagePlan     `json:"page"`
+	InputDigest string                         `json:"input_digest"`
 }
 
 type buildRootResult struct {
 	Format               string `json:"format"`
+	BuildID              string `json:"build_id"`
 	PrerenderTaskID      string `json:"prerender_task_id"`
 	PrerenderEmissionKey string `json:"prerender_emission_key"`
 	InputDigest          string `json:"input_digest"`
@@ -141,6 +130,7 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 		return websiteapi.BuildJob{}, websiteapi.ErrInvalid
 	}
 	if !validInterface(s.config.BuildWorkflow) || !validInterface(s.config.LocaleCatalog) ||
+		!validInterface(s.config.BuildInputResolver) || !validInterface(s.config.BuildFiles) ||
 		!identifierPattern.MatchString(s.config.BuildOperationID) || s.config.BuildContractVersion < 1 {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 	}
@@ -149,7 +139,11 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	if err != nil || catalogRevision < 0 {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 	}
-	inputDigest, err := buildInputDigest(snapshot, request.Locale, catalogRevision)
+	trustedInput, err := s.config.BuildInputResolver.ResolveBuildInput(ctx, snapshot, request.Locale, catalogRevision)
+	if err != nil {
+		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
+	}
+	inputDigest, err := prerendercontract.InputDigest(trustedInput)
 	if err != nil {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 	}
@@ -177,7 +171,7 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	now := time.Now().UTC()
 	record := buildRecord{
 		ID: buildID, SnapshotID: snapshot.ID, Locale: request.Locale,
-		LocaleCatalogRevision: catalogRevision, InputDigest: inputDigest,
+		LocaleCatalogRevision: catalogRevision, InputDigest: inputDigest, TrustedInput: trustedInput,
 		State: buildStateQueued, CreatedAt: now, UpdatedAt: now,
 	}
 	buildKey := websiterepo.BuildKey(buildID)
@@ -207,11 +201,20 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 		}
 		return websiteapi.BuildJob{}, mapped
 	}
+	// Core revisions come from a database-wide sequence, not a per-record
+	// counter. Read the authoritative revision before any CAS update.
+	current, err := s.loadBuildState(ctx, buildID)
+	if err != nil {
+		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
+	}
 
+	page, err := RenderPagePlan(trustedInput, snapshot.Payload.Config)
+	if err != nil {
+		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
+	}
 	startPayload, err := json.Marshal(buildWorkflowPayload{
-		Version: buildPayloadVersion, BuildID: buildID, SnapshotID: snapshot.ID,
-		SnapshotRevision: snapshot.Revision, SnapshotDigest: snapshot.Digest, ContentRevision: snapshot.ContentRevision,
-		Locale: request.Locale, LocaleCatalogRevision: catalogRevision, InputDigest: inputDigest,
+		Version: workflowPayloadVersion, BuildID: buildID,
+		Input: trustedInput, Page: page, InputDigest: inputDigest,
 	})
 	if err != nil || len(startPayload) > s.store.MaxPayloadBytes() {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
@@ -221,13 +224,11 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 		IdempotencyKey: "build/" + buildID, Payload: startPayload,
 	})
 	if err != nil {
-		state := buildState{record: record, key: buildKey, revision: 1}
-		job, _ := s.failBuild(ctx, state, "build_workflow_start_failed")
+		job, _ := s.failBuild(ctx, current, "build_workflow_start_failed")
 		return job, websiteapi.ErrUnavailable
 	}
 	if receipt.WorkflowID == uuid.Nil || receipt.RootTaskID == uuid.Nil {
-		state := buildState{record: record, key: buildKey, revision: 1}
-		job, _ := s.failBuild(ctx, state, "invalid_workflow_receipt")
+		job, _ := s.failBuild(ctx, current, "invalid_workflow_receipt")
 		return job, websiteapi.ErrUnavailable
 	}
 
@@ -235,11 +236,7 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	record.WorkflowID = receipt.WorkflowID.String()
 	record.RootTaskID = receipt.RootTaskID.String()
 	record.UpdatedAt = time.Now().UTC()
-	if err := s.putBuildRecord(ctx, buildKey, 1, record); err != nil {
-		current, loadErr := s.loadBuildState(ctx, buildID)
-		if loadErr != nil {
-			return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
-		}
+	if err := s.putBuildRecord(ctx, current.key, current.revision, record); err != nil {
 		return buildJobFromRecord(current.record), nil
 	}
 	return buildJobFromRecord(record), nil
@@ -294,7 +291,7 @@ func (s *Service) GetBuild(ctx context.Context, buildID string) (websiteapi.Buil
 	}
 
 	if current.record.PrerenderTaskID == "" {
-		selector, err := parseBuildRootResult(workflow.Result, current.record.InputDigest, s.store.MaxPayloadBytes())
+		selector, err := parseBuildRootResult(workflow.Result, current.record.ID, current.record.InputDigest, s.store.MaxPayloadBytes())
 		if err != nil {
 			if errors.Is(err, errBuildStaleInput) || workflow.State == "succeeded" {
 				code := "invalid_root_result"
@@ -345,7 +342,7 @@ func (s *Service) GetBuild(ctx context.Context, buildID string) (websiteapi.Buil
 			taskResult.Worker.OperationID != buildPrerenderOp || taskResult.Worker.ContractVersion != 1) {
 		return s.failBuild(ctx, current, "invalid_task_result")
 	}
-	manifestFileID, err := parseBuildTaskResult(taskResult.Result, current.record.InputDigest, s.store.MaxPayloadBytes())
+	manifestFileID, err := s.parseBuildTaskResult(ctx, taskResult.Result, current.record)
 	if err != nil {
 		code := "invalid_task_result"
 		if errors.Is(err, errBuildStaleInput) {
@@ -395,18 +392,6 @@ func (s *Service) resolvePrerenderTask(ctx context.Context, workflowID uuid.UUID
 		return uuid.Nil, err
 	}
 	return taskID, nil
-}
-
-func buildInputDigest(snapshot websiteapi.Snapshot, locale string, catalogRevision int64) (string, error) {
-	data, err := json.Marshal(buildInputFingerprint{
-		SnapshotID: snapshot.ID, SnapshotRevision: snapshot.Revision, SnapshotDigest: snapshot.Digest,
-		ContentRevision: snapshot.ContentRevision, Locale: locale, LocaleCatalogRevision: catalogRevision,
-	})
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func buildModuleDataValue(record buildRecord, revision int64) ([]byte, []byte, error) {
@@ -580,7 +565,7 @@ func validBuildTransition(from, to string) bool {
 	}
 }
 
-func parseBuildRootResult(raw json.RawMessage, expectedDigest string, maxBytes int) (string, error) {
+func parseBuildRootResult(raw json.RawMessage, expectedBuildID, expectedDigest string, maxBytes int) (string, error) {
 	if len(raw) == 0 || len(raw) > maxBytes {
 		return "", errBuildInvalidResult
 	}
@@ -588,7 +573,7 @@ func parseBuildRootResult(raw json.RawMessage, expectedDigest string, maxBytes i
 	if err := decodeStrictBuildJSON(raw, &result); err != nil {
 		return "", errBuildInvalidResult
 	}
-	if result.Format != buildRootFormat {
+	if result.Format != buildRootFormat || result.BuildID != strings.ToLower(expectedBuildID) {
 		return "", errBuildInvalidResult
 	}
 	if result.InputDigest != expectedDigest {
@@ -612,25 +597,61 @@ func parseBuildRootResult(raw json.RawMessage, expectedDigest string, maxBytes i
 	return result.PrerenderEmissionKey, nil
 }
 
-func parseBuildTaskResult(raw json.RawMessage, expectedDigest string, maxBytes int) (string, error) {
+func (s *Service) parseBuildTaskResult(ctx context.Context, raw json.RawMessage, record buildRecord) (string, error) {
+	maxBytes := s.store.MaxPayloadBytes()
 	if len(raw) == 0 || len(raw) > maxBytes {
 		return "", errBuildInvalidResult
 	}
-	var result buildTaskResult
+	result := struct {
+		Format      string              `json:"format"`
+		InputDigest string              `json:"input_digest"`
+		Manifest    buildManifestFile   `json:"manifest"`
+		Artifacts   []buildManifestFile `json:"artifacts"`
+	}{}
 	if err := decodeStrictBuildJSON(raw, &result); err != nil {
 		return "", errBuildInvalidResult
 	}
-	if result.Format != buildTaskFormat {
+	if result.Format != prerendercontract.BuildResultFormat {
 		return "", errBuildInvalidResult
 	}
-	if result.InputDigest != expectedDigest {
+	if result.InputDigest != record.InputDigest || prerendercontract.ValidateTrustedInput(record.TrustedInput) != nil {
+		return "", errBuildStaleInput
+	}
+	expected, err := prerendercontract.InputDigest(record.TrustedInput)
+	if err != nil || expected != record.InputDigest {
 		return "", errBuildStaleInput
 	}
 	if !snapshotIDPattern.MatchString(result.Manifest.FileID) || !sha256HexPattern.MatchString(result.Manifest.Checksum) ||
 		result.Manifest.ContentType != buildManifestType || result.Manifest.Size < 1 || result.Manifest.Size > int64(maxBytes) {
 		return "", errBuildInvalidResult
 	}
+	session, ok := buildActorSession(ctx)
+	if !ok || !validInterface(s.config.BuildFiles) {
+		return "", errBuildInvalidResult
+	}
+	reader, _, err := s.config.BuildFiles.ReadFile(ctx, session, result.Manifest.FileID)
+	if err != nil {
+		return "", errBuildInvalidResult
+	}
+	defer reader.Close()
+	manifestBytes, err := io.ReadAll(io.LimitReader(reader, int64(maxBytes)+1))
+	if err != nil || int64(len(manifestBytes)) > int64(maxBytes) || len(manifestBytes) != int(result.Manifest.Size) ||
+		prerendercontract.HexDigest(manifestBytes) != result.Manifest.Checksum {
+		return "", errBuildInvalidResult
+	}
+	manifest, err := prerendercontract.VerifyManifest(manifestBytes, record.InputDigest)
+	if err != nil || manifest.Locale != record.Locale || manifest.Render.Locale != record.Locale {
+		return "", errBuildInvalidResult
+	}
 	return strings.ToLower(result.Manifest.FileID), nil
+}
+
+func buildActorSession(ctx context.Context) (core.Session, bool) {
+	if ctx == nil {
+		return core.Session{}, false
+	}
+	actor, ok := ctx.Value(actorContextKey{}).(actor)
+	return actor.session, ok
 }
 
 func decodeStrictBuildJSON(raw json.RawMessage, target any) error {

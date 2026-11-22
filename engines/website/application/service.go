@@ -30,6 +30,12 @@ type RecordStore interface {
 	MaxPayloadBytes() int
 }
 
+// BuildFilesCapability is the Core-only artifact reader used by build
+// verification. It never grants SQL, S3, or arbitrary storage access.
+type BuildFilesCapability interface {
+	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
+}
+
 // BuildWorkflowClient is the owner-scoped Coordinator capability used by
 // durable Website builds. It is supplied by composition; no request can choose
 // an operation, owner or task identity.
@@ -94,6 +100,9 @@ type Config struct {
 	CoordinatorAccessGroup       string
 	BuildWorkflow                BuildWorkflowClient
 	LocaleCatalog                LocaleCatalogResolver
+	BuildInputResolver           BuildInputResolver
+	BuildFiles                   BuildFilesCapability
+	PrerenderImageDigest         string
 	BuildOperationID             string
 	BuildContractVersion         int
 	Files                        ImportFilesCapability

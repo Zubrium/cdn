@@ -12,6 +12,7 @@ import (
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/google/uuid"
 )
 
@@ -25,16 +26,24 @@ func buildTask() core.Task {
 
 func buildPayload(t *testing.T) json.RawMessage {
 	t.Helper()
+	input := prerendercontract.TrustedInput{
+		Version: prerendercontract.TrustedInputVersion, SnapshotID: "22222222-2222-4222-8222-222222222222",
+		SnapshotRevision: 3, SnapshotDigest: strings.Repeat("a", 64), SystemModelRevision: 1,
+		SystemModelDigest: strings.Repeat("c", 64), Locale: "en-US", LocaleCatalogRevision: 7,
+		ContentPublicationRevision: 2, LocaleSelectionDigest: strings.Repeat("d", 64),
+		FeaturePackageDigest: strings.Repeat("e", 64), DependencyLockDigest: strings.Repeat("f", 64),
+		RuntimeABI: prerendercontract.RuntimeABI, RuntimeAPIVersion: prerendercontract.RuntimeAPIVersion,
+	}
+	digest, err := prerendercontract.InputDigest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload, err := json.Marshal(websiteworkflow.Request{
-		Version:               1,
-		BuildID:               uuid.MustParse("11111111-1111-4111-8111-111111111111"),
-		SnapshotID:            uuid.MustParse("22222222-2222-4222-8222-222222222222"),
-		SnapshotRevision:      3,
-		SnapshotDigest:        strings.Repeat("a", 64),
-		ContentRevision:       2,
-		Locale:                "en-US",
-		LocaleCatalogRevision: 7,
-		InputDigest:           strings.Repeat("b", 64),
+		Version:     2,
+		BuildID:     uuid.MustParse("11111111-1111-4111-8111-111111111111"),
+		Input:       input,
+		Page:        prerendercontract.PagePlan{Title: "en-US", BodyHTML: "<html><body>test</body></html>"},
+		InputDigest: digest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +90,7 @@ func TestWebsiteBuildPageHandlerEmitsPinnedPrerenderChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	if childRequest.JobID != nil || childRequest.IdempotencyKey == "" || len(childRequest.Plan) == 0 ||
-		len(childRequest.PlanDigest) != 64 || childRequest.InputDigest != strings.Repeat("b", 64) {
+		len(childRequest.PlanDigest) != 64 || childRequest.InputDigest == "" {
 		t.Fatalf("child payload = %#v", childRequest)
 	}
 	if websiteworkflow.PlanDigest(childRequest.Plan) != childRequest.PlanDigest {
@@ -91,7 +100,7 @@ func TestWebsiteBuildPageHandlerEmitsPinnedPrerenderChild(t *testing.T) {
 	if err := json.Unmarshal(childRequest.Plan, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan) != 3 || string(plan["version"]) != `"render-plan/v1"` || string(plan["input_digest"]) != `"`+childRequest.InputDigest+`"` {
+	if len(plan) != 4 || string(plan["version"]) != `"render-plan/v2"` || string(plan["input_digest"]) != `"`+childRequest.InputDigest+`"` {
 		t.Fatalf("render plan = %s", childRequest.Plan)
 	}
 
@@ -99,7 +108,7 @@ func TestWebsiteBuildPageHandlerEmitsPinnedPrerenderChild(t *testing.T) {
 	if err := json.Unmarshal(outcome.Result, &root); err != nil {
 		t.Fatal(err)
 	}
-	if root.Format != websiteworkflow.RootFormat || root.BuildID == uuid.Nil || root.InputDigest != strings.Repeat("b", 64) ||
+	if root.Format != websiteworkflow.RootFormat || root.BuildID == uuid.Nil || root.InputDigest != childRequest.InputDigest ||
 		root.PrerenderEmissionKey != child.EmissionKey {
 		t.Fatalf("root result = %#v", root)
 	}
@@ -126,11 +135,12 @@ func TestWebsiteBuildPageHandlerRejectsInvalidTaskAndPayload(t *testing.T) {
 		t.Fatal("join task was accepted")
 	}
 
+	validPayload := string(buildPayload(t))
 	for name, payload := range map[string]json.RawMessage{
-		"unknown field":    json.RawMessage(`{"version":1,"build_id":"11111111-1111-4111-8111-111111111111","snapshot_id":"22222222-2222-4222-8222-222222222222","snapshot_revision":3,"snapshot_digest":"` + strings.Repeat("a", 64) + `","content_revision":2,"locale":"en-US","locale_catalog_revision":7,"input_digest":"` + strings.Repeat("b", 64) + `","route":"/"}`),
-		"malformed digest": json.RawMessage(strings.ReplaceAll(string(buildPayload(t)), strings.Repeat("b", 64), "short")),
-		"empty build id":   json.RawMessage(strings.ReplaceAll(string(buildPayload(t)), "11111111-1111-4111-8111-111111111111", uuid.Nil.String())),
-		"invalid locale":   json.RawMessage(strings.ReplaceAll(string(buildPayload(t)), `"en-US"`, `"/"`)),
+		"unknown field":    json.RawMessage(validPayload[:len(validPayload)-1] + `,"route":"/"}`),
+		"malformed digest": json.RawMessage(strings.ReplaceAll(validPayload, `"input_digest":"`, `"input_digest":"short`)),
+		"empty build id":   json.RawMessage(strings.ReplaceAll(validPayload, "11111111-1111-4111-8111-111111111111", uuid.Nil.String())),
+		"invalid locale":   json.RawMessage(strings.ReplaceAll(validPayload, `"locale":"en-US"`, `"locale":"/"`)),
 		"non-object":       json.RawMessage(`[]`),
 	} {
 		task := valid
