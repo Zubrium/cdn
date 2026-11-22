@@ -16,7 +16,7 @@ Observability даёт единую, безопасную для продакш�
 Сигналы:
 
 - **логи** — структурированные события с уровнем `debug|info|warn|error`;
-- **метрики** — счётчики и гистограммы с низкой кардинальностью меток;
+- **метрики** — счётчики, гистограммы и gauge с низкой кардинальностью меток;
 - **трейсы** — span'ы, связанные общим `trace_id` по W3C Trace Context.
 
 Границы ответственности:
@@ -130,7 +130,12 @@ active span context и экспортируются OTel SDK. Они **не** с
   `request-body`), отклоняются целиком. Значения дополнительно проверяются по
   шаблонам Bearer/Basic, JWT и `key=value` пар credential/cookie: даже под
   безопасным ключом нельзя передать токен, cookie, credential, тело формы, PII или
-  произвольный raw request/response body.
+  произвольный raw request/response body. На основании
+  [SPEC-caching.md](../architecture/SPEC-caching.md) дополнительно отклоняются
+  производные ключи `cache.key`, `cache_key`, `file.id`, `principal.id`, `url`,
+  `uri`, `locale`, `user.agent`, `user.email` и `username`: ключи кэша, file ID,
+  principal ID, URL, query, locale и пользовательские данные не попадают ни в
+  логи, ни в метрические метки.
 - `error.message` не должен содержать PII: бизнес-код обязан возвращать типизированную
   ошибку с безопасным классом, а не текст с данными посетителя.
 - trace_id/span_id — корреляционные идентификаторы, а не секреты; они могут
@@ -157,8 +162,11 @@ active span context и экспортируются OTel SDK. Они **не** с
 | `zubrium_cache_warmup_duration_seconds`  | histogram| Длительность прогрева; `cache`                                                 |
 | `zubrium_cache_invalidation_lag_seconds` | gauge    | Задержка инвалидации; `cache`                                                  |
 
-Метрики кэша и прогрева определены в [SPEC-caching.md](../architecture/SPEC-caching.md);
-до реального прогона они остаются планируемыми, как и остальные метрики этого документа.
+Метрики кэша и прогрева определены в [SPEC-caching.md](../architecture/SPEC-caching.md)
+и перечислены здесь как обязательный контракт будущей волны. Наблюдатель поддерживает
+тип gauge и accepts `SetGauge`, но кэши ещё не испускают эти серии: реализация
+кэшей, конфигурация warm-up и сценарии `CACHE-001..CACHE-012` выполняются отдельно.
+Наличие поддержки gauge не означает, что метрики кэша прошли acceptance.
 - Метки метрик фиксированы и низкокардинальны: identity, `outcome` и базовые поля
   из таблицы. Идентификаторы task/workflow/record, file ID, principal ID, URL, query,
   locale и значения ответов остаются только в span/log-записи и не попадают в метрические серии.

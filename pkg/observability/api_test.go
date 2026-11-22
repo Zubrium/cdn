@@ -56,6 +56,7 @@ func TestFileBackendWritesAllSignals(t *testing.T) {
 	metricIdentity := []Attribute{String("module.kind", "bus"), String("component.id", "dispatcher")}
 	observer.IncCounter(ctx, "zubrium_test_total", 1, append(metricIdentity, String("outcome", "ok"))...)
 	observer.ObserveHistogram(ctx, "zubrium_test_seconds", 0.1, append(metricIdentity, String("outcome", "ok"))...)
+	observer.SetGauge(ctx, "zubrium_cache_entries", 7, String("cache", "core.bytes"))
 	span.End(nil)
 
 	for _, name := range []string{"logs.jsonl", "spans.jsonl", "metrics.jsonl"} {
@@ -74,6 +75,14 @@ func TestFileBackendWritesAllSignals(t *testing.T) {
 		if record["trace_id"] == "" || record["span_id"] == "" {
 			t.Fatalf("trace correlation missing in %s: %#v", name, record)
 		}
+	}
+	metrics, err := os.ReadFile(filepath.Join(dir, "metrics.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(metrics), "\"metric.kind\":\"gauge\"") ||
+		!strings.Contains(string(metrics), "\"metric.name\":\"zubrium_cache_entries\"") {
+		t.Fatalf("gauge sample missing from metrics.jsonl: %s", metrics)
 	}
 }
 
@@ -98,6 +107,48 @@ func TestRedactsDerivedKeysAndCredentialValues(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestRejectsCacheCorrelationKeys(t *testing.T) {
+	keys := []string{
+		"cache.key", "cache_key", "file.id", "principal.id", "request.url",
+		"request_uri", "locale", "user.agent", "user.email", "username",
+	}
+	for _, key := range keys {
+		if got := String(key, "safe-looking value"); got.Key != "" {
+			t.Errorf("cache correlation key %q was accepted: %#v", key, got)
+		}
+	}
+	if got := String("http.route", "/api/admin/forms/{id}"); got.Key == "" {
+		t.Fatal("safe HTTP route attribute was rejected")
+	}
+}
+
+func TestGaugeSnapshotReplacesPreviousValue(t *testing.T) {
+	observer, err := New(Config{Mode: ModeNoop})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observer.WithIdentity(context.Background(), Identity{
+		ModuleKind: ModuleKindCore, ModuleID: "core", ComponentID: "cache",
+	})
+	labels := []Attribute{String("cache", "core.bytes")}
+	observer.SetGauge(ctx, "zubrium_cache_bytes", 10, labels...)
+	observer.SetGauge(ctx, "zubrium_cache_bytes", 4, labels...)
+
+	snapshot := observer.metrics.render()
+	if !strings.Contains(snapshot, "# TYPE zubrium_cache_bytes gauge") {
+		t.Fatalf("gauge type is missing: %s", snapshot)
+	}
+	for _, line := range strings.Split(snapshot, "\n") {
+		if strings.HasPrefix(line, "zubrium_cache_bytes{") {
+			if !strings.HasSuffix(line, " 4") {
+				t.Fatalf("gauge was not replaced by the last observation: %s", snapshot)
+			}
+			return
+		}
+	}
+	t.Fatalf("gauge series is missing: %s", snapshot)
 }
 
 func TestOperationMetricsStayLowCardinality(t *testing.T) {

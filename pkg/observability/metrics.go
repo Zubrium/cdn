@@ -21,8 +21,11 @@ type histogramValue struct {
 }
 
 type metricSeries struct {
-	counter   float64
-	histogram histogramValue
+	counter    float64
+	counterSet bool
+	histogram  histogramValue
+	gauge      float64
+	gaugeSet   bool
 }
 
 type metricStore struct {
@@ -84,6 +87,14 @@ func (s *metricStore) observe(name string, attrs []Attribute, value float64) {
 	}
 }
 
+func (s *metricStore) setGauge(name string, attrs []Attribute, value float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	series := s.entry(metricKeyFor(name, attrs))
+	series.gauge = value
+	series.gaugeSet = true
+}
+
 func escapeLabel(value string) string {
 	replacer := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n")
 	return replacer.Replace(sanitiseValue(value))
@@ -130,14 +141,26 @@ func (s *metricStore) render() string {
 	for _, key := range keys {
 		series := s.series[key]
 		labels := labelBlock(key)
-		out.WriteString("# TYPE ")
-		out.WriteString(key.name)
-		out.WriteString(" counter\n")
-		out.WriteString(key.name)
-		out.WriteString(labels)
-		out.WriteByte(' ')
-		out.WriteString(strconv.FormatFloat(series.counter, 'g', -1, 64))
-		out.WriteByte('\n')
+		if series.counterSet {
+			out.WriteString("# TYPE ")
+			out.WriteString(key.name)
+			out.WriteString(" counter\n")
+			out.WriteString(key.name)
+			out.WriteString(labels)
+			out.WriteByte(' ')
+			out.WriteString(strconv.FormatFloat(series.counter, 'g', -1, 64))
+			out.WriteByte('\n')
+		}
+		if series.gaugeSet {
+			out.WriteString("# TYPE ")
+			out.WriteString(key.name)
+			out.WriteString(" gauge\n")
+			out.WriteString(key.name)
+			out.WriteString(labels)
+			out.WriteByte(' ')
+			out.WriteString(strconv.FormatFloat(series.gauge, 'g', -1, 64))
+			out.WriteByte('\n')
+		}
 
 		histogram := series.histogram
 		if histogram.count == 0 {
@@ -146,22 +169,25 @@ func (s *metricStore) render() string {
 		out.WriteString("# TYPE ")
 		out.WriteString(key.name)
 		out.WriteString(" histogram\n")
+		bucketLabels := func(bound string) string {
+			if key.attrs == "" {
+				return "{le=\"" + bound + "\"}"
+			}
+			return strings.TrimSuffix(labels, "}") + ",le=\"" + bound + "\"}"
+		}
 		var cumulative uint64
 		for index, bound := range histogramBounds {
 			cumulative += histogram.buckets[index]
-			boundLabels := "{le=\"" + strconv.FormatFloat(bound, 'g', -1, 64) + "\""
-			if key.attrs != "" {
-				boundLabels = strings.TrimSuffix(labelBlock(key), "}") + ",le=\"" + strconv.FormatFloat(bound, 'g', -1, 64) + "\"}"
-			}
 			out.WriteString(key.name)
 			out.WriteString("_bucket")
-			out.WriteString(boundLabels)
+			out.WriteString(bucketLabels(strconv.FormatFloat(bound, 'g', -1, 64)))
 			out.WriteByte(' ')
 			out.WriteString(strconv.FormatUint(cumulative, 10))
 			out.WriteByte('\n')
 		}
 		out.WriteString(key.name)
-		out.WriteString("_bucket{le=\"+Inf\"}")
+		out.WriteString("_bucket")
+		out.WriteString(bucketLabels("+Inf"))
 		out.WriteByte(' ')
 		out.WriteString(strconv.FormatUint(histogram.count, 10))
 		out.WriteByte('\n')

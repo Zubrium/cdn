@@ -184,6 +184,10 @@ func (b *fileBackend) Histogram(ctx context.Context, name string, attrs []Attrib
 	_ = b.metrics.write(metricRecord(ctx, "histogram", name, attrs, value))
 }
 
+func (b *fileBackend) Gauge(ctx context.Context, name string, attrs []Attribute, value float64) {
+	_ = b.metrics.write(metricRecord(ctx, "gauge", name, attrs, value))
+}
+
 func (b *fileBackend) Close(context.Context) error {
 	first := b.logs.close()
 	if err := b.spans.close(); err != nil && first == nil {

@@ -159,6 +159,7 @@ func TestOTLPBackendExportsAllSignals(t *testing.T) {
 			[]Attribute{String("module.id", "core"), Bool("ready", true), Float("ratio", 0.5)}, trace)
 		backend.Counter(context.Background(), "zubrium_test_counter_total", []Attribute{String("metric.kind", "counter")}, 3)
 		backend.Histogram(context.Background(), "zubrium_test_histogram_seconds", []Attribute{String("metric.kind", "histogram")}, 0.25)
+		backend.Gauge(context.Background(), "zubrium_cache_entries", []Attribute{String("cache", "core.bytes")}, 7)
 	}()
 
 	requests := collector.snapshot()
@@ -210,6 +211,7 @@ func TestOTLPBackendExportsAllSignals(t *testing.T) {
 
 	metrics := collector.bodies("/v1/metrics")
 	requireContainsAny(t, metrics, "zubrium_test_counter_total", "zubrium_test_histogram_seconds", "metric.kind")
+	requireContainsAny(t, metrics, "zubrium_cache_entries", "core.bytes")
 }
 
 func TestOTLPBackendPropagatesRemoteParent(t *testing.T) {

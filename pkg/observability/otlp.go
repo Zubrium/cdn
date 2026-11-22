@@ -49,6 +49,7 @@ type otlpBackend struct {
 	mu         sync.Mutex
 	counters   map[string]metric.Float64Counter
 	histograms map[string]metric.Float64Histogram
+	gauges     map[string]metric.Float64Gauge
 }
 
 var _ backend = (*otlpBackend)(nil)
@@ -125,6 +126,7 @@ func newOTLPBackend(cfg Config, base Identity) (backend, error) {
 		timeouts:       cfg.Timeout,
 		counters:       make(map[string]metric.Float64Counter),
 		histograms:     make(map[string]metric.Float64Histogram),
+		gauges:         make(map[string]metric.Float64Gauge),
 	}, nil
 }
 
@@ -355,6 +357,23 @@ func (b *otlpBackend) Histogram(ctx context.Context, name string, attrs []Attrib
 	}
 	b.mu.Unlock()
 	histogram.Record(ctx, value, metric.WithAttributes(otlpAttributes(attrs)...))
+}
+
+func (b *otlpBackend) Gauge(ctx context.Context, name string, attrs []Attribute, value float64) {
+	b.mu.Lock()
+	gauge, ok := b.gauges[name]
+	if !ok {
+		created, err := b.meter.Float64Gauge(name)
+		if err != nil {
+			b.mu.Unlock()
+			otel.Handle(err)
+			return
+		}
+		gauge = created
+		b.gauges[name] = gauge
+	}
+	b.mu.Unlock()
+	gauge.Record(ctx, value, metric.WithAttributes(otlpAttributes(attrs)...))
 }
 
 type otlpLifecycle interface {

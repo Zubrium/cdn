@@ -255,6 +255,24 @@ func (o *Observer) ObserveHistogram(ctx context.Context, name string, value floa
 	o.backend.Histogram(ctx, clean, all, value)
 }
 
+// SetGauge records an instantaneous value such as cache entries or bytes.
+// Repeated writes for the same label set replace the previous value.
+func (o *Observer) SetGauge(ctx context.Context, name string, value float64, attrs ...Attribute) {
+	if o == nil {
+		return
+	}
+	clean := sanitiseKey(name)
+	if clean == "" {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	all := o.withTelemetryIdentity(ctx, nonEmpty(attrs))
+	o.metrics.setGauge(clean, sortedAttributes(all), value)
+	o.backend.Gauge(ctx, clean, all, value)
+}
+
 type noopBackend struct{}
 
 func (noopBackend) Log(context.Context, Identity, Level, string, []Attribute, TraceContext) {}
@@ -264,6 +282,7 @@ func (noopBackend) Start(ctx context.Context, _ Identity, _ string, _ []Attribut
 }
 func (noopBackend) Counter(context.Context, string, []Attribute, float64)   {}
 func (noopBackend) Histogram(context.Context, string, []Attribute, float64) {}
+func (noopBackend) Gauge(context.Context, string, []Attribute, float64)     {}
 func (noopBackend) Close(context.Context) error                             { return nil }
 
 var _ backend = noopBackend{}
