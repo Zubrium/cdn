@@ -62,6 +62,8 @@ export default function PagesPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const createRequested = searchParams.get("create") === "1";
+  const requestedTemplateID = searchParams.get("template_id") ?? "";
   const canEdit = hasGroupAccess(auth.principal, "features", 2);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -107,16 +109,18 @@ export default function PagesPage() {
   useEffect(() => () => retirePoll.current?.abort(), []);
 
   useEffect(() => {
-    if (searchParams.get("create") !== "1") return;
+    if (!createRequested) return;
     setName("");
-    setTemplateID(searchParams.get("template_id") ?? "");
+    setTemplateID(requestedTemplateID);
     createAttempt.current = null;
     setCreateOpen(true);
-    const next = new URLSearchParams(searchParams);
-    next.delete("create");
-    next.delete("template_id");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("create");
+      next.delete("template_id");
+      return next;
+    }, { replace: true });
+  }, [createRequested, requestedTemplateID, setSearchParams]);
 
   const openCreate = (selectedTemplate = "") => {
     setName("");

@@ -12,4 +12,13 @@ describe("ContextHelp", () => {
 
     expect(markup).toContain("h-11 w-11");
   });
+
+  it("associates the help text with its trigger for assistive technology", () => {
+    const markup = renderToStaticMarkup(
+      createElement(TooltipProvider, null, createElement(ContextHelp, { label: "Help" }, "Helpful details")),
+    );
+
+    expect(markup).toContain('aria-describedby="');
+    expect(markup).not.toContain("aria-description");
+  });
 });

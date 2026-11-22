@@ -99,7 +99,10 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     queryKey: ["site", "snapshot-choices", requestedPageID],
     queryFn: ({ signal }) => api.siteBuilder.contentSnapshots(signal, requestedPageID || undefined),
   });
-  const readySnapshotItems = readySnapshots(snapshots.data?.items ?? []);
+  const readySnapshotItems = useMemo(
+    () => readySnapshots(snapshots.data?.items ?? []),
+    [snapshots.data?.items],
+  );
   const selectedSnapshotState = snapshots.data?.items.find((item) => item.id === selected)?.state;
   const waitingForSelection = !selected && (snapshots.isLoading || snapshots.isError || readySnapshotItems.length > 0);
   const [config, setConfig] = useState<SiteEditorDraft | null>(null);
@@ -148,26 +151,30 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const detail = selected ? await api.siteBuilder.snapshot(selected) : null;
-      let modelSchema: ContentModel;
-      try {
-        modelSchema = await api.website.contentModel();
-      } catch (reason) {
-        if (!isApiError(reason) || reason.status !== 404) throw reason;
-        modelSchema = {
-          version: 1,
-          modelRevision: 0,
-          digest: "",
-          dataModel: { formatVersion: 1, entities: [], positions: {} },
-        };
-      }
+      const modelRequest = (async (): Promise<ContentModel> => {
+        try {
+          return await api.website.contentModel();
+        } catch (reason) {
+          if (!isApiError(reason) || reason.status !== 404) throw reason;
+          return {
+            version: 1,
+            modelRevision: 0,
+            digest: "",
+            dataModel: { formatVersion: 1, entities: [], positions: {} },
+          };
+        }
+      })();
+      const [detail, modelSchema] = await Promise.all([
+        selected ? api.siteBuilder.snapshot(selected) : Promise.resolve(null),
+        modelRequest,
+      ]);
       if (request !== requestNumber.current) return;
       let initial = detail ? editorDraftFromConfig(detail.payload.config) : emptyConfig();
       const initialMetadata = detail?.payload.metadata ?? {formatVersion: 1 as const, siteName: detail?.snapshot.name ?? "Website", pages: {}};
       let restored = initial;
       let restoredMetadata = initialMetadata;
       try {
-        const raw = principal ? localStorage.getItem(siteDraftKey(principal.id, selected)) : null;
+        const raw = userId ? localStorage.getItem(siteDraftKey(userId, selected)) : null;
         lastLocalDraft.current = raw;
         const local = parseSiteDraft(raw);
         localDraftConflict.current = Boolean(raw && (!local || (selected && JSON.stringify(local.baseline) !== JSON.stringify(initial))));
@@ -200,7 +207,7 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
     } finally {
       if (request === requestNumber.current) setLoading(false);
     }
-  }, [selected, principal]);
+  }, [selected, userId]);
 
   useEffect(() => {
     if (!selected && readySnapshotItems.length > 0) {
@@ -236,8 +243,15 @@ export function SiteWorkspace({ children }: { children?: ReactNode }) {
   }, [reload, selected, selectedSnapshotState, snapshot]);
 
   const dirty = useMemo(() => config !== null && savedConfig !== null && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
-  const modelDirty = dataModel !== null && savedDataModel !== null && JSON.stringify(dataModel) !== JSON.stringify(savedDataModel);
-  const allDirty = dirty || modelDirty || JSON.stringify(metadata) !== JSON.stringify(savedMetadata);
+  const modelDirty = useMemo(
+    () => dataModel !== null && savedDataModel !== null && JSON.stringify(dataModel) !== JSON.stringify(savedDataModel),
+    [dataModel, savedDataModel],
+  );
+  const metadataDirty = useMemo(
+    () => JSON.stringify(metadata) !== JSON.stringify(savedMetadata),
+    [metadata, savedMetadata],
+  );
+  const allDirty = dirty || modelDirty || metadataDirty;
   const guard = useUnsavedChangesGuard(allDirty, guardBypass, {
     allowPathChange: (current, next) => {
       return isSiteEditorPath(current) && isSiteEditorPath(next);

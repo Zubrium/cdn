@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
@@ -37,6 +38,13 @@ import { buttonVariants } from "@/components/ui/button";
 
 type TooltipSide = "top" | "right" | "bottom" | "left";
 
+const inlineAlertToneClasses = {
+  info: "border-info/30 bg-info/5 text-info",
+  warning: "border-warning/35 bg-warning/8 text-warning",
+  danger: "border-destructive/35 bg-destructive/5 text-destructive",
+  success: "border-success/30 bg-success/5 text-success",
+} as const;
+
 /** Keeps section help on one tooltip surface across pointer, keyboard, and touch. */
 export function ContextHelp({
   children,
@@ -50,26 +58,7 @@ export function ContextHelp({
   buttonClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [compactViewport, setCompactViewport] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches,
-  );
-  const [tooltipSide, setTooltipSide] = useState<TooltipSide>(() =>
-    typeof window !== "undefined" && side === "right" && window.matchMedia("(max-width: 639px)").matches
-      ? "top"
-      : side,
-  );
-  const accessibleDescription = typeof children === "string" ? children : undefined;
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 639px)");
-    const updateSide = () => {
-      setCompactViewport(media.matches);
-      setTooltipSide(media.matches && side === "right" ? "top" : side);
-    };
-    updateSide();
-    media.addEventListener("change", updateSide);
-    return () => media.removeEventListener("change", updateSide);
-  }, [side]);
+  const tooltipId = useId();
 
   return (
     <Tooltip open={open} onOpenChange={setOpen}>
@@ -79,7 +68,7 @@ export function ContextHelp({
           variant="ghost"
           size="icon"
           aria-label={label}
-          aria-description={accessibleDescription}
+          aria-describedby={tooltipId}
           aria-expanded={open}
           onClick={() => setOpen(true)}
           className={cn(
@@ -91,9 +80,10 @@ export function ContextHelp({
         </Button>
       </TooltipTrigger>
       <TooltipContent
-        side={tooltipSide}
+        id={tooltipId}
+        side={side}
         sideOffset={8}
-        style={compactViewport && side === "right" ? { maxWidth: "min(20rem, calc(100vw - 4rem))" } : undefined}
+        avoidCollisions
         className="max-w-sm whitespace-normal text-left leading-5"
       >
         {children}
@@ -262,16 +252,11 @@ export function InlineAlert({
   actions?: ReactNode;
   className?: string;
 }) {
-  const toneClasses = {
-    info: "border-info/30 bg-info/5 text-info",
-    warning: "border-warning/35 bg-warning/8 text-warning",
-    danger: "border-destructive/35 bg-destructive/5 text-destructive",
-    success: "border-success/30 bg-success/5 text-success",
-  }[tone];
+  const AlertIcon = tone === "success" ? Check : tone === "info" ? Info : AlertTriangle;
   return (
-    <div className={cn("rounded-lg border p-3.5 sm:p-4", toneClasses, className)}>
+    <div className={cn("rounded-lg border p-3.5 sm:p-4", inlineAlertToneClasses[tone], className)}>
       <div className="flex gap-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <AlertIcon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1 text-foreground">
           {title && <p className="text-sm font-semibold">{title}</p>}
           <div className={cn("text-sm leading-6 text-muted-foreground", title && "mt-1")}>

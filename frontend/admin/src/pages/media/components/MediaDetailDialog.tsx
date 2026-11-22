@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Copy, Download, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { formatBytes } from "@/lib/format";
 import { isImageMedia, MediaThumb, useMediaPreviewUrl } from "@/domains/media/media-preview";
+import { useDeleteMedia } from "@/domains/media/use-delete-media";
 
 export function mimeLabel(contentType: string): string {
   if (contentType.startsWith("image/")) return "Изображение";
@@ -88,8 +89,6 @@ export function MediaDetailDialog({
   const [filename, setFilename] = useState(media?.original_filename ?? "");
   const previewUrl = useMediaPreviewUrl(media && (isImageMedia(media) || media.content_type.startsWith("video/")) ? media : null);
 
-  useEffect(() => setFilename(media?.original_filename ?? ""), [media]);
-
   const renameMutation = useMutation({
     mutationFn: (name: string) => api.media.rename(media!.id, name, media!.revision),
     onSuccess: (updated) => {
@@ -100,18 +99,10 @@ export function MediaDetailDialog({
     onError: (error) => toast.error(errorMessage(error)),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (revision: number) => api.media.remove(media!.id, revision),
-    onSuccess: () => {
-      toast.success("Файл удалён");
-      void queryClient.invalidateQueries({ queryKey: queryKeys.media.all });
-      onClose();
-    },
-    onError: (error) => toast.error(errorMessage(error)),
-  });
+  const deleteMutation = useDeleteMedia(onClose);
 
   const requestDelete = async () => {
-    if (media && await confirmFileDeletion(media, confirm)) deleteMutation.mutate(media.revision);
+    if (media && await confirmFileDeletion(media, confirm)) deleteMutation.mutate({ id: media.id, revision: media.revision });
   };
 
   if (!media) return null;
@@ -182,18 +173,10 @@ export function MediaDetailDialog({
 export function MediaActions({ media, onOpen }: { media: Media; onOpen: () => void }) {
   const { principal } = useAuth();
   const canDelete = canDeleteGalleryFile(principal, media.groups);
-  const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const deleteMutation = useMutation({
-    mutationFn: (revision: number) => api.media.remove(media.id, revision),
-    onSuccess: () => {
-      toast.success("Файл удалён");
-      void queryClient.invalidateQueries({ queryKey: queryKeys.media.all });
-    },
-    onError: (error) => toast.error(errorMessage(error)),
-  });
+  const deleteMutation = useDeleteMedia();
   const requestDelete = async () => {
-    if (await confirmFileDeletion(media, confirm)) deleteMutation.mutate(media.revision);
+    if (await confirmFileDeletion(media, confirm)) deleteMutation.mutate({ id: media.id, revision: media.revision });
   };
 
   return (

@@ -193,6 +193,7 @@ export default function MediaPage() {
 
       <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       <MediaDetailDialog
+        key={selected ? `${selected.id}:${selected.revision}` : "none"}
         media={selected}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
