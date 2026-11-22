@@ -49,9 +49,17 @@
 
 - Из каталога `pkg/`: `go test ./...`, `go vet ./...`, `go build ./...` и `go test -race ./observability/...` — PASS. Unit-тесты покрывают JSONL-сигналы с trace/span correlation, derived-key/value redaction (включая ключи кэша, file/principal ID, URL, locale и user-agent), низкокардинальные метки операций, gauge с last-write-wins, W3C traceparent, HTTP route/healthz поведение и OTLP-экспорт в `httptest`-сервер (logs/traces/metrics, parent propagation, error status).
 - Из каталога `presentation/admin/base`: `go test ./...`, `go vet ./...` — PASS.
+- Из каталога `core` с централизованным overlay: `go test ./infrastructure/objectstore/...`, `go vet ./infrastructure/objectstore/...`, `go build ./...` — PASS. Regression-тест подтверждает, что точный `InsecureAllowedHosts` принимается, а wildcard/постфиксные значения отклоняются.
 - Из каталога `main`: `go test ./...`, `go vet ./...`, `go build ./...`, `go build -tags full ./...` — PASS; `go test ./internal/config` — PASS (разрешение observability-блока, отказ не-loopback HTTP S3 без явного allowlist).
-- `--check-config main/config.observability.yaml.example` с фиктивными env и `-tags full` — `configuration is valid` (exit 0).
-- `docker compose --profile observability config --quiet` с фиктивными значениями обязательных env — exit 0. Контейнеры **не запускались**, сетевые и startup-проверки не выполнялись.
+- `--check-config` с фиктивными env и `-tags full` — `configuration is valid` (exit 0) для `noop`, `file`, `otel`. Отклонены (fail-fast): неизвестный `mode`, пустой `file.directory`, пустой `otlp.endpoint`, невалидный `min_level`, пустое/битое содержимое переменной `headers_env`, невалидное имя переменной `headers_env`. Отдельно подтверждено, что отсутствие `headers_env` допустимо, если кастомные заголовки OTLP не нужны.
+- `docker compose --profile observability config --quiet` с фиктивными значениями обязательных env — exit 0; Collector-конфигурация прошла `otelcol-contrib validate`.
+- Образ приложения собирается `docker compose --profile observability build zubrium-obs` с `BUILD_TAGS=full`; внутри образа `atlas version v1.3.0` и бинарник `zubrium` доступны.
+
+### Блокирующие ограничения runtime-прогона
+
+- Первый старт приложения в file-режиме завершился до HTTP-листенера: `start component "core": unencrypted S3 endpoints must use loopback`. Причина — собственный баг конфигурации: `s3_insecure_allowed_hosts` валидировался, но не передавался в `core/presentation.S3Config` и `objectstore.S3Config`. Исправлено коммитом `b3e7822` с regression-тестом.
+- Второй старт завершился на `RequirePrivate`: disposable `alpine/minio:RELEASE.2025-10-15T17-29-55Z` (development-сборка) возвращает `NotImplemented` на `GetPublicAccessBlock`, хотя Core обязательно проверяет все четыре флага public access block. Та же ошибка воспроизведена напрямую через `aws s3api get-public-access-block`; `GetBucketPolicyStatus` в этом образе работает. Для полного прогона нужен S3-совместимый сервер с поддержкой public access block (в локальном кэше доступен `motoserver/moto`, альтернатива — LocalStack).
+- Загрузки `public.ecr.aws/zinclabs/openobserve:v1.1.2` и `localstack/localstack:latest` прерваны остановом Docker daemon (`Command was killed: the process daemon stopped`). Статус `OBS-006` и все OpenObserve-зависимые проверки остаются ожидающими.
 
 ### Ожидающие проверки
 
