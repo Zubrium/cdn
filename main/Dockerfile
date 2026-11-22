@@ -8,7 +8,8 @@ COPY presentation ./presentation
 COPY workers ./workers
 COPY pkg ./pkg
 COPY main ./main
-RUN CGO_ENABLED=0 go build -trimpath -o /out/zubrium ./main/cmd/zubrium
+ARG BUILD_TAGS=""
+RUN CGO_ENABLED=0 go build -trimpath -tags "${BUILD_TAGS}" -o /out/zubrium ./main/cmd/zubrium
 
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS atlas
 RUN apk add --no-cache ca-certificates curl

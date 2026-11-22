@@ -12,6 +12,7 @@ import (
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/observability"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/presentation/router/publiccontentruntime"
@@ -167,10 +168,11 @@ func (*routerAdminComponent) Ready(context.Context) error { return nil }
 func (*routerAdminComponent) Stop(context.Context) error  { return nil }
 
 type publicRouterComponent struct {
-	core   *coreComponent
-	engine *routerEngineComponent
-	config appconfig.Resolved
-	server *transport.PublicServer
+	core     *coreComponent
+	engine   *routerEngineComponent
+	config   appconfig.Resolved
+	observer *observability.Observer
+	server   *transport.PublicServer
 }
 
 func (component *publicRouterComponent) Start(ctx context.Context) error {
@@ -179,6 +181,7 @@ func (component *publicRouterComponent) Start(ctx context.Context) error {
 	}
 	settings := component.config.RouterAPI
 	server, err := transport.NewPublicServer(transport.PublicConfig{
+		Observer: component.observer,
 		Server: transport.ServerConfig{
 			Address: settings.PublicListenAddress, ReadHeaderTimeout: component.config.HTTP.ReadHeaderTimeout,
 			ReadTimeout: component.config.HTTP.ReadTimeout, WriteTimeout: component.config.HTTP.WriteTimeout,

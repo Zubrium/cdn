@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/observability"
 )
 
 var (
@@ -31,6 +34,16 @@ type Dispatcher struct {
 	active   sync.WaitGroup
 	drained  chan struct{}
 	drain    sync.Once
+	observer *observability.Observer
+}
+
+// WithObserver attaches the process observer to the bus dispatcher. It must
+// be called before Seal and is safe to call with nil.
+func (dispatcher *Dispatcher) WithObserver(observer *observability.Observer) *Dispatcher {
+	if dispatcher != nil {
+		dispatcher.observer = observer
+	}
+	return dispatcher
 }
 
 func NewAllowlisted(keys ...contracts.Key) (*Dispatcher, error) {
@@ -131,6 +144,29 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 	if err := key.Validate(); err != nil {
 		return contracts.Envelope{}, err
 	}
+	started := time.Now()
+	dispatchCtx := ctx
+	if observer := dispatcher.observer; observer != nil {
+		source := observer.CurrentIdentity(ctx)
+		identity := observability.Identity{
+			ModuleKind: observability.ModuleKindBus, ModuleID: "bus", ComponentID: "dispatcher", OperationID: key.ID,
+		}
+		var span observability.Span
+		dispatchCtx, span = observer.Start(observer.WithIdentity(ctx, identity), "bus.dispatch",
+			observability.String("bus.target.module", targetModule(key.ID)),
+			observability.String("bus.source.module", source.ModuleID),
+			observability.String("bus.source.component", source.ComponentID))
+		defer func() {
+			span.End(err)
+			labels := []observability.Attribute{
+				observability.String("operation.id", key.ID),
+				observability.String("bus.target.module", targetModule(key.ID)),
+				observability.String("outcome", outcome(err)),
+			}
+			observer.IncCounter(dispatchCtx, "zubrium_bus_dispatch_total", 1, labels...)
+			observer.ObserveHistogram(dispatchCtx, "zubrium_bus_dispatch_duration_seconds", time.Since(started).Seconds(), labels...)
+		}()
+	}
 	dispatcher.mu.RLock()
 	if dispatcher.closed {
 		dispatcher.mu.RUnlock()
@@ -167,11 +203,33 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 			ctx = contracts.WithStreamCapability(ctx, streams)
 		}
 	}
-	payload, err := handler(ctx, request.Payload)
+	payload, err := handler(dispatchCtx, request.Payload)
 	if err != nil {
 		return contracts.Envelope{}, err
 	}
 	return contracts.Envelope{OperationID: key.ID, Version: key.Version, Payload: payload}, nil
+}
+
+func targetModule(operationID string) string {
+	switch {
+	case strings.HasPrefix(operationID, "core."):
+		return "core"
+	case strings.HasPrefix(operationID, "content."):
+		return "engine.content"
+	case strings.HasPrefix(operationID, "main.publication."):
+		return "engine.publication"
+	case strings.HasPrefix(operationID, "main.retirement."):
+		return "composition.retirement"
+	default:
+		return "composition"
+	}
+}
+
+func outcome(err error) string {
+	if err != nil {
+		return "error"
+	}
+	return "ok"
 }
 
 func (dispatcher *Dispatcher) Close(ctx context.Context) error {

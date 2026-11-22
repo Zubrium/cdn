@@ -1,0 +1,54 @@
+# OTel Collector для изолированного observability-стека.
+#
+# AUTH БЕЗ ЗАПИСИ СЕКРЕТА В ФАЙЛ:
+# _BASE64=$(printf '%s:%s' "$OBS_OPENOBSERVE_EMAIL" "$OBS_OPENOBSERVE_PASSWORD" \
+#  | base64 | tr -d '\n')
+# export OBS_OPENOBSERVE_AUTH="$_BASE64"
+# unset _BASE64
+# Compose передаёт OBS_OPENOBSERVE_AUTH в контейнер из host env; в YAML окружении
+# и в этом конфиге остаётся только ссылка ${env:OBS_OPENOBSERVE_AUTH}.
+# Не выводите значение base64 в терминал, логи, чаты и QA-отчёты.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  debug:
+    verbosity: normal
+  otlphttp/openobserve:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic ${env:OBS_OPENOBSERVE_AUTH}"
+      X-OQ-ORG-ID: default
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlphttp/openobserve]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlphttp/openobserve]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlphttp/openobserve]
+  telemetry:
+    logs:
+      level: info

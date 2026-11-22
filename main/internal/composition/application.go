@@ -3,6 +3,7 @@ package composition
 import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/observability"
 )
 
 type StartupComponents struct {
@@ -10,8 +11,8 @@ type StartupComponents struct {
 	api  *fileAPIComponent
 }
 
-func RegisterComponents(config appconfig.Resolved, plan platform.BuildPlan) (*platform.RuntimeRegistry, *StartupComponents, error) {
-	registry, core, _, api, err := registerComponents(config, plan)
+func RegisterComponents(config appconfig.Resolved, plan platform.BuildPlan, observer *observability.Observer) (*platform.RuntimeRegistry, *StartupComponents, error) {
+	registry, core, _, api, err := registerComponents(config, plan, observer)
 	if err != nil {
 		return nil, nil, err
 	}

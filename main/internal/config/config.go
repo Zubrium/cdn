@@ -21,6 +21,7 @@ import (
 	loaderapp "github.com/Zubrium/cdn/engines/loader/features/files/application"
 	routermodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 	publicationapp "github.com/Zubrium/cdn/main/internal/publication"
+	"github.com/Zubrium/cdn/pkg/observability"
 	"github.com/Zubrium/cdn/presentation/fileapi"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/google/uuid"
@@ -37,6 +38,7 @@ type Core struct {
 	S3SecretKeyEnv          string                           `yaml:"s3_secret_key_env"`
 	S3PathStyle             bool                             `yaml:"s3_path_style"`
 	S3AllowInsecureHTTP     bool                             `yaml:"s3_allow_insecure_http"`
+	S3InsecureAllowedHosts  []string                         `yaml:"s3_insecure_allowed_hosts"`
 	BootstrapSecretEnv      string                           `yaml:"bootstrap_secret_env"`
 	AtlasBinary             string                           `yaml:"atlas_binary"`
 	MigrationLockTimeout    string                           `yaml:"migration_lock_timeout"`
@@ -367,6 +369,31 @@ type PrerenderSettings struct {
 	Timeout          time.Duration
 }
 
+// ObservabilityFile configures the cheap stdlib-only JSONL backend.
+type ObservabilityFile struct {
+	Directory    string `yaml:"directory"`
+	MaxFileBytes int64  `yaml:"max_file_bytes"`
+	MaxFiles     int    `yaml:"max_files"`
+}
+
+// ObservabilityOTLP configures the OpenTelemetry OTLP/HTTP backend. Header
+// values are read from the environment; credentials are never stored in YAML.
+type ObservabilityOTLP struct {
+	Endpoint   string `yaml:"endpoint"`
+	Insecure   bool   `yaml:"insecure"`
+	HeadersEnv string `yaml:"headers_env"`
+	Timeout    string `yaml:"timeout"`
+}
+
+type ObservabilityConfig struct {
+	Mode           string            `yaml:"mode"`
+	MinLevel       string            `yaml:"min_level"`
+	ServiceVersion string            `yaml:"service_version"`
+	InstanceID     string            `yaml:"instance_id"`
+	File           ObservabilityFile `yaml:"file"`
+	OTLP           ObservabilityOTLP `yaml:"otlp"`
+}
+
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -383,6 +410,7 @@ type Resolved struct {
 	HTTP                   HTTPServerConfig
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
+	Observability          observability.Config
 }
 
 var ErrCoordinatorProfileMismatch = errors.New("Coordinator settings do not match the compiled profile")
@@ -904,6 +932,42 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, errors.New("cannot fingerprint Coordinator configuration")
 	}
+	observabilityMode := observability.Mode(c.Observability.Mode)
+	if observabilityMode == "" {
+		observabilityMode = observability.ModeNoop
+	}
+	observabilityHeaders := make(map[string]string)
+	if c.Observability.OTLP.HeadersEnv != "" {
+		raw := getenv(c.Observability.OTLP.HeadersEnv)
+		if raw == "" {
+			return Resolved{}, errors.New("configured observability headers environment variable is empty")
+		}
+		for _, pair := range strings.Split(raw, ",") {
+			key, value, found := strings.Cut(strings.TrimSpace(pair), "=")
+			if !found || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				return Resolved{}, errors.New("observability headers must be comma-separated key=value pairs")
+			}
+			observabilityHeaders[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	var observabilityTimeout time.Duration
+	if c.Observability.OTLP.Timeout != "" {
+		observabilityTimeout, err = time.ParseDuration(c.Observability.OTLP.Timeout)
+		if err != nil || observabilityTimeout <= 0 {
+			return Resolved{}, errors.New("invalid observability OTLP timeout")
+		}
+	}
+	observabilityConfig := observability.Config{
+		Mode: observabilityMode, MinLevel: observability.Level(c.Observability.MinLevel),
+		ServiceVersion: c.Observability.ServiceVersion, InstanceID: c.Observability.InstanceID,
+		Directory: c.Observability.File.Directory, MaxFileBytes: c.Observability.File.MaxFileBytes,
+		MaxFiles: c.Observability.File.MaxFiles,
+		Endpoint: c.Observability.OTLP.Endpoint, Insecure: c.Observability.OTLP.Insecure,
+		Headers: observabilityHeaders, Timeout: observabilityTimeout,
+	}
+	if err := observabilityConfig.Validate(); err != nil {
+		return Resolved{}, fmt.Errorf("invalid observability configuration: %w", err)
+	}
 	return Resolved{Core: coreConfig, Loader: loaderConfig, FileAPI: fileAPIConfig,
 		AdminAPI: AdminAPISettings{MaxJSONBytes: c.AdminAPI.MaxJSONBytes, DefaultPageSize: c.AdminAPI.DefaultPageSize, MaxPageSize: c.AdminAPI.MaxPageSize,
 			SessionCookieSecure: *c.AdminAPI.SessionCookieSecure,
@@ -952,24 +1016,25 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[7],
 		}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
 			ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
-			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}}, nil
+			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}, Observability: observabilityConfig}, nil
 }
 
 type Config struct {
-	Core          Core              `yaml:"core"`
-	Loader        Loader            `yaml:"loader"`
-	FileAPI       FileAPI           `yaml:"file_api"`
-	AdminAPI      AdminAPI          `yaml:"admin_api"`
-	RouterAPI     RouterAPI         `yaml:"router_api"`
-	FormsAPI      FormsAPI          `yaml:"forms_api"`
-	ContentAPI    ContentAPI        `yaml:"content_api"`
-	Publication   Publication       `yaml:"publication"`
-	Retirement    Retirement        `yaml:"retirement"`
-	FeatureImport FeatureImport     `yaml:"feature_import"`
-	Media         Media             `yaml:"media"`
-	Prerender     Prerender         `yaml:"prerender"`
-	HTTP          HTTP              `yaml:"http"`
-	Coordinator   CoordinatorConfig `yaml:"coordinator"`
+	Core          Core                `yaml:"core"`
+	Loader        Loader              `yaml:"loader"`
+	FileAPI       FileAPI             `yaml:"file_api"`
+	AdminAPI      AdminAPI            `yaml:"admin_api"`
+	RouterAPI     RouterAPI           `yaml:"router_api"`
+	FormsAPI      FormsAPI            `yaml:"forms_api"`
+	ContentAPI    ContentAPI          `yaml:"content_api"`
+	Publication   Publication         `yaml:"publication"`
+	Retirement    Retirement          `yaml:"retirement"`
+	FeatureImport FeatureImport       `yaml:"feature_import"`
+	Media         Media               `yaml:"media"`
+	Prerender     Prerender           `yaml:"prerender"`
+	HTTP          HTTP                `yaml:"http"`
+	Coordinator   CoordinatorConfig   `yaml:"coordinator"`
+	Observability ObservabilityConfig `yaml:"observability"`
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -979,6 +1044,7 @@ func configFingerprint(config Config, runtimeURL, migrationURL string) (string, 
 	config.Core.MigrationDatabaseURLEnv = ""
 	config.Core.S3AccessKeyEnv = ""
 	config.Core.S3SecretKeyEnv = ""
+	config.Core.S3InsecureAllowedHosts = nil
 	config.Core.BootstrapSecretEnv = ""
 	// Each public Router process serves exactly one configured branch. Branch
 	// selection and its listener are deployment-local bindings, while
@@ -988,6 +1054,8 @@ func configFingerprint(config Config, runtimeURL, migrationURL string) (string, 
 	config.RouterAPI.PublicListenAddress = ""
 	config.Publication.WebsiteCredentialEnv = ""
 	config.Retirement.WebsiteCredentialEnv = ""
+	// Telemetry is deployment-local and does not change the shared Coordinator policy.
+	config.Observability = ObservabilityConfig{}
 	databaseIdentity := func(value string) (string, error) {
 		parsed, err := url.Parse(value)
 		if err != nil || parsed.Host == "" || parsed.Path == "" {
@@ -1063,8 +1131,11 @@ func Load(input io.Reader) (Config, error) {
 	if !envName.MatchString(cfg.Core.MigrationDatabaseURLEnv) {
 		return Config{}, errors.New("invalid migration database environment name")
 	}
-	if u.Scheme == "http" && (!cfg.Core.S3AllowInsecureHTTP || !isLoopback(u.Hostname())) {
-		return Config{}, errors.New("unencrypted S3 endpoints must use loopback")
+	if u.Scheme == "http" && !cfg.Core.S3AllowInsecureHTTP {
+		return Config{}, errors.New("unencrypted S3 endpoints require explicit opt-in")
+	}
+	if u.Scheme == "http" && !isLoopback(u.Hostname()) && !insecureHostAllowed(cfg.Core.S3InsecureAllowedHosts, u.Hostname()) {
+		return Config{}, errors.New("unencrypted S3 endpoints must use loopback or an explicitly allowed host")
 	}
 	return cfg, nil
 }
@@ -1108,6 +1179,19 @@ func validateConfigNode(node *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+// insecureHostAllowed accepts only exact hostnames explicitly listed by the
+// operator. Wildcards and IP ranges are deliberately not supported.
+func insecureHostAllowed(hosts []string, host string) bool {
+	want := strings.ToLower(strings.TrimSpace(host))
+	for _, item := range hosts {
+		candidate := strings.ToLower(strings.TrimSpace(item))
+		if candidate != "" && candidate == want {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoopback(host string) bool {

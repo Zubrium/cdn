@@ -10,4 +10,6 @@ func RegisterProfile(registry *presentation.Registry) error {
 
 func BuildPlan() presentation.BuildPlan { return GeneratedBuildPlan() }
 
+func ProfileName() string { return "router" }
+
 func DevelopmentFixturesEnabled() bool { return GeneratedDevelopmentFixtures() }

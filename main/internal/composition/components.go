@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
@@ -17,6 +18,7 @@ import (
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/observability"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/workers/archive"
@@ -393,6 +395,7 @@ type fileAPIComponent struct {
 	routerAdminEnabled  bool
 	uiHandler           http.Handler
 	config              appconfig.Resolved
+	observer            *observability.Observer
 	server              *transport.AdminServer
 }
 
@@ -425,7 +428,7 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		WorkflowPageDefault: c.config.Coordinator.WorkflowsPageDefault, WorkflowPageMaximum: c.config.Coordinator.WorkflowsPageMaximum,
 		AccessGroups: configuredGroupNames(c.core.config.Core.AccessGroups), RouterAdminEnabled: c.routerAdminEnabled,
 		UIHandler: c.uiHandler, SyntheticData: c.developmentFixtures, IdentityEnabled: c.identityAdmin,
-		BuildIdentity: os.Getenv("ZUBRIUM_BUILD_IDENTITY"),
+		BuildIdentity: os.Getenv("ZUBRIUM_BUILD_IDENTITY"), Observer: c.observer,
 	}
 	var routerOperations *router.PublicOperationRegistry
 	if c.routerEngine != nil {
@@ -578,17 +581,38 @@ func (c *fileAPIComponent) Errors() <-chan error {
 	return c.server.Errors()
 }
 
-func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*platform.RuntimeRegistry, *coreComponent, *loaderComponent, *fileAPIComponent, error) {
+func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, observer *observability.Observer) (*platform.RuntimeRegistry, *coreComponent, *loaderComponent, *fileAPIComponent, error) {
 	if len(plan.Components) == 0 {
 		return nil, nil, nil, nil, platform.ErrCoordinatorInputInvalid
 	}
 	registry := platform.NewRuntimeRegistry()
+	rawRegister := registry.Register
+	register := func(component platform.RuntimeComponent) error {
+		original := component.New
+		component.New = func(ctx context.Context) (platform.ManagedComponent, error) {
+			if observer == nil {
+				return original(ctx)
+			}
+			identity := observability.Identity{
+				ModuleKind: componentModuleKind(component.ID), ModuleID: componentModuleID(component.ID),
+				ComponentID: component.ID, OperationID: "component.initialize",
+			}
+			var managed platform.ManagedComponent
+			err := observer.Operation(ctx, identity, "component.lifecycle", nil, func(operationCtx context.Context) error {
+				var createErr error
+				managed, createErr = original(operationCtx)
+				return createErr
+			})
+			return managed, err
+		}
+		return rawRegister(component)
+	}
 	selected := make(map[string]struct{}, len(plan.Components))
 	for _, id := range plan.Components {
 		selected[id] = struct{}{}
 	}
 	core := &coreComponent{config: resolved, selected: selected, dispatcher: nil}
-	if err := registerWorkerHandlers(registry, selected, resolved, core); err != nil {
+	if err := registerWorkerHandlers(registry, selected, resolved, core, observer); err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("register worker handlers: %w", err)
 	}
 	keys := []contracts.Key{contracts.CoreReadinessOperation().Key}
@@ -611,12 +635,13 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if err := dispatcher.EnableScopedStreams(); err != nil {
 		return nil, nil, nil, nil, err
 	}
+	dispatcher.WithObserver(observer)
 	if err := validateRunnableComposition(selected); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	core.dispatcher = dispatcher
 	loader := &loaderComponent{core: core, config: resolved}
-	fileAPI := &fileAPIComponent{loader: loader, core: core, config: resolved}
+	fileAPI := &fileAPIComponent{loader: loader, core: core, config: resolved, observer: observer}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]
 	if _, enabled := selected["admin.notifications"]; enabled {
 		fileAPI.notifications = transport.NewNotificationHub()
@@ -631,7 +656,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if _, enabled := selected["admin.coordinator"]; enabled {
 		fileAPI.workflowControl = busWorkflowControl{dispatcher: dispatcher}
 	}
-	if err := registry.Register(platform.RuntimeComponent{ID: "core", New: func(context.Context) (platform.ManagedComponent, error) { return core, nil }}); err != nil {
+	if err := register(platform.RuntimeComponent{ID: "core", New: func(context.Context) (platform.ManagedComponent, error) { return core, nil }}); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	for _, workerID := range []string{"worker.archive", "worker.media", "worker.prerender"} {
@@ -639,13 +664,13 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			continue
 		}
 		workerID := workerID
-		if err := registry.Register(platform.RuntimeComponent{ID: workerID, Requires: []string{"core"}, New: func(ctx context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: workerID, Requires: []string{"core"}, New: func(ctx context.Context) (platform.ManagedComponent, error) {
 			return newWorkerComponent(ctx, workerID)
 		}}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
-	if err := registry.Register(platform.RuntimeComponent{ID: "engine.loader", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return loader, nil }}); err != nil {
+	if err := register(platform.RuntimeComponent{ID: "engine.loader", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return loader, nil }}); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	if fileAPI.developmentFixtures {
@@ -653,7 +678,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			id := id
 			requires := []string{"core"}
 			component := &readyComponent{id: id}
-			if err := registry.Register(platform.RuntimeComponent{ID: id, Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
+			if err := register(platform.RuntimeComponent{ID: id, Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
 				return nil, nil, nil, nil, err
 			}
 		}
@@ -662,7 +687,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if _, enabled := selected["engine.website"]; enabled && !fileAPI.developmentFixtures {
 		websiteEngine = &websiteEngineComponent{core: core, config: resolved}
 		fileAPI.websiteEngine = websiteEngine
-		if err := registry.Register(platform.RuntimeComponent{ID: "engine.website", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return websiteEngine, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "engine.website", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return websiteEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -684,7 +709,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 				return nil, nil, nil, nil, err
 			}
 		}
-		if err := registry.Register(platform.RuntimeComponent{ID: "engine.content", Requires: []string{"core", "engine.website"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "engine.content", Requires: []string{"core", "engine.website"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			contentEngine.website = websiteEngine.service
 			return contentEngine, nil
 		}}); err != nil {
@@ -698,7 +723,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		adminWebsite := &readyComponent{id: "admin.website"}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.website", Requires: []string{"core", "engine.website", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminWebsite, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.website", Requires: []string{"core", "engine.website", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminWebsite, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -706,7 +731,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if _, enabled := selected["engine.forms"]; enabled && !fileAPI.developmentFixtures {
 		formsEngine = &formsEngineComponent{core: core, config: resolved}
 		fileAPI.formsEngine = formsEngine
-		if err := registry.Register(platform.RuntimeComponent{ID: "engine.forms", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return formsEngine, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "engine.forms", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return formsEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -714,7 +739,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	if formsEngine != nil && fileAPI.formsAdminEnabled {
 		adminFilesRequires = append(adminFilesRequires, "engine.forms")
 	}
-	if err := registry.Register(platform.RuntimeComponent{ID: "admin.files", Requires: adminFilesRequires, New: func(context.Context) (platform.ManagedComponent, error) { return fileAPI, nil }}); err != nil {
+	if err := register(platform.RuntimeComponent{ID: "admin.files", Requires: adminFilesRequires, New: func(context.Context) (platform.ManagedComponent, error) { return fileAPI, nil }}); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	if _, enabled := selected["admin.ui"]; enabled {
@@ -726,7 +751,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		fileAPI.uiHandler = handler
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.ui", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "admin.ui", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return &readyComponent{id: "admin.ui"}, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
@@ -734,25 +759,25 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	}
 	if _, enabled := selected["admin.coordinator"]; enabled {
 		component := &readyComponent{id: "admin.coordinator"}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.coordinator", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.coordinator", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
 	if fileAPI.identityAdmin {
 		component := &readyComponent{id: "admin.identity"}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.identity", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.identity", Requires: []string{"core", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
 	if fileAPI.notifications != nil {
 		notificationsAPI := &readyComponent{id: "admin.notifications"}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.notifications", Requires: []string{"core", "admin.files", "admin.identity"}, New: func(context.Context) (platform.ManagedComponent, error) { return notificationsAPI, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.notifications", Requires: []string{"core", "admin.files", "admin.identity"}, New: func(context.Context) (platform.ManagedComponent, error) { return notificationsAPI, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
 	if formsEngine != nil && fileAPI.formsAdminEnabled && !fileAPI.developmentFixtures {
 		adminForms := &readyComponent{id: "admin.forms"}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.forms", Requires: []string{"core", "engine.forms", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminForms, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.forms", Requires: []string{"core", "engine.forms", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminForms, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -761,7 +786,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		adminContent := &readyComponent{id: "admin.content"}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.content", Requires: []string{"core", "engine.website", "engine.content", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminContent, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.content", Requires: []string{"core", "engine.website", "engine.content", "admin.files"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminContent, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -775,7 +800,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			{id: "admin.forms", engineID: "engine.forms"},
 		} {
 			component := &readyComponent{id: item.id}
-			if err := registry.Register(platform.RuntimeComponent{ID: item.id, Requires: []string{"core", "admin.files", item.engineID}, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
+			if err := register(platform.RuntimeComponent{ID: item.id, Requires: []string{"core", "admin.files", item.engineID}, New: func(context.Context) (platform.ManagedComponent, error) { return component, nil }}); err != nil {
 				return nil, nil, nil, nil, err
 			}
 		}
@@ -791,7 +816,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		}
 		routerEngine = &routerEngineComponent{core: core, loader: loader, forms: formsEngine, content: contentEngine, config: resolved, selected: selected, dispatcher: dispatcher}
 		fileAPI.routerEngine = routerEngine
-		if err := registry.Register(platform.RuntimeComponent{ID: "engine.router", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "engine.router", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -803,7 +828,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
 		}
 		fileAPI.publicationEngine = publicationEngine
-		if err := registry.Register(platform.RuntimeComponent{ID: "engine.publication", Requires: []string{"core", "engine.website", "engine.content", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "engine.publication", Requires: []string{"core", "engine.website", "engine.content", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return publicationEngine, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
@@ -817,7 +842,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
 		}
 		fileAPI.retirementEngine = retirementEngine
-		if err := registry.Register(platform.RuntimeComponent{ID: "composition.retirement", Requires: []string{"core", "engine.website", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "composition.retirement", Requires: []string{"core", "engine.website", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return retirementEngine, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
@@ -828,7 +853,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		adminAPI := &routerAdminComponent{}
-		if err := registry.Register(platform.RuntimeComponent{ID: "admin.router", Requires: []string{"core", "engine.loader", "admin.files", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminAPI, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "admin.router", Requires: []string{"core", "engine.loader", "admin.files", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) { return adminAPI, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -836,8 +861,8 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		if routerEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
-		publicAPI := &publicRouterComponent{core: core, engine: routerEngine, config: resolved}
-		if err := registry.Register(platform.RuntimeComponent{ID: "public.router", Requires: []string{"engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) { return publicAPI, nil }}); err != nil {
+		publicAPI := &publicRouterComponent{core: core, engine: routerEngine, config: resolved, observer: observer}
+		if err := register(platform.RuntimeComponent{ID: "public.router", Requires: []string{"engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) { return publicAPI, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -845,7 +870,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		if routerEngine == nil || contentEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
-		if err := registry.Register(platform.RuntimeComponent{ID: "public.content-runtime", Requires: []string{"core", "engine.website", "engine.content", "engine.router", "public.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "public.content-runtime", Requires: []string{"core", "engine.website", "engine.content", "engine.router", "public.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return &readyComponent{id: "public.content-runtime"}, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
@@ -860,7 +885,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		if formsEngine != nil {
 			requires = append(requires, "engine.forms")
 		}
-		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-upload", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return uploadAPI, nil }}); err != nil {
+		if err := register(platform.RuntimeComponent{ID: "public.form-upload", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return uploadAPI, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -868,7 +893,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		if routerEngine == nil || formsEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
-		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-session", Requires: []string{"engine.router", "public.router", "engine.forms"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "public.form-session", Requires: []string{"engine.router", "public.router", "engine.forms"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return &readyComponent{id: "public.form-session"}, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
@@ -878,7 +903,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 		if routerEngine == nil || formsEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
-		if err := registry.Register(platform.RuntimeComponent{ID: "public.form-submit", Requires: []string{"engine.router", "public.router", "engine.forms"}, New: func(context.Context) (platform.ManagedComponent, error) {
+		if err := register(platform.RuntimeComponent{ID: "public.form-submit", Requires: []string{"engine.router", "public.router", "engine.forms"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return &readyComponent{id: "public.form-submit"}, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
@@ -949,6 +974,37 @@ func (component *readyComponent) Stop(context.Context) error {
 		component.ready = false
 	}
 	return nil
+}
+
+func componentModuleKind(componentID string) observability.ModuleKind {
+	switch {
+	case componentID == "core" || strings.HasPrefix(componentID, "core."):
+		return observability.ModuleKindCore
+	case strings.HasPrefix(componentID, "engine."):
+		return observability.ModuleKindEngine
+	case strings.HasPrefix(componentID, "worker."):
+		return observability.ModuleKindWorker
+	case strings.HasPrefix(componentID, "admin.") || strings.HasPrefix(componentID, "public."):
+		return observability.ModuleKindPresentation
+	default:
+		return observability.ModuleKindComposition
+	}
+}
+
+func componentModuleID(componentID string) string {
+	if componentID == "core" {
+		return "core"
+	}
+	if strings.HasPrefix(componentID, "engine.") || strings.HasPrefix(componentID, "worker.") {
+		return componentID
+	}
+	if strings.HasPrefix(componentID, "admin.") {
+		return "admin"
+	}
+	if strings.HasPrefix(componentID, "public.") {
+		return "public-router"
+	}
+	return "composition"
 }
 
 func configuredGroupNames(groups map[string]platform.AccessLevel) []string {

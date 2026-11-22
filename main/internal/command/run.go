@@ -12,7 +12,18 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/main/internal/composition"
 	config "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/observability"
 )
+
+func closeApplication(observer *observability.Observer, application *platform.ComponentApplication, ctx context.Context) error {
+	if application == nil {
+		return nil
+	}
+	return observer.Operation(ctx, observability.Identity{
+		ModuleKind: observability.ModuleKindComposition, ModuleID: "composition", ComponentID: "runtime",
+		OperationID: "composition.close",
+	}, "component.lifecycle", nil, func(context.Context) error { return application.Close(ctx) })
+}
 
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--version" {
@@ -83,29 +94,56 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		componentRegistry, components, err := composition.RegisterComponents(resolved, buildPlan)
+		observabilityConfig := resolved.Observability
+		observabilityConfig.Profile = composition.ProfileName()
+		observabilityConfig.BranchID = resolved.RouterAPI.BranchID
+		observer, err := observability.New(observabilityConfig)
 		if err != nil {
+			fmt.Fprintln(stderr, "observability initialization failed:", err)
+			return 1
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
+			defer cancel()
+			_ = observer.Close(shutdownCtx)
+		}()
+		observer.Log(ctx, observability.LevelInfo, "application starting",
+			observability.String("deployment.profile", composition.ProfileName()),
+			observability.String("router.branch", resolved.RouterAPI.BranchID))
+		componentRegistry, components, err := composition.RegisterComponents(resolved, buildPlan, observer)
+		if err != nil {
+			observer.Log(ctx, observability.LevelError, "component registration failed", observability.String("error.message", err.Error()))
 			fmt.Fprintln(stderr, "Coordinator registration failed")
 			return 1
 		}
-		application, err := platform.Compose(ctx, buildPlan, componentRegistry, resolved.HTTP.ShutdownTimeout)
+		var application *platform.ComponentApplication
+		err = observer.Operation(ctx, observability.Identity{
+			ModuleKind: observability.ModuleKindComposition, ModuleID: "composition", ComponentID: "runtime",
+			OperationID: "composition.compose",
+		}, "component.lifecycle", nil, func(operationCtx context.Context) error {
+			var composeErr error
+			application, composeErr = platform.Compose(operationCtx, buildPlan, componentRegistry, resolved.HTTP.ShutdownTimeout)
+			return composeErr
+		})
 		if err != nil {
+			observer.Log(ctx, observability.LevelError, "application startup failed", observability.String("error.message", err.Error()))
 			fmt.Fprintln(stderr, "application startup failed:", err)
 			return 1
 		}
+		observer.Log(ctx, observability.LevelInfo, "application started")
 		components.SetApplicationReadiness(application)
 		closed := false
 		defer func() {
 			if !closed {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
 				defer cancel()
-				_ = application.Close(shutdownCtx)
+				_ = closeApplication(observer, application, shutdownCtx)
 			}
 		}()
 		if secret := components.InitialAdminSecret(); secret != "" {
 			if _, err := fmt.Fprintln(stderr, "Initial administrator secret (shown once):", secret); err != nil {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
-				_ = application.Close(shutdownCtx)
+				_ = closeApplication(observer, application, shutdownCtx)
 				cancel()
 				closed = true
 				return 1
@@ -113,7 +151,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		if _, err := fmt.Fprintln(stdout, "Core, Coordinator, Loader, and File API listening on", components.AdminAddress()); err != nil {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
-			_ = application.Close(shutdownCtx)
+			_ = closeApplication(observer, application, shutdownCtx)
 			cancel()
 			closed = true
 			return 1
@@ -121,7 +159,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		select {
 		case <-ctx.Done():
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
-			err := application.Close(shutdownCtx)
+			err := closeApplication(observer, application, shutdownCtx)
 			shutdownCancel()
 			closed = true
 			if err != nil {
@@ -131,7 +169,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 0
 		case err, ok := <-application.Failures():
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
-			shutdownErr := application.Close(shutdownCtx)
+			shutdownErr := closeApplication(observer, application, shutdownCtx)
 			shutdownCancel()
 			closed = true
 			if ok && err != nil {

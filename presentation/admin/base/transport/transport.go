@@ -15,6 +15,7 @@ import (
 	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteengine "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/observability"
 	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
 	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
 	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
@@ -59,6 +60,7 @@ type AdminConfig struct {
 	SyntheticData            bool
 	IdentityEnabled          bool
 	BuildIdentity            string
+	Observer                 *observability.Observer
 }
 
 type AdminDependencies struct {
@@ -115,7 +117,14 @@ func (s *AdminServer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: s.config.Server.ReadHeaderTimeout,
+	var handler http.Handler = mux
+	if s.config.Observer != nil {
+		mux.Handle("GET /metrics", s.config.Observer.MetricsHandler())
+		handler = s.config.Observer.Handler(observability.Identity{
+			ModuleKind: observability.ModuleKindPresentation, ModuleID: "admin", ComponentID: "http-server",
+		}, mux)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: s.config.Server.ReadHeaderTimeout,
 		ReadTimeout: s.config.Server.ReadTimeout, WriteTimeout: s.config.Server.WriteTimeout,
 		IdleTimeout: s.config.Server.IdleTimeout, MaxHeaderBytes: s.config.Server.MaxHeaderBytes}
 	listener, err := net.Listen("tcp", s.config.Server.Address)
@@ -383,8 +392,9 @@ func (s *AdminServer) Address() string {
 }
 
 type PublicConfig struct {
-	Server ServerConfig
-	Router routerhttp.Config
+	Server   ServerConfig
+	Router   routerhttp.Config
+	Observer *observability.Observer
 }
 
 type PublicServer struct {
@@ -424,7 +434,13 @@ func (s *PublicServer) Start(ctx context.Context) error {
 		}
 		publicHandler.ServeHTTP(w, r)
 	})
-	server := &http.Server{Handler: guarded, ReadHeaderTimeout: s.config.Server.ReadHeaderTimeout,
+	var observed http.Handler = guarded
+	if s.config.Observer != nil {
+		observed = s.config.Observer.Handler(observability.Identity{
+			ModuleKind: observability.ModuleKindPresentation, ModuleID: "public-router", ComponentID: "http-server",
+		}, guarded)
+	}
+	server := &http.Server{Handler: observed, ReadHeaderTimeout: s.config.Server.ReadHeaderTimeout,
 		ReadTimeout: s.config.Server.ReadTimeout, WriteTimeout: s.config.Server.WriteTimeout,
 		IdleTimeout: s.config.Server.IdleTimeout, MaxHeaderBytes: s.config.Server.MaxHeaderBytes}
 	listener, err := net.Listen("tcp", s.config.Server.Address)
