@@ -212,8 +212,14 @@ func (repository *ModuleDataRepository) FindMatch(ctx context.Context, branchID,
 		}
 		for _, record := range records {
 			route, err := decodeRoute(record)
-			if err != nil || route.BranchID != branchID || route.Host != host || !model.PathMatches(route.Path, path, route.Match) {
+			if err != nil {
 				return model.Route{}, ErrInvalid
+			}
+			// The path selector is a prefix filter: sibling routes with an exact
+			// path that is a prefix of the request are valid records and must be
+			// skipped instead of failing the whole lookup.
+			if route.BranchID != branchID || route.Host != host || !model.PathMatches(route.Path, path, route.Match) {
+				continue
 			}
 			if best.ID == "" || route.Match == model.MatchExact ||
 				(best.Match != model.MatchExact && len(route.Path) > len(best.Path)) {

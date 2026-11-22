@@ -187,6 +187,25 @@ func TestFindMatchChoosesExactThenLongestSegmentPrefix(t *testing.T) {
 	}
 }
 
+func TestFindMatchSkipsSiblingsThatArePrefixesOfTheRequest(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewModuleDataRepository(newMemoryModuleData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := testRoute(t, "01938f7a-68af-7c10-a51d-78b6ca125320", "forms.example.test", "/forms/contact")
+	submit := testRoute(t, "01938f7a-68af-7c10-a51d-78b6ca125321", "forms.example.test", "/forms/contact/submit")
+	for index, route := range []model.Route{session, submit} {
+		if _, err := repo.Create(ctx, route, "router-route-form-00"+string(rune('1'+index)), "fingerprint-form-"+string(rune('1'+index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matched, err := repo.FindMatch(ctx, "main", "forms.example.test", "/forms/contact/submit")
+	if err != nil || matched.ID != submit.ID {
+		t.Fatalf("submit route = %+v, %v; want %q", matched, err, submit.ID)
+	}
+}
+
 func TestCreateIsAtomicAndIdempotentButRejectsKeyReuse(t *testing.T) {
 	ctx := context.Background()
 	data := newMemoryModuleData()

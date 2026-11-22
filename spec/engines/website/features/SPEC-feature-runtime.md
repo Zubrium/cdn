@@ -35,6 +35,8 @@ export type FeatureModule = {
 
 Context содержит только публичные проекции выбранной страницы и system-wide published Content, плюс scoped SDK; в нём нет секретов, credentials, приватных Core file data, произвольных callbacks или выбора engine/module namespace. Страница не задаёт route: runtime получает текущие `path` и `params` от Router как request projection.
 
+Единый аргумент-маршрут для контента, форм и внешних бэкендов объявляется в manifest как обычный строковый аргумент с `format: "route"`; backend-валидация форматов аргументов не отвергает это значение. Admin разрешает выбранный маршрут в итоговую строку до публикации snapshot, а runtime получает только эту строку: объект binding во внешний контракт фичи не передаётся.
+
 Feature dependencies разрешаются Website по manifest SemVer ranges до готовности page snapshot. Dependency graph конечен, не содержит циклов и конфликтующих диапазонов; точные provider version, package digest и требуемая версия public runtime API фиксируются в immutable lock. Feature импортирует только exports объявленного versioned public API.
 
 Feature manifest объявляет сетевые возможности: точные `https` origins и типизированные контракты запросов/ответов. Runtime строит browser `connect-src` только из same-origin и exact origins manifest-ов закреплённых feature builds в dependency lock; wildcard, credentials и произвольные origins запрещены. Значение path может поступать из опубликованной модели Content только как относительный путь под одним из объявленных origins; вводимые значения не могут менять origin.

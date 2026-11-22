@@ -1,6 +1,33 @@
 # QA-отчёт
 
-## Текущий проход — durable Website build, prerender sandbox, integration и browser QA (2026-11-22)
+## Текущий проход — глобальные Forms, вложенные страницы Admin и публичный submit (2026-11-22)
+
+### Подтверждённые проверки
+
+- Изолированный стек `live-forms-20261122t220232z-0d0fb9` пересобран из этого checkout: `main` → `go build -tags=full ./cmd/zubrium`, Admin → `pnpm --filter @website-engine/admin build`. Live-процесс перезапущен на чистом (не `.debug`) binary; `verify-target.sh` повторно прошёл: рабочие порты свободны, PID 49267/49268 использует checkout binary и `live.yaml`, `/healthz` и `/readyz` отдают 204, build identity совпадает с ожидаемым.
+- Browser QA на verification-цели `127.0.0.1:49267`: список `/admin/forms` показывает все созданные формы; переход по строке открывает `/admin/forms/:formId`; `/admin/forms/new` открывает отдельную страницу создания; через неё создана третья форма `qa.third-form-20261122` (ID `19be8082-f1b7-4b31-ae7f-27209a9af721`), после сохранения выполнен редирект в редактор конкретной формы и новая запись появилась в списке. Ранее в этом же стеке подтверждены duplicate key error, публикация v1, отсутствие автообновления pinned-привязки и ручное обновление маршрутов до v2 через UI.
+- Публичный submit после исправления Router: `POST /forms/contact.qa-forms-2026` → 201 с cookie, затем `POST .../submit` с тем же cookie и `Idempotency-Key` → 201, receipt получен. Регрессия с exact-route, являющимся префиксом запроса, устранена; `TestFindMatchSkipsSiblingsThatArePrefixesOfTheRequest` зелёный.
+- Submissions: новая заявка после перезапуска получила корректный `form_key`; в Admin `/admin/submissions?form=...&key=contact.qa-forms-2026` она найдена, а `key=missing_field` даёт пустой список. Старая заявка, созданная до исправления, не содержит `form_key` и в фильтр по ключу не попадает — это ожидаемое поведение для исторических записей текущего изолированного стека.
+- Дополнительный battery публичных запросов на изолированном listener `49268` с `Host: forms.example.test`: `POST /forms/<key>` → 201 и cookie `Path=/; HttpOnly; SameSite=Strict; Max-Age=1799` (без `Secure`, стек HTTP), GET без cookie → 404, GET с cookie → 200, DELETE → 204 с cleared cookie `Max-Age=0`; `POST` с телом `{}` → 413 из-за `MaxRequestBytes: 1`; submit без валидного `Idempotency-Key` → 400, с ключом → 201, повтор с тем же ключом и телом → тот же receipt ID, с тем же ключом и другим телом → 409; upload PDF → 201 с `attachment_id`, повтор с тем же ключом → 200 и тот же ID, поле `message` или MIME `text/html` → 400, запрос без cookie → 404. Host `127.0.0.1:49268` отклоняется до обработки запроса (404). Все созданные заявки и файлы существуют только в disposable стеке.
+- Статические проверки после последних правок: `go test/vet/build ./...` по каждому из 19 модулей `go.work` с централизованным overlay — PASS; `go test -tags=full` OpenAPI parity `TestOpenAPIOperationsMatchRegisteredHTTPHandlers` — PASS; `make lint-core-boundary` — PASS; `git diff --check` — PASS.
+- Admin из `frontend/`: `pnpm --filter @website-engine/admin typecheck`, `test` (49 файлов, 241 тест) и `build` — PASS; ESLint по всем изменённым Admin-файлам с `--max-warnings=0` — PASS.
+
+### Найденные и исправленные дефекты текущего прохода
+
+- **Router `FindMatch`:** exact-route с путём, являющимся префиксом запроса, приводил к `ErrInvalid` вместо продолжения поиска; добавлен regression test.
+- **Forms submit:** при создании submission не сохранялся `form_key` из схемы, из-за чего фильтр заявок по ключу всегда возвращал пустой результат; ключ берётся из загруженной схемы сессии, добавлен assertions в `TestPublicFormSessionValidatesAndAcceptsImmutableSubmission`.
+- **Admin Forms:** страница `/forms/new` не имела явного creating-режима при прямом рендере; введён prop `creating`, а detail-страница выводит путь публикации по умолчанию и версию в описании.
+- **Admin Submissions:** поле фильтра называлось «Ключ значения» и не соответствовало контракту `key` (ключ формы); переименовано в «Ключ формы».
+- **Admin publication warnings:** `formPublicationWarnings` читал только плоский `schema_version`; для уже существующего `public.form-upload` с версией во вложенном `form` предупреждение отсутствовало. Добавлено извлечение binding по той же логике, что и в `routeSuggestions`, и regression-тест на stale nested binding.
+- **WEB-023 aggregation:** тест `TestManifestAcceptsRouteFormatStringArgument` не вызывался агрегатором `web023ABIAndManifestValidationAreStrict`; вызов добавлен, чтобы route-аргумент реально входил в acceptance-прогон.
+
+### Ограничения текущего прохода
+
+- Browser QA route-аргумента в site editor остаётся заблокированным: `GET /api/admin/features` в живом стеке возвращает `503 {"error":"unavailable"}` из fail-closed stub `engines/website/application/unavailable.go`; конфигурация `feature_import` каталог не чинит. UI-логика `format: "route"`/`source: "route"` проверена статическими тестами, но не реальным feature-каталогом.
+- E2E-ledger содержит только `E2E-PUB-001` и `E2E-RET-001`; глобальные формы, вложенные Admin-страницы, фильтр `form_key`, route-аргумент и host без порта покрыты Go/frontend-тестами и browser QA, но не являются отдельными исполняемыми E2E-сценариями.
+- Полный публичный E2E routing/publish, release checks и cybersecurity audit в этом проходе не запускались. Коммит и push в текущую ветку выполнены по запросу пользователя.
+
+## Ранее зафиксированный проход — durable Website build, prerender sandbox, integration и browser QA (2026-11-22)
 
 ### Подтверждённые проверки
 

@@ -14,8 +14,8 @@ import (
 
 const (
 	namespace = "forms/sessions"
-	scopeType = "visitor"
-	scopeID   = "public"
+	scopeType = "global"
+	scopeID   = "global"
 )
 
 type Store interface {
@@ -38,23 +38,16 @@ func New(store Store) (*Repository, error) {
 
 func TokenRecordKey(tokenHash string) string { return "visitor:" + tokenHash }
 
-func (repo *Repository) Get(ctx context.Context, snapshotID, tokenHash string) (model.Stored, error) {
+func (repo *Repository) Get(ctx context.Context, tokenHash string) (model.Stored, error) {
 	recordKey := TokenRecordKey(tokenHash)
 	record, err := repo.store.Get(ctx, dataKey(recordKey))
 	if err != nil {
 		return model.Stored{}, err
 	}
-	stored, err := decode(recordKey, record)
-	if err != nil {
-		return model.Stored{}, err
-	}
-	if stored.Session.SnapshotID != snapshotID {
-		return model.Stored{}, core.ErrModuleDataNotFound
-	}
-	return stored, nil
+	return decode(recordKey, record)
 }
 
-func (repo *Repository) Create(ctx context.Context, snapshotID, tokenHash string, session model.Session) (model.Stored, error) {
+func (repo *Repository) Create(ctx context.Context, tokenHash string, session model.Session) (model.Stored, error) {
 	value, err := encode(session)
 	if err != nil {
 		return model.Stored{}, err
@@ -67,7 +60,7 @@ func (repo *Repository) Create(ctx context.Context, snapshotID, tokenHash string
 	return decode(recordKey, record)
 }
 
-func (repo *Repository) Update(ctx context.Context, snapshotID string, stored model.Stored) (model.Stored, error) {
+func (repo *Repository) Update(ctx context.Context, stored model.Stored) (model.Stored, error) {
 	if stored.Revision < 1 || stored.RecordKey == "" {
 		return model.Stored{}, core.ErrModuleDataInvalid
 	}
@@ -82,11 +75,11 @@ func (repo *Repository) Update(ctx context.Context, snapshotID string, stored mo
 	return decode(stored.RecordKey, record)
 }
 
-func (repo *Repository) Delete(ctx context.Context, snapshotID string, stored model.Stored) error {
+func (repo *Repository) Delete(ctx context.Context, stored model.Stored) error {
 	return repo.store.Delete(ctx, dataKey(stored.RecordKey), stored.Revision)
 }
 
-func (repo *Repository) ListByForm(ctx context.Context, snapshotID, formID, after string, limit int) ([]model.Stored, string, error) {
+func (repo *Repository) ListByForm(ctx context.Context, formID, after string, limit int) ([]model.Stored, string, error) {
 	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, []core.ModuleDataSelector{{
 		Field: "form_id", Operator: core.SelectorEqual, Values: []any{formID},
 	}}, limit)
@@ -94,19 +87,10 @@ func (repo *Repository) ListByForm(ctx context.Context, snapshotID, formID, afte
 		return nil, "", err
 	}
 	items, err := decodePage(keys, records)
-	if err != nil {
-		return nil, "", err
-	}
-	filtered := make([]model.Stored, 0, len(items))
-	for _, item := range items {
-		if item.Session.SnapshotID == snapshotID {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered, next, nil
+	return items, next, err
 }
 
-func (repo *Repository) ListAll(ctx context.Context, snapshotID, after string, limit int) ([]model.Stored, string, error) {
+func (repo *Repository) ListAll(ctx context.Context, after string, limit int) ([]model.Stored, string, error) {
 	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, nil, limit)
 	if err != nil {
 		return nil, "", err
@@ -115,7 +99,7 @@ func (repo *Repository) ListAll(ctx context.Context, snapshotID, after string, l
 	return items, next, err
 }
 
-func (repo *Repository) ListExpired(ctx context.Context, snapshotID, after string, limit int) ([]model.Stored, string, error) {
+func (repo *Repository) ListExpired(ctx context.Context, after string, limit int) ([]model.Stored, string, error) {
 	keys, records, next, err := repo.store.ListExpired(ctx, namespace, scopeType, scopeID, after, limit)
 	if err != nil {
 		return nil, "", err
@@ -144,7 +128,7 @@ func dataKey(recordKey string) core.ModuleDataKey {
 }
 
 func encode(session model.Session) (core.ModuleDataValue, error) {
-	if session.ID == "" || session.SnapshotID == "" || session.FormID == "" || session.SchemaVersion < 1 || session.ExpiresAt.IsZero() || len(session.Uploads) > model.MaxUploadsPerSession {
+	if session.ID == "" || session.FormID == "" || session.SchemaVersion < 1 || session.ExpiresAt.IsZero() || len(session.Uploads) > model.MaxUploadsPerSession {
 		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
 	}
 	uploads := make([]sessionpkg.Upload, len(session.Uploads))
@@ -156,8 +140,8 @@ func encode(session model.Session) (core.ModuleDataValue, error) {
 			Deleting: upload.Deleting,
 		}
 	}
-	payload, err := json.Marshal(sessionpkg.PayloadV1{
-		ID: session.ID, SnapshotID: session.SnapshotID, FormID: session.FormID, SchemaVersion: session.SchemaVersion, State: session.State,
+	payload, err := json.Marshal(sessionpkg.PayloadV2{
+		ID: session.ID, FormID: session.FormID, SchemaVersion: session.SchemaVersion, State: session.State,
 		CreatedAt: session.CreatedAt.UTC(), ExpiresAt: session.ExpiresAt.UTC(), Uploads: uploads,
 		SubmissionID: session.SubmissionID, SubmissionKeyHash: session.SubmissionKeyHash,
 		SubmissionFingerprint: session.SubmissionFingerprint, UsedUploadIDs: append([]string(nil), session.UsedUploadIDs...),
@@ -168,7 +152,7 @@ func encode(session model.Session) (core.ModuleDataValue, error) {
 		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
 	}
 	index, err := json.Marshal(map[string]any{"form_id": session.FormID, "schema_version": session.SchemaVersion,
-		"snapshot_id": session.SnapshotID, "state": session.State})
+		"state": session.State})
 	if err != nil {
 		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
 	}
@@ -181,9 +165,9 @@ func decode(recordKey string, record core.ModuleDataRecord) (model.Stored, error
 	if record.PayloadVersion != sessionpkg.PayloadVersion || recordKey == "" {
 		return model.Stored{}, core.ErrModuleDataUnavailable
 	}
-	var payload sessionpkg.PayloadV1
+	var payload sessionpkg.PayloadV2
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
-	if err := decoder.Decode(&payload); err != nil || payload.ID == "" || payload.SnapshotID == "" || payload.FormID == "" || payload.SchemaVersion < 1 ||
+	if err := decoder.Decode(&payload); err != nil || payload.ID == "" || payload.FormID == "" || payload.SchemaVersion < 1 ||
 		(payload.State != model.StateActive && payload.State != model.StateSubmitting && payload.State != model.StateSubmitted && payload.State != model.StateCancelled) ||
 		payload.ExpiresAt.IsZero() || payload.CreatedAt.IsZero() {
 		return model.Stored{}, core.ErrModuleDataUnavailable
@@ -233,7 +217,7 @@ func decode(recordKey string, record core.ModuleDataRecord) (model.Stored, error
 		return model.Stored{}, core.ErrModuleDataUnavailable
 	}
 	return model.Stored{Session: model.Session{
-		ID: payload.ID, SnapshotID: payload.SnapshotID, FormID: payload.FormID, SchemaVersion: payload.SchemaVersion, State: payload.State,
+		ID: payload.ID, FormID: payload.FormID, SchemaVersion: payload.SchemaVersion, State: payload.State,
 		CreatedAt: payload.CreatedAt, ExpiresAt: payload.ExpiresAt, Uploads: uploads,
 		SubmissionID: payload.SubmissionID, SubmissionKeyHash: payload.SubmissionKeyHash,
 		SubmissionFingerprint: payload.SubmissionFingerprint, UsedUploadIDs: append([]string(nil), payload.UsedUploadIDs...),

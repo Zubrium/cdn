@@ -28,7 +28,6 @@ type RouteDraft = {
   maxBytes: string;
   allowedContentTypes: string[];
   bindForm: boolean;
-  snapshotID: string;
   formID: string;
   schemaVersion: number;
 };
@@ -44,7 +43,6 @@ const emptyDraft = (): RouteDraft => ({
   maxBytes: "",
   allowedContentTypes: [],
   bindForm: false,
-  snapshotID: "",
   formID: "",
   schemaVersion: 0,
 });
@@ -70,7 +68,7 @@ function targetDetails(target: RouterRouteTarget): string | null {
   if (target.kind !== "registered-operation") return null;
   const config = target.operation_config;
   const form = typeof config.form === "object" && config.form !== null ? config.form as Record<string, unknown> : config;
-  const binding = typeof form.snapshot_id === "string" && typeof form.form_id === "string"
+  const binding = typeof form.form_id === "string"
     ? ` · форма ${form.form_id} · схема v${typeof form.schema_version === "number" ? form.schema_version : "?"}`
     : "";
   if (target.operation_id === "public.form-session" || target.operation_id === "public.form-submit") return binding || null;
@@ -133,26 +131,24 @@ function RouteDialog({
   const submitOperation = operations.find((operation) => operation.id === "public.form-submit");
   const requiresFormBinding = draft.targetKind === "public.form-session" || draft.targetKind === "public.form-submit" ||
     (draft.targetKind === "public.form-upload" && draft.bindForm);
-  const validSnapshotID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(draft.snapshotID);
   const schemas = useInfiniteQuery({
-    queryKey: ["router", "forms", draft.snapshotID],
-    queryFn: ({ pageParam, signal }) => api.formsEngine.schemas(draft.snapshotID, pageParam ?? undefined, 100, signal),
+    queryKey: ["router", "forms"],
+    queryFn: ({ pageParam, signal }) => api.formsEngine.schemas(pageParam ?? undefined, 100, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
-    enabled: open && requiresFormBinding && validSnapshotID,
+    enabled: open && requiresFormBinding,
   });
   const formSchemas: FormSchema[] = useMemo(() => schemas.data?.pages.flatMap((page) => page.items) ?? [], [schemas.data]);
 
   const formBindingEditor = <div className="space-y-3 rounded-md border border-border p-3">
     <p className="text-xs leading-5 text-muted-foreground">Операция фиксирует форму и версию схемы на сервере. Посетитель не может выбрать другую форму.</p>
-    <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">ID снапшота</span><Input required maxLength={36} value={draft.snapshotID} onChange={(event) => { const snapshotID = event.currentTarget.value.trim(); setDraft((current) => ({ ...current, snapshotID, ...(snapshotID !== current.snapshotID ? { formID: "", schemaVersion: 0 } : {}) })); }} placeholder="UUID снапшота" /></label>
-    {validSnapshotID && schemas.isLoading && <p role="status" className="text-xs text-muted-foreground">Загружаем формы…</p>}
-    {validSnapshotID && schemas.error && <p role="status" className="text-xs text-muted-foreground">Список схем недоступен; ID формы и версию можно ввести вручную. <button type="button" className="underline underline-offset-2" onClick={() => void schemas.refetch()}>Повторить</button></p>}
+    {schemas.isLoading && <p role="status" className="text-xs text-muted-foreground">Загружаем формы…</p>}
+    {schemas.error && <p role="status" className="text-xs text-muted-foreground">Список схем недоступен; ID формы и версию можно ввести вручную. <button type="button" className="underline underline-offset-2" onClick={() => void schemas.refetch()}>Повторить</button></p>}
     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
       <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">UUID формы</span><Input required maxLength={36} value={draft.formID} onChange={(event) => setDraft((current) => ({ ...current, formID: event.currentTarget.value.trim() }))} placeholder="UUID формы" /></label>
       <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Версия схемы</span><Input type="number" min={1} step={1} required value={draft.schemaVersion || ""} onChange={(event) => setDraft((current) => ({ ...current, schemaVersion: Number(event.currentTarget.value) }))} /></label>
     </div>
-    <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">Выбрать из схем</span><select className="h-11 w-full rounded-md border border-input bg-background px-3" value={draft.formID ? `${draft.formID}:${draft.schemaVersion}` : ""} disabled={!validSnapshotID || schemas.isLoading} onChange={(event) => { const [formID, version] = event.currentTarget.value.split(":"); setDraft((current) => ({ ...current, formID, schemaVersion: Number(version) })); }}><option value="">Выберите доступную схему</option>{draft.formID && !formSchemas.some((schema) => schema.id === draft.formID && schema.version === draft.schemaVersion) && <option value={`${draft.formID}:${draft.schemaVersion}`}>{draft.formID} · v{draft.schemaVersion} · сохранённый маршрут</option>}{formSchemas.map((schema) => <option key={schema.id} value={`${schema.id}:${schema.version}`}>{schema.key} · v{schema.version}</option>)}</select></label>
+    <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">Выбрать из схем</span><select className="h-11 w-full rounded-md border border-input bg-background px-3" value={draft.formID ? `${draft.formID}:${draft.schemaVersion}` : ""} disabled={schemas.isLoading} onChange={(event) => { const [formID, version] = event.currentTarget.value.split(":"); setDraft((current) => ({ ...current, formID, schemaVersion: Number(version) })); }}><option value="">Выберите доступную схему</option>{draft.formID && !formSchemas.some((schema) => schema.id === draft.formID && schema.version === draft.schemaVersion) && <option value={`${draft.formID}:${draft.schemaVersion}`}>{draft.formID} · v{draft.schemaVersion} · сохранённый маршрут</option>}{formSchemas.map((schema) => <option key={schema.id} value={`${schema.id}:${schema.version}`}>{schema.key} · v{schema.version}</option>)}</select></label>
     {schemas.hasNextPage && <Button type="button" size="sm" variant="outline" loading={schemas.isFetchingNextPage} onClick={() => void schemas.fetchNextPage()}>Загрузить ещё формы</Button>}
   </div>;
 
@@ -170,7 +166,6 @@ function RouteDialog({
         const config = route.target.operation_config;
         base.targetKind = route.target.operation_id as RouteDraft["targetKind"];
         const form = typeof config.form === "object" && config.form !== null ? config.form as Record<string, unknown> : config;
-        base.snapshotID = typeof form.snapshot_id === "string" ? form.snapshot_id : "";
         base.formID = typeof form.form_id === "string" ? form.form_id : "";
         base.schemaVersion = typeof form.schema_version === "number" ? form.schema_version : 0;
         if (route.target.operation_id === "public.form-upload") {

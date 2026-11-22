@@ -12,7 +12,6 @@ const (
 
 type Session struct {
 	ID                     string
-	SnapshotID             string
 	FormID                 string
 	SchemaVersion          int64
 	State                  string

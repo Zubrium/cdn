@@ -18,7 +18,6 @@ paths:
       operationId: listFormSchemas
       x-required-group-level: { group: forms_schemas, level: 1 }
       parameters:
-        - { $ref: '#/components/parameters/SnapshotID' }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Limit' }
       responses:
@@ -44,7 +43,6 @@ paths:
       x-required-group-level: { group: forms_schemas, level: 1 }
       parameters:
         - { name: schemaID, in: path, required: true, schema: { type: string } }
-        - { $ref: '#/components/parameters/SnapshotID' }
       responses:
         '200': { description: Form schema., content: { application/json: { schema: { $ref: '#/components/schemas/Schema' } } } }
         '401': { $ref: '#/components/responses/Error' }
@@ -55,8 +53,8 @@ paths:
       operationId: listFormSubmissions
       x-required-group-level: { group: forms_submissions, level: 1 }
       parameters:
-        - { $ref: '#/components/parameters/SnapshotID' }
-        - { name: form_id, in: query, schema: { type: string } }
+        - { name: form_id, in: query, required: true, schema: { type: string } }
+        - { name: key, in: query, schema: { type: string, minLength: 1, maxLength: 128 } }
         - { name: state, in: query, schema: { type: string, maxLength: 64 } }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Limit' }
@@ -70,14 +68,14 @@ paths:
       operationId: exportFormSubmissions
       x-required-group-level: { group: forms_submissions, level: 1 }
       description: >-
-        Traverses accessible submissions with the same snapshot, form and state filters as the list endpoint.
+        Traverses accessible submissions with the same form, key and state filters as the list endpoint.
         Cursor pages are independent Core reads and do not form a transactional snapshot. The response is a complete
         UTF-8 CSV or an error; it never returns a partial export. Formula-like answer
         strings are prefixed with an apostrophe. Operator limits are configured with forms_api.export_max_concurrent,
         forms_api.export_max_rows and forms_api.export_max_bytes.
       parameters:
-        - { $ref: '#/components/parameters/SnapshotID' }
-        - { name: form_id, in: query, schema: { type: string } }
+        - { name: form_id, in: query, required: true, schema: { type: string } }
+        - { name: key, in: query, schema: { type: string, minLength: 1, maxLength: 128 } }
         - { name: state, in: query, schema: { type: string, maxLength: 64 } }
       responses:
         '200':
@@ -98,7 +96,6 @@ paths:
       x-required-group-level: { group: forms_submissions, level: 1 }
       parameters:
         - { name: submissionID, in: path, required: true, schema: { type: string } }
-        - { $ref: '#/components/parameters/SnapshotID' }
       responses:
         '200': { description: Submission with immutable answer values., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } } }
         '401': { $ref: '#/components/responses/Error' }
@@ -110,7 +107,6 @@ paths:
       x-csrf-required-for-cookie-auth: true
       parameters:
         - { name: submissionID, in: path, required: true, schema: { type: string } }
-        - { $ref: '#/components/parameters/SnapshotID' }
         - name: If-Match
           in: header
           required: true
@@ -130,7 +126,7 @@ paths:
       parameters: [{ name: submissionID, in: path, required: true, schema: { type: string } }]
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, additionalProperties: false, required: [snapshot_id, status, expected_revision], properties: { snapshot_id: { type: string }, status: { type: string, maxLength: 64 }, expected_revision: { type: integer, minimum: 1 } } } } }
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [status, expected_revision], properties: { status: { type: string, maxLength: 64 }, expected_revision: { type: integer, minimum: 1 } } } } }
       responses:
         '200': { description: Status changed; answer values remain immutable., headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } } }
         '400': { $ref: '#/components/responses/Error' }
@@ -142,7 +138,6 @@ components:
     AdminSession: { type: apiKey, in: cookie, name: zubrium_admin_session }
     BearerCredential: { type: http, scheme: bearer }
   parameters:
-    SnapshotID: { name: snapshot_id, in: query, required: true, schema: { type: string } }
     Cursor: { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
   schemas:
@@ -152,7 +147,7 @@ components:
       required: [id, key, version, fields, revision]
       properties:
         id: { type: string, format: uuid }
-        key: { type: string, minLength: 1, maxLength: 128, description: Stable schema key used by engine integrations. }
+        key: { type: string, minLength: 1, maxLength: 128, description: Globally unique stable schema key used by engine integrations. }
         version: { type: integer, minimum: 1 }
         fields:
           type: object
@@ -228,9 +223,8 @@ components:
     SaveSchema:
       type: object
       additionalProperties: false
-      required: [snapshot_id, key, fields, expected_revision]
+      required: [key, fields, expected_revision]
       properties:
-        snapshot_id: { type: string, format: uuid }
         schema_id: { type: string, format: uuid, minLength: 1 }
         key: { type: string, minLength: 1, maxLength: 128 }
         fields:

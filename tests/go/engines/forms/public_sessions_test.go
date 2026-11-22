@@ -14,7 +14,7 @@ func TestPublicFormSessionValidatesAndAcceptsImmutableSubmission(t *testing.T) {
 	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	admin := authenticatedContext(t, api)
 	schema, err := api.SaveSchema(admin, formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{
+		Key: "contact", Fields: map[string]any{
 			"email":   map[string]any{"type": "email", "required": true},
 			"message": map[string]any{"type": "text", "required": false, "max_length": 100},
 		},
@@ -24,20 +24,20 @@ func TestPublicFormSessionValidatesAndAcceptsImmutableSubmission(t *testing.T) {
 	}
 
 	created, err := api.CreateVisitorSession(context.Background(), formapi.CreateVisitorSessionRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 	})
 	if err != nil || created.Token == "" || created.Session.FormID != schema.ID || len(created.Session.Fields) != 2 {
 		t.Fatalf("CreateVisitorSession = %#v, %v", created, err)
 	}
 	resumed, err := api.GetVisitorSession(context.Background(), formapi.GetVisitorSessionRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version}, Token: created.Token,
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version}, Token: created.Token,
 	})
 	if err != nil || resumed.ID != created.Session.ID {
 		t.Fatalf("GetVisitorSession = %#v, %v", resumed, err)
 	}
 
 	submit := formapi.SubmitVisitorResponseRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 		Token:             created.Token, IdempotencyKey: "submission-key-0001",
 		Values: map[string]any{"email": "visitor@example.test", "message": "hello"},
 	}
@@ -54,22 +54,30 @@ func TestPublicFormSessionValidatesAndAcceptsImmutableSubmission(t *testing.T) {
 		t.Fatalf("changed body with same idempotency key = %v, want conflict", err)
 	}
 	if _, err := api.SubmitVisitorResponse(context.Background(), formapi.SubmitVisitorResponseRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 		Token:             created.Token, IdempotencyKey: "submission-key-0002", Values: submit.Values,
 	}); !errors.Is(err, formapi.ErrConflict) {
 		t.Fatalf("second accepted answer for a completed session = %v, want conflict", err)
 	}
 
-	page, err := api.ListSubmissions(admin, formapi.ListSubmissionsRequest{SnapshotID: "snapshot-a", FormID: schema.ID, Limit: 10})
+	page, err := api.ListSubmissions(admin, formapi.ListSubmissionsRequest{FormID: schema.ID, Limit: 10})
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != first.ID || page.Items[0].SchemaVersion != schema.Version {
 		t.Fatalf("accepted submission page = %#v, %v", page, err)
+	}
+	byKey, err := api.ListSubmissions(admin, formapi.ListSubmissionsRequest{FormID: schema.ID, Key: schema.Key, Limit: 10})
+	if err != nil || len(byKey.Items) != 1 || byKey.Items[0].ID != first.ID {
+		t.Fatalf("submission filtered by form key %q = %#v, %v", schema.Key, byKey, err)
+	}
+	wrongKey, err := api.ListSubmissions(admin, formapi.ListSubmissionsRequest{FormID: schema.ID, Key: "another-key", Limit: 10})
+	if err != nil || len(wrongKey.Items) != 0 {
+		t.Fatalf("submission filtered by another key = %#v, %v", wrongKey, err)
 	}
 }
 
 func TestPublicFormSessionCannotSubmitInvalidOrUnknownValues(t *testing.T) {
 	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	schema, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{
+		Key: "contact", Fields: map[string]any{
 			"email": map[string]any{"type": "email", "required": true},
 		},
 	})
@@ -77,7 +85,7 @@ func TestPublicFormSessionCannotSubmitInvalidOrUnknownValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, err := api.CreateVisitorSession(context.Background(), formapi.CreateVisitorSessionRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -88,14 +96,14 @@ func TestPublicFormSessionCannotSubmitInvalidOrUnknownValues(t *testing.T) {
 		{},
 	} {
 		_, err := api.SubmitVisitorResponse(context.Background(), formapi.SubmitVisitorResponseRequest{
-			PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+			PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 			Token:             session.Token, IdempotencyKey: "invalid-answer-0001", Values: values,
 		})
 		if !errors.Is(err, formapi.ErrInvalid) {
 			t.Fatalf("invalid values %#v = %v, want invalid request", values, err)
 		}
 	}
-	if page, err := api.ListSubmissions(authenticatedContext(t, api), formapi.ListSubmissionsRequest{SnapshotID: "snapshot-a", FormID: schema.ID, Limit: 10}); err != nil || len(page.Items) != 0 {
+	if page, err := api.ListSubmissions(authenticatedContext(t, api), formapi.ListSubmissionsRequest{FormID: schema.ID, Limit: 10}); err != nil || len(page.Items) != 0 {
 		t.Fatalf("invalid answers created submissions: page=%#v err=%v", page, err)
 	}
 }
@@ -103,7 +111,7 @@ func TestPublicFormSessionCannotSubmitInvalidOrUnknownValues(t *testing.T) {
 func TestCompletedUploadRetryRemainsSafeAfterItsFormWasSubmitted(t *testing.T) {
 	api, _, _, files := newEngine(t, core.AccessLevelWrite, nil)
 	schema, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "attachments", Fields: map[string]any{
+		Key: "attachments", Fields: map[string]any{
 			"document": map[string]any{"type": "file", "required": true, "max_files": 1, "max_file_bytes": 1024, "allowed_content_types": []any{"application/pdf"}},
 		},
 	})
@@ -111,13 +119,13 @@ func TestCompletedUploadRetryRemainsSafeAfterItsFormWasSubmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, err := api.CreateVisitorSession(context.Background(), formapi.CreateVisitorSessionRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := api.BeginVisitorUpload(context.Background(), formapi.BeginVisitorUploadRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 		Token:             session.Token, FieldID: "document", IdempotencyKey: "visitor-upload-key-001", ContentType: "application/pdf",
 		DeclaredSize: 3, RouteMaxBytes: 1024, RouteContentTypes: []string{"application/pdf"}, AccessGroup: "uploads",
 	})
@@ -130,7 +138,7 @@ func TestCompletedUploadRetryRemainsSafeAfterItsFormWasSubmitted(t *testing.T) {
 	files.files[fileID] = core.File{ID: fileID, Groups: []string{"uploads"}, ContentType: "application/pdf", SHA256: checksum, Revision: 1, Size: 3}
 	files.mu.Unlock()
 	complete := formapi.CompleteVisitorUploadRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 		Token:             session.Token, ReservationID: reservation.ID, FileID: fileID, SHA256: checksum,
 		ContentType: "application/pdf", Size: 3, AccessGroup: "uploads",
 	}
@@ -154,19 +162,19 @@ func TestPublicFormRouteVersionChangeRejectsExistingSession(t *testing.T) {
 	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	admin := authenticatedContext(t, api)
 	schema, err := api.SaveSchema(admin, formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}},
+		Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	session, err := api.CreateVisitorSession(context.Background(), formapi.CreateVisitorSessionRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	updated, err := api.SaveSchema(admin, formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", SchemaID: schema.ID, Key: schema.Key,
+		SchemaID: schema.ID, Key: schema.Key,
 		Fields:           map[string]any{"email": map[string]any{"type": "email", "required": true}, "name": map[string]any{"type": "text", "required": false}},
 		ExpectedRevision: schema.Revision,
 	})
@@ -174,7 +182,7 @@ func TestPublicFormRouteVersionChangeRejectsExistingSession(t *testing.T) {
 		t.Fatalf("schema update = %#v, %v", updated, err)
 	}
 	_, err = api.SubmitVisitorResponse(context.Background(), formapi.SubmitVisitorResponseRequest{
-		PublicFormBinding: formapi.PublicFormBinding{SnapshotID: "snapshot-a", FormID: schema.ID, SchemaVersion: schema.Version},
+		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
 		Token:             session.Token, IdempotencyKey: "stale-form-answer-01", Values: map[string]any{"email": "visitor@example.test"},
 	})
 	if !errors.Is(err, formapi.ErrExpired) {
@@ -191,7 +199,7 @@ func TestSchemaValidationRejectsUnsupportedAndUnsafeFieldDefinitions(t *testing.
 		{"upload": map[string]any{"type": "file", "required": false, "max_files": 1, "max_file_bytes": 1024, "allowed_content_types": []any{"text/html"}}},
 	} {
 		if _, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
-			SnapshotID: "snapshot-a", Key: "invalid", Fields: fields,
+			Key: "invalid", Fields: fields,
 		}); !errors.Is(err, formapi.ErrInvalid) {
 			t.Fatalf("invalid field schema %#v = %v, want invalid", fields, err)
 		}
@@ -204,7 +212,7 @@ func TestSchemaValidationRejectsUnsupportedAndUnsafeFieldDefinitions(t *testing.
 func TestSchemaAcceptsExplicitSupportedFieldTypesAndConstraints(t *testing.T) {
 	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
 	schema, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
-		SnapshotID: "snapshot-a", Key: "typed-contact", Fields: map[string]any{
+		Key: "typed-contact", Fields: map[string]any{
 			"name":       map[string]any{"type": "text", "required": true, "min_length": 2, "max_length": 80, "pattern": "^[A-Za-z ]+$"},
 			"email":      map[string]any{"type": "email", "required": true, "max_length": 120},
 			"age":        map[string]any{"type": "number", "required": false, "minimum": 18, "maximum": 120},

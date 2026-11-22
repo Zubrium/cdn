@@ -21,6 +21,18 @@ func TestABIOnlyAcceptsTheUnversionedName(t *testing.T) {
 	}
 }
 
+func TestManifestAcceptsRouteFormatStringArgument(t *testing.T) {
+	manifest := strings.Replace(string(mustValidManifest(t)), `"arguments": {"title": "text"}`,
+		`"arguments": {"target": {"type": "string", "format": "route"}}`, 1)
+	validated, err := runtime.ValidateManifest([]byte(manifest), featureFiles())
+	if err != nil {
+		t.Fatalf("format route argument was rejected: %v", err)
+	}
+	if _, ok := validated.Arguments["target"]; !ok {
+		t.Fatalf("route argument missing from validated manifest: %#v", validated.Arguments)
+	}
+}
+
 func TestManifestRejectsDuplicateUnknownAndSecretFields(t *testing.T) {
 	cases := map[string]string{
 		"duplicate key":      `{"formatVersion":2,"formatVersion":2}`,
@@ -62,6 +74,7 @@ func TestManifestValidatesAssetsOriginsAndSecretFreePublicContract(t *testing.T)
 
 func web023ABIAndManifestValidationAreStrict(t *testing.T) {
 	TestABIOnlyAcceptsTheUnversionedName(t)
+	TestManifestAcceptsRouteFormatStringArgument(t)
 	TestManifestRejectsDuplicateUnknownAndSecretFields(t)
 	TestManifestValidatesAssetsOriginsAndSecretFreePublicContract(t)
 	TestManifestDigestBindsImmutableBytes(t)

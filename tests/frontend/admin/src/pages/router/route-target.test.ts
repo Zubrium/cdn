@@ -51,17 +51,17 @@ describe("Router target builder", () => {
     const bound = {
       ...draft,
       bindForm: true,
-      snapshotID: "01938f7a-68af-7c10-a51d-78b6ca125301",
       formID: "01938f7a-68af-7c10-a51d-78b6ca125302",
       schemaVersion: 3,
     };
     expect(buildRouterTarget(bound, [uploadOperation])).toMatchObject({
       operation_id: "public.form-upload",
       operation_config: {
-        form: { enabled: true, snapshot_id: bound.snapshotID, form_id: bound.formID, schema_version: 3 },
+        form: { enabled: true, form_id: bound.formID, schema_version: 3 },
         file_set_id: bound.fileSetID,
       },
     });
+    expect(JSON.stringify(buildRouterTarget(bound, [uploadOperation]))).not.toContain("snapshot_id");
     expect(buildRouterTarget({ ...bound, fileSetID: "" }, [uploadOperation])).toBeNull();
   });
 
@@ -77,7 +77,6 @@ describe("Router target builder", () => {
       ...draft,
       targetKind: "public.form-session" as const,
       match: "exact" as const,
-      snapshotID: "01938f7a-68af-7c10-a51d-78b6ca125301",
       formID: "01938f7a-68af-7c10-a51d-78b6ca125302",
       schemaVersion: 1,
     };

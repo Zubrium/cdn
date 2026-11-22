@@ -90,7 +90,7 @@ func TestFixtureReadsRequireCurrentDirectGroupAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := denied.Forms.ListSchemas(deniedCtx, syntheticSnapshotID, "", 20); !errors.Is(err, forms.ErrForbidden) {
+	if _, err := denied.Forms.ListSchemas(deniedCtx, "", 20); !errors.Is(err, forms.ErrForbidden) {
 		t.Fatalf("missing group access was not denied: %v", err)
 	}
 }

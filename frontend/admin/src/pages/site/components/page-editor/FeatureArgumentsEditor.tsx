@@ -5,7 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/input";
 import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import { MediaPickerDialog } from "@/domains/media/MediaPickerDialog";
-import type { FeatureArgumentBinding, JsonValue, MediaRenditionContext } from "@/types";
+import type { FeatureArgumentBinding, FeatureArgumentRouteBinding, FormSchema, JsonValue, MediaRenditionContext } from "@/types";
+import type { FormRouteSuggestion } from "@/domains/forms/publication";
+import { staleFormBindingWarning } from "@/domains/forms/publication";
 import { appendSchemaPath, initialValue, pointerSegment, type SchemaField } from "./schema";
 
 export function addArgumentArrayItem(values: JsonValue[], itemSchema: SchemaField): JsonValue[] {
@@ -273,7 +275,54 @@ function MediaArgumentValue({ schema, value, label, required, controlID, describ
   </div>;
 }
 
-export function ArgumentField({ schema, argumentKey, binding, captures, required = false, onChange, preparation }: { schema: SchemaField; argumentKey: string; binding?: FeatureArgumentBinding; captures: string[]; required?: boolean; onChange: (binding?: FeatureArgumentBinding) => void; preparation?: MediaRenditionContext }) {
+function RouteArgumentEditor({ route, suggestions, formSchemas, onChange }: {
+  route?: FeatureArgumentRouteBinding;
+  suggestions: FormRouteSuggestion[];
+  formSchemas: FormSchema[];
+  onChange: (route?: FeatureArgumentRouteBinding) => void;
+}) {
+  const current = route ?? { mode: "path" as const, path: "" };
+  const hostId = useId();
+  const pathId = useId();
+  const suggestionValue = (suggestion: FormRouteSuggestion) => `${suggestion.host ? `${suggestion.host}|` : ""}${suggestion.path}`;
+  const selected = suggestions.find((suggestion) => suggestion.path === current.path && suggestion.host === current.host);
+  const warning = current.formId
+    ? staleFormBindingWarning(current.schemaVersion, formSchemas.find((schema) => schema.id === current.formId)?.version ?? current.schemaVersion ?? 1, selected !== undefined)
+    : null;
+  const setMode = (mode: "path" | "absolute") => onChange({
+    ...current,
+    mode,
+    ...(mode === "absolute" ? { host: current.host ?? "" } : {}),
+  });
+  return <div className="space-y-2 rounded-md border border-border p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <Label className="text-xs text-muted-foreground">Публичный маршрут</Label>
+      <select aria-label="Режим маршрута" className="min-h-11 rounded-md border border-input bg-background px-2 text-xs" value={current.mode} onChange={(event) => setMode(event.currentTarget.value as "path" | "absolute")}><option value="path">Относительный путь</option><option value="absolute">Абсолютный URL</option></select>
+    </div>
+    {suggestions.length > 0 && <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">Доступные публичные маршруты</Label>
+      <select aria-label="Доступные публичные маршруты" className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm" value={selected ? suggestionValue(selected) : ""} onChange={(event) => {
+        const suggestion = suggestions.find((item) => suggestionValue(item) === event.currentTarget.value);
+        if (!suggestion) return;
+        onChange({
+          mode: suggestion.host ? "absolute" : "path",
+          host: suggestion.host,
+          path: suggestion.path,
+          routeId: suggestion.id,
+          ...(suggestion.formId ? { formId: suggestion.formId } : {}),
+          ...(suggestion.schemaVersion !== undefined ? { schemaVersion: suggestion.schemaVersion } : {}),
+        });
+      }}><option value="">Ввести вручную</option>{suggestions.map((suggestion) => <option key={`${suggestion.id}-${suggestion.path}`} value={suggestionValue(suggestion)}>{suggestion.host ? `https://${suggestion.host}` : ""}{suggestion.path}{suggestion.operationId ? ` · ${suggestion.operationId}${suggestion.operationCompiled === false ? " · операция недоступна" : ""}` : ""}</option>)}</select>
+    </div>}
+    {current.mode === "absolute" && <div className="space-y-1"><Label htmlFor={hostId} className="text-xs text-muted-foreground">Host</Label><Input id={hostId} className="min-h-11" value={current.host ?? ""} onChange={(event) => onChange({ ...current, host: event.currentTarget.value })} placeholder="forms.example.com" /></div>}
+    <div className="space-y-1"><Label htmlFor={pathId} className="text-xs text-muted-foreground">Путь</Label><Input id={pathId} className="min-h-11" value={current.path} onChange={(event) => onChange({ ...current, path: event.currentTarget.value })} placeholder="/forms/contact" /></div>
+    <p className="text-xs text-muted-foreground">В конфигурацию снапшота попадёт строка: {current.mode === "path" ? current.path || "/…" : `https://${current.host || "host"}${current.path || "/…"}`}. Структура привязки остаётся только в редакторе.</p>
+    {warning && <p role="alert" className="text-xs text-warning">{warning}</p>}
+    {selected === undefined && suggestions.length > 0 && current.formId && <p role="note" className="text-xs text-muted-foreground">Маршрут не найден среди доступных — проверьте публикацию формы в Router.</p>}
+  </div>;
+}
+
+export function ArgumentField({ schema, argumentKey, binding, captures, required = false, onChange, preparation, routeSuggestions = [], formSchemas = [] }: { schema: SchemaField; argumentKey: string; binding?: FeatureArgumentBinding; captures: string[]; required?: boolean; onChange: (binding?: FeatureArgumentBinding) => void; preparation?: MediaRenditionContext; routeSuggestions?: FormRouteSuggestion[]; formSchemas?: FormSchema[] }) {
   const id = useId();
   const pathId = `${id}-path`;
   const queryId = `${id}-query`;
@@ -283,6 +332,7 @@ export function ArgumentField({ schema, argumentKey, binding, captures, required
   const value = binding?.source === "literal" ? binding.value : schema.default ?? initialValue(schema);
   const isPathScalar = ["string", "integer", "number", "boolean"].includes(schema.type ?? "") && captures.length > 0;
   const canUseQuery = schema.type !== "string" || schema.format !== "media" ? supportsQueryBinding(schema) : false;
+  const canUseRoute = schema.type === "string" && schema.format === "route";
   const hasStalePath = binding?.source === "path" && (!captures.includes(binding.pathArg ?? "") || !isPathScalar);
   const hasStaleQuery = binding?.source === "query" && !canUseQuery;
   const emptyQueryKey = binding?.source === "query" && !binding.queryKey?.trim();
@@ -295,14 +345,16 @@ export function ArgumentField({ schema, argumentKey, binding, captures, required
       const next = event.currentTarget.value;
       if (next === "path") onChange({ source: "path", pathArg: captures[0] });
       else if (next === "query") onChange({ source: "query", queryKey: name } as FeatureArgumentBinding);
+      else if (next === "route") onChange({ source: "route", route: { mode: "path", path: "" } });
       else onChange({ source: "literal", value: schema.default ?? initialValue(schema) });
-    }}><option value="literal">Постоянное</option>{(isPathScalar || hasStalePath) && <option value="path">{hasStalePath ? "Из пути · параметр недоступен" : "Из пути"}</option>}{(canUseQuery || hasStaleQuery) && <option value="query">{hasStaleQuery ? "Из query · тип больше не поддерживается" : "Из query"}</option>}</select>}</div>
+    }}><option value="literal">Постоянное</option>{(isPathScalar || hasStalePath) && <option value="path">{hasStalePath ? "Из пути · параметр недоступен" : "Из пути"}</option>}{(canUseQuery || hasStaleQuery) && <option value="query">{hasStaleQuery ? "Из query · тип больше не поддерживается" : "Из query"}</option>}{canUseRoute && <option value="route">Из маршрута</option>}</select>}</div>
     {source === "path" && <div className="space-y-1"><Label htmlFor={pathId} className="text-xs text-muted-foreground">Параметр пути</Label><select id={pathId} aria-invalid={hasStalePath} aria-describedby={[schema.description ? descriptionId : undefined, hasStalePath ? `${pathId}-error` : undefined].filter(Boolean).join(" ") || undefined} className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm" value={binding?.source === "path" ? binding.pathArg : captures[0] ?? ""} onChange={(event) => onChange({ source: "path", pathArg: event.currentTarget.value })}>
       {!captures.length && <option value="">Нет параметров пути</option>}
       {hasStalePath && <option value={binding?.source === "path" ? binding.pathArg : ""} disabled>{binding?.source === "path" ? `${binding.pathArg} · маршрут недоступен` : "Параметр маршрута недоступен"}</option>}
       {captures.map((capture) => <option key={capture} value={capture}>{capture}</option>)}
     </select>{hasStalePath && <p id={`${pathId}-error`} role="alert" className="text-xs text-warning">Сохранённый параметр пути больше не доступен для страницы. Выберите другой источник или постоянное значение.</p>}</div>}
     {source === "query" && <div className="space-y-1"><Label htmlFor={queryId} className="text-xs text-muted-foreground">Ключ query-строки</Label><Input id={queryId} aria-invalid={emptyQueryKey} aria-describedby={[schema.description ? descriptionId : undefined, emptyQueryKey ? `${queryId}-error` : undefined].filter(Boolean).join(" ") || undefined} className="min-h-11" value={binding?.source === "query" ? binding.queryKey : name} onChange={(event) => onChange({ source: "query", queryKey: event.currentTarget.value })} placeholder="page" />{emptyQueryKey && <p id={`${queryId}-error`} role="alert" className="text-xs text-warning">Укажите имя query-параметра.</p>}{required && <p className="text-xs text-muted-foreground">Если параметр отсутствует в URL, обязательный аргумент не будет передан и страница не пройдёт проверку.</p>}</div>}
+    {source === "route" && <RouteArgumentEditor route={binding?.source === "route" ? binding.route : undefined} suggestions={routeSuggestions} formSchemas={formSchemas} onChange={(route) => onChange({ source: "route", ...(route ? { route } : {}) })} />}
     {hasStaleQuery && <p role="alert" className="text-xs text-warning">Тип аргумента изменился и больше не может быть заполнен query-параметром. Выберите постоянное значение.</p>}
     {hasStaleMediaSource && <p role="alert" className="text-xs text-warning">Аргумент медиа больше нельзя брать из маршрута или query. Выберите существующий файл, чтобы заменить старую связь.</p>}
     {source === "literal" && <ArgumentValueEditor schema={schema} value={value} label={name} required={required} argumentPath={rootPath} preparation={preparation ? { ...preparation, fieldPath: rootPath } : undefined} onChange={literalChange} />}
@@ -424,12 +476,14 @@ function ArgumentValueEditor({ schema, value, label, required, argumentPath, pre
 
 
 
-export function FeatureArgumentsEditor({ fields, requiredKeys, arguments: bindings, captures, preparation, onChange }: {
+export function FeatureArgumentsEditor({ fields, requiredKeys, arguments: bindings, captures, preparation, routeSuggestions = [], formSchemas = [], onChange }: {
   fields: Record<string, SchemaField>;
   requiredKeys: ReadonlySet<string>;
   arguments?: Record<string, FeatureArgumentBinding>;
   captures: string[];
   preparation?: Omit<MediaRenditionContext, "fieldPath">;
+  routeSuggestions?: FormRouteSuggestion[];
+  formSchemas?: FormSchema[];
   onChange: (key: string, binding?: FeatureArgumentBinding) => void;
 }) {
   return <fieldset className="space-y-2 border-t border-border pt-3">
@@ -441,6 +495,8 @@ export function FeatureArgumentsEditor({ fields, requiredKeys, arguments: bindin
       required={requiredKeys.has(key)}
       binding={bindings?.[key]}
       captures={captures}
+      routeSuggestions={routeSuggestions}
+      formSchemas={formSchemas}
       onChange={(binding) => onChange(key, binding)}
       preparation={preparation ? { ...preparation, fieldPath: `/${pointerSegment(key)}` } : undefined}
     />)}

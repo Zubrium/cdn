@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const ContentHomePage = lazy(() => import("@/pages/content/ContentHomePage"));
 const SubmissionsPage = lazy(() => import("@/pages/submissions/SubmissionsPage"));
 const FormsPage = lazy(() => import("@/pages/forms/FormsPage"));
+const FormDetailPage = lazy(() => import("@/pages/forms/FormDetailPage"));
 const MediaPage = lazy(() => import("@/pages/media/MediaPage"));
 const AccessLayout = lazy(() => import("@/pages/access/AccessLayout"));
 const UsersPage = lazy(() => import("@/pages/access/UsersPage"));
@@ -142,7 +143,11 @@ export const router = createBrowserRouter(
             ] },
             { path: "submissions", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
             { path: "submissions/:submissionId", element: <RequireGroup group="forms_submissions"><SubmissionsPage /></RequireGroup> },
-            { path: "forms", element: <RequireGroup group="forms_schemas"><FormsPage /></RequireGroup> },
+            { path: "forms", element: <RequireGroup group="forms_schemas" />, children: [
+              { index: true, element: <FormsPage /> },
+              { path: "new", element: <FormDetailPage creating /> },
+              { path: ":formId", element: <FormDetailPage /> },
+            ] },
             { path: "media", element: <RequireAnyGroup><MediaPage /></RequireAnyGroup> },
             { path: "coordinator/workflows", element: <RequireGroup group="coordinator_jobs"><CoordinatorWorkflowsPage /></RequireGroup> },
             { path: "coordinator/workflows/:workflowId", element: <RequireGroup group="coordinator_jobs"><CoordinatorWorkflowsPage /></RequireGroup> },

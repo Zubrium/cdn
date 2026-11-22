@@ -32,12 +32,12 @@ var (
 )
 
 type Schemas interface {
-	Get(context.Context, string, string) (schemamodel.Schema, int64, error)
+	Get(context.Context, string) (schemamodel.Schema, int64, error)
 }
 
 type Submissions interface {
-	Get(context.Context, string, string) (submissionmodel.Submission, int64, error)
-	CreateAccepted(context.Context, string, submissionapp.CreateInput) (submissionmodel.Submission, int64, error)
+	Get(context.Context, string) (submissionmodel.Submission, int64, error)
+	CreateAccepted(context.Context, submissionapp.CreateInput) (submissionmodel.Submission, int64, error)
 }
 
 type Files interface {
@@ -63,7 +63,6 @@ func New(repo *repository.Repository, schemas Schemas, submissions Submissions, 
 }
 
 type Binding struct {
-	SnapshotID    string
 	FormID        string
 	SchemaVersion int64
 }
@@ -160,9 +159,9 @@ func (service *Service) Create(ctx context.Context, binding Binding) (Credential
 		return Credential{}, core.ErrModuleDataUnavailable
 	}
 	now := time.Now().UTC()
-	entry := model.Session{ID: id, SnapshotID: binding.SnapshotID, FormID: binding.FormID, SchemaVersion: binding.SchemaVersion,
+	entry := model.Session{ID: id, FormID: binding.FormID, SchemaVersion: binding.SchemaVersion,
 		State: model.StateActive, CreatedAt: now, ExpiresAt: now.Add(service.ttl), Uploads: []model.Upload{}}
-	stored, err := service.repository.Create(ctx, binding.SnapshotID, tokenHash, entry)
+	stored, err := service.repository.Create(ctx, tokenHash, entry)
 	if err != nil {
 		return Credential{}, mapStoreError(err)
 	}
@@ -245,7 +244,7 @@ func (service *Service) BeginUpload(ctx context.Context, input BeginUploadInput)
 		upload := model.Upload{ID: id, FieldID: input.FieldID, IdempotencyHash: keyHash, ContentType: mediaType,
 			DeclaredSize: input.DeclaredSize, MaxBytes: maxBytes, AccessGroup: input.AccessGroup}
 		stored.Session.Uploads = append(stored.Session.Uploads, upload)
-		updated, err := service.repository.Update(ctx, input.Binding.SnapshotID, stored)
+		updated, err := service.repository.Update(ctx, stored)
 		if errors.Is(err, core.ErrModuleDataConflict) {
 			continue
 		}
@@ -317,7 +316,7 @@ func (service *Service) CompleteUpload(ctx context.Context, input CompleteUpload
 		stored.Session.Uploads[index].SHA256 = input.SHA256
 		stored.Session.Uploads[index].Size = input.Size
 		stored.Session.Uploads[index].Completed = true
-		_, err = service.repository.Update(ctx, input.Binding.SnapshotID, stored)
+		_, err = service.repository.Update(ctx, stored)
 		if errors.Is(err, core.ErrModuleDataConflict) {
 			continue
 		}
@@ -349,7 +348,7 @@ func (service *Service) AbortUpload(ctx context.Context, input AbortUploadInput)
 		upload := stored.Session.Uploads[index]
 		if upload.Completed && !upload.Deleting {
 			stored.Session.Uploads[index].Deleting = true
-			if _, err := service.repository.Update(ctx, input.Binding.SnapshotID, stored); errors.Is(err, core.ErrModuleDataConflict) {
+			if _, err := service.repository.Update(ctx, stored); errors.Is(err, core.ErrModuleDataConflict) {
 				continue
 			} else if err != nil {
 				return mapStoreError(err)
@@ -362,7 +361,7 @@ func (service *Service) AbortUpload(ctx context.Context, input AbortUploadInput)
 			}
 		}
 		stored.Session.Uploads = append(stored.Session.Uploads[:index], stored.Session.Uploads[index+1:]...)
-		_, err = service.repository.Update(ctx, input.Binding.SnapshotID, stored)
+		_, err = service.repository.Update(ctx, stored)
 		if errors.Is(err, core.ErrModuleDataConflict) {
 			continue
 		}
@@ -395,7 +394,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt,
 					return Receipt{}, err
 				}
 			}
-			submission, _, err := service.submissions.Get(ctx, input.Binding.SnapshotID, stored.Session.SubmissionID)
+			submission, _, err := service.submissions.Get(ctx, stored.Session.SubmissionID)
 			if err != nil {
 				return Receipt{}, mapStoreError(err)
 			}
@@ -416,7 +415,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt,
 		stored.Session.SubmissionAttachments = append([]string(nil), fileIDs...)
 		stored.Session.SubmissionCreatedAt = time.Now().UTC()
 		stored.Session.UsedUploadIDs = append([]string(nil), usedUploads...)
-		reserved, err := service.repository.Update(ctx, input.Binding.SnapshotID, stored)
+		reserved, err := service.repository.Update(ctx, stored)
 		if errors.Is(err, core.ErrModuleDataConflict) {
 			continue
 		}
@@ -427,7 +426,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt,
 		if err != nil {
 			return Receipt{}, err
 		}
-		submission, _, err := service.submissions.Get(ctx, input.Binding.SnapshotID, reserved.Session.SubmissionID)
+		submission, _, err := service.submissions.Get(ctx, reserved.Session.SubmissionID)
 		if err != nil {
 			return Receipt{}, mapStoreError(err)
 		}
@@ -447,8 +446,12 @@ func (service *Service) finishSubmission(ctx context.Context, tokenHash string, 
 		if stored.Session.State != model.StateSubmitting {
 			return model.Stored{}, core.ErrModuleDataConflict
 		}
-		submission, _, err := service.submissions.CreateAccepted(ctx, stored.Session.SnapshotID, submissionapp.CreateInput{
-			ID: stored.Session.SubmissionID, FormID: stored.Session.FormID, SchemaVersion: stored.Session.SchemaVersion,
+		schema, _, err := service.schemas.Get(ctx, stored.Session.FormID)
+		if err != nil {
+			return model.Stored{}, mapStoreError(err)
+		}
+		submission, _, err := service.submissions.CreateAccepted(ctx, submissionapp.CreateInput{
+			ID: stored.Session.SubmissionID, FormID: stored.Session.FormID, FormKey: schema.Key, SchemaVersion: stored.Session.SchemaVersion,
 			Values: stored.Session.SubmissionValues, Attachments: stored.Session.SubmissionAttachments,
 			IdempotencyKeyHash: stored.Session.SubmissionKeyHash, IdempotencyFingerprint: stored.Session.SubmissionFingerprint,
 			CreatedAt: stored.Session.SubmissionCreatedAt,
@@ -460,14 +463,14 @@ func (service *Service) finishSubmission(ctx context.Context, tokenHash string, 
 			return model.Stored{}, core.ErrModuleDataUnavailable
 		}
 		stored.Session.State = model.StateSubmitted
-		updated, err := service.repository.Update(ctx, stored.Session.SnapshotID, stored)
+		updated, err := service.repository.Update(ctx, stored)
 		if err == nil {
 			return updated, nil
 		}
 		if !errors.Is(err, core.ErrModuleDataConflict) {
 			return model.Stored{}, mapStoreError(err)
 		}
-		stored, err = service.repository.Get(ctx, stored.Session.SnapshotID, tokenHash)
+		stored, err = service.repository.Get(ctx, tokenHash)
 		if err != nil {
 			return model.Stored{}, mapStoreError(err)
 		}
@@ -491,7 +494,7 @@ func (service *Service) Cancel(ctx context.Context, binding Binding, token strin
 			return service.cleanupSession(ctx, stored)
 		}
 		stored.Session.State = model.StateCancelled
-		updated, err := service.repository.Update(ctx, binding.SnapshotID, stored)
+		updated, err := service.repository.Update(ctx, stored)
 		if errors.Is(err, core.ErrModuleDataConflict) {
 			continue
 		}
@@ -503,13 +506,13 @@ func (service *Service) Cancel(ctx context.Context, binding Binding, token strin
 	return core.ErrModuleDataConflict
 }
 
-func (service *Service) CancelFormSessions(ctx context.Context, snapshotID, formID string, currentVersion int64) error {
-	if service == nil || ctx == nil || !validIdentifier(snapshotID) || !validIdentifier(formID) || currentVersion < 1 {
+func (service *Service) CancelFormSessions(ctx context.Context, formID string, currentVersion int64) error {
+	if service == nil || ctx == nil || !validIdentifier(formID) || currentVersion < 1 {
 		return core.ErrModuleDataInvalid
 	}
 	after := ""
 	for {
-		items, next, err := service.repository.ListByForm(ctx, snapshotID, formID, after, service.pageSize)
+		items, next, err := service.repository.ListByForm(ctx, formID, after, service.pageSize)
 		if err != nil {
 			return mapStoreError(err)
 		}
@@ -518,7 +521,7 @@ func (service *Service) CancelFormSessions(ctx context.Context, snapshotID, form
 				continue
 			}
 			item.Session.State = model.StateCancelled
-			updated, err := service.repository.Update(ctx, snapshotID, item)
+			updated, err := service.repository.Update(ctx, item)
 			if errors.Is(err, core.ErrModuleDataConflict) {
 				continue
 			}
@@ -544,7 +547,7 @@ func (service *Service) Cleanup(ctx context.Context) error {
 	}
 	after := ""
 	for {
-		items, next, err := service.repository.ListAll(ctx, "", after, service.pageSize)
+		items, next, err := service.repository.ListAll(ctx, after, service.pageSize)
 		if err != nil {
 			return mapStoreError(err)
 		}
@@ -571,7 +574,7 @@ func (service *Service) Cleanup(ctx context.Context) error {
 				if err := service.cleanupDeletingUploads(ctx, tokenHashFromRecord(item), item); err != nil {
 					return err
 				}
-				item, err = service.repository.Get(ctx, item.Session.SnapshotID, tokenHashFromRecord(item))
+				item, err = service.repository.Get(ctx, tokenHashFromRecord(item))
 				if errors.Is(err, core.ErrModuleDataNotFound) {
 					continue
 				}
@@ -581,7 +584,7 @@ func (service *Service) Cleanup(ctx context.Context) error {
 				if item.Session.State != model.StateActive {
 					continue
 				}
-				schema, _, err := service.schemas.Get(ctx, item.Session.SnapshotID, item.Session.FormID)
+				schema, _, err := service.schemas.Get(ctx, item.Session.FormID)
 				if errors.Is(err, core.ErrModuleDataNotFound) || (err == nil && schema.Version != item.Session.SchemaVersion) {
 					if err := service.cancelActiveSession(ctx, item); err != nil {
 						return err
@@ -618,14 +621,14 @@ func (service *Service) cancelActiveSession(ctx context.Context, stored model.St
 			}
 		}
 		stored.Session.State = model.StateCancelled
-		updated, err := service.repository.Update(ctx, stored.Session.SnapshotID, stored)
+		updated, err := service.repository.Update(ctx, stored)
 		if err == nil {
 			return service.cleanupSession(ctx, updated)
 		}
 		if !errors.Is(err, core.ErrModuleDataConflict) {
 			return mapStoreError(err)
 		}
-		stored, err = service.repository.Get(ctx, stored.Session.SnapshotID, tokenHash)
+		stored, err = service.repository.Get(ctx, tokenHash)
 		if err != nil {
 			if errors.Is(err, core.ErrModuleDataNotFound) {
 				return nil
@@ -652,7 +655,7 @@ func (service *Service) cleanupDeletingUploads(ctx context.Context, tokenHash st
 			return err
 		}
 		for attempt := 0; attempt < 8; attempt++ {
-			current, err := service.repository.Get(ctx, stored.Session.SnapshotID, tokenHash)
+			current, err := service.repository.Get(ctx, tokenHash)
 			if errors.Is(err, core.ErrModuleDataNotFound) {
 				return nil
 			}
@@ -667,7 +670,7 @@ func (service *Service) cleanupDeletingUploads(ctx context.Context, tokenHash st
 				break
 			}
 			current.Session.Uploads = append(current.Session.Uploads[:index], current.Session.Uploads[index+1:]...)
-			_, err = service.repository.Update(ctx, current.Session.SnapshotID, current)
+			_, err = service.repository.Update(ctx, current)
 			if err == nil {
 				break
 			}
@@ -820,14 +823,14 @@ func (service *Service) load(ctx context.Context, binding Binding, token string,
 
 func (service *Service) loadByHash(ctx context.Context, binding Binding, tokenHash string, requireActive bool) (model.Stored, schemamodel.Schema, error) {
 	for attempt := 0; attempt < 8; attempt++ {
-		stored, err := service.repository.Get(ctx, binding.SnapshotID, tokenHash)
+		stored, err := service.repository.Get(ctx, tokenHash)
 		if errors.Is(err, core.ErrModuleDataNotFound) {
 			return model.Stored{}, schemamodel.Schema{}, ErrExpired
 		}
 		if err != nil {
 			return model.Stored{}, schemamodel.Schema{}, mapStoreError(err)
 		}
-		if stored.Session.SnapshotID != binding.SnapshotID || stored.Session.FormID != binding.FormID || stored.Session.SchemaVersion != binding.SchemaVersion {
+		if stored.Session.FormID != binding.FormID || stored.Session.SchemaVersion != binding.SchemaVersion {
 			return model.Stored{}, schemamodel.Schema{}, ErrMismatch
 		}
 		if stored.Session.State == model.StateSubmitting {
@@ -880,7 +883,7 @@ func (service *Service) loadByHash(ctx context.Context, binding Binding, tokenHa
 }
 
 func (service *Service) currentSchema(ctx context.Context, binding Binding) (schemamodel.Schema, int64, error) {
-	schema, revision, err := service.schemas.Get(ctx, binding.SnapshotID, binding.FormID)
+	schema, revision, err := service.schemas.Get(ctx, binding.FormID)
 	if err != nil {
 		return schemamodel.Schema{}, 0, err
 	}
@@ -926,7 +929,7 @@ func (service *Service) cleanupSession(ctx context.Context, stored model.Stored)
 			return err
 		}
 	}
-	if err := service.repository.Delete(ctx, stored.Session.SnapshotID, stored); err != nil && !errors.Is(err, core.ErrModuleDataNotFound) {
+	if err := service.repository.Delete(ctx, stored); err != nil && !errors.Is(err, core.ErrModuleDataNotFound) {
 		return mapStoreError(err)
 	}
 	return nil
@@ -953,7 +956,7 @@ func (service *Service) deleteFile(ctx context.Context, id string) error {
 }
 
 func validBinding(binding Binding) bool {
-	return validIdentifier(binding.SnapshotID) && validIdentifier(binding.FormID) && binding.SchemaVersion > 0
+	return validIdentifier(binding.FormID) && binding.SchemaVersion > 0
 }
 
 func validIdentifier(value string) bool {

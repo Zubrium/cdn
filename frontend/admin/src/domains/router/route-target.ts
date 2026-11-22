@@ -9,7 +9,6 @@ export interface RouterTargetDraft {
   maxBytes: string;
   allowedContentTypes: string[];
   bindForm?: boolean;
-  snapshotID?: string;
   formID?: string;
   schemaVersion?: number;
 }
@@ -17,8 +16,8 @@ export interface RouterTargetDraft {
 function formBinding(draft: RouterTargetDraft): Record<string, unknown> | null {
   const version = draft.schemaVersion;
   const canonicalUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-  if (!canonicalUUID.test(draft.snapshotID ?? "") || !canonicalUUID.test(draft.formID ?? "") || !Number.isSafeInteger(version) || Number(version) < 1) return null;
-  return { enabled: true, snapshot_id: draft.snapshotID, form_id: draft.formID, schema_version: version };
+  if (!canonicalUUID.test(draft.formID ?? "") || !Number.isSafeInteger(version) || Number(version) < 1) return null;
+  return { enabled: true, form_id: draft.formID, schema_version: version };
 }
 
 export function buildRouterTarget(draft: RouterTargetDraft, operations: RouterPublicOperation[] = []): RouterRouteTarget | null {

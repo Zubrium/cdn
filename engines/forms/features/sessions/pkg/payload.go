@@ -2,26 +2,47 @@ package pkg
 
 import "time"
 
-const PayloadVersion = 1
+// PayloadV2 is the global-scope visitor session. Version 1 remains declared
+// for the historical snapshot-scoped format; no migration or upcaster exists.
+const PayloadVersion = 2
 
 // PayloadV1 stores one resumable visitor session; only the digest of its
 // bearer token is included in the record key.
 type PayloadV1 struct {
-	ID                    string    `json:"id"`
-	SnapshotID            string    `json:"snapshot_id"`
-	FormID                string    `json:"form_id"`
-	SchemaVersion         int64     `json:"schema_version"`
-	State                 string    `json:"state"`
-	CreatedAt             time.Time `json:"created_at"`
-	ExpiresAt             time.Time `json:"expires_at"`
-	Uploads               []Upload  `json:"uploads"`
-	SubmissionID          string    `json:"submission_id,omitempty"`
-	SubmissionKeyHash     string    `json:"submission_key_hash,omitempty"`
-	SubmissionFingerprint string    `json:"submission_fingerprint,omitempty"`
+	ID                    string         `json:"id"`
+	SnapshotID            string         `json:"snapshot_id"`
+	FormID                string         `json:"form_id"`
+	SchemaVersion         int64          `json:"schema_version"`
+	State                 string         `json:"state"`
+	CreatedAt             time.Time      `json:"created_at"`
+	ExpiresAt             time.Time      `json:"expires_at"`
+	Uploads               []Upload       `json:"uploads"`
+	SubmissionID          string         `json:"submission_id,omitempty"`
+	SubmissionKeyHash     string         `json:"submission_key_hash,omitempty"`
+	SubmissionFingerprint string         `json:"submission_fingerprint,omitempty"`
 	SubmissionValues      map[string]any `json:"submission_values,omitempty"`
-	SubmissionAttachments []string  `json:"submission_attachments,omitempty"`
-	SubmissionCreatedAt   time.Time `json:"submission_created_at,omitempty"`
-	UsedUploadIDs         []string  `json:"used_upload_ids,omitempty"`
+	SubmissionAttachments []string       `json:"submission_attachments,omitempty"`
+	SubmissionCreatedAt   time.Time      `json:"submission_created_at,omitempty"`
+	UsedUploadIDs         []string       `json:"used_upload_ids,omitempty"`
+}
+
+// PayloadV2 stores one global-scope visitor session bound to form_id and the
+// exact schema version. Old snapshot-scoped records are never migrated.
+type PayloadV2 struct {
+	ID                    string         `json:"id"`
+	FormID                string         `json:"form_id"`
+	SchemaVersion         int64          `json:"schema_version"`
+	State                 string         `json:"state"`
+	CreatedAt             time.Time      `json:"created_at"`
+	ExpiresAt             time.Time      `json:"expires_at"`
+	Uploads               []Upload       `json:"uploads"`
+	SubmissionID          string         `json:"submission_id,omitempty"`
+	SubmissionKeyHash     string         `json:"submission_key_hash,omitempty"`
+	SubmissionFingerprint string         `json:"submission_fingerprint,omitempty"`
+	SubmissionValues      map[string]any `json:"submission_values,omitempty"`
+	SubmissionAttachments []string       `json:"submission_attachments,omitempty"`
+	SubmissionCreatedAt   time.Time      `json:"submission_created_at,omitempty"`
+	UsedUploadIDs         []string       `json:"used_upload_ids,omitempty"`
 }
 
 type Upload struct {

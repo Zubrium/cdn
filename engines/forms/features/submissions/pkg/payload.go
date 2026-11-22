@@ -8,6 +8,7 @@ const PayloadVersion = 1
 type PayloadV1 struct {
 	ID                        string         `json:"id"`
 	FormID                    string         `json:"form_id"`
+	FormKey                   string         `json:"form_key,omitempty"`
 	SchemaVersion             int64          `json:"schema_version"`
 	State                     string         `json:"state"`
 	Values                    map[string]any `json:"values"`

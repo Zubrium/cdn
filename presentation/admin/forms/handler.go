@@ -74,8 +74,8 @@ func (h *Handler) listSchemas(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id", "cursor", "limit")
-	if !valid || !validID(query["snapshot_id"]) || len(query["cursor"]) > 1024 {
+	query, valid := readQuery(r, "cursor", "limit")
+	if !valid || len(query["cursor"]) > 1024 {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -84,7 +84,7 @@ func (h *Handler) listSchemas(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.api.ListSchemas(ctx, query["snapshot_id"], query["cursor"], limit)
+	page, err := h.api.ListSchemas(ctx, query["cursor"], limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -97,13 +97,13 @@ func (h *Handler) getSchema(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id")
+	_, valid := readQuery(r)
 	schemaID := r.PathValue("schemaID")
-	if !valid || !validID(query["snapshot_id"]) || !validID(schemaID) {
+	if !valid || !validID(schemaID) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	schema, err := h.api.GetSchema(ctx, query["snapshot_id"], schemaID)
+	schema, err := h.api.GetSchema(ctx, schemaID)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -121,7 +121,7 @@ func (h *Handler) saveSchema(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
-	if !validID(request.SnapshotID) || (request.SchemaID != "" && !validID(request.SchemaID)) || !validText(request.Key, 128) ||
+	if (request.SchemaID != "" && !validID(request.SchemaID)) || !validText(request.Key, 128) ||
 		request.Fields == nil || request.ExpectedRevision < 0 ||
 		(request.SchemaID == "" && request.ExpectedRevision != 0) ||
 		(request.SchemaID != "" && request.ExpectedRevision == 0) {
@@ -141,8 +141,8 @@ func (h *Handler) listSubmissions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id", "form_id", "state", "cursor", "limit")
-	if !valid || !validID(query["snapshot_id"]) || (query["form_id"] != "" && !validID(query["form_id"])) ||
+	query, valid := readQuery(r, "form_id", "key", "state", "cursor", "limit")
+	if !valid || !validID(query["form_id"]) || (query["key"] != "" && !validText(query["key"], 128)) ||
 		len(query["state"]) > 64 || len(query["cursor"]) > 1024 {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
@@ -152,7 +152,7 @@ func (h *Handler) listSubmissions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.api.ListSubmissions(ctx, engine.ListSubmissionsRequest{SnapshotID: query["snapshot_id"], FormID: query["form_id"], State: query["state"], Cursor: query["cursor"], Limit: limit})
+	page, err := h.api.ListSubmissions(ctx, engine.ListSubmissionsRequest{FormID: query["form_id"], Key: query["key"], State: query["state"], Cursor: query["cursor"], Limit: limit})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -165,8 +165,8 @@ func (h *Handler) exportSubmissions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id", "form_id", "state")
-	if !valid || !validID(query["snapshot_id"]) || (query["form_id"] != "" && !validID(query["form_id"])) || len(query["state"]) > 64 {
+	query, valid := readQuery(r, "form_id", "key", "state")
+	if !valid || !validID(query["form_id"]) || (query["key"] != "" && !validText(query["key"], 128)) || len(query["state"]) > 64 {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -179,7 +179,7 @@ func (h *Handler) exportSubmissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.readExportRows(ctx, query["snapshot_id"], query["form_id"], query["state"])
+	rows, err := h.readExportRows(ctx, query["form_id"], query["key"], query["state"])
 	if err != nil {
 		if errors.Is(err, errExportLimit) {
 			writeError(w, http.StatusRequestEntityTooLarge, "export_limit_exceeded")
@@ -201,7 +201,7 @@ func (h *Handler) exportSubmissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="forms-`+query["snapshot_id"]+`-submissions.csv"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="forms-`+query["form_id"]+`-submissions.csv"`)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
@@ -217,7 +217,7 @@ var (
 	errExportCursor = errors.New("Forms CSV export cursor did not advance")
 )
 
-func (h *Handler) readExportRows(ctx context.Context, snapshotID, formID, state string) ([]exportRow, error) {
+func (h *Handler) readExportRows(ctx context.Context, formID, formKey, state string) ([]exportRow, error) {
 	rows := make([]exportRow, 0)
 	cursor := ""
 	seenCursors := make(map[string]struct{})
@@ -225,7 +225,7 @@ func (h *Handler) readExportRows(ctx context.Context, snapshotID, formID, state 
 	maxPages := h.cfg.ExportMaxRows + 1
 	for pageNumber := 0; pageNumber < maxPages; pageNumber++ {
 		page, err := h.api.ListSubmissions(ctx, engine.ListSubmissionsRequest{
-			SnapshotID: snapshotID, FormID: formID, State: state, Cursor: cursor, Limit: h.cfg.DefaultPageSize,
+			FormID: formID, Key: formKey, State: state, Cursor: cursor, Limit: h.cfg.DefaultPageSize,
 		})
 		if err != nil {
 			return nil, err
@@ -347,13 +347,13 @@ func (h *Handler) getSubmission(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id")
+	_, valid := readQuery(r)
 	submissionID := r.PathValue("submissionID")
-	if !valid || !validID(query["snapshot_id"]) || !validID(submissionID) {
+	if !valid || !validID(submissionID) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	submission, err := h.api.GetSubmission(ctx, query["snapshot_id"], submissionID)
+	submission, err := h.api.GetSubmission(ctx, submissionID)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -368,7 +368,6 @@ func (h *Handler) setSubmissionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		SnapshotID       string `json:"snapshot_id"`
 		Status           string `json:"status"`
 		ExpectedRevision int64  `json:"expected_revision"`
 	}
@@ -377,12 +376,11 @@ func (h *Handler) setSubmissionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	submissionID := r.PathValue("submissionID")
-	if !validID(request.SnapshotID) || !validText(request.Status, 64) || !validID(submissionID) || request.ExpectedRevision < 1 {
+	if !validText(request.Status, 64) || !validID(submissionID) || request.ExpectedRevision < 1 {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	submission, err := h.api.SetSubmissionStatus(ctx, engine.SetSubmissionStatusRequest{SnapshotID: request.SnapshotID,
-		SubmissionID: submissionID, Status: request.Status, ExpectedRevision: request.ExpectedRevision})
+	submission, err := h.api.SetSubmissionStatus(ctx, engine.SetSubmissionStatusRequest{SubmissionID: submissionID, Status: request.Status, ExpectedRevision: request.ExpectedRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -396,14 +394,14 @@ func (h *Handler) deleteSubmission(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, valid := readQuery(r, "snapshot_id")
+	_, valid := readQuery(r)
 	revision, revisionOK := parseIfMatchRevision(r.Header.Values("If-Match"))
 	submissionID := r.PathValue("submissionID")
-	if !valid || !validID(query["snapshot_id"]) || !validID(submissionID) || !revisionOK {
+	if !valid || !validID(submissionID) || !revisionOK {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if err := h.api.DeleteSubmission(ctx, engine.DeleteSubmissionRequest{SnapshotID: query["snapshot_id"], SubmissionID: submissionID, ExpectedRevision: revision}); err != nil {
+	if err := h.api.DeleteSubmission(ctx, engine.DeleteSubmissionRequest{SubmissionID: submissionID, ExpectedRevision: revision}); err != nil {
 		writeEngineError(w, err)
 		return
 	}

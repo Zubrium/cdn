@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Database, Route, Trash2 } from "lucide-react";
+import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import type { DataModel, FeatureArgumentBinding, FeatureBuild, SiteEditorDraft, SitePage, SitePlacement } from "@/types";
 import { routeCapturesForPage, detailRoutes as getDetailRoutes } from "../../route-tree";
@@ -8,6 +10,7 @@ import { DetailLinkEditor, StructuralBindingsEditor } from "./StructuralBindings
 import { properties, requiredProperties, type SchemaField } from "./schema";
 import { buildFor } from "./schema";
 import { siteContextQuery } from "../../site-query";
+import { routeSuggestions } from "@/domains/forms/publication";
 
 export function PlacementEditor({ page, placement, builds, config, dataModel, snapshotId, buildsLoading = false, onChange, onRemove }: { page: SitePage; placement: SitePlacement; builds: FeatureBuild[]; config: SiteEditorDraft; dataModel: DataModel | null; snapshotId: string; buildsLoading?: boolean; onChange: (value: SitePlacement) => void; onRemove: () => void }) {
   const build = buildFor(builds, placement);
@@ -22,6 +25,27 @@ export function PlacementEditor({ page, placement, builds, config, dataModel, sn
   }));
   const uniqueDataCollectionFields = dataCollectionFields.filter((candidate) => dataCollectionFields.filter((item) => item.field === candidate.field).length === 1);
   const detailRoutes = getDetailRoutes(config.routeTree, config.pages);
+  const routerRoutesAvailable = typeof api.router?.routes?.list === "function";
+  const routerOperationsAvailable = typeof api.router?.operations?.list === "function";
+  const formsAvailable = typeof api.formsEngine?.schemas === "function";
+  const routerRoutesQuery = useQuery({
+    queryKey: ["router", "routes", "argument-hints"],
+    queryFn: ({ signal }) => api.router.routes.list({ limit: 100 }, signal),
+    enabled: routerRoutesAvailable && Object.values(fields).some((field) => field.type === "string" && field.format === "route"),
+  });
+  const routerOperationsQuery = useQuery({
+    queryKey: ["router", "operations"],
+    queryFn: ({ signal }) => api.router.operations.list(signal),
+    enabled: routerOperationsAvailable && routerRoutesQuery.isSuccess,
+  });
+  const formSchemasQuery = useQuery({
+    queryKey: ["formsEngine", "schemas"],
+    queryFn: ({ signal }) => api.formsEngine.schemas(undefined, 100, signal),
+    enabled: formsAvailable && routerRoutesQuery.isSuccess,
+  });
+  const routeHints = routerRoutesQuery.isSuccess && routerOperationsQuery.isSuccess
+    ? routeSuggestions(routerRoutesQuery.data.items, routerOperationsQuery.data.items)
+    : [];
   const patchBinding = (key: string, binding?: FeatureArgumentBinding) => { const next = { ...(placement.arguments ?? {}) }; if (binding) next[key] = binding; else delete next[key]; onChange({ ...placement, arguments: next }); };
 
   const contentInputs = manifest?.dataInputs?.length ?? 0;
@@ -47,7 +71,7 @@ export function PlacementEditor({ page, placement, builds, config, dataModel, sn
       {(pageInputs > 0 || uniqueCaptures.length > 0) && <details open className="border-t border-border/70 pt-4">
         <summary className="cursor-pointer text-sm font-medium">Параметры страницы и постоянные значения</summary>
         <p className="mt-1 text-xs text-muted-foreground">Значения можно взять из параметров маршрута или query, либо задать вручную. Для каждого источника показан пример использования.</p>
-        <div className="mt-3">{Object.entries(fields).length > 0 && <FeatureArgumentsEditor fields={fields} requiredKeys={requiredArgumentKeys} arguments={placement.arguments} captures={uniqueCaptures} preparation={build && snapshotId ? { snapshotId, featureKey: build.key, buildVersion: build.version, schemaKind: "arguments", buildDigest: build.digest } : undefined} onChange={(key, binding) => patchBinding(key, binding)} />}</div>
+        <div className="mt-3">{Object.entries(fields).length > 0 && <FeatureArgumentsEditor fields={fields} requiredKeys={requiredArgumentKeys} arguments={placement.arguments} captures={uniqueCaptures} preparation={build && snapshotId ? { snapshotId, featureKey: build.key, buildVersion: build.version, schemaKind: "arguments", buildDigest: build.digest } : undefined} routeSuggestions={routeHints} formSchemas={formSchemasQuery.data?.items ?? []} onChange={(key, binding) => patchBinding(key, binding)} />}</div>
       </details>}
 
       {contentInputs > 0 && <details open className="border-t border-border/70 pt-4">

@@ -202,6 +202,11 @@ export interface FormSchema {
   revision: number;
 }
 
+export interface FormSubmissionFilter {
+  key?: string;
+  state?: string;
+}
+
 export interface FormSubmission {
   id: string;
   form_id: string;
@@ -520,11 +525,21 @@ export interface FeatureBuild {
   createdAt: string;
 }
 
+export interface FeatureArgumentRouteBinding {
+  mode: "path" | "absolute";
+  path: string;
+  host?: string;
+  routeId?: string;
+  formId?: string;
+  schemaVersion?: number;
+}
+
 export interface FeatureArgumentBinding {
-  source: "literal" | "path" | "query";
+  source: "literal" | "path" | "query" | "route";
   value?: JsonValue;
   pathArg?: string;
   queryKey?: string;
+  route?: FeatureArgumentRouteBinding;
 }
 
 export interface SitePlacement {

@@ -147,7 +147,7 @@ func (engine *Engine) authorize(ctx context.Context, group string, required core
 	return state, nil
 }
 
-func (engine *Engine) ListSchemas(ctx context.Context, snapshotID, cursor string, limit int) (formapi.SchemaPage, error) {
+func (engine *Engine) ListSchemas(ctx context.Context, cursor string, limit int) (formapi.SchemaPage, error) {
 	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.SchemaPage{}, err
 	}
@@ -155,7 +155,7 @@ func (engine *Engine) ListSchemas(ctx context.Context, snapshotID, cursor string
 	if err != nil {
 		return formapi.SchemaPage{}, formapi.ErrInvalid
 	}
-	items, next, err := engine.schemas.List(ctx, snapshotID, after, limit)
+	items, next, err := engine.schemas.List(ctx, after, limit)
 	if err != nil {
 		return formapi.SchemaPage{}, mapCoreError(err)
 	}
@@ -167,11 +167,11 @@ func (engine *Engine) ListSchemas(ctx context.Context, snapshotID, cursor string
 	return page, nil
 }
 
-func (engine *Engine) GetSchema(ctx context.Context, snapshotID, schemaID string) (formapi.Schema, error) {
+func (engine *Engine) GetSchema(ctx context.Context, schemaID string) (formapi.Schema, error) {
 	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.Schema{}, err
 	}
-	schema, revision, err := engine.schemas.Get(ctx, snapshotID, schemaID)
+	schema, revision, err := engine.schemas.Get(ctx, schemaID)
 	if err != nil {
 		return formapi.Schema{}, mapCoreError(err)
 	}
@@ -182,16 +182,16 @@ func (engine *Engine) SaveSchema(ctx context.Context, request formapi.SaveSchema
 	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelWrite); err != nil {
 		return formapi.Schema{}, err
 	}
-	schema, revision, err := engine.schemas.Save(ctx, request.SnapshotID, request.SchemaID, request.Key, request.Fields, request.ExpectedRevision)
+	schema, revision, err := engine.schemas.Save(ctx, request.SchemaID, request.Key, request.Fields, request.ExpectedRevision)
 	if err != nil {
 		return formapi.Schema{}, mapCoreError(err)
 	}
-	_ = engine.visitors.CancelFormSessions(ctx, request.SnapshotID, schema.ID, schema.Version)
+	_ = engine.visitors.CancelFormSessions(ctx, schema.ID, schema.Version)
 	return formapi.Schema{ID: schema.ID, Key: schema.Key, Version: schema.Version, Fields: schema.Fields, Revision: revision}, nil
 }
 
 func (engine *Engine) CreateVisitorSession(ctx context.Context, request formapi.CreateVisitorSessionRequest) (formapi.VisitorSessionCredential, error) {
-	created, err := engine.visitors.Create(ctx, sessionapp.Binding{SnapshotID: request.SnapshotID, FormID: request.FormID, SchemaVersion: request.SchemaVersion})
+	created, err := engine.visitors.Create(ctx, sessionapp.Binding{FormID: request.FormID, SchemaVersion: request.SchemaVersion})
 	if err != nil {
 		return formapi.VisitorSessionCredential{}, mapVisitorError(err)
 	}
@@ -202,7 +202,7 @@ func (engine *Engine) CreateVisitorSession(ctx context.Context, request formapi.
 }
 
 func (engine *Engine) GetVisitorSession(ctx context.Context, request formapi.GetVisitorSessionRequest) (formapi.VisitorSession, error) {
-	session, err := engine.visitors.Get(ctx, sessionapp.Binding{SnapshotID: request.SnapshotID, FormID: request.FormID, SchemaVersion: request.SchemaVersion}, request.Token)
+	session, err := engine.visitors.Get(ctx, sessionapp.Binding{FormID: request.FormID, SchemaVersion: request.SchemaVersion}, request.Token)
 	if err != nil {
 		return formapi.VisitorSession{}, mapVisitorError(err)
 	}
@@ -212,7 +212,7 @@ func (engine *Engine) GetVisitorSession(ctx context.Context, request formapi.Get
 
 func (engine *Engine) BeginVisitorUpload(ctx context.Context, request formapi.BeginVisitorUploadRequest) (formapi.VisitorUploadReservation, error) {
 	reservation, err := engine.visitors.BeginUpload(ctx, sessionapp.BeginUploadInput{
-		Binding: sessionapp.Binding{SnapshotID: request.SnapshotID, FormID: request.FormID, SchemaVersion: request.SchemaVersion},
+		Binding: sessionapp.Binding{FormID: request.FormID, SchemaVersion: request.SchemaVersion},
 		Token:   request.Token, FieldID: request.FieldID, IdempotencyKey: request.IdempotencyKey,
 		ContentType: request.ContentType, DeclaredSize: request.DeclaredSize, RouteMaxBytes: request.RouteMaxBytes,
 		RouteContentTypes: request.RouteContentTypes, AccessGroup: request.AccessGroup,
@@ -228,7 +228,7 @@ func (engine *Engine) BeginVisitorUpload(ctx context.Context, request formapi.Be
 
 func (engine *Engine) CompleteVisitorUpload(ctx context.Context, request formapi.CompleteVisitorUploadRequest) (formapi.VisitorAttachment, error) {
 	attachment, err := engine.visitors.CompleteUpload(ctx, sessionapp.CompleteUploadInput{
-		Binding: sessionapp.Binding{SnapshotID: request.SnapshotID, FormID: request.FormID, SchemaVersion: request.SchemaVersion},
+		Binding: sessionapp.Binding{FormID: request.FormID, SchemaVersion: request.SchemaVersion},
 		Token:   request.Token, ReservationID: request.ReservationID, FileID: request.FileID, SHA256: request.SHA256,
 		ContentType: request.ContentType, Size: request.Size, AccessGroup: request.AccessGroup,
 	})
@@ -240,14 +240,14 @@ func (engine *Engine) CompleteVisitorUpload(ctx context.Context, request formapi
 
 func (engine *Engine) AbortVisitorUpload(ctx context.Context, request formapi.AbortVisitorUploadRequest) error {
 	return mapVisitorError(engine.visitors.AbortUpload(ctx, sessionapp.AbortUploadInput{
-		Binding: sessionapp.Binding{SnapshotID: request.SnapshotID, FormID: request.FormID, SchemaVersion: request.SchemaVersion},
+		Binding: sessionapp.Binding{FormID: request.FormID, SchemaVersion: request.SchemaVersion},
 		Token:   request.Token, ReservationID: request.ReservationID,
 	}))
 }
 
 func (engine *Engine) SubmitVisitorResponse(ctx context.Context, request formapi.SubmitVisitorResponseRequest) (formapi.VisitorSubmissionReceipt, error) {
 	receipt, err := engine.visitors.Submit(ctx, sessionapp.SubmitInput{
-		Binding: sessionapp.Binding{SnapshotID: request.SnapshotID, FormID: request.FormID, SchemaVersion: request.SchemaVersion},
+		Binding: sessionapp.Binding{FormID: request.FormID, SchemaVersion: request.SchemaVersion},
 		Token:   request.Token, IdempotencyKey: request.IdempotencyKey, Values: request.Values,
 	})
 	if err != nil {
@@ -257,7 +257,7 @@ func (engine *Engine) SubmitVisitorResponse(ctx context.Context, request formapi
 }
 
 func (engine *Engine) CancelVisitorSession(ctx context.Context, request formapi.CancelVisitorSessionRequest) error {
-	return mapVisitorError(engine.visitors.Cancel(ctx, sessionapp.Binding{SnapshotID: request.SnapshotID,
+	return mapVisitorError(engine.visitors.Cancel(ctx, sessionapp.Binding{
 		FormID: request.FormID, SchemaVersion: request.SchemaVersion}, request.Token))
 }
 
@@ -296,7 +296,7 @@ func (engine *Engine) ListSubmissions(ctx context.Context, request formapi.ListS
 	if err != nil {
 		return formapi.SubmissionPage{}, formapi.ErrInvalid
 	}
-	items, next, err := engine.submissions.List(ctx, request.SnapshotID, request.FormID, request.State, after, request.Limit)
+	items, next, err := engine.submissions.List(ctx, request.FormID, request.Key, request.State, after, request.Limit)
 	if err != nil {
 		return formapi.SubmissionPage{}, mapCoreError(err)
 	}
@@ -311,11 +311,11 @@ func (engine *Engine) ListSubmissions(ctx context.Context, request formapi.ListS
 	return page, nil
 }
 
-func (engine *Engine) GetSubmission(ctx context.Context, snapshotID, id string) (formapi.Submission, error) {
+func (engine *Engine) GetSubmission(ctx context.Context, id string) (formapi.Submission, error) {
 	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelRead); err != nil {
 		return formapi.Submission{}, err
 	}
-	submission, revision, err := engine.submissions.Get(ctx, snapshotID, id)
+	submission, revision, err := engine.submissions.Get(ctx, id)
 	if err != nil {
 		return formapi.Submission{}, mapCoreError(err)
 	}
@@ -329,7 +329,7 @@ func (engine *Engine) SetSubmissionStatus(ctx context.Context, request formapi.S
 	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelWrite); err != nil {
 		return formapi.Submission{}, err
 	}
-	submission, revision, err := engine.submissions.SetState(ctx, request.SnapshotID, request.SubmissionID, request.Status, request.ExpectedRevision)
+	submission, revision, err := engine.submissions.SetState(ctx, request.SubmissionID, request.Status, request.ExpectedRevision)
 	if err != nil {
 		return formapi.Submission{}, mapCoreError(err)
 	}
@@ -343,7 +343,7 @@ func (engine *Engine) DeleteSubmission(ctx context.Context, request formapi.Dele
 	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelWrite); err != nil {
 		return err
 	}
-	if err := engine.submissions.Delete(ctx, engine.fileSession, request.SnapshotID, request.SubmissionID, request.ExpectedRevision); err != nil {
+	if err := engine.submissions.Delete(ctx, engine.fileSession, request.SubmissionID, request.ExpectedRevision); err != nil {
 		return mapCoreError(err)
 	}
 	return nil
@@ -356,7 +356,7 @@ func (engine *Engine) ValidatePublicForm(ctx context.Context, binding formapi.Pu
 	if engine == nil || ctx == nil || binding.Validate() != nil {
 		return formapi.ErrInvalid
 	}
-	schema, _, err := engine.schemas.Get(ctx, binding.SnapshotID, binding.FormID)
+	schema, _, err := engine.schemas.Get(ctx, binding.FormID)
 	if err != nil {
 		return mapCoreError(err)
 	}
@@ -383,7 +383,7 @@ func (engine *Engine) ValidatePublicUploadRoute(ctx context.Context, binding for
 	if err := engine.authorization.RequireGroupLevel(ctx, engine.fileSession, []string{binding.AccessGroup}, core.AccessLevelWrite); err != nil {
 		return mapCoreError(err)
 	}
-	schema, _, err := engine.schemas.Get(ctx, binding.SnapshotID, binding.FormID)
+	schema, _, err := engine.schemas.Get(ctx, binding.FormID)
 	if err != nil {
 		return mapCoreError(err)
 	}

@@ -592,7 +592,7 @@ func formUploadResponse(status int, attachment forms.VisitorAttachment) (engine.
 }
 
 func scopedFormIdempotencyKey(request engine.PublicOperationRequest, config routeConfig, fieldID string) string {
-	value := strings.Join([]string{scopedIdempotencyKey(request, config), config.Form.FormID, config.Form.SnapshotID,
+	value := strings.Join([]string{scopedIdempotencyKey(request, config), config.Form.FormID,
 		fmt.Sprint(config.Form.SchemaVersion), fieldID}, "\x00")
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])

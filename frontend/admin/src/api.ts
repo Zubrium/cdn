@@ -11,8 +11,10 @@ import type {
   IssuedCredential,
   FeatureBuild,
   FeatureManifest,
+  FeatureArgumentRouteBinding,
   FormSchema,
   FormFieldDefinition,
+  FormSubmissionFilter,
   FormSubmission,
   ListResponse,
   Media,
@@ -236,9 +238,8 @@ function validateFileSet(value: unknown): FileSet {
 }
 
 function validPublicFormBindingConfig(config: unknown): config is Record<string, unknown> {
-  if (!isRecord(config) || !hasOnlyKeys(config, ["enabled", "snapshot_id", "form_id", "schema_version"])) return false;
-  return config.enabled === true && typeof config.snapshot_id === "string" && uuidValuePattern.test(config.snapshot_id) &&
-    config.snapshot_id === config.snapshot_id.toLowerCase() &&
+  if (!isRecord(config) || !hasOnlyKeys(config, ["enabled", "form_id", "schema_version"])) return false;
+  return config.enabled === true &&
     typeof config.form_id === "string" && uuidValuePattern.test(config.form_id) &&
     config.form_id === config.form_id.toLowerCase() &&
     Number.isSafeInteger(config.schema_version) && Number(config.schema_version) >= 1;
@@ -312,6 +313,68 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean
   return Object.keys(value).every((key) => allow.has(key));
 }
 
+function invalidRouteArgument(message: string): never {
+  throw new ApiError(400, "invalid_snapshot_payload", message);
+}
+
+export function resolveRouteArgumentValue(route: unknown, invalid: (message: string) => never = invalidRouteArgument): string {
+  const binding = route as Partial<FeatureArgumentRouteBinding> | null;
+  if (!isRecord(route) || !binding || (binding.mode !== "path" && binding.mode !== "absolute") ||
+    typeof binding.path !== "string" || !binding.path.startsWith("/") || binding.path.includes("?") ||
+    binding.path.includes("#") || hasAsciiControl(binding.path)) {
+    return invalid("Некорректная привязка аргумента к маршруту");
+  }
+  if (binding.mode === "path") return binding.path;
+  if (typeof binding.host !== "string" || binding.host.length === 0 || binding.host.length > 253 ||
+    hasWhitespaceOrAsciiControl(binding.host) || binding.host.includes("://") || binding.host.includes("/")) {
+    return invalid("Для абсолютного маршрута укажите корректный host");
+  }
+  return `https://${binding.host}${binding.path}`;
+}
+
+/** Resolves structured `route` argument bindings to literal strings before a
+ * Website snapshot payload is sent. The editor may keep the structure, but a
+ * feature must only receive the final path or URL. */
+export function resolveSiteConfigRouteArguments(config: unknown, invalid: (message: string) => never = invalidRouteArgument): unknown {
+  if (!isRecord(config)) return config;
+  let changed = false;
+  const next: Record<string, unknown> = { ...config };
+  for (const collectionKey of ["pages", "page"]) {
+    const collection = config[collectionKey];
+    if (collection === undefined) continue;
+    const resolveCollection = (value: unknown): unknown => {
+      if (!isRecord(value) || !Array.isArray(value.placements)) return value;
+      let placementChanged = false;
+      const placements = value.placements.map((rawPlacement) => {
+        if (!isRecord(rawPlacement) || !isRecord(rawPlacement.arguments)) return rawPlacement;
+        let argumentChanged = false;
+        const resolvedArguments: Record<string, unknown> = { ...rawPlacement.arguments };
+        for (const [argumentKey, rawBinding] of Object.entries(rawPlacement.arguments)) {
+          if (!isRecord(rawBinding) || rawBinding.source !== "route") continue;
+          const value = resolveRouteArgumentValue(rawBinding.route, invalid);
+          resolvedArguments[argumentKey] = { source: "literal", value };
+          argumentChanged = true;
+        }
+        if (!argumentChanged) return rawPlacement;
+        placementChanged = true;
+        return { ...rawPlacement, arguments: resolvedArguments };
+      });
+      return placementChanged ? { ...value, placements } : value;
+    };
+    const resolved: unknown = Array.isArray(collection)
+      ? collection.map(resolveCollection)
+      : resolveCollection(collection);
+    const collectionChanged = Array.isArray(collection) && Array.isArray(resolved)
+      ? resolved.some((page: unknown, index: number) => page !== collection[index])
+      : resolved !== collection;
+    if (collectionChanged) {
+      changed = true;
+      next[collectionKey] = resolved;
+    }
+  }
+  return changed ? next : config;
+}
+
 type SnapshotDetail = {
   snapshot: SiteSnapshot;
   payload: { config: SiteConfig; metadata?: SiteMetadata };
@@ -378,10 +441,11 @@ function snapshotPayloadFromWebsite(payload: { config: unknown; metadata: unknow
   const invalid = (message: string): never => {
     throw new ApiError(request ? 400 : 502, request ? "invalid_snapshot_payload" : "invalid_response", message);
   };
-  const config = payload.config;
-  if (!isRecord(config) || !isRecord(payload.metadata) || payload.metadata.formatVersion !== 1) {
+  const rawConfig = payload.config;
+  if (!isRecord(rawConfig) || !isRecord(payload.metadata) || payload.metadata.formatVersion !== 1) {
     return invalid("Конфигурация снапшота должна соответствовать page-snapshot контракту");
   }
+  const config = resolveSiteConfigRouteArguments(rawConfig, invalid) as Record<string, unknown>;
   const formatVersion = config.format_version ?? (request ? config.formatVersion : undefined);
   if (![2, 3].includes(Number(formatVersion)) || (!request && (("dataModel" in config) || ("routeTree" in config)))) {
     return invalid("Конфигурация снапшота должна соответствовать page-snapshot контракту и не содержать dataModel или маршруты");
@@ -1110,46 +1174,48 @@ export const api = {
   },
 
   formsEngine: {
-    schemas(snapshotID: string, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return request<unknown>(`${ADMIN_ROOT}/forms/schemas`, { signal, query: { snapshot_id: snapshotID, cursor, limit } })
+    schemas(cursor?: string, limit?: number, signal?: AbortSignal) {
+      return request<unknown>(`${ADMIN_ROOT}/forms/schemas`, { signal, query: { cursor, limit } })
         .then(parseFormSchemaPage);
     },
-    schema(snapshotID: string, schemaID: string, signal?: AbortSignal): Promise<FormSchema> {
-      return request<unknown>(`${ADMIN_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal, query: { snapshot_id: snapshotID } })
+    schema(schemaID: string, signal?: AbortSignal): Promise<FormSchema> {
+      return request<unknown>(`${ADMIN_ROOT}/forms/schemas/${encoded(schemaID)}`, { signal })
         .then(parseFormSchema);
     },
-    saveSchema(input: { snapshot_id: string; schema_id?: string; key: string; fields: Record<string, FormFieldDefinition>; expected_revision: number }): Promise<FormSchema> {
+    saveSchema(input: { schema_id?: string; key: string; fields: Record<string, FormFieldDefinition>; expected_revision: number }): Promise<FormSchema> {
       return request<unknown>(`${ADMIN_ROOT}/forms/schemas`, { method: "PUT", body: input }).then(parseFormSchema);
     },
-    submissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, cursor?: string, limit?: number, signal?: AbortSignal) {
-      return requestList<FormSubmission>(`${ADMIN_ROOT}/forms/submissions`, { signal, query: { snapshot_id: snapshotID, ...filters, cursor, limit } });
+    submissions(formID: string, filters: FormSubmissionFilter = {}, cursor?: string, limit?: number, signal?: AbortSignal) {
+      if (!formID) return Promise.reject(new ApiError(400, "invalid_request", "Выберите форму"));
+      return requestList<FormSubmission>(`${ADMIN_ROOT}/forms/submissions`, { signal, query: { form_id: formID, ...filters, cursor, limit } });
     },
-    async exportSubmissions(snapshotID: string, filters: { form_id?: string; state?: string } = {}, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+    async exportSubmissions(formID: string, filters: FormSubmissionFilter = {}, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+      if (!formID) throw new ApiError(400, "invalid_request", "Выберите форму");
       const response = await rawRequest(`${ADMIN_ROOT}/forms/submissions/export`, {
-        signal, headers: { Accept: "text/csv" }, query: { snapshot_id: snapshotID, ...filters },
+        signal, headers: { Accept: "text/csv" }, query: { form_id: formID, ...filters },
       });
       if (!response.ok) throw await parseErrorResponse(response);
       if (response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() !== "text/csv") {
         throw new ApiError(502, "invalid_response", "Сервер вернул некорректный CSV-экспорт");
       }
-      const filename = filenameFromDisposition(response.headers.get("Content-Disposition"), `forms-${snapshotID}-submissions.csv`);
+      const filename = filenameFromDisposition(response.headers.get("Content-Disposition"), `forms-${formID}-submissions.csv`);
       return { blob: await response.blob(), filename };
     },
-    submission(snapshotID: string, id: string, signal?: AbortSignal): Promise<FormSubmission> {
-      return request<FormSubmission>(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}`, { signal, query: { snapshot_id: snapshotID } });
+    submission(id: string, signal?: AbortSignal): Promise<FormSubmission> {
+      return request<FormSubmission>(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}`, { signal });
     },
-    async setSubmissionStatus(snapshotID: string, id: string, status: string, expectedRevision: number): Promise<FormSubmission> {
+    async setSubmissionStatus(id: string, status: string, expectedRevision: number): Promise<FormSubmission> {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
         throw new ApiError(400, "invalid_revision", "Для изменения статуса требуется актуальная ревизия заявки");
       }
-      return request<FormSubmission>(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}/status`, { method: "PATCH", body: { snapshot_id: snapshotID, status, expected_revision: expectedRevision } });
+      return request<FormSubmission>(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}/status`, { method: "PATCH", body: { status, expected_revision: expectedRevision } });
     },
-    async deleteSubmission(snapshotID: string, id: string, revision: number): Promise<void> {
+    async deleteSubmission(id: string, revision: number): Promise<void> {
       if (!Number.isSafeInteger(revision) || revision < 1) {
         throw new ApiError(400, "invalid_revision", "Для удаления требуется актуальная ревизия заявки");
       }
       return request(`${ADMIN_ROOT}/forms/submissions/${encoded(id)}`, {
-        method: "DELETE", query: { snapshot_id: snapshotID }, headers: { "If-Match": `"r${revision}"` },
+        method: "DELETE", headers: { "If-Match": `"r${revision}"` },
       });
     },
   },

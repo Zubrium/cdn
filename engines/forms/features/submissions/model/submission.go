@@ -7,6 +7,7 @@ import "time"
 type Submission struct {
 	ID                    string
 	FormID                string
+	FormKey               string
 	SchemaVersion         int64
 	State                 string
 	Values                map[string]any

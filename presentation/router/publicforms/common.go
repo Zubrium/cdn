@@ -35,20 +35,19 @@ type VisitorAPI interface {
 
 type BindingConfig struct {
 	Enabled       bool   `json:"enabled"`
-	SnapshotID    string `json:"snapshot_id"`
 	FormID        string `json:"form_id"`
 	SchemaVersion int64  `json:"schema_version"`
 }
 
 func (config BindingConfig) Binding() forms.PublicFormBinding {
-	return forms.PublicFormBinding{SnapshotID: config.SnapshotID, FormID: config.FormID, SchemaVersion: config.SchemaVersion}
+	return forms.PublicFormBinding{FormID: config.FormID, SchemaVersion: config.SchemaVersion}
 }
 
 func (config BindingConfig) Validate() error {
 	if !config.Enabled || config.Binding().Validate() != nil {
 		return router.ErrInvalidTarget
 	}
-	for _, rawID := range []string{config.SnapshotID, config.FormID} {
+	for _, rawID := range []string{config.FormID} {
 		id, err := uuid.Parse(rawID)
 		if err != nil || id == uuid.Nil || id.String() != rawID {
 			return router.ErrInvalidTarget

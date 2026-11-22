@@ -382,17 +382,17 @@ func (a *Content) CopySnapshotContent(ctx context.Context, _ content.CopySnapsho
 	return content.CopySnapshotContentResult{}, a.writeUnavailable(ctx)
 }
 
-func (a *Forms) ListSchemas(ctx context.Context, _ string, _ string, _ int) (forms.SchemaPage, error) {
+func (a *Forms) ListSchemas(ctx context.Context, _ string, _ int) (forms.SchemaPage, error) {
 	if err := a.requireGroup(ctx, formsSchemaGroup, core.AccessLevelRead); err != nil {
 		return forms.SchemaPage{}, err
 	}
 	return forms.SchemaPage{Items: []forms.Schema{demoSchema()}}, nil
 }
-func (a *Forms) GetSchema(ctx context.Context, snapshotID, schemaID string) (forms.Schema, error) {
+func (a *Forms) GetSchema(ctx context.Context, schemaID string) (forms.Schema, error) {
 	if err := a.requireGroup(ctx, formsSchemaGroup, core.AccessLevelRead); err != nil {
 		return forms.Schema{}, err
 	}
-	if snapshotID != syntheticSnapshotID || schemaID != syntheticSchemaID {
+	if schemaID != syntheticSchemaID {
 		return forms.Schema{}, forms.ErrNotFound
 	}
 	return demoSchema(), nil
@@ -404,16 +404,16 @@ func (a *Forms) ListSubmissions(ctx context.Context, request forms.ListSubmissio
 	if err := a.requireGroup(ctx, formsSubmissionGroup, core.AccessLevelRead); err != nil {
 		return forms.SubmissionPage{}, err
 	}
-	if request.SnapshotID != syntheticSnapshotID || (request.FormID != "" && request.FormID != syntheticFormID) {
+	if request.FormID != "" && request.FormID != syntheticFormID {
 		return forms.SubmissionPage{Items: []forms.Submission{}}, nil
 	}
 	return forms.SubmissionPage{Items: []forms.Submission{demoSubmission()}}, nil
 }
-func (a *Forms) GetSubmission(ctx context.Context, snapshotID, submissionID string) (forms.Submission, error) {
+func (a *Forms) GetSubmission(ctx context.Context, submissionID string) (forms.Submission, error) {
 	if err := a.requireGroup(ctx, formsSubmissionGroup, core.AccessLevelRead); err != nil {
 		return forms.Submission{}, err
 	}
-	if snapshotID != syntheticSnapshotID || submissionID != syntheticEntryID {
+	if submissionID != syntheticEntryID {
 		return forms.Submission{}, forms.ErrNotFound
 	}
 	return demoSubmission(), nil

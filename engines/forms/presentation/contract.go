@@ -37,11 +37,11 @@ type Contract interface {
 type API interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
-	ListSchemas(context.Context, string, string, int) (SchemaPage, error)
-	GetSchema(context.Context, string, string) (Schema, error)
+	ListSchemas(context.Context, string, int) (SchemaPage, error)
+	GetSchema(context.Context, string) (Schema, error)
 	SaveSchema(context.Context, SaveSchemaRequest) (Schema, error)
 	ListSubmissions(context.Context, ListSubmissionsRequest) (SubmissionPage, error)
-	GetSubmission(context.Context, string, string) (Submission, error)
+	GetSubmission(context.Context, string) (Submission, error)
 	SetSubmissionStatus(context.Context, SetSubmissionStatusRequest) (Submission, error)
 	DeleteSubmission(context.Context, DeleteSubmissionRequest) error
 	ValidatePublicForm(context.Context, PublicFormBinding) error
@@ -69,7 +69,6 @@ type SchemaPage struct {
 }
 
 type SaveSchemaRequest struct {
-	SnapshotID       string         `json:"snapshot_id"`
 	SchemaID         string         `json:"schema_id,omitempty"`
 	Key              string         `json:"key"`
 	Fields           map[string]any `json:"fields"`
@@ -89,7 +88,6 @@ type Submission struct {
 // PublicFormBinding is copied from a server-side Router route configuration.
 // Visitor requests cannot select or override any part of it.
 type PublicFormBinding struct {
-	SnapshotID    string `json:"snapshot_id"`
 	FormID        string `json:"form_id"`
 	SchemaVersion int64  `json:"schema_version"`
 }
@@ -104,10 +102,10 @@ type PublicUploadRouteBinding struct {
 }
 
 func (binding PublicFormBinding) Validate() error {
-	if binding.SnapshotID == "" || len(binding.SnapshotID) > 128 || binding.FormID == "" || len(binding.FormID) > 128 || binding.SchemaVersion < 1 {
+	if binding.FormID == "" || len(binding.FormID) > 128 || binding.SchemaVersion < 1 {
 		return ErrInvalid
 	}
-	for _, value := range []string{binding.SnapshotID, binding.FormID} {
+	for _, value := range []string{binding.FormID} {
 		for _, char := range value {
 			if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '.' || char == '-' {
 				continue
@@ -206,8 +204,8 @@ type CancelVisitorSessionRequest struct {
 }
 
 type ListSubmissionsRequest struct {
-	SnapshotID string `json:"snapshot_id"`
-	FormID     string `json:"form_id,omitempty"`
+	FormID     string `json:"form_id"`
+	Key        string `json:"key,omitempty"`
 	State      string `json:"state,omitempty"`
 	Cursor     string `json:"cursor,omitempty"`
 	Limit      int    `json:"limit"`
@@ -219,14 +217,12 @@ type SubmissionPage struct {
 }
 
 type SetSubmissionStatusRequest struct {
-	SnapshotID       string `json:"snapshot_id"`
 	SubmissionID     string `json:"submission_id"`
 	Status           string `json:"status"`
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type DeleteSubmissionRequest struct {
-	SnapshotID       string `json:"snapshot_id"`
 	SubmissionID     string `json:"submission_id"`
 	ExpectedRevision int64  `json:"expected_revision"`
 }

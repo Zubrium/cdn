@@ -417,11 +417,10 @@ components:
     PublicFormBinding:
       type: object
       additionalProperties: false
-      required: [enabled, snapshot_id, form_id, schema_version]
+      required: [enabled, form_id, schema_version]
       properties:
         enabled: { const: true }
-        snapshot_id: { type: string, format: uuid }
-        form_id: { type: string, format: uuid }
+        form_id: { type: string, format: uuid, description: Globally unique schema ID selected by the deployment. }
         schema_version: { type: integer, minimum: 1 }
     PublicFormSession:
       type: object
@@ -514,7 +513,11 @@ components:
             properties:
               match: { const: exact }
       properties:
-        host: { type: string, maxLength: 253 }
+        host:
+          type: string
+          maxLength: 253
+          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$'
+          description: Canonical hostname without a port. Ports, userinfo, paths and wildcard names are rejected; values are lowercased and an optional trailing dot is removed before route matching.
         path: { type: string, maxLength: 2048 }
         match: { type: string, enum: [exact, prefix] }
         target: { $ref: '#/components/schemas/RouteTarget' }

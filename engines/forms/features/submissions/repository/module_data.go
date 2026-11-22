@@ -14,7 +14,8 @@ import (
 
 const (
 	namespace = "forms/submissions"
-	scopeType = "submission"
+	scopeType = "global"
+	scopeID   = "global"
 )
 
 type Store interface {
@@ -36,22 +37,22 @@ func New(store Store) (*Repository, error) {
 	return &Repository{store: store}, nil
 }
 
-func (repo *Repository) Get(ctx context.Context, snapshotID, id string) (model.StoredSubmission, error) {
-	record, err := repo.store.Get(ctx, dataKey(snapshotID, id))
+func (repo *Repository) Get(ctx context.Context, id string) (model.StoredSubmission, error) {
+	record, err := repo.store.Get(ctx, dataKey(id))
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
 	return decode(record)
 }
 
-func (repo *Repository) Create(ctx context.Context, snapshotID string, payload submissionpkg.PayloadV1) (model.StoredSubmission, error) {
+func (repo *Repository) Create(ctx context.Context, payload submissionpkg.PayloadV1) (model.StoredSubmission, error) {
 	value, err := encode(payload)
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
-	record, err := repo.store.Put(ctx, dataKey(snapshotID, payload.ID), value, 0)
+	record, err := repo.store.Put(ctx, dataKey(payload.ID), value, 0)
 	if errors.Is(err, core.ErrModuleDataConflict) {
-		existing, readErr := repo.Get(ctx, snapshotID, payload.ID)
+		existing, readErr := repo.Get(ctx, payload.ID)
 		if readErr == nil && existing.Submission.IdempotencyKeyHash == payload.IdempotencyKeyHash &&
 			existing.Submission.IdempotencyFingerprint == payload.IdempotencyFingerprint && existing.Submission.FormID == payload.FormID &&
 			existing.Submission.SchemaVersion == payload.SchemaVersion {
@@ -68,15 +69,15 @@ func (repo *Repository) Create(ctx context.Context, snapshotID string, payload s
 	return decode(record)
 }
 
-func (repo *Repository) List(ctx context.Context, snapshotID, formID, state, after string, limit int) ([]model.StoredSubmission, string, error) {
-	selectors := make([]core.ModuleDataSelector, 0, 2)
-	if formID != "" {
-		selectors = append(selectors, core.ModuleDataSelector{Field: "form_id", Operator: core.SelectorEqual, Values: []any{formID}})
+func (repo *Repository) List(ctx context.Context, formID, formKey, state, after string, limit int) ([]model.StoredSubmission, string, error) {
+	selectors := []core.ModuleDataSelector{{Field: "form_id", Operator: core.SelectorEqual, Values: []any{formID}}}
+	if formKey != "" {
+		selectors = append(selectors, core.ModuleDataSelector{Field: "form_key", Operator: core.SelectorEqual, Values: []any{formKey}})
 	}
 	if state != "" {
 		selectors = append(selectors, core.ModuleDataSelector{Field: "state", Operator: core.SelectorEqual, Values: []any{state}})
 	}
-	_, records, next, err := repo.store.List(ctx, namespace, scopeType, snapshotID, after, selectors, limit)
+	_, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, selectors, limit)
 	if err != nil {
 		return nil, "", err
 	}
@@ -91,8 +92,8 @@ func (repo *Repository) List(ctx context.Context, snapshotID, formID, state, aft
 	return items, next, nil
 }
 
-func (repo *Repository) SetState(ctx context.Context, snapshotID, id, state string, expectedRevision int64) (model.StoredSubmission, error) {
-	entry, err := repo.Get(ctx, snapshotID, id)
+func (repo *Repository) SetState(ctx context.Context, id, state string, expectedRevision int64) (model.StoredSubmission, error) {
+	entry, err := repo.Get(ctx, id)
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
@@ -100,7 +101,8 @@ func (repo *Repository) SetState(ctx context.Context, snapshotID, id, state stri
 		return model.StoredSubmission{}, core.ErrModuleDataConflict
 	}
 	payload := submissionpkg.PayloadV1{
-		ID: entry.Submission.ID, FormID: entry.Submission.FormID, SchemaVersion: entry.Submission.SchemaVersion, State: state,
+		ID: entry.Submission.ID, FormID: entry.Submission.FormID, FormKey: entry.Submission.FormKey,
+		SchemaVersion: entry.Submission.SchemaVersion, State: state,
 		Values: entry.Submission.Values, CreatedAt: entry.Submission.CreatedAt,
 		IdempotencyKeyHash: entry.Submission.IdempotencyKeyHash, IdempotencyFingerprint: entry.Submission.IdempotencyFingerprint,
 		AttachmentIDs: entry.Attachments,
@@ -109,15 +111,15 @@ func (repo *Repository) SetState(ctx context.Context, snapshotID, id, state stri
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
-	record, err := repo.store.Put(ctx, dataKey(snapshotID, id), value, expectedRevision)
+	record, err := repo.store.Put(ctx, dataKey(id), value, expectedRevision)
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
 	return decode(record)
 }
 
-func (repo *Repository) BeginDelete(ctx context.Context, snapshotID, id string, expectedRevision int64) (model.StoredSubmission, error) {
-	entry, err := repo.Get(ctx, snapshotID, id)
+func (repo *Repository) BeginDelete(ctx context.Context, id string, expectedRevision int64) (model.StoredSubmission, error) {
+	entry, err := repo.Get(ctx, id)
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
@@ -131,7 +133,8 @@ func (repo *Repository) BeginDelete(ctx context.Context, snapshotID, id string, 
 		return model.StoredSubmission{}, core.ErrModuleDataConflict
 	}
 	payload := submissionpkg.PayloadV1{
-		ID: entry.Submission.ID, FormID: entry.Submission.FormID, SchemaVersion: entry.Submission.SchemaVersion, State: entry.Submission.State,
+		ID: entry.Submission.ID, FormID: entry.Submission.FormID, FormKey: entry.Submission.FormKey,
+		SchemaVersion: entry.Submission.SchemaVersion, State: entry.Submission.State,
 		Values: entry.Submission.Values, CreatedAt: entry.Submission.CreatedAt,
 		IdempotencyKeyHash: entry.Submission.IdempotencyKeyHash, IdempotencyFingerprint: entry.Submission.IdempotencyFingerprint,
 		AttachmentIDs: entry.Attachments,
@@ -141,19 +144,19 @@ func (repo *Repository) BeginDelete(ctx context.Context, snapshotID, id string, 
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
-	record, err := repo.store.Put(ctx, dataKey(snapshotID, id), value, expectedRevision)
+	record, err := repo.store.Put(ctx, dataKey(id), value, expectedRevision)
 	if err != nil {
 		return model.StoredSubmission{}, err
 	}
 	return decode(record)
 }
 
-func (repo *Repository) FinishDelete(ctx context.Context, snapshotID, id string, expectedRevision int64) error {
-	return repo.store.Delete(ctx, dataKey(snapshotID, id), expectedRevision)
+func (repo *Repository) FinishDelete(ctx context.Context, id string, expectedRevision int64) error {
+	return repo.store.Delete(ctx, dataKey(id), expectedRevision)
 }
 
-func dataKey(snapshotID, id string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: snapshotID, RecordKey: id}
+func dataKey(id string) core.ModuleDataKey {
+	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: id}
 }
 
 func encode(payload submissionpkg.PayloadV1) (core.ModuleDataValue, error) {
@@ -163,6 +166,7 @@ func encode(payload submissionpkg.PayloadV1) (core.ModuleDataValue, error) {
 	}
 	index, err := json.Marshal(map[string]any{
 		"form_id":        payload.FormID,
+		"form_key":       payload.FormKey,
 		"schema_version": payload.SchemaVersion,
 		"state":          payload.State,
 		"created_at":     payload.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -203,8 +207,8 @@ func decode(record core.ModuleDataRecord) (model.StoredSubmission, error) {
 		return model.StoredSubmission{}, core.ErrModuleDataUnavailable
 	}
 	return model.StoredSubmission{
-		Submission: model.Submission{ID: payload.ID, FormID: payload.FormID, SchemaVersion: payload.SchemaVersion,
-			State: payload.State, Values: payload.Values, CreatedAt: payload.CreatedAt,
+		Submission: model.Submission{ID: payload.ID, FormID: payload.FormID, FormKey: payload.FormKey,
+			SchemaVersion: payload.SchemaVersion, State: payload.State, Values: payload.Values, CreatedAt: payload.CreatedAt,
 			IdempotencyKeyHash: payload.IdempotencyKeyHash, IdempotencyFingerprint: payload.IdempotencyFingerprint},
 		Revision:   record.Revision, Attachments: append([]string(nil), payload.AttachmentIDs...), DeletePending: payload.DeletePending,
 		DeleteStartedFromRevision: payload.DeleteStartedFromRevision,

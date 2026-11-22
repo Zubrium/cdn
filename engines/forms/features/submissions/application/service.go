@@ -24,12 +24,12 @@ type Service struct {
 }
 
 type Repository interface {
-	Get(context.Context, string, string) (model.StoredSubmission, error)
-	Create(context.Context, string, submissionpkg.PayloadV1) (model.StoredSubmission, error)
+	Get(context.Context, string) (model.StoredSubmission, error)
+	Create(context.Context, submissionpkg.PayloadV1) (model.StoredSubmission, error)
 	List(context.Context, string, string, string, string, int) ([]model.StoredSubmission, string, error)
-	SetState(context.Context, string, string, string, int64) (model.StoredSubmission, error)
-	BeginDelete(context.Context, string, string, int64) (model.StoredSubmission, error)
-	FinishDelete(context.Context, string, string, int64) error
+	SetState(context.Context, string, string, int64) (model.StoredSubmission, error)
+	BeginDelete(context.Context, string, int64) (model.StoredSubmission, error)
+	FinishDelete(context.Context, string, int64) error
 }
 
 type Versioned struct {
@@ -40,6 +40,7 @@ type Versioned struct {
 type CreateInput struct {
 	ID                     string
 	FormID                 string
+	FormKey                string
 	SchemaVersion          int64
 	Values                 map[string]any
 	Attachments            []string
@@ -55,16 +56,16 @@ func New(repository Repository, files Files, maxPage int) (*Service, error) {
 	return &Service{repository: repository, files: files, maxPage: maxPage}, nil
 }
 
-func (service *Service) Get(ctx context.Context, snapshotID, id string) (model.Submission, int64, error) {
-	if !validIdentifier(snapshotID) || !validIdentifier(id) {
+func (service *Service) Get(ctx context.Context, id string) (model.Submission, int64, error) {
+	if !validIdentifier(id) {
 		return model.Submission{}, 0, core.ErrModuleDataInvalid
 	}
-	entry, err := service.repository.Get(ctx, snapshotID, id)
+	entry, err := service.repository.Get(ctx, id)
 	return entry.Submission, entry.Revision, err
 }
 
-func (service *Service) CreateAccepted(ctx context.Context, snapshotID string, input CreateInput) (model.Submission, int64, error) {
-	if !validIdentifier(snapshotID) || !validIdentifier(input.ID) || !validIdentifier(input.FormID) || input.SchemaVersion < 1 ||
+func (service *Service) CreateAccepted(ctx context.Context, input CreateInput) (model.Submission, int64, error) {
+	if !validIdentifier(input.ID) || !validIdentifier(input.FormID) || input.SchemaVersion < 1 ||
 		input.Values == nil || input.IdempotencyKeyHash == "" || input.IdempotencyFingerprint == "" || input.CreatedAt.IsZero() {
 		return model.Submission{}, 0, core.ErrModuleDataInvalid
 	}
@@ -78,8 +79,8 @@ func (service *Service) CreateAccepted(ctx context.Context, snapshotID string, i
 		}
 		seen[id] = struct{}{}
 	}
-	stored, err := service.repository.Create(ctx, snapshotID, submissionpkg.PayloadV1{
-		ID: input.ID, FormID: input.FormID, SchemaVersion: input.SchemaVersion, State: "new",
+	stored, err := service.repository.Create(ctx, submissionpkg.PayloadV1{
+		ID: input.ID, FormID: input.FormID, FormKey: input.FormKey, SchemaVersion: input.SchemaVersion, State: "new",
 		Values: input.Values, CreatedAt: input.CreatedAt.UTC(), IdempotencyKeyHash: input.IdempotencyKeyHash,
 		IdempotencyFingerprint: input.IdempotencyFingerprint, AttachmentIDs: append([]string(nil), input.Attachments...),
 	})
@@ -89,12 +90,12 @@ func (service *Service) CreateAccepted(ctx context.Context, snapshotID string, i
 	return stored.Submission, stored.Revision, nil
 }
 
-func (service *Service) List(ctx context.Context, snapshotID, formID, state, after string, limit int) ([]Versioned, string, error) {
-	if !validIdentifier(snapshotID) || (formID != "" && !validIdentifier(formID)) ||
+func (service *Service) List(ctx context.Context, formID, formKey, state, after string, limit int) ([]Versioned, string, error) {
+	if !validIdentifier(formID) || (formKey != "" && !validText(formKey, 128)) ||
 		(state != "" && !validStatus(state)) || limit < 1 || limit > service.maxPage {
 		return nil, "", core.ErrModuleDataInvalid
 	}
-	entries, next, err := service.repository.List(ctx, snapshotID, formID, state, after, limit)
+	entries, next, err := service.repository.List(ctx, formID, formKey, state, after, limit)
 	if err != nil {
 		return nil, "", err
 	}
@@ -105,19 +106,19 @@ func (service *Service) List(ctx context.Context, snapshotID, formID, state, aft
 	return items, next, nil
 }
 
-func (service *Service) SetState(ctx context.Context, snapshotID, id, state string, expectedRevision int64) (model.Submission, int64, error) {
-	if !validIdentifier(snapshotID) || !validIdentifier(id) || !validStatus(state) || expectedRevision < 1 {
+func (service *Service) SetState(ctx context.Context, id, state string, expectedRevision int64) (model.Submission, int64, error) {
+	if !validIdentifier(id) || !validStatus(state) || expectedRevision < 1 {
 		return model.Submission{}, 0, core.ErrModuleDataInvalid
 	}
-	entry, err := service.repository.SetState(ctx, snapshotID, id, state, expectedRevision)
+	entry, err := service.repository.SetState(ctx, id, state, expectedRevision)
 	return entry.Submission, entry.Revision, err
 }
 
-func (service *Service) Delete(ctx context.Context, session core.Session, snapshotID, id string, expectedRevision int64) error {
-	if !validIdentifier(snapshotID) || !validIdentifier(id) || expectedRevision < 1 {
+func (service *Service) Delete(ctx context.Context, session core.Session, id string, expectedRevision int64) error {
+	if !validIdentifier(id) || expectedRevision < 1 {
 		return core.ErrModuleDataInvalid
 	}
-	entry, err := service.repository.BeginDelete(ctx, snapshotID, id, expectedRevision)
+	entry, err := service.repository.BeginDelete(ctx, id, expectedRevision)
 	if err != nil {
 		return err
 	}
@@ -145,11 +146,15 @@ func (service *Service) Delete(ctx context.Context, session core.Session, snapsh
 			return core.ErrRevisionConflict
 		}
 	}
-	return service.repository.FinishDelete(ctx, snapshotID, id, entry.Revision)
+	return service.repository.FinishDelete(ctx, id, entry.Revision)
 }
 
 func validStatus(value string) bool {
 	return value != "" && len(value) <= 64 && utf8.ValidString(value) && strings.TrimSpace(value) == value && !strings.ContainsRune(value, '\x00')
+}
+
+func validText(value string, maximum int) bool {
+	return value != "" && len(value) <= maximum && utf8.ValidString(value) && strings.TrimSpace(value) == value && !strings.ContainsRune(value, '\x00')
 }
 
 func validIdentifier(value string) bool {

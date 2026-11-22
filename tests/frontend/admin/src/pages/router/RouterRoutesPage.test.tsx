@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     media: { fileSets: vi.fn() },
     principals: { groups: vi.fn() },
     router: { operations: { list: vi.fn() }, routes: { list: vi.fn() } },
+    formsEngine: { schemas: vi.fn() },
   },
   useAuth: vi.fn(),
   useConfirm: vi.fn(),
@@ -27,9 +28,8 @@ const route = {
   host: "files.example.test",
   path: "/uploads/consent",
   match: "exact",
-  target: { kind: "registered-operation", operation_id: "public.form-upload", operation_config: {
-    enabled: true, access_group: "uploads", file_set_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
-    max_bytes: 2097152, allowed_content_types: ["image/png"],
+  target: { kind: "registered-operation", operation_id: "public.form-session", operation_config: {
+    enabled: true, form_id: "44444444-4444-4444-8444-444444444444", schema_version: 3,
   } },
   state: "active",
   revision: 4,
@@ -73,6 +73,7 @@ describe("Router route settings", () => {
       allowed_content_types: ["image/png", "application/pdf"],
     }] });
     mocks.api.router.routes.list.mockResolvedValue({ items: [route], next_cursor: null });
+    mocks.api.formsEngine.schemas.mockResolvedValue({ items: [], next_cursor: null });
   });
 
   it("shows explicit public routes to readers without exposing write actions", () => {
@@ -80,9 +81,9 @@ describe("Router route settings", () => {
     expect(rendered).toContain("Публичные маршруты");
     expect(rendered).toContain("files.example.test/uploads/consent");
     expect(rendered).toContain("files.example.test/assets/app.js");
-    expect(rendered).toContain("Загрузка файла формы через Loader · POST");
-    expect(rendered).toContain("Группа uploads");
-    expect(rendered).toContain("набор 01938f7a-68af-7c10-a51d-78b6ca125399");
+    expect(rendered).toContain("Сессия формы · GET/POST/DELETE");
+    expect(rendered).toContain("форма 44444444-4444-4444-8444-444444444444 · схема v3");
+    expect(rendered).not.toContain("ID снапшота");
     expect(rendered).not.toContain("Новый маршрут");
     expect(rendered).not.toContain("Изменить цель");
   });

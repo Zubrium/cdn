@@ -8,7 +8,13 @@ vi.mock("@/domains/media/MediaPickerDialog", () => ({
   MediaPickerDialog: () => null,
 }));
 
-function renderArgument(schema: Parameters<typeof ArgumentField>[0]["schema"], binding?: FeatureArgumentBinding, captures: string[] = [], required = false) {
+function renderArgument(
+  schema: Parameters<typeof ArgumentField>[0]["schema"],
+  binding?: FeatureArgumentBinding,
+  captures: string[] = [],
+  required = false,
+  extras: Partial<Parameters<typeof ArgumentField>[0]> = {},
+) {
   return renderToStaticMarkup(createElement(ArgumentField, {
     schema,
     argumentKey: "value",
@@ -16,6 +22,7 @@ function renderArgument(schema: Parameters<typeof ArgumentField>[0]["schema"], b
     captures,
     required,
     onChange: () => {},
+    ...extras,
   }));
 }
 
@@ -62,6 +69,56 @@ describe("feature argument dynamic sources", () => {
     expect(stalePath).toContain("slug · маршрут недоступен");
     expect(stalePath).toContain("Сохранённый параметр пути больше не доступен для страницы.");
     expect(requiredQuery).toContain("Если параметр отсутствует в URL, обязательный аргумент не будет передан");
+  });
+
+  it("offers a structured route source only for format route string arguments", () => {
+    const routeMarkup = renderArgument({ type: "string", format: "route", title: "Форма" });
+    const plainMarkup = renderArgument({ type: "string", title: "Заголовок" });
+
+    expect(routeMarkup).toContain('value="route"');
+    expect(routeMarkup).toContain("Из маршрута");
+    expect(plainMarkup).not.toContain('value="route"');
+  });
+
+  it("shows Router route suggestions and keeps an absolute binding structured", () => {
+    const markup = renderArgument(
+      { type: "string", format: "route", title: "Форма" },
+      { source: "route", route: { mode: "absolute", host: "forms.example.test", path: "/forms/contact", routeId: "route-1", formId: "form-1", schemaVersion: 2 } },
+      [],
+      false,
+      {
+        routeSuggestions: [{
+          id: "route-1",
+          host: "forms.example.test",
+          path: "/forms/contact",
+          operationId: "public.form-session",
+          formId: "form-1",
+          schemaVersion: 3,
+        }],
+        formSchemas: [{ id: "form-1", key: "contact", version: 3, revision: 4, fields: {} }],
+      },
+    );
+
+    expect(markup).toContain("https://forms.example.test/forms/contact");
+    expect(markup).toContain('value="forms.example.test"');
+    expect(markup).toContain("Маршрут закреплён на версии 2, текущая версия формы 3");
+    expect(markup).toContain("не блокирует сохранение страницы");
+  });
+
+  it("warns when a selected form route is not published yet", () => {
+    const markup = renderArgument(
+      { type: "string", format: "route", title: "Форма" },
+      { source: "route", route: { mode: "path", path: "/forms/contact", routeId: "missing-route", formId: "form-1", schemaVersion: 1 } },
+      [],
+      false,
+      {
+        routeSuggestions: [],
+        formSchemas: [{ id: "form-1", key: "contact", version: 1, revision: 1, fields: {} }],
+      },
+    );
+
+    expect(markup).toContain("не опубликован");
+    expect(markup).toContain('role="alert"');
   });
 
   it("explains when a manifest media argument still has an obsolete dynamic source", () => {
