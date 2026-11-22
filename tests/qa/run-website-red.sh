@@ -209,6 +209,10 @@ run_integration() {
 		printf '%s\n' "WEB-021 integration did not produce the required PASS subtest line; refusing a zero-test success" >&2
 		return 1
 	fi
+	if ! grep -qF -- "--- PASS: TestWebsitePageRetirementAcceptance/WEB-022" "$work_dir"/*.log; then
+		printf '%s\n' "WEB-022 integration did not produce the required PASS subtest line; refusing a zero-test success" >&2
+		return 1
+	fi
 }
 
 python3 "$root/tests/go-overlay.py" > "$overlay" || exit $?

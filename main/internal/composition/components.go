@@ -379,6 +379,7 @@ type fileAPIComponent struct {
 	websiteEngine       *websiteEngineComponent
 	routerEngine        *routerEngineComponent
 	publicationEngine   *publicationComponent
+	retirementEngine    *retirementComponent
 	formsAdminEnabled   bool
 	websiteAdminEnabled bool
 	identityAdmin       bool
@@ -429,6 +430,9 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 	dependencies := transport.AdminDependencies{
 		Core: c.core.runtime, Files: c.loader.service, WorkflowControl: c.workflowControl,
 		Notifications: c.notifications,
+	}
+	if c.retirementEngine != nil {
+		dependencies.Retirement = c.retirementEngine.client
 	}
 	if fixtureAPIs != nil {
 		dependencies.Website, dependencies.Content, dependencies.Forms = fixtureAPIs.website, fixtureAPIs.content, fixtureAPIs.forms
@@ -587,6 +591,9 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 	}
 	if _, enabled := selected["engine.publication"]; enabled {
 		keys = append(keys, contracts.PublicationPublishOperation().Key)
+	}
+	if _, enabled := selected["composition.retirement"]; enabled {
+		keys = append(keys, contracts.RetirePageOperation().Key, contracts.GetPageRetirementOperation().Key)
 	}
 	dispatcher, err := bus.NewAllowlisted(keys...)
 	if err != nil {
@@ -792,6 +799,20 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan) (*
 			return nil, nil, nil, nil, err
 		}
 	}
+	if _, enabled := selected["composition.retirement"]; enabled {
+		if websiteEngine == nil || routerEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		retirementEngine := &retirementComponent{
+			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
+		}
+		fileAPI.retirementEngine = retirementEngine
+		if err := registry.Register(platform.RuntimeComponent{ID: "composition.retirement", Requires: []string{"core", "engine.website", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return retirementEngine, nil
+		}}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	if _, enabled := selected["admin.router"]; enabled {
 		if routerEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
@@ -869,7 +890,7 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	}
 	available := map[string]struct{}{
 		"core": {}, "engine.loader": {}, "admin.files": {}, "admin.coordinator": {}, "admin.identity": {}, "admin.notifications": {},
-		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "engine.publication": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
+		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "engine.publication": {}, "composition.retirement": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
 		"public.form-session": {}, "public.form-submit": {},
 		"worker.archive": {}, "worker.media": {}, "worker.prerender": {},
 	}

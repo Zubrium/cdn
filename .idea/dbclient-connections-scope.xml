@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DbClientConnectionScopeFilter">
+    <option name="entries">
+      <list>
+        <ConnectionScopeStateEntry>
+          <option name="connectionId" value="70aa768e-3c37-4457-a3fc-e4c0295891a5" />
+          <option name="perDatabaseSchemas">
+            <list>
+              <DatabaseSchemaListing>
+                <option name="database" value="postgres" />
+                <option name="visibleSchemas">
+                  <list>
+                    <option value="public" />
+                  </list>
+                </option>
+              </DatabaseSchemaListing>
+            </list>
+          </option>
+          <option name="visibleDatabases">
+            <list>
+              <option value="postgres" />
+            </list>
+          </option>
+        </ConnectionScopeStateEntry>
+      </list>
+    </option>
+  </component>
+</project>

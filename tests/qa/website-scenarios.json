@@ -374,11 +374,11 @@
       "action": "Run the durable retirement workflow through trusted orchestration.",
       "expected_result": "Each route target is withdrawn independently; page becomes retired only after all complete; retry is idempotent and reused page ID is refused.",
       "expected_state": "Snapshots/page identity, Content drafts/history, Forms resources and Core files remain; only separate checked cleanup may delete files.",
-      "test_file": "tests/go/engines/website/application/acceptance_rules_test.go",
-      "test_symbol": "TestWebsiteScenarioPageDeletion/WEB-022",
-      "coverage_status": "blocked",
-      "execution_status": "blocked",
-      "blocker": "Нет RetirePage, HTTP DELETE и durable retirement workflow; destructive retirement against a non-disposable system запрещён."
+      "test_file": "tests/go/main/cmd/zubrium/website_page_retirement_acceptance_test.go",
+      "test_symbol": "TestWebsitePageRetirementAcceptance/WEB-022",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-023",

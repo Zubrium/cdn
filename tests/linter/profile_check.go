@@ -29,6 +29,7 @@ func isolationProfileRegistry() profileRegistry {
 		"engine.forms":           {id: "engine.forms", requires: []string{"core"}},
 		"engine.router":          {id: "engine.router", requires: []string{"core"}},
 		"engine.publication":     {id: "engine.publication", requires: []string{"core", "engine.website", "engine.content", "engine.router"}},
+		"composition.retirement": {id: "composition.retirement", requires: []string{"core", "engine.website", "engine.router"}},
 		"development.fixtures":   {id: "development.fixtures", requires: []string{"core", "engine.website", "engine.content", "engine.forms", "admin.website", "admin.content", "admin.forms", "admin.identity"}},
 		"worker.archive":         {id: "worker.archive", requires: []string{"core"}},
 		"worker.media":           {id: "worker.media", requires: []string{"core"}},
@@ -57,6 +58,7 @@ var isolationGeneratedImports = map[string]string{
 	"engine.forms":           "engines/forms/presentation",
 	"engine.router":          "engines/router/presentation",
 	"engine.publication":     "main/internal/publication",
+	"composition.retirement": "main/internal/retirement",
 	"worker.archive":         "workers/archive",
 	"worker.media":           "workers/media",
 	"worker.prerender":       "workers/prerender",
@@ -78,12 +80,13 @@ var isolationGeneratedImports = map[string]string{
 }
 
 type profileDocument struct {
-	version    int
-	engines    []string
-	workers    []string
-	devFixture bool
-	admin      []string
-	public     []string
+	version     int
+	engines     []string
+	workers     []string
+	composition []string
+	devFixture  bool
+	admin       []string
+	public      []string
 }
 
 var profilegenLine = regexp.MustCompile(`profilegen -profile (\S+) -out (\S+) -package (\S+) -tag '([^']*)'`)
@@ -220,6 +223,8 @@ func parseIsolationProfile(data []byte) (profileDocument, error) {
 				profile.engines = append(profile.engines, value)
 			case "workers":
 				profile.workers = append(profile.workers, value)
+			case "composition":
+				profile.composition = append(profile.composition, value)
 			case "apis.admin":
 				profile.admin = append(profile.admin, value)
 			case "apis.public":
@@ -253,7 +258,7 @@ func parseIsolationProfile(data []byte) (profileDocument, error) {
 					return profile, fmt.Errorf("line %d: invalid development_fixtures %q", number+1, value)
 				}
 				profile.devFixture = parsed
-			case "engines", "workers":
+			case "engines", "workers", "composition":
 				if value != "" && value != "[]" {
 					return profile, fmt.Errorf("line %d: %s must use a block list", number+1, key)
 				}
@@ -301,6 +306,7 @@ func isolationBuildPlan(profile profileDocument) ([]string, error) {
 	}{
 		{"engine.", profile.engines},
 		{"worker.", profile.workers},
+		{"composition.", profile.composition},
 		{"admin.", profile.admin},
 		{"public.", profile.public},
 	} {

@@ -22,6 +22,7 @@ type BuildProfile struct {
 	Version             int      `yaml:"version"`
 	Engines             []string `yaml:"engines"`
 	Workers             []string `yaml:"workers"`
+	Composition         []string `yaml:"composition"`
 	DevelopmentFixtures bool     `yaml:"development_fixtures"`
 	APIs                struct {
 		Admin  []string `yaml:"admin"`
@@ -40,6 +41,7 @@ func buildRegistry() Registry {
 		"engine.forms":           {ID: "engine.forms", Requires: []string{"core"}},
 		"engine.router":          {ID: "engine.router", Requires: []string{"core"}},
 		"engine.publication":     {ID: "engine.publication", Requires: []string{"core", "engine.website", "engine.content", "engine.router"}},
+		"composition.retirement": {ID: "composition.retirement", Requires: []string{"core", "engine.website", "engine.router"}},
 		"development.fixtures":   {ID: "development.fixtures", Requires: []string{"core", "engine.website", "engine.content", "engine.forms", "admin.website", "admin.content", "admin.forms", "admin.identity"}},
 		"worker.archive":         {ID: "worker.archive", Requires: []string{"core"}},
 		"worker.media":           {ID: "worker.media", Requires: []string{"core"}},
@@ -95,8 +97,8 @@ func ParseBuildProfile(input io.Reader) (BuildPlan, error) {
 		prefix string
 		values []string
 	}{
-		{"engine.", profile.Engines}, {"worker.", profile.Workers}, {"admin.", profile.APIs.Admin},
-		{"public.", profile.APIs.Public},
+		{"engine.", profile.Engines}, {"worker.", profile.Workers}, {"composition.", profile.Composition},
+		{"admin.", profile.APIs.Admin}, {"public.", profile.APIs.Public},
 	} {
 		for _, name := range group.values {
 			selected = append(selected, group.prefix+name)
@@ -167,6 +169,7 @@ type generatedImport struct {
 	alias string
 	blank bool
 	reg   string
+	value string
 }
 
 var generatedModuleImports = map[string]generatedImport{
@@ -175,10 +178,11 @@ var generatedModuleImports = map[string]generatedImport{
 	"engine.content":         {path: "github.com/Zubrium/cdn/engines/content/presentation", alias: "contentEngine", reg: "content"},
 	"engine.forms":           {path: "github.com/Zubrium/cdn/engines/forms/presentation", alias: "formsEngine", reg: "forms"},
 	"engine.router":          {path: "github.com/Zubrium/cdn/engines/router/presentation", alias: "routerEngine", reg: "router"},
-	"engine.publication":     {path: "github.com/Zubrium/cdn/main/internal/publication", blank: true},
-	"worker.archive":         {path: "github.com/Zubrium/cdn/workers/archive", blank: true},
-	"worker.media":           {path: "github.com/Zubrium/cdn/workers/media", blank: true},
-	"worker.prerender":       {path: "github.com/Zubrium/cdn/workers/prerender", blank: true},
+	"engine.publication":     {path: "github.com/Zubrium/cdn/main/internal/publication", alias: "publication", reg: "publication", value: "publication.Module{}"},
+	"composition.retirement": {path: "github.com/Zubrium/cdn/main/internal/retirement", alias: "retirement", reg: "retirement", value: "retirement.Module{}"},
+	"worker.archive":         {path: "github.com/Zubrium/cdn/workers/archive", alias: "archive", reg: "worker.archive", value: "archive.Descriptor{}"},
+	"worker.media":           {path: "github.com/Zubrium/cdn/workers/media", alias: "media", reg: "worker.media", value: "media.Descriptor{}"},
+	"worker.prerender":       {path: "github.com/Zubrium/cdn/workers/prerender", alias: "prerender", reg: "worker.prerender", value: "prerender.Descriptor{}"},
 	"admin.files":            {path: "github.com/Zubrium/cdn/presentation/fileapi", blank: true},
 	"admin.website":          {path: "github.com/Zubrium/cdn/presentation/sitesapi", blank: true},
 	"admin.content":          {path: "github.com/Zubrium/cdn/presentation/admin/content", blank: true},
@@ -229,7 +233,11 @@ func GenerateBuildProfileGoWithTag(plan BuildPlan, packageName, buildTag string)
 		}
 		imports = append(imports, module)
 		if module.reg != "" {
-			registrations = append(registrations, fmt.Sprintf("if err := registry.Register(%s, %s.Descriptor{}); err != nil { return err }", strconv.Quote(module.reg), module.alias))
+			value := module.value
+			if value == "" {
+				value = module.alias + ".Descriptor{}"
+			}
+			registrations = append(registrations, fmt.Sprintf("if err := registry.Register(%s, %s); err != nil { return err }", strconv.Quote(module.reg), value))
 		}
 	}
 	sort.Slice(imports, func(i, j int) bool { return imports[i].path < imports[j].path })

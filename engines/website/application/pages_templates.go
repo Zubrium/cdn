@@ -188,7 +188,8 @@ func (s *Service) CreatePage(ctx context.Context, request websiteapi.CreatePageR
 	if err != nil {
 		return websiteapi.Page{}, websiteapi.ErrUnavailable
 	}
-	page := websiteapi.Page{ID: pageID, Name: request.Name, LatestSnapshotID: rootID,
+	page := websiteapi.Page{ID: pageID, Name: request.Name, Revision: 1,
+		LifecycleState: "active", LatestSnapshotID: rootID,
 		LatestSnapshotState: "ready", CreatedAt: root.CreatedAt}
 	pageValue, err := pageModuleDataValue(page, 1)
 	if err != nil {
@@ -248,22 +249,41 @@ func (s *Service) loadPage(ctx context.Context, pageID string) (websiteapi.Page,
 func decodePageRecord(key core.ModuleDataKey, record core.ModuleDataRecord) (websiteapi.Page, error) {
 	var stored pageDocument
 	var index struct {
-		RecordType string `json:"record_type"`
-		PageID     string `json:"page_id"`
-		SnapshotID string `json:"snapshot_id"`
-		State      string `json:"state"`
-		Revision   int64  `json:"revision"`
+		RecordType     string `json:"record_type"`
+		PageID         string `json:"page_id"`
+		SnapshotID     string `json:"snapshot_id"`
+		State          string `json:"state"`
+		Revision       int64  `json:"revision"`
+		LifecycleState string `json:"lifecycle_state"`
 	}
 	pageIDFromKey := strings.TrimPrefix(key.RecordKey, "page/")
+	payloadErr := json.Unmarshal(record.Payload, &stored)
+	indexErr := json.Unmarshal(record.IndexData, &index)
+	if stored.Page.LifecycleState == "" {
+		stored.Page.LifecycleState = "active"
+	}
 	if !strings.HasPrefix(key.RecordKey, "page/") || pageIDFromKey == key.RecordKey || key != websiterepo.PageKey(pageIDFromKey) || record.PayloadVersion != pageRecordVersion || record.Revision < 1 ||
-		json.Unmarshal(record.Payload, &stored) != nil || json.Unmarshal(record.IndexData, &index) != nil ||
+		payloadErr != nil || indexErr != nil ||
 		index.RecordType != "page" || index.PageID != stored.Page.ID || index.PageID != pageIDFromKey || index.SnapshotID != stored.Page.LatestSnapshotID ||
 		index.State != stored.Page.LatestSnapshotState || index.Revision < 1 ||
+		(index.LifecycleState != "" && index.LifecycleState != stored.Page.LifecycleState) ||
 		!snapshotIDPattern.MatchString(stored.Page.ID) || !validSnapshotName(stored.Page.Name) || !snapshotIDPattern.MatchString(stored.Page.LatestSnapshotID) ||
-		!validSnapshotState(stored.Page.LatestSnapshotState) || stored.Page.CreatedAt.IsZero() {
+		!validSnapshotState(stored.Page.LatestSnapshotState) || stored.Page.CreatedAt.IsZero() ||
+		!validPageLifecycle(stored.Page.LifecycleState) ||
+		(stored.Page.RetirementJobID != "" && !snapshotIDPattern.MatchString(stored.Page.RetirementJobID)) {
 		return websiteapi.Page{}, websiteapi.ErrUnavailable
 	}
+	stored.Page.Revision = record.Revision
 	return stored.Page, nil
+}
+
+func validPageLifecycle(state string) bool {
+	switch state {
+	case "active", "retiring", "retired":
+		return true
+	default:
+		return false
+	}
 }
 
 func snapshotIndex(snapshot websiteapi.Snapshot) (json.RawMessage, error) {
@@ -278,7 +298,7 @@ func pageModuleDataValue(page websiteapi.Page, revision int64) (*core.ModuleData
 		return nil, websiteapi.ErrUnavailable
 	}
 	index, err := json.Marshal(map[string]any{"record_type": "page", "page_id": page.ID, "snapshot_id": page.LatestSnapshotID,
-		"state": page.LatestSnapshotState, "revision": revision})
+		"state": page.LatestSnapshotState, "revision": revision, "lifecycle_state": page.LifecycleState})
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
 	}

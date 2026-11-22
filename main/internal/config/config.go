@@ -154,6 +154,18 @@ type Publication struct {
 	PollInterval         string               `yaml:"poll_interval"`
 }
 
+// RetirementBinding maps one server-owned page identity to the complete set
+// of Router routes that must be withdrawn before that page becomes retired.
+type RetirementBinding struct {
+	PageID   string   `yaml:"page_id"`
+	RouteIDs []string `yaml:"route_ids"`
+}
+
+type Retirement struct {
+	Bindings             []RetirementBinding `yaml:"bindings"`
+	WebsiteCredentialEnv string              `yaml:"website_credential_env"`
+}
+
 // FeatureImport supplies trusted, server-side inputs for the durable archive
 // worker and the Website import API. It is never populated from an HTTP request.
 type FeatureImport struct {
@@ -306,6 +318,13 @@ type PublicationSettings struct {
 	PollInterval      time.Duration
 }
 
+type RetirementSettings struct {
+	Enabled           bool
+	Routes            map[string][]string
+	WebsiteCredential string
+	RouterCredential  string
+}
+
 type FeatureImportSettings struct {
 	Enabled           bool
 	TargetFileSetID   string
@@ -357,6 +376,7 @@ type Resolved struct {
 	FormsAPI               FormsAPISettings
 	ContentAPI             ContentAPISettings
 	Publication            PublicationSettings
+	Retirement             RetirementSettings
 	FeatureImport          FeatureImportSettings
 	Media                  MediaSettings
 	Prerender              PrerenderSettings
@@ -684,6 +704,40 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			})
 		}
 	}
+	retirementConfigured := len(c.Retirement.Bindings) > 0 || c.Retirement.WebsiteCredentialEnv != ""
+	retirementRoutes := make(map[string][]string, len(c.Retirement.Bindings))
+	if retirementConfigured {
+		if len(c.Retirement.Bindings) == 0 || len(c.Retirement.Bindings) > 256 ||
+			!envName.MatchString(c.Retirement.WebsiteCredentialEnv) || c.RouterAPI.ServiceCredentialEnv == "" {
+			return Resolved{}, errors.New("retirement requires trusted bindings and explicit Website and Router service credentials")
+		}
+		seen := make(map[string]struct{}, len(c.Retirement.Bindings))
+		for _, binding := range c.Retirement.Bindings {
+			pageID, pageErr := uuid.Parse(binding.PageID)
+			if pageErr != nil || pageID == uuid.Nil || binding.PageID != pageID.String() ||
+				len(binding.RouteIDs) == 0 || len(binding.RouteIDs) > 64 {
+				return Resolved{}, errors.New("retirement bindings require a canonical page UUID and between 1 and 64 route IDs")
+			}
+			if _, duplicatePage := seen[binding.PageID]; duplicatePage {
+				return Resolved{}, errors.New("duplicate retirement page binding")
+			}
+			seen[binding.PageID] = struct{}{}
+			routes := make([]string, 0, len(binding.RouteIDs))
+			routeSeen := make(map[string]struct{}, len(binding.RouteIDs))
+			for _, routeIDValue := range binding.RouteIDs {
+				routeID, routeErr := uuid.Parse(routeIDValue)
+				if routeErr != nil || routeID == uuid.Nil || routeIDValue != routeID.String() {
+					return Resolved{}, errors.New("retirement bindings require canonical route UUIDs")
+				}
+				if _, duplicateRoute := routeSeen[routeIDValue]; duplicateRoute {
+					return Resolved{}, errors.New("duplicate retirement route binding")
+				}
+				routeSeen[routeIDValue] = struct{}{}
+				routes = append(routes, routeIDValue)
+			}
+			retirementRoutes[binding.PageID] = routes
+		}
+	}
 	featureImportConfigured := c.FeatureImport.TargetFileSetID != "" || c.FeatureImport.StagingDirectory != "" ||
 		c.FeatureImport.ServiceCredentialEnv != "" || len(c.FeatureImport.OutputGroups) > 0 || c.FeatureImport.MaxArchiveBytes != 0 ||
 		c.FeatureImport.MaxEntries != 0 || c.FeatureImport.MaxEntryBytes != 0 || c.FeatureImport.MaxExpandedBytes != 0 || c.FeatureImport.MaxCompressionRatio != 0
@@ -762,6 +816,13 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		publicationWebsiteCredential = getenv(c.Publication.WebsiteCredentialEnv)
 		if publicationWebsiteCredential == "" || strings.ContainsRune(publicationWebsiteCredential, '\x00') {
 			return Resolved{}, errors.New("configured publication Website credential is empty or invalid")
+		}
+	}
+	var retirementWebsiteCredential string
+	if retirementConfigured {
+		retirementWebsiteCredential = getenv(c.Retirement.WebsiteCredentialEnv)
+		if retirementWebsiteCredential == "" || strings.ContainsRune(retirementWebsiteCredential, '\x00') {
+			return Resolved{}, errors.New("configured retirement Website credential is empty or invalid")
 		}
 	}
 	var formsFileServiceCredential string
@@ -861,6 +922,8 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		Publication: PublicationSettings{Enabled: publicationConfigured, Targets: publicationTargets,
 			BuildTimeout: publicationBuildTimeout, PollInterval: publicationPollInterval,
 			WebsiteCredential: publicationWebsiteCredential, RouterCredential: routerServiceCredential},
+		Retirement: RetirementSettings{Enabled: retirementConfigured, Routes: retirementRoutes,
+			WebsiteCredential: retirementWebsiteCredential, RouterCredential: routerServiceCredential},
 		FeatureImport: FeatureImportSettings{Enabled: featureImportConfigured,
 			TargetFileSetID: c.FeatureImport.TargetFileSetID, OutputGroups: append([]string(nil), c.FeatureImport.OutputGroups...),
 			StagingDirectory: c.FeatureImport.StagingDirectory, ServiceCredential: featureImportCredential,
@@ -901,6 +964,7 @@ type Config struct {
 	FormsAPI      FormsAPI          `yaml:"forms_api"`
 	ContentAPI    ContentAPI        `yaml:"content_api"`
 	Publication   Publication       `yaml:"publication"`
+	Retirement    Retirement        `yaml:"retirement"`
 	FeatureImport FeatureImport     `yaml:"feature_import"`
 	Media         Media             `yaml:"media"`
 	Prerender     Prerender         `yaml:"prerender"`
@@ -923,6 +987,7 @@ func configFingerprint(config Config, runtimeURL, migrationURL string) (string, 
 	config.RouterAPI.BranchID = ""
 	config.RouterAPI.PublicListenAddress = ""
 	config.Publication.WebsiteCredentialEnv = ""
+	config.Retirement.WebsiteCredentialEnv = ""
 	databaseIdentity := func(value string) (string, error) {
 		parsed, err := url.Parse(value)
 		if err != nil || parsed.Host == "" || parsed.Path == "" {

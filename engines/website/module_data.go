@@ -24,6 +24,7 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 			{Name: "website/snapshots", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "revision": {Type: core.SelectorNumber},
 				"parent_id": {Type: core.SelectorString}, "page_id": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString}, "action": {Type: core.SelectorString},
+				"lifecycle_state": {Type: core.SelectorString},
 			}},
 			{Name: "website/page-templates", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
 				"record_type": {Type: core.SelectorString}, "template_id": {Type: core.SelectorString},

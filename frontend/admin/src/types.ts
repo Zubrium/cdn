@@ -107,12 +107,32 @@ export interface WebsiteSnapshotPage {
   next_cursor: string | null;
 }
 
+export type WebsitePageLifecycleState = "active" | "retiring" | "retired";
+export type WebsitePageRetirementState = "queued" | "running" | "succeeded" | "retryable_failed";
+export type WebsitePageRetirementRouteState = "pending" | "removed" | "retryable_failed";
+
 export interface WebsitePage {
   id: string;
   name: string;
+  revision: number;
+  lifecycle_state: WebsitePageLifecycleState;
+  retirement_job_id?: string;
   latest_snapshot_id: string;
   latest_snapshot_state: WebsiteSnapshotState;
   created_at: string;
+}
+
+export interface WebsitePageRetirementRoute {
+  route_id: string;
+  state: WebsitePageRetirementRouteState;
+  error_code?: string;
+}
+
+export interface WebsitePageRetirement {
+  id: string;
+  page_id: string;
+  state: WebsitePageRetirementState;
+  routes: WebsitePageRetirementRoute[];
 }
 
 export interface WebsitePagePage {

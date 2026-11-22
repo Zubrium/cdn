@@ -20,8 +20,12 @@ type Descriptor struct{}
 
 func (Descriptor) ComponentDescriptor() core.ComponentDescriptor { return ComponentDescriptor() }
 func (Descriptor) DataDescriptor() core.ModuleDataDescriptor     { return DataDescriptor() }
+func (Descriptor) Operations() []core.Operation                  { return nil }
 
-var _ core.ComponentDescriptorProvider = Descriptor{}
+var (
+	_ core.ComponentDescriptorProvider = Descriptor{}
+	_ core.Module                      = Descriptor{}
+)
 
 func ComponentDescriptor() core.ComponentDescriptor {
 	return core.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,

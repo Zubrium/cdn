@@ -209,6 +209,19 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '412': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /api/admin/pages/{pageID}/retirement/{jobID}:
+    get:
+      operationId: getPageRetirement
+      description: Poll the durable retirement workflow addressed by the Location header.
+      parameters:
+        - { name: pageID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Current durable retirement state., content: { application/json: { schema: { $ref: '#/components/schemas/PageRetirement' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /api/admin/templates:
     get:
       operationId: listPageTemplates
@@ -571,10 +584,11 @@ components:
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Page' } }, next_cursor: { type: string } }
     Page:
       type: object
-      required: [id, name, lifecycle_state, latest_snapshot_id, latest_snapshot_state, created_at]
+      required: [id, name, revision, lifecycle_state, latest_snapshot_id, latest_snapshot_state, created_at]
       properties:
         id: { type: string, format: uuid, description: Server-generated, stable page identity; never reused. }
         name: { type: string, minLength: 1, maxLength: 120 }
+        revision: { type: integer, minimum: 1 }
         lifecycle_state: { type: string, enum: [active, retiring, retired] }
         retirement_job_id: { type: string, format: uuid }
         latest_snapshot_id: { type: string, format: uuid }

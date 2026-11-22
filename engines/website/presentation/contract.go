@@ -47,6 +47,7 @@ type PageAPI interface {
 	ListPages(context.Context, string, int) (PagePage, error)
 	GetPage(context.Context, string) (Page, error)
 	CreatePage(context.Context, CreatePageRequest) (Page, error)
+	RetirePage(context.Context, RetirePageRequest) (Page, error)
 	ListPageTemplates(context.Context, string, int) (PageTemplatePage, error)
 	GetPageTemplate(context.Context, string) (PageTemplate, error)
 	CreatePageTemplate(context.Context, CreatePageTemplateRequest) (PageTemplate, error)
@@ -272,9 +273,23 @@ type SnapshotPage struct {
 type Page struct {
 	ID                  string    `json:"id"`
 	Name                string    `json:"name"`
+	Revision            int64     `json:"revision"`
+	LifecycleState      string    `json:"lifecycle_state"`
+	RetirementJobID     string    `json:"retirement_job_id,omitempty"`
 	LatestSnapshotID    string    `json:"latest_snapshot_id"`
 	LatestSnapshotState string    `json:"latest_snapshot_state"`
 	CreatedAt           time.Time `json:"created_at"`
+}
+
+// RetirePageRequest advances only the Website-owned page lifecycle. The
+// trusted outer composition owns route withdrawal and supplies the job
+// identity; Website never selects or calls a Router route.
+type RetirePageRequest struct {
+	PageID           string `json:"page_id"`
+	ExpectedRevision int64  `json:"expected_revision"`
+	LifecycleState   string `json:"lifecycle_state"`
+	RetirementJobID  string `json:"retirement_job_id"`
+	IdempotencyKey   string `json:"-"`
 }
 
 type PagePage struct {

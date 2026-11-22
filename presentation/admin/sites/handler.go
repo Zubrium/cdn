@@ -17,6 +17,7 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
@@ -24,21 +25,31 @@ import (
 const importPath = "/api/admin/feature-imports"
 const apiPrefix = "/api/admin"
 
+// PageRetirementAPI is the narrow process-local ingress to the trusted
+// retirement workflow. The identity is taken from the URL; routes remain in
+// server-owned composition state.
+type PageRetirementAPI interface {
+	RetirePage(context.Context, contracts.RetirePageRequest) (contracts.PageRetirement, error)
+	GetPageRetirement(context.Context, contracts.PageRetirementQuery) (contracts.PageRetirement, error)
+}
+
 type Config struct {
 	MaxJSONBytes         int64
 	DefaultPageSize      int
 	MaxPageSize          int
 	AllowedOrigins       []string
+	Retirement           PageRetirementAPI
 	SnapshotForkWorkflow interface {
 		Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
 	}
 }
 
 type Handler struct {
-	website website.API
-	cfg     Config
-	auth    *adminhttpauth.Transport
-	mux     *http.ServeMux
+	website    website.API
+	retirement PageRetirementAPI
+	cfg        Config
+	auth       *adminhttpauth.Transport
+	mux        *http.ServeMux
 }
 
 func NewHandler(api website.API, cfg Config) (*Handler, error) {
@@ -50,7 +61,7 @@ func NewHandler(api website.API, cfg Config) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Handler{website: api, cfg: cfg, auth: auth, mux: http.NewServeMux()}
+	h := &Handler{website: api, retirement: cfg.Retirement, cfg: cfg, auth: auth, mux: http.NewServeMux()}
 	h.mux.HandleFunc("POST "+importPath, h.beginImport)
 	h.mux.HandleFunc("GET "+importPath+"/{id}", h.getImport)
 	h.mux.HandleFunc("GET "+apiPrefix+"/features", h.listFeatureCatalog)
@@ -62,6 +73,8 @@ func NewHandler(api website.API, cfg Config) (*Handler, error) {
 	h.mux.HandleFunc("GET "+apiPrefix+"/pages", h.listPages)
 	h.mux.HandleFunc("POST "+apiPrefix+"/pages", h.createPage)
 	h.mux.HandleFunc("GET "+apiPrefix+"/pages/{pageID}", h.getPage)
+	h.mux.HandleFunc("DELETE "+apiPrefix+"/pages/{pageID}", h.retirePage)
+	h.mux.HandleFunc("GET "+apiPrefix+"/pages/{pageID}/retirement/{jobID}", h.getPageRetirement)
 	h.mux.HandleFunc("GET "+apiPrefix+"/templates", h.listPageTemplates)
 	h.mux.HandleFunc("POST "+apiPrefix+"/templates", h.createPageTemplate)
 	h.mux.HandleFunc("GET "+apiPrefix+"/templates/{templateID}", h.getPageTemplate)
@@ -301,9 +314,132 @@ func (h *Handler) createPage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, value)
 }
 
+func (h *Handler) retirePage(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if h.retirement == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	pageID := r.PathValue("pageID")
+	if !validUUID(pageID) {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	ifMatch, ok := readIfMatch(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	key, ok := readIdempotencyKey(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	job, err := h.retirement.RetirePage(ctx, contracts.RetirePageRequest{
+		PageID: pageID, IfMatch: ifMatch, IdempotencyKey: key,
+	})
+	if err != nil {
+		writeRetirementError(w, err)
+		return
+	}
+	if !validPageRetirement(job, pageID, "") {
+		writeError(w, http.StatusBadGateway, "unavailable")
+		return
+	}
+	w.Header().Set("Location", apiPrefix+"/pages/"+pageID+"/retirement/"+job.ID)
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (h *Handler) getPageRetirement(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if h.retirement == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	pageID, jobID := r.PathValue("pageID"), r.PathValue("jobID")
+	if !validUUID(pageID) || !validUUID(jobID) {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if _, ok := readQuery(r); !ok {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	job, err := h.retirement.GetPageRetirement(ctx, contracts.PageRetirementQuery{PageID: pageID, JobID: jobID})
+	if err != nil {
+		writeRetirementError(w, err)
+		return
+	}
+	if !validPageRetirement(job, pageID, jobID) {
+		writeError(w, http.StatusBadGateway, "unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
 func validPageResponse(value website.Page, pageID string) bool {
 	return validUUID(value.ID) && value.ID == pageID && validSnapshotName(value.Name) &&
+		value.Revision >= 1 && (value.LifecycleState == "active" || value.LifecycleState == "retiring" || value.LifecycleState == "retired") &&
+		(value.RetirementJobID == "" || validUUID(value.RetirementJobID)) &&
 		validUUID(value.LatestSnapshotID) && validSnapshotState(value.LatestSnapshotState)
+}
+
+func validPageRetirement(value contracts.PageRetirement, pageID, jobID string) bool {
+	if !validUUID(value.ID) || (jobID != "" && value.ID != jobID) || !validUUID(value.PageID) || value.PageID != pageID ||
+		len(value.Routes) == 0 || len(value.Routes) > 64 {
+		return false
+	}
+	switch value.State {
+	case "queued", "running", "succeeded", "retryable_failed":
+	default:
+		return false
+	}
+	seen := make(map[string]struct{}, len(value.Routes))
+	for _, route := range value.Routes {
+		if !validUUID(route.RouteID) {
+			return false
+		}
+		if _, duplicate := seen[route.RouteID]; duplicate {
+			return false
+		}
+		seen[route.RouteID] = struct{}{}
+		switch route.State {
+		case "pending", "removed", "retryable_failed":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func readIfMatch(r *http.Request) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	value := strings.TrimSpace(r.Header.Get("If-Match"))
+	if !ifMatchPattern.MatchString(value) {
+		return "", false
+	}
+	return value, true
+}
+
+func writeRetirementError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, contracts.ErrInvalidRetirementRequest):
+		writeError(w, http.StatusBadRequest, "invalid_request")
+	case errors.Is(err, contracts.ErrRetirementNotFound):
+		writeError(w, http.StatusNotFound, "not_found")
+	case errors.Is(err, contracts.ErrRetirementConflict):
+		writeError(w, http.StatusConflict, "conflict")
+	default:
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+	}
 }
 
 func (h *Handler) listPageTemplates(w http.ResponseWriter, r *http.Request) {
@@ -1123,6 +1259,7 @@ func validFieldPath(value string) bool {
 var fieldPathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 
 var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var ifMatchPattern = regexp.MustCompile(`^"[1-9][0-9]*"$`)
 
 func validVersion(value string) bool {
 	return value != "" && len(value) <= 128 && versionPattern.MatchString(value)

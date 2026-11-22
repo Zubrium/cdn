@@ -66,6 +66,7 @@ type AdminDependencies struct {
 	Files            fileapi.Loader
 	WorkflowControl  coordinatoradmin.WorkflowControl
 	Website          websiteengine.API
+	Retirement       sitesapi.PageRetirementAPI
 	Content          contentengine.API
 	ContentSchemas   contentadmin.SchemaSnapshots
 	Forms            formsengine.API
@@ -192,6 +193,7 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		handler, err := sitesapi.NewHandler(s.deps.Website, sitesapi.Config{
 			MaxJSONBytes: s.config.MaxJSONBytes, DefaultPageSize: s.config.DefaultPageSize,
 			MaxPageSize: s.config.MaxPageSize, AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
+			Retirement: s.deps.Retirement,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("initialize Website API: %w", err)

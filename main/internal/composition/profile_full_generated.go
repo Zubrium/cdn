@@ -10,7 +10,8 @@ import (
 	loaderEngine "github.com/Zubrium/cdn/engines/loader/presentation"
 	routerEngine "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteEngine "github.com/Zubrium/cdn/engines/website/presentation"
-	_ "github.com/Zubrium/cdn/main/internal/publication"
+	publication "github.com/Zubrium/cdn/main/internal/publication"
+	retirement "github.com/Zubrium/cdn/main/internal/retirement"
 	_ "github.com/Zubrium/cdn/presentation/admin/base/transport"
 	_ "github.com/Zubrium/cdn/presentation/admin/content"
 	_ "github.com/Zubrium/cdn/presentation/admin/forms"
@@ -22,9 +23,9 @@ import (
 	_ "github.com/Zubrium/cdn/presentation/router/publicforms"
 	_ "github.com/Zubrium/cdn/presentation/router/publicupload"
 	_ "github.com/Zubrium/cdn/presentation/sitesapi"
-	_ "github.com/Zubrium/cdn/workers/archive"
-	_ "github.com/Zubrium/cdn/workers/media"
-	_ "github.com/Zubrium/cdn/workers/prerender"
+	archive "github.com/Zubrium/cdn/workers/archive"
+	media "github.com/Zubrium/cdn/workers/media"
+	prerender "github.com/Zubrium/cdn/workers/prerender"
 )
 
 func RegisterGeneratedEngines(registry *platform.Registry) error {
@@ -44,6 +45,21 @@ func RegisterGeneratedEngines(registry *platform.Registry) error {
 		return err
 	}
 	if err := registry.Register("router", routerEngine.Descriptor{}); err != nil {
+		return err
+	}
+	if err := registry.Register("retirement", retirement.Module{}); err != nil {
+		return err
+	}
+	if err := registry.Register("publication", publication.Module{}); err != nil {
+		return err
+	}
+	if err := registry.Register("worker.archive", archive.Descriptor{}); err != nil {
+		return err
+	}
+	if err := registry.Register("worker.media", media.Descriptor{}); err != nil {
+		return err
+	}
+	if err := registry.Register("worker.prerender", prerender.Descriptor{}); err != nil {
 		return err
 	}
 	return nil
@@ -66,6 +82,7 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"admin.router",
 		"admin.ui",
 		"admin.website",
+		"composition.retirement",
 		"engine.publication",
 		"public.router",
 		"public.content-runtime",

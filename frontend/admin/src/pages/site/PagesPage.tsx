@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, FilePlus2, LayoutTemplate, Plus, Search } from "lucide-react";
+import { ArrowRight, FilePlus2, LayoutTemplate, Plus, Search, Trash2 } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { useAuth } from "@/app/auth";
 import { ErrorState, useDocumentTitle } from "@/components/common/page";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
-import type { WebsitePageTemplate } from "@/types";
+import type { WebsitePage, WebsitePageRetirement, WebsitePageTemplate } from "@/types";
 import { errorMessage } from "@/lib/errors";
 import { hasGroupAccess } from "@/lib/permissions";
 import { useSiteWorkspace } from "./SiteWorkspace";
@@ -17,11 +21,38 @@ import { siteContextQuery } from "./site-query";
 
 const PAGE_LIST_LIMIT = 100;
 const TEMPLATE_LIST_LIMIT = 100;
+const RETIREMENT_POLL_MS = 1000;
+const RETIREMENT_POLL_LIMIT = 120;
 
 type CreateAttempt = { fingerprint: string; key: string };
 
 function pageDetailURL(pageID: string, snapshotID: string): string {
   return `/site/pages/${encodeURIComponent(pageID)}${siteContextQuery(snapshotID, pageID)}`;
+}
+
+function retirementStateLabel(state: string): string {
+  if (state === "queued") return "в очереди";
+  if (state === "running") return "выполняется";
+  if (state === "succeeded") return "завершено";
+  return "требует повтора";
+}
+
+function waitForRetirementPoll(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, RETIREMENT_POLL_MS);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export default function PagesPage() {
@@ -38,6 +69,13 @@ export default function PagesPage() {
   const [templateID, setTemplateID] = useState("");
   const [creating, setCreating] = useState(false);
   const createAttempt = useRef<CreateAttempt | null>(null);
+  const [retireTarget, setRetireTarget] = useState<WebsitePage | null>(null);
+  const [retireJob, setRetireJob] = useState<WebsitePageRetirement | null>(null);
+  const [retiring, setRetiring] = useState(false);
+  const [retireError, setRetireError] = useState("");
+  const retireNotified = useRef("");
+  const retireKey = useRef<string | null>(null);
+  const retirePoll = useRef<AbortController | null>(null);
 
   const pages = useInfiniteQuery({
     queryKey: ["site", "website-pages"],
@@ -66,6 +104,8 @@ export default function PagesPage() {
     return allPages.filter((page) => page.name.toLocaleLowerCase("ru-RU").includes(query));
   }, [allPages, search]);
 
+  useEffect(() => () => retirePoll.current?.abort(), []);
+
   useEffect(() => {
     if (searchParams.get("create") !== "1") return;
     setName("");
@@ -92,6 +132,81 @@ export default function PagesPage() {
       setName("");
       setTemplateID("");
       createAttempt.current = null;
+    }
+  };
+
+  const openRetire = (page: WebsitePage) => {
+    if (retiring || page.lifecycle_state === "retired") return;
+    retirePoll.current?.abort();
+    retireKey.current = `page-retire-${crypto.randomUUID()}`;
+    retireNotified.current = "";
+    setRetireTarget(page);
+    setRetireJob(null);
+    setRetireError("");
+  };
+
+  const closeRetire = () => {
+    if (retiring) return;
+    retirePoll.current?.abort();
+    retireKey.current = null;
+    setRetireTarget(null);
+    setRetireJob(null);
+    setRetireError("");
+  };
+
+  const followRetirement = async (pageID: string, jobID: string, controller: AbortController) => {
+    for (let attempt = 0; attempt < RETIREMENT_POLL_LIMIT && !controller.signal.aborted; attempt += 1) {
+      const job = await api.website.pageRetirement(pageID, jobID, controller.signal);
+      if (controller.signal.aborted) return;
+      setRetireJob(job);
+      if (job.state === "succeeded") {
+        if (retireNotified.current !== jobID) {
+          retireNotified.current = jobID;
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["site", "website-pages"] }),
+            queryClient.invalidateQueries({ queryKey: ["site", "snapshot-choices"] }),
+          ]);
+          toast.success("Страница выведена из публикации");
+        }
+        setRetireTarget(null);
+        return;
+      }
+      if (job.state === "retryable_failed") {
+        setRetireError("Вывод маршрутов прерван. Устраните причину и повторите действие.");
+        return;
+      }
+      await waitForRetirementPoll(controller.signal);
+    }
+    if (!controller.signal.aborted) setRetireError("Вывод страницы ещё не завершён. Проверьте состояние позже.");
+  };
+
+  const confirmRetire = async () => {
+    const target = retireTarget;
+    if (!target || retiring) return;
+    const controller = new AbortController();
+    retirePoll.current?.abort();
+    retirePoll.current = controller;
+    setRetiring(true);
+    setRetireError("");
+    try {
+      let jobID = target.retirement_job_id;
+      if (!jobID || target.lifecycle_state !== "retiring") {
+        const key = retireKey.current ?? `page-retire-${crypto.randomUUID()}`;
+        retireKey.current = key;
+        const job = await api.website.retirePage(target.id, JSON.stringify(target.revision), key);
+        jobID = job.id;
+        setRetireJob(job);
+      }
+      await followRetirement(target.id, jobID, controller);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        const message = errorMessage(error);
+        setRetireError(message);
+        toast.error(message);
+      }
+    } finally {
+      if (retirePoll.current === controller) retirePoll.current = null;
+      setRetiring(false);
     }
   };
 
@@ -163,14 +278,20 @@ export default function PagesPage() {
         {canEdit && !search && <Button type="button" className="mt-5 min-h-11" onClick={() => openCreate()}><Plus />Создать страницу</Button>}
       </section> : <div className="divide-y divide-border">
         {visiblePages.map((page) => {
+          const lifecycle = page.lifecycle_state === "retired" ? " · выведена" : page.lifecycle_state === "retiring" ? " · выводится" : "";
           const row = <div className="flex min-h-[4.5rem] min-w-0 items-center gap-3 px-1 py-3">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"><FilePlus2 className="size-4" /></span>
-            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{page.name}</span><span className="mt-1 block text-xs text-muted-foreground">{page.latest_snapshot_state === "ready" ? "Готовый снапшот" : page.latest_snapshot_state === "provisioning" ? "Снапшот готовится" : "Сбой подготовки снапшота"}</span></span>
+            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{page.name}</span><span className="mt-1 block text-xs text-muted-foreground">{page.latest_snapshot_state === "ready" ? "Готовый снапшот" : page.latest_snapshot_state === "provisioning" ? "Снапшот готовится" : "Сбой подготовки снапшота"}{lifecycle}</span></span>
             <span className="hidden shrink-0 text-xs text-muted-foreground sm:block">Создана {new Date(page.created_at).toLocaleDateString("ru-RU")}</span>
             {canEdit && <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
           </div>;
-          return <article key={page.id} className="border-b border-border/70 last:border-0">
-            {canEdit ? <Link to={pageDetailURL(page.id, page.latest_snapshot_id)} className="block rounded-sm hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row}</Link> : row}
+          return <article key={page.id} className="flex min-w-0 items-stretch border-b border-border/70 last:border-0">
+            {canEdit ? <Link to={pageDetailURL(page.id, page.latest_snapshot_id)} className="block min-w-0 flex-1 rounded-sm hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row}</Link> : <div className="min-w-0 flex-1">{row}</div>}
+            {canEdit && page.lifecycle_state !== "retired" && <div className="flex shrink-0 items-center pr-1">
+              <Button type="button" variant="ghost" size="icon" className="min-h-11 min-w-11 text-destructive hover:text-destructive" aria-label={`Вывести страницу ${page.name}`} title="Вывести страницу из публикации" disabled={retiring} onClick={() => openRetire(page)}>
+                <Trash2 className="size-4" aria-hidden="true" />
+              </Button>
+            </div>}
           </article>;
         })}
         {pages.hasNextPage && <div className="py-4 text-center"><Button type="button" variant="outline" className="min-h-11" loading={pages.isFetchingNextPage} onClick={() => void pages.fetchNextPage()}>Загрузить ещё</Button></div>}
@@ -204,5 +325,30 @@ export default function PagesPage() {
         </form>
       </DialogContent>
     </Dialog>
+
+    <AlertDialog open={retireTarget !== null} onOpenChange={(open) => { if (!open) closeRetire(); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Вывести страницу из публикации?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Страница «{retireTarget?.name ?? ""}» получит состояние «retiring». Сервер отзовёт все привязанные публичные маршруты и только после этого затем окончательно пометит страницу как «retired». ID страницы больше не будет использован повторно.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {retireJob && <div role="status" className="space-y-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <p>Задание {retireJob.id}: {retirementStateLabel(retireJob.state)}.</p>
+          <ul className="space-y-1">
+            {retireJob.routes.map((route) => <li key={route.route_id} className="truncate">
+              {route.route_id}: {route.state === "removed" ? "маршрут отозван" : route.state === "retryable_failed" ? "требует повтора" : "ожидает отзыва"}
+              {route.error_code ? ` (${route.error_code})` : ""}
+            </li>)}
+          </ul>
+        </div>}
+        {retireError && <p role="alert" className="text-xs text-destructive">{retireError}</p>}
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild><Button type="button" variant="outline" className="min-h-11" disabled={retiring}>Отмена</Button></AlertDialogCancel>
+          <AlertDialogAction asChild><Button type="button" variant="destructive" className="min-h-11" disabled={retiring} loading={retiring} onClick={() => void confirmRetire()}>{retireTarget?.lifecycle_state === "retiring" ? "Наблюдать за выводом" : "Вывести страницу"}</Button></AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>;
 }

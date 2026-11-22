@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DbClientProjectConnectionStore">
+    <option name="connections">
+      <list>
+        <ConnectionEntry>
+          <option name="advanced">
+            <AdvancedOptions>
+              <option name="keepAliveIntervalSec" value="0" />
+            </AdvancedOptions>
+          </option>
+          <option name="connectionMode" value="HOST" />
+          <option name="createdAt" value="1795366996134" />
+          <option name="ssh">
+            <SshConfig />
+          </option>
+          <option name="ssl">
+            <SslConfig />
+          </option>
+          <option name="id" value="70aa768e-3c37-4457-a3fc-e4c0295891a5" />
+          <option name="name" value="Postgres Connection" />
+          <option name="databaseId" value="postgres" />
+          <option name="port" value="5432" />
+          <option name="username" value="postgres" />
+          <option name="database" value="postgres" />
+        </ConnectionEntry>
+      </list>
+    </option>
+  </component>
+</project>

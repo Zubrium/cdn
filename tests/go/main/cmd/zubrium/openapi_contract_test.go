@@ -135,8 +135,7 @@ func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 // Spec-required endpoints that are documented but not yet wired in this
 // checkout. Keep the list explicit so new drift still fails this check.
 var pendingOperations = map[string]string{
-	"POST /api/locale-preference":      "Router locale preference operation is not compiled into the profile",
-	"DELETE /api/admin/pages/{pageID}": "durable page retirement workflow is not wired into the Website API",
+	"POST /api/locale-preference": "Router locale preference operation is not compiled into the profile",
 }
 
 func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {

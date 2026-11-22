@@ -172,6 +172,9 @@ func (a *Website) GetPage(ctx context.Context, pageID string) (website.Page, err
 func (a *Website) CreatePage(ctx context.Context, _ website.CreatePageRequest) (website.Page, error) {
 	return website.Page{}, a.writeUnavailable(ctx)
 }
+func (a *Website) RetirePage(ctx context.Context, _ website.RetirePageRequest) (website.Page, error) {
+	return website.Page{}, a.writeUnavailable(ctx)
+}
 func (a *Website) ListPageTemplates(ctx context.Context, _ string, _ int) (website.PageTemplatePage, error) {
 	if err := a.require(ctx, core.AccessLevelRead); err != nil {
 		return website.PageTemplatePage{}, err
@@ -487,7 +490,7 @@ var _ core.Module = Descriptor{}
 var demoTime = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 
 func demoPage() website.Page {
-	return website.Page{ID: syntheticPageID, Name: "Synthetic demo",
+	return website.Page{ID: syntheticPageID, Name: "Synthetic demo", Revision: 1, LifecycleState: "active",
 		LatestSnapshotID: syntheticSnapshotID, LatestSnapshotState: "ready", CreatedAt: demoTime}
 }
 

@@ -54,6 +54,7 @@ import type {
   WebsiteSnapshotPayload,
   WebsitePage,
   WebsitePagePage,
+  WebsitePageRetirement,
   WebsitePageTemplate,
   WebsitePageTemplatePage,
   WebsitePageTemplateConfiguration,
@@ -864,7 +865,10 @@ function toMedia(file: CoreFile): Media {
 
 function parseWebsitePage(value: unknown): WebsitePage {
   if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
-    typeof value.name !== "string" || typeof value.latest_snapshot_id !== "string" ||
+    typeof value.name !== "string" || !Number.isSafeInteger(value.revision) || (value.revision as number) < 1 ||
+    !["active", "retiring", "retired"].includes(String(value.lifecycle_state)) ||
+    (value.retirement_job_id !== undefined && !uuidValuePattern.test(String(value.retirement_job_id))) ||
+    typeof value.latest_snapshot_id !== "string" ||
     !uuidValuePattern.test(value.latest_snapshot_id) || !["provisioning", "ready", "failed"].includes(String(value.latest_snapshot_state)) ||
     typeof value.created_at !== "string" || !Number.isFinite(Date.parse(value.created_at))) {
     throw new ApiError(502, "invalid_response", "Сервер вернул некорректную страницу сайта");
@@ -908,6 +912,14 @@ export const api = {
       return parseWebsitePage(await request<unknown>(`${ADMIN_ROOT}/pages`, {
         method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
       }));
+    },
+    async retirePage(pageID: string, ifMatch: string, idempotencyKey: string): Promise<WebsitePageRetirement> {
+      return request<WebsitePageRetirement>(`${ADMIN_ROOT}/pages/${encoded(pageID)}`, {
+        method: "DELETE", headers: { "If-Match": ifMatch, "Idempotency-Key": idempotencyKey },
+      });
+    },
+    async pageRetirement(pageID: string, jobID: string, signal?: AbortSignal): Promise<WebsitePageRetirement> {
+      return request<WebsitePageRetirement>(`${ADMIN_ROOT}/pages/${encoded(pageID)}/retirement/${encoded(jobID)}`, { signal });
     },
     async pageTemplates(cursor?: string, limit?: number, signal?: AbortSignal): Promise<WebsitePageTemplatePage> {
       const page = await requestList<WebsitePageTemplate>(`${ADMIN_ROOT}/templates`, { signal, query: { cursor, limit } });

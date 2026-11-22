@@ -125,6 +125,15 @@ content_api:
   service_credential_env: ZUBRIUM_CONTENT_SERVICE_CREDENTIAL
   locale: en-US
 
+# Optional durable page retirement. Every page/route binding is server-owned;
+# the DELETE request supplies only a page URL, If-Match and Idempotency-Key.
+# retirement:
+#   website_credential_env: ZUBRIUM_WEBSITE_SERVICE_CREDENTIAL
+#   bindings:
+#     - page_id: 00000000-0000-4000-8000-000000000001
+#       route_ids:
+#         - 00000000-0000-4000-8000-000000000002
+
 # Enable durable feature imports only after an operator-created managed FileSet
 # and a service credential with write access to its output groups exist. Without
 # this block the compiled archive worker stays fail-closed.

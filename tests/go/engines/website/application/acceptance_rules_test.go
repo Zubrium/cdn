@@ -178,7 +178,19 @@ func TestWebsiteScenarioSiteEditorBindings(t *testing.T) {
 
 func TestWebsiteScenarioPageDeletion(t *testing.T) {
 	t.Run("WEB-022", func(t *testing.T) {
-		t.Skip("blocked: durable retirement requires disposable Router targets plus Content, Forms and Core resources")
+		// The executable durable-flow check lives in the disposable main
+		// acceptance suite; this contract guard keeps the Website facade
+		// honest: no retirement state or operation may disappear silently.
+		apiType := reflect.TypeOf((*websiteapi.API)(nil)).Elem()
+		if _, exists := apiType.MethodByName("RetirePage"); !exists {
+			t.Fatal("Website API must expose the typed RetirePage operation")
+		}
+		pageType := reflect.TypeOf(websiteapi.Page{})
+		for _, field := range []string{"Revision", "LifecycleState", "RetirementJobID"} {
+			if _, exists := pageType.FieldByName(field); !exists {
+				t.Fatalf("Website Page must expose %s for durable retirement", field)
+			}
+		}
 	})
 }
 
