@@ -1,13 +1,14 @@
 # Observability стек: запуск и просмотр сигналов
 
-Изолированный стек для проверки контракта из [SPEC-observability](../../spec/observability/SPEC-observability.md): `zubrium-obs` → OTel Collector → OpenObserve, плюс одноразовые PostgreSQL и MinIO. Стек использует `profiles: [observability]` в корневом [compose.yaml](../../compose.yaml); сервис `core-qa-postgres` и рабочие API не затрагиваются.
+Изолированный стек для проверки контракта из [SPEC-observability](../../spec/observability/SPEC-observability.md): `zubrium-obs` → OTel Collector → OpenObserve, плюс одноразовые PostgreSQL и S3-эмулятор Moto. Стек использует `profiles: [observability]` в корневом [compose.yaml](../../compose.yaml); сервис `core-qa-postgres` и рабочие API не затрагиваются.
 
 > Все проверки этого стека пока ожидают реального прогона: статусы `OBS-001..OBS-010` в [acceptance matrix](../../tests/ACCEPTANCE-MATRIX.md) не выставлены в `pass`, результаты не записаны в [QA report](../../docs/QA_REPORT.md).
 
 ## 1. Предусловия
 
-- Docker Compose v2, свободные порты `18080` (Admin), `18081` (публичный Router), `15080` (OpenObserve UI), `14317/14318` (OTLP gRPC/HTTP), `15900/15901` (MinIO API/console), `15432` (PostgreSQL).
-- Только disposable-данные. PostgreSQL и MinIO живут в tmpfs и исчезают при остановке контейнеров; OpenObserve хранит сигналы в named volume `openobserve-data`.
+- Docker Compose v2, свободные порты `18080` (Admin), `18081` (публичный Router), `15080` (OpenObserve UI), `14317/14318` (OTLP gRPC/HTTP), `15900` (Moto S3 API), `15432` (PostgreSQL).
+- Только disposable-данные. PostgreSQL живёт в tmpfs, Moto хранит состояние в памяти процесса; оба исчезают при остановке контейнеров. OpenObserve хранит сигналы в named volume `openobserve-data`.
+- S3-эмулятор — `motoserver/moto`: он поддерживает `Get/PutPublicAccessBlock`, обязательный для Core `RequirePrivate`. Ранее использованный `alpine/minio` является development-сборкой и возвращает `NotImplemented` на эту операцию.
 - Образ OpenObserve зафиксирован как `public.ecr.aws/zinclabs/openobserve:v1.1.2`: тег `latest` в этом реестре нестабилен для повторяемого прогона.
 - Не направляйте запросы на рабочий API. Для write-сценариев используйте только этот стек.
 

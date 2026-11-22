@@ -42,24 +42,22 @@ services:
       timeout: 3s
       retries: 30
 
-  # Одноразовый S3; bucket создаётся отдельным одноразовым obs-minio-init через aws-cli.
+  # Одноразовый S3-эмулятор; bucket и public access block создаёт obs-minio-init.
+  # Moto выбран вместо MinIO: development-сборка alpine/minio не поддерживает
+  # GetPublicAccessBlock, который Core обязательно проверяет при старте.
   obs-minio:
     profiles: [observability]
-    image: alpine/minio:RELEASE.2025-10-15T17-29-55Z
+    image: motoserver/moto:latest
     restart: "no"
-    command: server /data --console-address ":9001"
+    command: ["-H", "0.0.0.0", "-p", "5000"]
     environment:
-      MINIO_ROOT_USER: ${OBS_S3_ACCESS_KEY:?set OBS_S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${OBS_S3_SECRET_KEY:?set OBS_S3_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
     ports:
-      - "127.0.0.1:15900:9000"
-      - "127.0.0.1:15901:9001"
-    tmpfs:
-      - /data
+      - "127.0.0.1:15900:5000"
     healthcheck:
       test:
         - CMD-SHELL
-        - "wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live 2>/dev/null || curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 || exit 1"
+        - "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:5000/moto-api/\").read()' || exit 1"
       interval: 2s
       timeout: 3s
       retries: 30
@@ -81,10 +79,12 @@ services:
       - -c
       - |
         set -eu
-        endpoint=http://obs-minio:9000
+        endpoint=http://obs-minio:5000
         bucket=zubrium-private
         aws s3api head-bucket --endpoint-url "$$endpoint" --bucket "$$bucket" 2>/dev/null || \
           aws s3api create-bucket --endpoint-url "$$endpoint" --bucket "$$bucket"
+        aws s3api put-public-access-block --endpoint-url "$$endpoint" --bucket "$$bucket" \
+          --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 
   openobserve:
     profiles: [observability]

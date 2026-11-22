@@ -8,7 +8,7 @@ core:
   database_url_env: ZUBRIUM_DATABASE_URL
   migration_database_url_env: ZUBRIUM_MIGRATION_DATABASE_URL
   bootstrap_secret_env: ZUBRIUM_BOOTSTRAP_SECRET
-  s3_endpoint: http://obs-minio:9000
+  s3_endpoint: http://obs-minio:5000
   s3_region: us-east-1
   s3_bucket: zubrium-private
   s3_access_key_env: ZUBRIUM_S3_ACCESS_KEY
