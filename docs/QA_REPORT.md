@@ -1,5 +1,65 @@
 # QA-отчёт
 
+## Admin UI/UX polish и browser QA (2026-11-23)
+
+### Целевая среда
+
+- Изолированный run `ui-polish-20261122t211824z-b7cfbb`, отдельный checkout `$RUN_DIR/checkout`, Admin `127.0.0.1:49320`, public `127.0.0.1:49321`, S3-boundary proxy `127.0.0.1:49322`, PostgreSQL `49310`, secret-server `49330`. Рабочие порты `8080/5173/55432` не имеют слушателей.
+- Перед каждым write-сценарием выполнялся `tests/qa/browser/verify-target.sh` с ожидаемым build identity: PID использует бинарник и конфиг checkout, `/healthz` и `/readyz` дают 204, public listener не экспонирует health. Write-запросы отправлялись только в этот disposable стек.
+- Все правки — frontend (`frontend/admin/src`, `frontend/admin/index.html`, `frontend/ui/styles/admin.css`) и frontend-тесты. Generated `pkg/static/dist` пересобран из этого же source. Смежные пользовательские изменения в Go/spec/observability-файлах не изменялись.
+
+### Статические проверки (финальный код)
+
+- Из `frontend/`: `pnpm --filter @website-engine/admin typecheck`, `pnpm lint` (`--max-warnings=0`) и `pnpm --filter @website-engine/admin build` — PASS.
+- `pnpm --filter @website-engine/admin test` — `61 files / 282 tests passed`, включая regression-тесты unsaved guard, `changesSnapshotOrLocale` контент-редактора и локализацию простых API-кодов.
+- `git diff --check` — PASS. Коммит и push не выполнялись: отдельный запрос не поступал.
+
+### Исполненные browser-проверки
+
+- Responsive: светлая тема на `360/390/768/1024/1280/1440/1920 px`, ключевые экраны `/admin/`, `/admin/forms`, `/admin/content`, `/admin/media`, `/admin/site/pages`, `/admin/router/routes`, `/admin/submissions`. Горизонтального переполнения нет; на `360/390` интерактивные цели ≥44 px, включая кнопку закрытия Sonner-toast и «Изменить цель» в Router. Видимый фокус по первому `Tab` и навигация по ссылкам работают.
+- Темы: system/light/dark через `ThemeToggle`, `body` background/foreground и `meta[name=theme-color]` соответствуют токенам (`#f7f7f7` / `#141414`); тема сохраняется между переходами.
+- Lighthouse на `/admin/forms`: Accessibility `1`, Best Practices `1`, SEO `1`, failures нет. Ранее SEO было `0.75` из-за отсутствующего `meta[name=description]`; описание добавлено в `frontend/admin/index.html`.
+- Media: grid/list, поиск с пустым результатом, actions menu и detail/upload dialogs закрываются по `Escape`; мобильные кнопки «Сетка»/«Список» имеют высоту 44 px.
+- Forms: создана форма `qa-form`, сохранение прошло; невалидный Go RE2 шаблон теперь показывает локализованное `Некорректный запрос. Проверьте введённые данные.` вместо сырого `invalid_request`; publication host/base path валидируются; unsaved guard проверен обоими путями («Остаться» и «Покинуть страницу»).
+- Site editor: создана страница `QA Главная` и снапшот `#1`, вкладки «Фичи»/«SEO» переключаются, dirty-состояние сохраняется при переходе «Настройки» → «Страницы». Guard на смену `snapshot` покрыт unit-тестом (`changesSnapshotOrLocale`).
+- Router: создан точный маршрут `qa.example.test/qa` с Core file target, подтверждено диалоговое «Опубликовать файл по маршруту?» → «Сделать доступным»; маршрут показан как `active`, `exact`, `Ветка main · ревизия 1`.
+- Submissions: в изолированном стеке фильтр по `form` и `key` меняет URL без дублирования history entries и оставляет список согласованным с выбранной формой.
+- Snapshots: `/admin/snapshots/tree` и `/admin/snapshots/registry` открываются с корректными заголовками; single-root дерево показывает созданный снапшот `#1` со ссылками «Страницы», «Состав фичей», «Контент».
+
+### Ограничения и невыполненные проверки
+
+- Content deep QA заблокирован стеком: `PUT /api/admin/content/locales` успешно создал конфигурацию `en-US/ru-RU` (revision 1), но `GET /api/admin/content/locales` после этого стабильно возвращает `503 {"error":"unavailable"}` из fail-closed провайдера Content projections; редактор показывает `Не удалось загрузить локали контента unavailable` с рабочей кнопкой «Повторить». Это ограничение изолированного окружения, не frontend-регрессия; реальные content records/drafts/publication не проверялись.
+- Проверка guard при смене `snapshot` в живом UI не выполнена: в стеке только один снапшот. Логика покрыта unit-тестом и остаётся ограниченной проверкой.
+- Визуальный осмотр сохранённых скриншотов из `$RUN_DIR/qa-shots/` не выполнялся: текущая модель не читает изображения. QA опирается на DOM/accessibility/ComputedStyle/console/Lighthouse-проверки.
+- `MediaFilters` остаётся не подключённым: `/api/files` принимает только `q/group/cursor/limit`, а фильтры `type/status/sort/from/to/min/max` требуют изменения API-контракта вне frontend-волны.
+- В консоли изолированного стека присутствуют ожидаемые `503 /api/admin/content/locales` и `404 /api/admin/model` из недоступных в этой композиции engine capabilities; ошибок JS-рантайма в проверенных UI-потоках не зафиксировано.
+- Integration/release/cybersecurity проверки в этой волне не запускались; коммит и push не выполнялись. Файл `frontend/admin/src/pages/site/RouterPage.tsx` не достижим из роутера, поэтому добавленные ранее контролы приоритета/родителя откачены, а не перенесены в рабочий UI без требования задачи.
+
+## Кэширование и прогрев (2026-11-23)
+
+Целевой контракт: [SPEC-caching](../spec/architecture/SPEC-caching.md). Исполняемые сценарии `CACHE-001..CACHE-012` определены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md). Все они находятся в статусе «планируется/ожидает проверки»: в этом отчёте нет evidence реализации кэша, Vary/сжатия, метрик кэша и прогрева до Ready. Старые проходы ниже к новой функциональности не применяются. Статус `pass` будет выставлен только после реального прогона с зафиксированными командами, целевым стеком и ограничениями.
+
+## Observability (2026-11-23)
+
+### Фактически запущенные проверки
+
+- Из каталога `pkg/`: `go test ./...`, `go vet ./...`, `go build ./...` и `go test -race ./observability/...` — PASS. Unit-тесты покрывают JSONL-сигналы с trace/span correlation, derived-key/value redaction, низкокардинальные метки операций, W3C traceparent, HTTP route/healthz поведение и OTLP-экспорт в `httptest`-сервер (logs/traces/metrics, parent propagation, error status).
+- Из каталога `presentation/admin/base`: `go test ./...`, `go vet ./...` — PASS.
+- Из каталога `main`: `go test ./...`, `go vet ./...`, `go build ./...`, `go build -tags full ./...` — PASS; `go test ./internal/config` — PASS (разрешение observability-блока, отказ не-loopback HTTP S3 без явного allowlist).
+- `--check-config main/config.observability.yaml.example` с фиктивными env и `-tags full` — `configuration is valid` (exit 0).
+- `docker compose --profile observability config --quiet` с фиктивными значениями обязательных env — exit 0. Контейнеры **не запускались**, сетевые и startup-проверки не выполнялись.
+
+### Ожидающие проверки
+
+Следующие пункты остаются «планируется/ожидает проверки» и не имеют статуса `pass`:
+
+- Старт isolate-стека и исполняемые input/result сценарии `OBS-001..OBS-010` из [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md): healthz без лога но с метрикой, 409 + span error, `trace_id` в ответе/логах, worker identity, три JSONL-файла с ротацией, записи в OpenObserve, невалидный traceparent, недоступность Collector, redaction в живом API, параллелизм и shutdown.
+- Реальные порты 18080/18081/15080/14318/14317/15900/15901/15432, tmpfs для PostgreSQL/MinIO, named volume только для OpenObserve, миграции PostgreSQL отдельной ролью и запись в MinIO.
+- OTel Collector pipelines logs/traces/metrics и наличие сигналов в OpenObserve; SQL/PromQL примеры из [README deploy/observability](../deploy/observability/README.md) не выполнялись.
+- Отказные случаи в живом стеке: переполнение файлов, сброс/завершение компонентов, таймаут экспорта, отсутствие утечки тела формы/PII в атрибуты.
+
+`pass` по любому ожидающему пункту будет выставлен только после реального прогона с зафиксированными командами, целевыми сервисами, ограничениями и результатами. Наличие спецификации, compose-файлов, конфигурации Collector или unit-тестов не подменяет acceptance-прогон.
+
 ## Текущий проход — глобальные Forms, вложенные страницы Admin и публичный submit (2026-11-22)
 
 ### Подтверждённые проверки

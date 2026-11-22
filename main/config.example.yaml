@@ -1,3 +1,7 @@
+# Текущие плоские ключи ниже соответствуют текущему коду. Целевая вложенная
+# схема core.cache.* / router.cache.* и параметры прогрева описаны в
+# spec/architecture/SPEC-caching.md; их внедрение — отдельная волна вместе с
+# изменением конфигурационного контракта, без compatibility aliases.
 core:
   database_url_env: ZUBRIUM_DATABASE_URL
   migration_database_url_env: ZUBRIUM_MIGRATION_DATABASE_URL
@@ -159,6 +163,23 @@ http:
   idle_timeout: 2m
   shutdown_timeout: 20s
   max_header_bytes: 65536
+
+# Telemetry is deployment-local: noop by default, file for cheap JSONL output,
+# otlp for export through an OpenTelemetry Collector into OpenObserve.
+observability:
+  mode: noop
+  min_level: info
+  # service_version: dev
+  # instance_id: zubrium-local
+  # file:
+  #   directory: /var/lib/zubrium/observability
+  #   max_file_bytes: 16777216
+  #   max_files: 4
+  # otlp:
+  #   endpoint: http://otel-collector:4318
+  #   insecure: true
+  #   timeout: 5s
+  #   headers_env: ZUBRIUM_OBSERVABILITY_HEADERS
 
 coordinator:
   workflow_access_group: coordinator_jobs

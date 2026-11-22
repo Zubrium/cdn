@@ -69,7 +69,7 @@ flowchart LR
 }
 ```
 
-Это логическая схема; точный JSON Schema/versioned Go contract фиксируется при реализации. `digest` рассчитывается однозначно по canonical payload без самого поля digest. `document` — ровно один HTML document; `assets` содержит только его ресурсы и не задаёт страницы или маршруты. Пути assets — канонические относительные пути без начального `/`; HTML использует соответствующие относительные URL. Router связывает один route непосредственно с artifact manifest: запрос по точному route возвращает `document`, а разрешение asset path происходит только в пределах этого же artifact. Для artifact с assets используется prefix route; exact route может обслуживать только artifact без assets, поскольку он не образует пространства путей для ресурсов. `cache_class` ограничен enum; Router отображает его на собственную безопасную HTTP cache policy.
+Это логическая схема; точный JSON Schema/versioned Go contract фиксируется при реализации. `digest` рассчитывается однозначно по canonical payload без самого поля digest. `document` — ровно один HTML document; `assets` содержит только его ресурсы и не задаёт страницы или маршруты. Пути assets — канонические относительные пути без начального `/`; HTML использует соответствующие относительные URL. Router связывает один route непосредственно с artifact manifest: запрос по точному route возвращает `document`, а разрешение asset path происходит только в пределах этого же artifact. Для artifact с assets используется prefix route; exact route может обслуживать только artifact без assets, поскольку он не образует пространства путей для ресурсов. `cache_class` ограничен enum `none|short|immutable`; Router отображает его на безопасную HTTP cache policy из [SPEC-caching.md](../../architecture/SPEC-caching.md): `no-store`, `public, max-age=<uint>` или `public, max-age=<uint>, immutable`.
 
 Все ID генерирует Core. Поле `file_id` — UUID, проверяемый Core. Каждый файл manifest должен быть включён в один и тот же готовый artifact. Записи файлов нельзя переопределять запросом и нельзя резолвить по файловому имени на S3.
 
@@ -80,7 +80,7 @@ flowchart LR
 - Слеши/percent encoding обрабатываются единообразно; дубли после нормализации запрещены.
 - Manifest не содержит публичных routes, внешних redirect targets, произвольных response headers, template expressions, S3 URI и route registration commands.
 - `content_type` выбирается из server-side allowlist и проверяется по реальным байтам/назначению: `text/html`, `text/css`, `text/javascript`, `application/javascript`, `application/json`, `image/jpeg`, `image/png`, `image/webp`, `image/avif`, `image/gif`, `font/woff`, `font/woff2`, `application/font-woff`; `charset=utf-8` допускается только для HTML/CSS/JavaScript. Для неизвестного типа Router использует attachment/nosniff или отклоняет artifact по политике.
-- Checksum и `size` проверяются при упаковке; Router может сверять метаданные Core при публикации и при чтении в зависимости от Core contract.
+- Checksum и `size` проверяются при упаковке; Router обязан сверять актуальные метаданные Core и revision при публикации и при каждом использовании кэшированного manifest, как описано в [SPEC-caching.md](../../architecture/SPEC-caching.md).
 - Один файл не становится публичным от присутствия в artifact. Доступ существует лишь через активный Router mapping и Router Core identity.
 - Один и тот же Core file ID может быть использован в нескольких asset paths только при явном разрешении и совпадении metadata; по умолчанию дублирующие пути считают ошибкой build.
 
@@ -112,12 +112,12 @@ Artifact ID — Core file ID manifest. Успешное создание artifac
 4. для точного route запрашивает `document`; для route-scoped asset request канонизирует относительный asset path;
 5. находит только точный asset entry в `assets` текущего artifact;
 6. читает соответствующий Core file потоком;
-7. применяет только безопасные headers/cache policy Router и возвращает байты.
+7. применяет только безопасные headers/cache policy из [SPEC-caching.md](../../architecture/SPEC-caching.md) и возвращает байты.
 
-При неизвестной версии формата Router не пытается угадать поля и не отдаёт содержимое. Отсутствующий target file не раскрывает внутренний UUID. Устаревший manifest/route cache не используется, если актуальность и авторизация не подтверждены.
+При неизвестной версии формата Router не пытается угадать поля и не отдаёт содержимое. Отсутствующий target file не раскрывает внутренний UUID. Устаревший manifest/route cache не используется, если актуальность и авторизация не подтверждены; границы, TTL, метрики и прогрев таких кэшей описаны в [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
 ## 6. Проверки совместимости
 
-Контракт фиксируется тестовыми fixtures: минимальный single-document page artifact, versioned assets, пустой/слишком большой manifest, дубли нормализованных asset paths, неизвестная версия, отсутствующий Core file, неверный digest, запрещённый MIME и revoked access. Fixtures являются данными для проверки, не живыми публичными файлами.
+Контракт фиксируется тестовыми fixtures: минимальный single-document page artifact, versioned assets, пустой/слишком большой manifest, дубли нормализованных asset paths, неизвестная версия, отсутствующий Core file, неверный digest, запрещённый MIME, revoked access и инвалидация по CAS/revision из [SPEC-caching.md](../../architecture/SPEC-caching.md). Fixtures являются данными для проверки, не живыми публичными файлами.
 
 Проверка реализации должна подтвердить, что Website может собрать artifact без Router; Router может раздать artifact без знания Website; Core access revocation сразу закрывает выдачу; и route switch на новый artifact сохраняет прежнюю выдачу при любой ошибке до успешного CAS.

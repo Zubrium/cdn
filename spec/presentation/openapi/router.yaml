@@ -5,7 +5,9 @@ info:
   description: >-
     Router settings are authenticated. Public delivery is matched only against
     explicitly configured routes and dispatches only registered operations;
-    the default public response cache policy is no-store. Router Presentation
+    the default public response cache policy is no-store. Allowed public
+    Cache-Control values, Vary rules, compression and cache warm-up are defined
+    by SPEC-caching.md (spec/architecture/SPEC-caching.md). Router Presentation
     owns form-session cookies; Forms Engine receives only a typed session token.
 servers: [{ url: / }]
 security:
@@ -17,6 +19,10 @@ x-locale-resolution:
   locale_cookie: { name: zubrium_locale, httpOnly: true, sameSite: Lax, path: '/', domain: omitted, secure: explicit-startup-setting, maxAge: required-startup-setting }
   accept_language: { quality_order: descending, tie_break: header-order, matching: RFC4647-Lookup, wildcard: default-locale }
   locale_in_path_or_query: false
+  cache_policy:
+    cookie_selected_locale: no-store
+    accept_language_selected_locale: vary-accept-language
+    vary_cookie: forbidden
   preference_operation: public.locale-preference
 paths:
   /api/admin/router/operations:
@@ -135,6 +141,8 @@ paths:
   /:
     x-public-route-match: all-paths-not-under-configured-admin-prefixes
     x-cache-default: no-store
+    x-cache-control-allowlist: ['no-store', 'public, max-age=<uint>', 'public, max-age=<uint>, immutable']
+    x-cache-vary: { accept_language: conditional, accept_encoding: when-compressed, cookie: forbidden }
     x-prefix-match: complete-path-segment
     x-exact-route-precedence: exact-wins-then-longest-prefix
     x-max-normalized-path-segments: 31
@@ -197,6 +205,8 @@ paths:
       x-deployment-requires-external-proxy: true
       x-proxy-configuration-owner: deployer
       x-proxy-admission-policy-owner: deployer
+      x-proxy-cache-policy-owner: deployer
+      x-proxy-cache-must-honor-origin: [Cache-Control, ETag, Vary]
       x-idempotency-key-required-operations: [public.form-upload, public.form-submit]
       x-router-form-cookie: >-
         Router Presentation reads and writes one host-only, HttpOnly, SameSite=Strict

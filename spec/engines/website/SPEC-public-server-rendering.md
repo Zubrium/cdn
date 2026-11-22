@@ -20,11 +20,11 @@ Feature runtime использует только `static-lifecycle`, описа
 
 Каждый URL повторно разрешается Go router; обычная same-origin navigation и browser history обеспечивают Back/Forward без второго client-side router. Неизвестный URL/detail возвращает 404, отсутствие назначенного snapshot — встроенный 503, runtime error — 500. Страницы ошибок получают `noindex`; ошибки и fallback без успешного prerender выдают `no-store` и не имеют ETag.
 
-Успешная индексируемая страница со status 200 может использовать `Cache-Control: public, max-age=0, must-revalidate` и strong ETag только при полной resolved document identity. Identity учитывает branch, snapshot, published content revision, structural digest, route/path/status, metadata, route arguments, theme/system assets и resolved placement outputs. Query raw string не включается в key; учитывается эффективный результат разрешения arguments и данных. Drafts, submissions, credentials и private media не включаются в публичный документ.
+Успешная индексируемая страница со status 200 использует `Cache-Control: no-store` и strong ETag только при полной resolved document identity. `public, max-age=<uint>[, immutable]` допустим только для representation с полностью стабильной identity и по правилам [SPEC-caching.md](../../architecture/SPEC-caching.md). Identity учитывает branch, snapshot, published content revision, structural digest, route/path/status, metadata, route arguments, theme/system assets и resolved placement outputs. Query raw string не включается в key; учитывается эффективный результат разрешения arguments и данных. Drafts, submissions, credentials и private media не включаются в публичный документ.
 
-Перед сохранением нового HTML renderer повторно проверяет snapshot/content identity. Если состояние изменилось, результат отклоняется и не кешируется. Совпадающие cold requests могут объединяться в одну генерацию; cache ограничивается настроенными TTL/entry limits. Ошибки не кешируются, межпроцессный shared cache не предполагается.
+Перед сохранением нового HTML renderer повторно проверяет snapshot/content identity. Если состояние изменилось, результат отклоняется и не кешируется. Совпадающие cold requests могут объединяться в одну генерацию; любой такой кэш остаётся process-local, bounded по записям и байтам и подчиняется [SPEC-caching.md](../../architecture/SPEC-caching.md). Ошибки и частичные ответы не кешируются, межпроцессный shared cache не предполагается.
 
-Сжатие HTTP-представлений следует общему Presentation-контракту: корректные validators и `Vary: Accept-Encoding`; Range и бинарные media не перекодируются. CDN и proxy остаются ответственностью deployer и не изменяют origin semantics.
+Сжатие HTTP-представлений, `Vary: Accept-Encoding`, locale-политика и поведение внешнего CDN/proxy определяются [SPEC-caching.md](../../architecture/SPEC-caching.md). Range и бинарные media не перекодируются; deployer не меняет origin semantics.
 
 ## Prerender worker
 
@@ -42,6 +42,6 @@ Diagnostics ограничены allowlisted стадиями и безопас�
 - Проверить target ABI `render`/`hydrate`/`update`/`dispose`, initial paint, cancellation, timeout, placement isolation и отсутствие DOM mutation после отмены.
 - Проверить no-JS document, успешный prerender, worker disabled/failure и безопасный fallback без заявления о prerender success.
 - Проверить route/status/SEO, 404/503/500, system-page overrides, publication/restore и отсутствие drafts/private data в public HTML.
-- Проверить cache identity, validators, query semantics, concurrency coalescing, publish/assignment invalidation и отказ от кеширования частичного/ошибочного результата.
+- Проверить cache identity, validators, query semantics, concurrency coalescing, publish/assignment invalidation и отказ от кеширования частичного/ошибочного результата согласно [SPEC-caching.md](../../architecture/SPEC-caching.md).
 - Проверить Chromium sandbox, запросы worker, retries и приватность diagnostics на изолированной disposable среде.
 - Все browser/API acceptance выполнять только с disposable DB/storage. Фактические результаты, ограничения и незакрытые сценарии записывать в [QA_REPORT.md](../../../docs/QA_REPORT.md); критерии здесь сами по себе не подтверждают прохождение.

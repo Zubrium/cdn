@@ -1,10 +1,10 @@
 # Router Engine — целевая спецификация
 
-Статус: согласованный контракт Router v2; код и acceptance-проверки остаются предметом отложенной итоговой проверки. Website snapshots задают одну страницу и не содержат URL; Website prerender создаёт immutable `static-page-artifact/v1`, а Router route явно задаёт `default_locale` и complete locale-to-manifest map. Router не хранит `snapshot_id`, `page_id`, feature manifests, dependency locks или Content revisions; API принимает только готовые artifacts. Route targets также могут быть Core file или зарегистрированной публичной operation. Operations доступны только если входят в скомпилированный профиль и зарегистрированы типизированным контрактом; произвольные callbacks и URL запрещены. `core-file` и registered operations используют exact path; artifact route связывает exact document path и его route-scoped assets. Router подключает отдельно настроенные Forms/Loader routes без прямого доступа к хранилищу. Загрузка закрыта по умолчанию и становится анонимной только для явно включённого маршрута. Загруженный Core file всегда остаётся приватным; публичная выдача требует отдельного явно настроенного GET route. Публичный `core-file` GET route связывается ровно с одним `file_id` из сохранённой конфигурации; посетитель не передаёт ID и не выбирает файл через FileSet. Router не реализует request-rate limiting. Публичный listener держится за внешним proxy, выбор которого и admission policy принадлежат deployer. Coordinator может автоматически переключать file/artifact route после успешной публикации; public operation routes не меняются. Cache по умолчанию `no-store`; fallback неявно не применяется. Общие правила Core и изоляции engine data: [SPEC-core-architecture.md](../../core/SPEC-core-architecture.md), [SPEC-module-data.md](../../core/SPEC-module-data.md); page artifact: [SPEC-static-site-artifact.md](../website/SPEC-static-site-artifact.md); Website: [SPEC-website-engine.md](../website/SPEC-website-engine.md).
+Статус: согласованный контракт Router v2; код и acceptance-проверки остаются предметом отложенной итоговой проверки. Website snapshots задают одну страницу и не содержат URL; Website prerender создаёт immutable `static-page-artifact/v1`, а Router route явно задаёт `default_locale` и complete locale-to-manifest map. Router не хранит `snapshot_id`, `page_id`, feature manifests, dependency locks или Content revisions; API принимает только готовые artifacts. Route targets также могут быть Core file или зарегистрированной публичной operation. Operations доступны только если входят в скомпилированный профиль и зарегистрированы типизированным контрактом; произвольные callbacks и URL запрещены. `core-file` и registered operations используют exact path; artifact route связывает exact document path и его route-scoped assets. Router подключает отдельно настроенные Forms/Loader routes без прямого доступа к хранилищу. Загрузка закрыта по умолчанию и становится анонимной только для явно включённого маршрута. Загруженный Core file всегда остаётся приватным; публичная выдача требует отдельного явно настроенного GET route. Публичный `core-file` GET route связывается ровно с одним `file_id` из сохранённой конфигурации; посетитель не передаёт ID и не выбирает файл через FileSet. Router не реализует request-rate limiting. Публичный listener держится за внешним proxy, выбор которого и admission policy принадлежат deployer. Coordinator может автоматически переключать file/artifact route после успешной публикации; public operation routes не меняются. Cache по умолчанию `no-store`; fallback неявно не применяется. Полная HTTP-политика, allowlist `Cache-Control`, `Vary`, сжатие и прогрев определяются [SPEC-caching.md](../../architecture/SPEC-caching.md). Общие правила Core и изоляции engine data: [SPEC-core-architecture.md](../../core/SPEC-core-architecture.md), [SPEC-module-data.md](../../core/SPEC-module-data.md); page artifact: [SPEC-static-site-artifact.md](../website/SPEC-static-site-artifact.md); Website: [SPEC-website-engine.md](../website/SPEC-website-engine.md).
 
-Router не зависит от Website и не понимает snapshots или версии фич. Каждый branch обслуживается отдельным Router process. Публичный listener следует держать за внешним proxy; Router сам не ограничивает частоту запросов, а выбор и настройка proxy относятся к развёртыванию. Router внутри выбранной branch сопоставляет настроенный path с общим файлом, нейтральным static-page artifact или абстрактной зарегистрированной public operation. Он не реализует бизнес-правила Content/Forms и не вызывает движки по сети: operation предоставляется статическим composition root как типизированная Go capability.
+Router не зависит от Website и не понимает snapshots или версии фич. Каждый branch обслуживается отдельным Router process. Публичный listener следует держать за внешним proxy; Router сам не ограничивает частоту запросов, а выбор и настройка proxy относятся к развёртыванию. Внешний caching proxy/CDN также принадлежит deployer и обязан сохранять `no-store`, ETag и `Vary` origin из [SPEC-caching.md](../../architecture/SPEC-caching.md). Router внутри выбранной branch сопоставляет настроенный path с общим файлом, нейтральным static-page artifact или абстрактной зарегистрированной public operation. Он не реализует бизнес-правила Content/Forms и не вызывает движки по сети: operation предоставляется статическим composition root как типизированная Go capability.
 
-`profiles/router.yaml` собирает самостоятельный production профиль Core + Loader + Router с File, Identity, Coordinator и Router Admin API, публичным Router listener и `public.form-upload`. Он не выбирает Website, Content, Forms или development fixtures: в этом профиле доступна только независимая Loader-загрузка. Form-bound upload и `public.form-session`/`public.form-submit` собираются только при явном выборе Forms и соответствующих public operations. Профиль собирается `make build-router` и проверяется `make test-router`; адрес listener задаётся оператором в Router-конфигурации. Профиль не устанавливает, не выбирает и не настраивает внешний proxy.
+`profiles/router.yaml` собирает самостоятельный production профиль Core + Loader + Router с File, Identity, Coordinator и Router Admin API, публичным Router listener и `public.form-upload`. Он не выбирает Website, Content, Forms или development fixtures: в этом профиле доступна только независимая Loader-загрузка. Form-bound upload и `public.form-session`/`public.form-submit` собираются только при явном выборе Forms и соответствующих public operations. Профиль собирается `make build-router` и проверяется `make test-router`; адрес listener задаётся оператором в Router-конфигурации. Профиль не устанавливает, не выбирает и не настраивает внешний proxy, включая caching proxy/CDN из [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
 ## 1. Ответственности и API
 
@@ -73,7 +73,7 @@ Website snapshots никогда не передаются Delivery API и не 
 
 ## 3. Постоянная конфигурация
 
-Route mappings хранятся Router в namespace `router` таблицы `engine_data.records`, TTL `0`. Router владеет JSON payload и его версией; Core владеет физическим хранением и CAS. Локальный cache конфигурации допустим только как производный cache с проверкой revision/invalidation и fail-closed поведением, согласованным с [SPEC-module-data.md](../../core/SPEC-module-data.md).
+Route mappings хранятся Router в namespace `router` таблицы `engine_data.records`, TTL `0`. Router владеет JSON payload и его версией; Core владеет физическим хранением и CAS. Локальный cache конфигурации допустим только как bounded производный cache с проверкой revision/invalidation и fail-closed поведением, согласованным с [SPEC-module-data.md](../../core/SPEC-module-data.md) и [SPEC-caching.md](../../architecture/SPEC-caching.md); цели прогрева и их лимиты задаются в `router.cache.*`.
 
 Логическая запись маршрута включает:
 
@@ -85,7 +85,7 @@ Route mappings хранятся Router в namespace `router` таблицы `eng
 - `target.operation_id` и версия контракта — только для operation из build profile;
 - `target.config` — типизированная конфигурация operation. Для upload route она задаёт destination access group и optional FileSet, максимальный размер и точный MIME allowlist; запрос содержит ровно один raw file body. Loader session expiry и multipart part limits задаются явно в startup config Loader, а staging concurrency/budget — в Router operation deployment config. Конфигурация никогда не берётся из visitor URL/body. Она включает анонимную загрузку только при явном включении route; Core file всегда остаётся приватным. Публичный `core-file` GET route привязывается к одному настроенному `file_id`, требует exact match и не читает ID или FileSet из запроса;
 - ожидаемую revision для CAS и audit metadata без секретов;
-- только разрешённые cache/security-header policies;
+- только разрешённые cache/security-header policies из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 - состояние `active` (чернового неявно публичного route нет).
 
 Route records могут храниться отдельными CAS-документами. Каждая операция изменяет ровно один route; общей транзакции набора routes нет. Хранилище должно позволять детерминированно обнаруживать конфликты ветки/host/path до сохранения. TTL не используется.
@@ -94,9 +94,9 @@ Route records могут храниться отдельными CAS-докум�
 
 Settings API требует аутентификацию. Управление маршрутами ограничивается выделенной статической access group, например `router_routes`: уровень `1` даёт чтение конфигурации, уровень `2` — создание, изменение, переключение и удаление route. Эту группу может объявить startup YAML либо зарегистрировать Router при запуске; одинаковое глобально уникальное имя в обоих источниках обозначает одну группу. Отсутствие группы среди всех источников или назначения означает отказ. Неявное право только из-за слова «admin» не возникает.
 
-Router runtime использует отдельную обычную Core user identity с минимальными read grants для целевых файлов и artifact assets. Delivery API не получает обход авторизации Core. Если доступ runtime principal отозван, выдача закрывается при актуальной проверке Core.
+Router runtime использует отдельную обычную Core user identity с минимальными read grants для целевых файлов и artifact assets. Delivery API не получает обход авторизации Core. Если доступ runtime principal отозван, выдача закрывается при актуальной проверке Core. Возможный кэш прав `core.authorization` является подсказкой с проверкой `revision + access_epoch` и не меняет эту гарантию; его правила описаны в [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
-Обновление route не может увеличить Core grants. Установка file/artifact цели должна проверить, что Router identity имеет возможность прочитать файл/manifest и его допустимые dependencies. Для operation target проверяются наличие operation в каталоге сборки и соответствие конфигурации её схеме. Публичная загрузка дополнительно требует текущий уровень `2` у Router service identity в настроенной группе загрузки и в `management_group` указанного FileSet. Эта проверка выполняется при создании/замене route и перед staging каждого запроса; Loader повторно проверяет права в момент записи. Отсутствующая или недоступная группа/FileSet закрывает операцию. Если API не может безопасно проверить необходимые права или ограничения, target не активируется.
+Обновление route не может увеличить Core grants. Установка file/artifact цели должна проверить, что Router identity имеет возможность прочитать файл/manifest и его допустимые dependencies. Для operation target проверяются наличие operation в каталоге сборки и соответствие конфигурации её схеме. Публичная загрузка дополнительно требует текущий уровень `2` у Router service identity в настроенной группе загрузки и в `management_group` указанного FileSet. Эта проверка выполняется при создании/замене route и перед staging каждого запроса; Loader повторно проверяет права в момент записи. Отсутствующая или недоступная группа/FileSet закрывает операцию. Если API не может безопасно проверить необходимые права или ограничения, target не активируется. Кэширование решения о правах допускается только с fail-closed валидацией из [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
 ## 4. Settings API
 
@@ -106,12 +106,12 @@ Router runtime использует отдельную обычную Core user 
 - `GetRoute(route_id)` — вернуть mapping и revision, не раскрывая недоступные Core objects;
 - `CreateRoute(route_spec, idempotency_key)` — проверить host/path/branch/target, конфликт, Core grants или регистрацию/schema operation;
 - `ReplaceTarget(route_id, new_target, expected_revision)` — атомарный CAS target binding;
-- `UpdatePolicy(route_id, policy, expected_revision)` — изменить только allowlisted serving/cache policy;
+- `UpdatePolicy(route_id, policy, expected_revision)` — изменить только allowlisted serving/cache policy из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 - `DeleteRoute(route_id, expected_revision)` — удалить mapping через явную аутентифицированную операцию.
 
 Клиент получает `409 Conflict` на stale revision/route collision, контролируемую validation error на невалидный target и authorization error на недостаточный Core grant. Ошибка до CAS не меняет активный mapping. Повтор с тем же idempotency key и fingerprint возвращает исходный результат; другое тело с тем же ключом — конфликт.
 
-Настроечное изменение сначала полностью валидируется и подготавливается, затем одной CAS операцией переключает route record/revision. Успешный ответ возвращается только после долговременной записи в Core module data. Инвалидация кеша другим процессам инициируется после commit; при недоступности инвалидации инстансы проверяют актуальную revision, а при невозможности проверки закрывают выдачу. Старое значение не используется как fail-open.
+Настроечное изменение сначала полностью валидируется и подготавливается, затем одной CAS операцией переключает route record/revision. Успешный ответ возвращается только после долговременной записи в Core module data. Инвалидация кеша другим процессам инициируется после commit; при недоступности инвалидации инстансы проверяют актуальную revision, а при невозможности проверки закрывают выдачу. Старое значение не используется как fail-open. Ограничения `router.manifests` и `router.routes`, их TTL и метрики описаны в [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
 ## 5. Delivery API
 
@@ -149,18 +149,18 @@ Upload принимает один raw file body на запрос; multipart pa
 
 Router ставит host-only cookie с `Path=/`, без `Domain`, `HttpOnly`, `SameSite=Strict`, временем жизни сессии и явно настроенным `Secure`. Для `Secure=true` имя `__Host-zubrium-form-<form_id>`, для development `Secure=false` — `zubrium_form_<form_id>`. Token не возвращается в JSON, URL или логи. Router не принимает `form_id`, schema version, access group, FileSet или Core file ID от посетителя. Отсутствующий/невалидный/истёкший capability не раскрывает существование закрытых ресурсов. Ответы используют `no-store`; `DELETE` очищает cookie, а создание новой сессии заменяет её. Подробности session state, field types и валидации определяет [SPEC-forms-engine.md](../forms/SPEC-forms-engine.md).
 
-Для публичной загрузки нет IP rate limiter в приложении; внешний proxy перед listener обязателен при публичной экспозиции. Настройка gateway/proxy, лимитов IP и admission policy — обязанность deployer, а не Router.
+Для публичной загрузки нет IP rate limiter в приложении; внешний proxy перед listener обязателен при публичной экспозиции. Настройка gateway/proxy, лимитов IP, admission policy и caching policy — обязанность deployer, а не Router; caching proxy не должен кэшировать `no-store`-ответы и должен учитывать `Vary` согласно [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
 ### 5.3 HTTP-ответ и безопасность
 
 - `Content-Type` берётся из проверенного allowlisted значения/manifest, а не из произвольного запроса; применяются безопасный charset и `X-Content-Type-Options: nosniff`.
 - Content-Disposition по умолчанию `inline` только для разрешённых web types; иные файлы скачиваются как attachment с безопасным именем.
-- ETag строится из checksum immutable file/manifest; conditional GET проверяется после разрешения route и актуальной Core авторизации.
+- ETag строится из checksum immutable file/manifest; conditional GET проверяется после разрешения route и актуальной Core авторизации. Validators, weak comparison и 304 подчиняются [SPEC-caching.md](../../architecture/SPEC-caching.md).
 - Range поддерживается только если Core streaming contract его безопасно реализует; в противном случае route отвечает без Range, не буферизуя неограниченный файл в памяти.
-- Cache-Control по умолчанию — `no-store`. Более длительный cache допускается только после явной безопасной настройки route policy; приватные данные/authorization responses не попадают в shared CDN cache.
+- Cache-Control по умолчанию — `no-store`. Допустимы только `no-store` и `public, max-age=<uint>[, immutable]` из allowlist [SPEC-caching.md](../../architecture/SPEC-caching.md) при `<uint> > 0`; приватные данные и authorization responses не попадают в shared CDN cache. Locale из cookie остаётся `no-store`, locale из `Accept-Language` получает `Vary: Accept-Language`; сжатие добавляет `Vary: Accept-Encoding`.
 - CORS и indexing headers задаются веткой/route allowlist; значения из файла или запроса не могут установить произвольный origin/header.
 - Внутренние Core IDs, ошибки S3, права, namespace и наличие закрытых файлов не раскрываются в публичном теле ответа.
-- Ошибка Core/module-data проверки закрывает доступ. Недоступный объект не может быть доставлен из устаревшего Router byte cache.
+- Ошибка Core/module-data проверки закрывает доступ. Недоступный объект не может быть доставлен из устаревшего Core byte cache, кэша прав, manifest cache или route cache.
 
 ## 6. Атомарная публикация маршрута
 
@@ -202,7 +202,7 @@ Atomicity распространяется на один route binding. Если
 - Конфликт route предотвращается при записи и повторно проверяется при загрузке state; повреждённая конфигурация закрывает конфликтующие mappings.
 - Недоступность Core или module data не должна переводить route в произвольную выдачу/старый target без проверки актуальности.
 - Ошибка загрузки одного artifact file возвращает контролируемую 5xx/404 политику без утечки внутренней детали; частично собранная HTML-страница не маркируется успешной.
-- Метрики: route resolution hit/miss, Core authorization failures, revision conflicts, artifact-manifest errors, bytes streamed, request latency и invalidation lag. Логи не включают содержимое файлов, credentials и секреты.
+- Метрики: route resolution hit/miss, Core authorization failures, revision conflicts, artifact-manifest errors, bytes streamed, request latency и invalidation lag. Метрики кэшей и прогрева перечислены в [SPEC-caching.md](../../architecture/SPEC-caching.md) и не содержат file ID, URL, locale или principal ID. Логи не включают содержимое файлов, credentials и секреты.
 
 ## 8. Приёмочные проверки
 
@@ -213,11 +213,11 @@ Atomicity распространяется на один route binding. Если
 3. host/branch изолированности и статических branch IDs;
 4. exact/longest-prefix matching, collision и одинакового prefix в разных ветках;
 5. percent-encoded traversal/separators, malformed URL, spoofed Host/Forwarded headers;
-6. access revocation, отсутствующей группы, stale local cache и отказа проверки revision;
+6. access revocation, отсутствующей группы, stale local cache, отказа проверки revision, а также сценарии `CACHE-004` и `CACHE-006` из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 7. параллельных replaceTarget с одинаковой expected revision: только один commit succeeds;
 8. недоступного/частичного artifact, checksum/content-type mismatch и отказа до переключения;
 9. старого route при Website build failure и CAS conflict;
-10. cache headers, ETag/conditional GET, Range policy, CORS/indexing и безопасных response headers;
+10. cache headers, allowlist `Cache-Control`, ETag/conditional GET, `Vary` для locale и сжатия, Range policy, CORS/indexing, безопасных response headers и метрик кэша из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 11. невозможности Router→Website RPC, вызова не зарегистрированной operation, произвольного handler/URL/Core UUID/group/FileSet/visibility в visitor request;
 12. хранения route records только через Router-scoped Core module-data API;
 13. form-session cookie lifecycle, фиксированного schema binding, exact-only public operation routes, submit idempotency, upload через Loader, MIME/size/group/FileSet policy, schema change и cleanup cancellation.
@@ -227,6 +227,6 @@ Browser QA не отправляет writes в общий или production API.
 ## 9. Зафиксированные решения
 
 1. CAS и атомарность применяются к одной записи route. Последовательное обновление набора может завершиться частично и должно отображать это состояние клиенту.
-2. Cache-Control по умолчанию — `no-store`; immutable cache задаётся только явной настройкой.
+2. Cache-Control по умолчанию — `no-store`; `public, max-age=<uint>, immutable` задаётся только явной настройкой и CAS-валидацией согласно [SPEC-caching.md](../../architecture/SPEC-caching.md).
 3. Неизвестный asset path текущего artifact возвращает 404; artifact не задаёт route fallback или SPA fallback.
 4. Router вызывает только зарегистрированные в сборке public operations; route config может ссылаться на operation ID из этого каталога, но не задаёт произвольный callback/URL. Публичная загрузка допускается только через явно настроенную operation и проходит через Loader.
