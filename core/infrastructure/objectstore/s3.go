@@ -24,6 +24,9 @@ type S3Config struct {
 	Endpoint, Region, Bucket, AccessKey, SecretKey string
 	PathStyle                                      bool
 	AllowInsecureHTTP                              bool
+	// InsecureAllowedHosts contains exact hostnames explicitly trusted by the
+	// operator for a plaintext endpoint (for example an isolated compose S3).
+	InsecureAllowedHosts []string
 }
 type S3 struct {
 	client *s3.Client
@@ -49,8 +52,8 @@ func NewS3(ctx context.Context, cfg S3Config) (*S3, error) {
 	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || cfg.Region == "" || cfg.Bucket == "" || cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return nil, errors.New("invalid S3 configuration")
 	}
-	if endpoint.Scheme == "http" && (!cfg.AllowInsecureHTTP || !loopbackEndpoint(endpoint.Hostname())) {
-		return nil, errors.New("unencrypted S3 endpoints must use loopback")
+	if endpoint.Scheme == "http" && (!cfg.AllowInsecureHTTP || (!loopbackEndpoint(endpoint.Hostname()) && !insecureHostAllowed(cfg.InsecureAllowedHosts, endpoint.Hostname()))) {
+		return nil, errors.New("unencrypted S3 endpoints must use loopback or an explicitly allowed host")
 	}
 	provider := credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")
 	clientConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region), awsconfig.WithCredentialsProvider(aws.NewCredentialsCache(provider)))
@@ -126,6 +129,19 @@ func (s *S3) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("delete object: %w", err)
 	}
 	return nil
+}
+
+// insecureHostAllowed accepts only exact hostnames explicitly listed by the
+// operator. Wildcards and IP ranges are deliberately not supported.
+func insecureHostAllowed(hosts []string, host string) bool {
+	want := strings.ToLower(strings.TrimSpace(host))
+	for _, item := range hosts {
+		candidate := strings.ToLower(strings.TrimSpace(item))
+		if candidate != "" && candidate == want {
+			return true
+		}
+	}
+	return false
 }
 
 func loopbackEndpoint(host string) bool {

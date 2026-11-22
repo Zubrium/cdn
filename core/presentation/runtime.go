@@ -154,6 +154,9 @@ type S3Config struct {
 	Endpoint, Region, Bucket, AccessKey, SecretKey string
 	PathStyle                                      bool
 	AllowInsecureHTTP                              bool
+	// Keep field order and types identical to objectstore.S3Config: Runtime
+	// converts this value directly when constructing the storage boundary.
+	InsecureAllowedHosts []string
 }
 
 type Runtime struct {

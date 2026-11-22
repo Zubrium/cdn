@@ -39,6 +39,24 @@ func TestRejectsIncompleteOrUnsafeConfiguration(t *testing.T) {
 	}
 }
 
+func TestAllowsOnlyExactExplicitInsecureHost(t *testing.T) {
+	base := S3Config{Endpoint: "http://storage.internal:9000", Region: "test", Bucket: "test", AccessKey: "test", SecretKey: "test", AllowInsecureHTTP: true}
+
+	allowed := base
+	allowed.InsecureAllowedHosts = []string{"STORAGE.internal"}
+	if _, err := NewS3(context.Background(), allowed); err != nil {
+		t.Fatalf("explicit exact host was rejected: %v", err)
+	}
+
+	for _, hosts := range [][]string{{}, {"*.internal"}, {"other.internal"}, {"storage.internal.evil.test"}} {
+		rejected := base
+		rejected.InsecureAllowedHosts = hosts
+		if _, err := NewS3(context.Background(), rejected); err == nil {
+			t.Fatalf("accepted insecure endpoint with hosts %q", hosts)
+		}
+	}
+}
+
 func TestObjectKeysMustBeInternalUUIDsBeforeNetworkAccess(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -908,7 +908,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	coreConfig := platform.RuntimeConfig{
 		Database:             platform.DatabaseConfig{URL: dbURL, MinConnections: c.Core.MinConnections, MaxConnections: c.Core.MaxConnections, ConnectTimeout: parsed[0], MaxLifetime: parsed[1], MaxIdleTime: parsed[2], HealthInterval: parsed[3]},
 		MigrationDatabaseURL: migrationDBURL,
-		S3:                   platform.S3Config{Endpoint: c.Core.S3Endpoint, Region: c.Core.S3Region, Bucket: c.Core.S3Bucket, AccessKey: accessKey, SecretKey: secretKey, PathStyle: c.Core.S3PathStyle, AllowInsecureHTTP: c.Core.S3AllowInsecureHTTP},
+		S3:                   platform.S3Config{Endpoint: c.Core.S3Endpoint, Region: c.Core.S3Region, Bucket: c.Core.S3Bucket, AccessKey: accessKey, SecretKey: secretKey, PathStyle: c.Core.S3PathStyle, AllowInsecureHTTP: c.Core.S3AllowInsecureHTTP, InsecureAllowedHosts: append([]string(nil), c.Core.S3InsecureAllowedHosts...)},
 		BootstrapSecret:      bootstrap, AtlasBinary: c.Core.AtlasBinary, MigrationLockTimeout: parsed[4], AccessGroups: accessGroups,
 		CacheMaxBytes: c.Core.CacheMaxBytes, CacheTTL: parsed[5], MaxMetadataBytes: c.Core.MaxMetadataBytes,
 		MaxObjectBytes: c.Core.MaxObjectBytes, MaxCachedObjectBytes: c.Core.MaxCachedObjectBytes,
