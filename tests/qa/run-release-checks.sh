@@ -95,6 +95,9 @@ run git diff --check
 run git rev-parse --abbrev-ref HEAD
 run git rev-parse HEAD
 
+section 'frontend assets (required by embedded Admin UI tests)'
+run pnpm --dir frontend build
+
 section 'architecture and Go sweep'
 run make lint-core-boundary
 run make vet
