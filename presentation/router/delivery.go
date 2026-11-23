@@ -59,7 +59,6 @@ func NewCoreTargetValidator(files CoreFiles, operations engine.PublicOperationCa
 
 func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, target model.Target, match string) error {
 	if validator == nil || ctx == nil || target.Validate() != nil {
-		println("ROUTE_DIAG core_target_invalid", target.Kind, target.DefaultLocale, len(target.LocaleTargets))
 		return engine.ErrInvalidTarget
 	}
 	if target.Kind == model.TargetStaticSiteArtifact && target.FallbackEnabled {
@@ -76,17 +75,14 @@ func (validator *CoreTargetValidator) ValidateRouteTarget(ctx context.Context, t
 		return mapTargetCoreError(err)
 	}
 	for _, slot := range target.LocaleSlots() {
-		println("ROUTE_DIAG core_slot", slot.Locale, slot.ArtifactManifestFileID)
 		manifest, _, err := readArtifactManifest(ctx, validator.files, slot.ArtifactManifestFileID)
 		if err != nil {
-			println("ROUTE_DIAG core_manifest_error", err.Error())
 			return mapTargetCoreError(err)
 		}
 		if len(manifest.assets) > 0 && match != model.MatchPrefix {
 			return engine.ErrInvalidTarget
 		}
 		if err := validateArtifactFiles(ctx, validator.files, slot.ArtifactManifestFileID, manifest); err != nil {
-			println("ROUTE_DIAG core_files_error", err.Error())
 			return err
 		}
 	}
@@ -115,9 +111,32 @@ type CoreDelivery struct {
 	files      CoreFiles
 	routes     RouteResolver
 	operations engine.PublicOperationCatalog
+	manifests  *manifestCache
+	routeCache *routeCache
 }
 
 func NewCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, operations engine.PublicOperationCatalog) (*CoreDelivery, error) {
+	return newCoreDelivery(branchID, files, routes, operations, nil, nil)
+}
+
+// NewCoreDeliveryWithCache enables both bounded Router caches. Every bound is
+// mandatory: composition must pass explicit startup configuration, and an
+// unavailable revision source never falls back to a stale cached match.
+func NewCoreDeliveryWithCache(branchID string, files CoreFiles, routes RouteResolver, operations engine.PublicOperationCatalog, config RouterCacheConfig) (*CoreDelivery, error) {
+	if !validCacheSettings(config.Manifests) || !validCacheSettings(config.Routes) {
+		return nil, engine.ErrInvalid
+	}
+	fingerprints, ok := routes.(RouteFingerprintSource)
+	if !ok || isNilAPI(fingerprints) {
+		return nil, engine.ErrInvalid
+	}
+	return newCoreDelivery(branchID, files, routes, operations,
+		newManifestCache(files, config.Manifests),
+		newRouteCache(branchID, routes, fingerprints, config.Routes))
+}
+
+func newCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, operations engine.PublicOperationCatalog,
+	manifests *manifestCache, routeCache *routeCache) (*CoreDelivery, error) {
 	if branchID == "" || len(branchID) > 128 || strings.TrimSpace(branchID) != branchID ||
 		isNilAPI(files) || isNilAPI(routes) {
 		return nil, engine.ErrInvalid
@@ -127,7 +146,10 @@ func NewCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, ope
 			return nil, engine.ErrInvalid
 		}
 	}
-	return &CoreDelivery{branchID: branchID, files: files, routes: routes, operations: operations}, nil
+	return &CoreDelivery{
+		branchID: branchID, files: files, routes: routes, operations: operations,
+		manifests: manifests, routeCache: routeCache,
+	}, nil
 }
 
 func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
@@ -138,16 +160,19 @@ func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.Delive
 		request.Method != http.MethodPut && request.Method != http.MethodPatch && request.Method != http.MethodDelete {
 		return engine.DeliveryResponse{}, engine.ErrInvalid
 	}
-	route, err := delivery.routes.ResolveRoute(ctx, request.Host, request.EscapedPath)
+	host, hostErr := model.NormalizeRequestHost(request.Host)
+	path, pathErr := model.NormalizePath(request.EscapedPath)
+	if hostErr != nil || pathErr != nil {
+		return engine.DeliveryResponse{}, engine.ErrNotFound
+	}
+	route, err := delivery.resolveRoute(ctx, request, host, path)
 	if err != nil {
 		return engine.DeliveryResponse{}, mapRouteError(err)
 	}
 	if route.BranchID != delivery.branchID || route.State != model.StateActive || route.ValidateForStorage() != nil {
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
-	host, hostErr := model.NormalizeRequestHost(request.Host)
-	path, pathErr := model.NormalizePath(request.EscapedPath)
-	if hostErr != nil || pathErr != nil || route.Host != host || !model.PathMatches(route.Path, path, route.Match) {
+	if route.Host != host || !model.PathMatches(route.Path, path, route.Match) {
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
 	switch route.Target.Kind {
@@ -174,6 +199,14 @@ func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.Delive
 	default:
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
+}
+
+func (delivery *CoreDelivery) resolveRoute(ctx context.Context, request engine.DeliveryRequest, host, path string) (model.Route, error) {
+	if delivery.routeCache == nil {
+		return delivery.routes.ResolveRoute(ctx, request.Host, request.EscapedPath)
+	}
+	key := routeCacheKey{branch: delivery.branchID, host: host, path: path, method: request.Method}
+	return delivery.routeCache.resolve(ctx, key, request.Host, request.EscapedPath)
 }
 
 func cloneFormSessionTokens(source map[string]string) map[string]string {
@@ -241,11 +274,21 @@ type languageRange struct {
 	q     float64
 }
 
+type localeSource uint8
+
+const (
+	localeDefault localeSource = iota
+	localeFromCookie
+	localeFromAcceptLanguage
+)
+
 // selectArtifactFileID resolves the server-owned locale catalog in the order
 // declared by the Router contract: a supported preference cookie, then RFC 4647
 // lookup over Accept-Language, then the configured default locale. Path and
-// query never participate.
-func selectArtifactFileID(target model.Target, request engine.DeliveryRequest) (string, error) {
+// query never participate. The source is returned so a cookie-selected
+// representation can be marked no-store and an Accept-Language representation
+// can carry an explicit Vary.
+func selectArtifactFileID(target model.Target, request engine.DeliveryRequest) (string, localeSource, error) {
 	supported := make(map[string]string, len(target.LocaleTargets))
 	for _, item := range target.LocaleTargets {
 		supported[item.Locale] = item.ArtifactManifestFileID
@@ -253,7 +296,7 @@ func selectArtifactFileID(target model.Target, request engine.DeliveryRequest) (
 	if request.LocalePreference != "" {
 		if locale, err := model.CanonicalLocale(request.LocalePreference); err == nil {
 			if fileID, found := supported[locale]; found {
-				return fileID, nil
+				return fileID, localeFromCookie, nil
 			}
 		}
 	}
@@ -266,7 +309,7 @@ func selectArtifactFileID(target model.Target, request engine.DeliveryRequest) (
 		for {
 			if locale, err := model.CanonicalLocale(candidate); err == nil {
 				if fileID, found := supported[locale]; found {
-					return fileID, nil
+					return fileID, localeFromAcceptLanguage, nil
 				}
 			}
 			separator := strings.LastIndex(candidate, "-")
@@ -276,7 +319,8 @@ func selectArtifactFileID(target model.Target, request engine.DeliveryRequest) (
 			candidate = candidate[:separator]
 		}
 	}
-	return target.DefaultArtifactFileID()
+	fileID, err := target.DefaultArtifactFileID()
+	return fileID, localeDefault, err
 }
 
 func parseAcceptLanguage(header string) []languageRange {
@@ -322,12 +366,11 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 	if route.Target.FallbackEnabled {
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
-	var err error
-	artifactFileID, err := selectArtifactFileID(route.Target, request)
+	artifactFileID, source, err := selectArtifactFileID(route.Target, request)
 	if err != nil {
 		return engine.DeliveryResponse{}, engine.ErrNotFound
 	}
-	manifest, _, err := readArtifactManifest(ctx, delivery.files, artifactFileID)
+	manifest, _, err := delivery.readManifest(ctx, artifactFileID)
 	if err != nil {
 		return engine.DeliveryResponse{}, mapDeliveryFileError(err)
 	}
@@ -351,6 +394,14 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 		entry = asset.artifactFile
 		cacheControl = artifactCacheControl(asset)
 	}
+	var vary []string
+	switch source {
+	case localeFromCookie:
+		// Vary: Cookie would make every private cookie a shared-cache key.
+		cacheControl = "no-store"
+	case localeFromAcceptLanguage:
+		vary = append(vary, "Accept-Language")
+	}
 	if request.Method == http.MethodHead || request.IfNoneMatch != "" {
 		file, statErr := delivery.files.StatFile(ctx, entry.FileID)
 		if statErr != nil {
@@ -361,12 +412,13 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 		}
 		etag, _ := fileETag(entry.SHA256)
 		if request.IfNoneMatch != "" && matchesIfNoneMatch(request.IfNoneMatch, etag) {
-			return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: cacheControl}, nil
+			return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag,
+				CacheControl: cacheControl, Vary: vary}, nil
 		}
 		contentType, _ := normalizedContentType(entry.ContentType)
 		if request.Method == http.MethodHead {
 			return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: contentType, ContentLength: entry.Size,
-				ETag: etag, CacheControl: cacheControl}, nil
+				ETag: etag, CacheControl: cacheControl, Vary: vary}, nil
 		}
 	}
 	body, file, err := delivery.files.ReadFile(ctx, entry.FileID)
@@ -383,7 +435,14 @@ func (delivery *CoreDelivery) deliverArtifact(ctx context.Context, route model.R
 	etag, _ := fileETag(entry.SHA256)
 	contentType, _ := normalizedContentType(entry.ContentType)
 	return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: contentType, ContentLength: entry.Size,
-		ETag: etag, CacheControl: cacheControl, Body: body}, nil
+		ETag: etag, CacheControl: cacheControl, Vary: vary, Body: body}, nil
+}
+
+func (delivery *CoreDelivery) readManifest(ctx context.Context, fileID string) (parsedArtifact, contracts.File, error) {
+	if delivery.manifests == nil {
+		return readArtifactManifest(ctx, delivery.files, fileID)
+	}
+	return delivery.manifests.read(ctx, fileID)
 }
 
 // Struct field order follows the canonical JSON key order so a payload marshalled
@@ -422,17 +481,14 @@ type parsedArtifact struct {
 func readArtifactManifest(ctx context.Context, files CoreFiles, fileID string) (parsedArtifact, contracts.File, error) {
 	manifestFile, err := files.StatFile(ctx, fileID)
 	if err != nil {
-		println("ROUTE_DIAG manifest_stat", err.Error())
 		return parsedArtifact{}, contracts.File{}, err
 	}
 	mediaType, _, err := mime.ParseMediaType(manifestFile.ContentType)
 	if err != nil || mediaType != "application/json" || manifestFile.Size < 1 || manifestFile.Size > maxArtifactManifestBytes {
-		println("ROUTE_DIAG manifest_media", manifestFile.ContentType, manifestFile.Size, mediaType)
 		return parsedArtifact{}, contracts.File{}, engine.ErrInvalidTarget
 	}
 	body, actualFile, err := files.ReadFile(ctx, fileID)
 	if err != nil {
-		println("ROUTE_DIAG manifest_read", err.Error())
 		return parsedArtifact{}, contracts.File{}, err
 	}
 	if body == nil {
@@ -443,7 +499,6 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, fileID string) (
 	manifestContentType, manifestTypeErr := normalizedContentType(manifestFile.ContentType)
 	if actualFile.ID != manifestFile.ID || actualFile.Revision != manifestFile.Revision || actualFile.Size != manifestFile.Size ||
 		actualFile.SHA256 != manifestFile.SHA256 || actualTypeErr != nil || manifestTypeErr != nil || actualContentType != manifestContentType {
-		println("ROUTE_DIAG manifest_meta", actualFile.ID == manifestFile.ID, actualFile.Revision, manifestFile.Revision, actualFile.Size, manifestFile.Size, actualFile.SHA256 == manifestFile.SHA256, actualFile.ContentType, manifestFile.ContentType)
 		return parsedArtifact{}, contracts.File{}, engine.ErrUnavailable
 	}
 	data, err := io.ReadAll(io.LimitReader(body, maxArtifactManifestBytes+1))
@@ -451,23 +506,19 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, fileID string) (
 		return parsedArtifact{}, contracts.File{}, err
 	}
 	if int64(len(data)) != manifestFile.Size || len(data) > maxArtifactManifestBytes {
-		println("ROUTE_DIAG manifest_body_size", len(data), manifestFile.Size)
 		return parsedArtifact{}, contracts.File{}, engine.ErrInvalidTarget
 	}
 	actualDigest := sha256.Sum256(data)
 	if hex.EncodeToString(actualDigest[:]) != manifestFile.SHA256 {
-		println("ROUTE_DIAG manifest_digest")
 		return parsedArtifact{}, contracts.File{}, engine.ErrUnavailable
 	}
 	var envelope artifactEnvelope
 	if err := httpjson.DecodeBytes(data, &envelope); err != nil || envelope.Format != "static-page-artifact/v1" || envelope.Assets == nil || len(envelope.Assets) > maxArtifactAssets {
-		println("ROUTE_DIAG manifest_envelope", err == nil, envelope.Format, envelope.Assets == nil, len(envelope.Assets))
 		return parsedArtifact{}, contracts.File{}, engine.ErrInvalidTarget
 	}
 	var rootFields map[string]json.RawMessage
 	if json.Unmarshal(data, &rootFields) != nil || len(rootFields) != 4 || rootFields["format"] == nil || rootFields["digest"] == nil ||
 		rootFields["document"] == nil || rootFields["assets"] == nil {
-		println("ROUTE_DIAG manifest_root_fields", len(rootFields))
 		return parsedArtifact{}, contracts.File{}, engine.ErrInvalidTarget
 	}
 	var documentFields map[string]json.RawMessage
@@ -490,13 +541,11 @@ func readArtifactManifest(ctx context.Context, files CoreFiles, fileID string) (
 	}
 	expectedDigest, err := artifactPayloadDigest(data)
 	if err != nil || envelope.Digest != expectedDigest {
-		println("ROUTE_DIAG manifest_expected_digest", envelope.Digest, expectedDigest, err == nil)
 		return parsedArtifact{}, contracts.File{}, engine.ErrInvalidTarget
 	}
 	manifest := parsedArtifact{document: envelope.Document, assets: make(map[string]artifactAsset, len(envelope.Assets))}
 	fileIDs := make(map[string]struct{}, len(envelope.Assets)+1)
 	if err := validateArtifactFile(manifest.document, fileID, true); err != nil {
-		println("ROUTE_DIAG manifest_document_invalid", manifest.document.FileID, manifest.document.ContentType, manifest.document.Size)
 		return parsedArtifact{}, contracts.File{}, err
 	}
 	fileIDs[manifest.document.FileID] = struct{}{}

@@ -2,6 +2,8 @@
 package router
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -27,6 +29,17 @@ const (
 	operationsPath = "/api/admin/router/operations"
 )
 
+// CompressionConfig is explicit: enabling compression requires every bound.
+// No algorithm, threshold, media type or buffer limit is inferred at runtime.
+type CompressionConfig struct {
+	Enabled              bool
+	Algorithms           []string
+	MinBytes             int64
+	MaxUncompressedBytes int64
+	MaxCompressedBytes   int64
+	MediaTypes           []string
+}
+
 type Config struct {
 	BranchID                string
 	MaxJSONBytes            int64
@@ -35,6 +48,7 @@ type Config struct {
 	AllowedOrigins          []string
 	PublicOperations        engine.PublicOperationCatalog
 	FormSessionCookieSecure bool
+	Compression             CompressionConfig
 }
 
 type Handler struct {
@@ -60,6 +74,9 @@ func NewHandler(api API, cfg Config) (*Handler, error) {
 		if r < 0x21 || r == 0x7f {
 			return nil, errors.New("invalid Router branch ID")
 		}
+	}
+	if !validCompressionConfig(cfg.Compression) {
+		return nil, errors.New("invalid Router HTTP compression configuration")
 	}
 	var auth *adminhttpauth.Transport
 	if len(cfg.AllowedOrigins) > 0 {
@@ -188,7 +205,6 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
-	println("ROUTE_DIAG entered")
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -200,22 +216,18 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	var input engine.CreateRouteRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
-		println("ROUTE_DIAG decode_error")
 		writeDecodeError(w, err)
 		return
 	}
 	if input.BranchID != "" && input.BranchID != h.cfg.BranchID {
-		println("ROUTE_DIAG branch_invalid")
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if !validTargetMatch(input.Match, input.Target.Kind) {
-		println("ROUTE_DIAG match_invalid", input.Match, input.Target.Kind)
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if err := h.validateTarget(ctx, input.Target); err != nil {
-		println("ROUTE_DIAG target_invalid", input.Target.Kind)
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -223,7 +235,6 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	input.IdempotencyKey = key
 	route, err := h.api.CreateRoute(ctx, input)
 	if err != nil {
-		println("ROUTE_DIAG api_create_error", input.Host, input.Match, input.Target.Kind, fmt.Sprintf("%T", err), err.Error())
 		writeEngineError(w, err)
 		return
 	}
@@ -443,14 +454,115 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 	if response.AcceptRanges == "bytes" {
 		w.Header().Set("Accept-Ranges", "bytes")
 	}
-	if response.ContentLength >= 0 {
+	vary := append([]string(nil), response.Vary...)
+	var bufferedBody []byte
+	var encoded, buffered bool
+	if h.canCompress(r, response) {
+		config := h.cfg.Compression
+		var raw bytes.Buffer
+		if _, err := io.Copy(&raw, io.LimitReader(response.Body, config.MaxUncompressedBytes+1)); err != nil {
+			writeError(w, http.StatusBadGateway, "unavailable")
+			return
+		}
+		if int64(raw.Len()) > config.MaxUncompressedBytes {
+			writeError(w, http.StatusBadGateway, "unavailable")
+			return
+		}
+		var buffer bytes.Buffer
+		writer := gzip.NewWriter(&buffer)
+		if _, err := writer.Write(raw.Bytes()); err != nil {
+			_ = writer.Close()
+			writeError(w, http.StatusBadGateway, "unavailable")
+			return
+		}
+		if err := writer.Close(); err != nil {
+			writeError(w, http.StatusBadGateway, "unavailable")
+			return
+		}
+		buffered = true
+		bufferedBody = raw.Bytes()
+		if int64(buffer.Len()) <= config.MaxCompressedBytes {
+			bufferedBody = buffer.Bytes()
+			encoded = true
+			vary = append(vary, "Accept-Encoding")
+		}
+	}
+	if values := dedupeVary(vary); len(values) > 0 {
+		w.Header().Set("Vary", strings.Join(values, ", "))
+	}
+	if encoded {
+		w.Header().Set("Content-Encoding", "gzip")
+	}
+	if buffered {
+		w.Header().Set("Content-Length", strconv.Itoa(len(bufferedBody)))
+	} else if response.ContentLength >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))
 	}
 	w.WriteHeader(response.StatusCode)
 	if r.Method == http.MethodHead || response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotModified || response.Body == nil {
 		return
 	}
+	if buffered {
+		_, _ = io.Copy(w, bytes.NewReader(bufferedBody))
+		return
+	}
 	_, _ = io.Copy(w, response.Body)
+}
+
+func (h *Handler) canCompress(r *http.Request, response engine.DeliveryResponse) bool {
+	config := h.cfg.Compression
+	if !config.Enabled || r.Method == http.MethodHead || response.StatusCode != http.StatusOK || response.Body == nil ||
+		r.Header.Get("Range") != "" || response.ContentLength < config.MinBytes || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(response.ContentType)
+	if err != nil {
+		return false
+	}
+	for _, allowed := range config.MediaTypes {
+		parsed, _, parseErr := mime.ParseMediaType(allowed)
+		if parseErr == nil && parsed == mediaType {
+			return true
+		}
+	}
+	return false
+}
+
+func acceptsGzip(header string) bool {
+	for _, part := range strings.Split(header, ",") {
+		fields := strings.Split(part, ";")
+		encoding := strings.ToLower(strings.TrimSpace(fields[0]))
+		if encoding != "gzip" {
+			continue
+		}
+		accepted := true
+		for _, parameter := range fields[1:] {
+			name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if found && strings.EqualFold(strings.TrimSpace(name), "q") {
+				quality, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil || quality <= 0 {
+					accepted = false
+				}
+			}
+		}
+		if accepted {
+			return true
+		}
+	}
+	return false
+}
+
+func dedupeVary(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (h *Handler) formSessionTokens(r *http.Request) (map[string]string, error) {
@@ -626,7 +738,34 @@ func validDeliveryResponse(response engine.DeliveryResponse) bool {
 	if strings.ContainsAny(response.CacheControl, "\r\n") || len(response.CacheControl) > 128 || !validCacheControl(response.CacheControl) {
 		return false
 	}
+	for _, value := range response.Vary {
+		if value != "Accept-Language" && value != "Accept-Encoding" {
+			return false
+		}
+	}
 	return response.ETag == "" || validETag(response.ETag)
+}
+
+func validCompressionConfig(config CompressionConfig) bool {
+	if !config.Enabled {
+		return true
+	}
+	if len(config.Algorithms) == 0 || config.MinBytes <= 0 || config.MaxUncompressedBytes <= 0 ||
+		config.MaxCompressedBytes <= 0 || len(config.MediaTypes) == 0 {
+		return false
+	}
+	for _, algorithm := range config.Algorithms {
+		if algorithm != "gzip" {
+			return false
+		}
+	}
+	for _, mediaType := range config.MediaTypes {
+		parsed, _, err := mime.ParseMediaType(mediaType)
+		if err != nil || strings.Contains(parsed, "*") {
+			return false
+		}
+	}
+	return true
 }
 
 func validCacheControl(value string) bool {

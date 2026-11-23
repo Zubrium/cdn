@@ -8,11 +8,16 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const mountPath = "/admin"
+
+// Vite content hashes are 8 or more URL-safe characters between the last dash
+// and the file extension. Only such immutable filenames get a shared TTL.
+var hashedAssetName = regexp.MustCompile(`-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$`)
 
 type Handler struct{ assets fs.FS }
 
@@ -27,7 +32,7 @@ func NewHandler(assets fs.FS) (*Handler, error) {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -75,6 +80,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		contentType += "; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", contentType)
+	if hashedAssetName.MatchString(path.Base(clean)) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
 	http.ServeContent(w, r, path.Base(clean), zeroModTime, bytes.NewReader(content))
 }
 

@@ -42,6 +42,13 @@ type TargetValidator interface {
 	ValidateRouteTarget(context.Context, model.Target, string) error
 }
 
+// RouteFingerprintSource is the authoritative, server-owned identity check
+// used before a cached public route match may be reused. It is never populated
+// from visitor input.
+type RouteFingerprintSource interface {
+	ResolveRouteFingerprint(context.Context, string, string) (string, error)
+}
+
 type Config struct {
 	BranchID        string
 	AccessGroup     string
@@ -168,40 +175,32 @@ func (service *Service) GetRoute(ctx context.Context, branchID, id string) (mode
 
 func (service *Service) CreateRoute(ctx context.Context, input CreateRouteInput) (model.Route, error) {
 	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
-		println("ROUTE_DIAG app_authorize_error", err.Error())
 		return model.Route{}, err
 	}
 	if input.BranchID != "" && input.BranchID != service.config.BranchID || !validIdempotency.MatchString(input.IdempotencyKey) {
-		println("ROUTE_DIAG app_input_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	host, err := model.NormalizeHost(input.Host)
 	if err != nil {
-		println("ROUTE_DIAG app_host_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	path, err := model.NormalizePath(input.Path)
 	if err != nil {
-		println("ROUTE_DIAG app_path_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	if err := service.validator.ValidateRouteTarget(ctx, input.Target, input.Match); err != nil {
-		println("ROUTE_DIAG app_target_invalid", err.Error())
 		return model.Route{}, mapTargetError(err)
 	}
 	route, err := model.NewRoute(uuid.NewString(), service.config.BranchID, host, path, input.Match, input.Target, service.now())
 	if err != nil {
-		println("ROUTE_DIAG app_new_route_invalid", err.Error())
 		return model.Route{}, ErrInvalid
 	}
 	fingerprint, err := fingerprint(route)
 	if err != nil {
-		println("ROUTE_DIAG app_fingerprint_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	created, err := service.repository.Create(ctx, route, input.IdempotencyKey, fingerprint)
 	if err != nil {
-		println("ROUTE_DIAG app_repository_error", err.Error())
 		return model.Route{}, mapRepositoryError(err)
 	}
 	return created, nil
@@ -309,6 +308,46 @@ func (service *Service) ResolveRoute(ctx context.Context, host, escapedPath stri
 		return model.Route{}, mapRepositoryError(err)
 	}
 	return route, nil
+}
+
+// RouteFingerprint binds the route revision, its locale assignment revisions
+// and the target identity into one value. A changed publication or assignment
+// changes the fingerprint, so a cached match cannot outlive its authority.
+func RouteFingerprint(route model.Route) string {
+	identity := struct {
+		ID        string       `json:"id"`
+		BranchID  string       `json:"branch_id"`
+		Revision  int64        `json:"revision"`
+		UpdatedAt time.Time    `json:"updated_at"`
+		Target    model.Target `json:"target"`
+	}{route.ID, route.BranchID, route.Revision, route.UpdatedAt, route.Target}
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
+}
+
+// ResolveRouteFingerprint reads the authoritative record for one configured
+// branch. Delivery has no end-user credential: this is a server-owned check
+// and never accepts an identity supplied by a visitor.
+func (service *Service) ResolveRouteFingerprint(ctx context.Context, branchID, routeID string) (string, error) {
+	if service == nil || ctx == nil || branchID != service.config.BranchID || !validUUID(routeID) {
+		return "", ErrInvalid
+	}
+	route, err := service.repository.GetByID(ctx, branchID, routeID)
+	if err != nil {
+		return "", mapRepositoryError(err)
+	}
+	if route.State != model.StateActive || route.ValidateForStorage() != nil {
+		return "", ErrNotFound
+	}
+	fingerprint := RouteFingerprint(route)
+	if fingerprint == "" {
+		return "", ErrUnavailable
+	}
+	return fingerprint, nil
 }
 
 func (service *Service) authorize(ctx context.Context, minimum contracts.AccessLevel) error {

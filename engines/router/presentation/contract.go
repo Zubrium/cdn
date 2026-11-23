@@ -169,6 +169,7 @@ type DeliveryResponse struct {
 	ETag               string
 	LastModified       string
 	CacheControl       string
+	Vary               []string
 	ContentDisposition string
 	AcceptRanges       string
 	Body               io.ReadCloser

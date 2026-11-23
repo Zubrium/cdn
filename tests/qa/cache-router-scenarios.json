@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "CACHE-006",
+      "source": "spec/architecture/SPEC-caching.md §4, §6.1; tests/ACCEPTANCE-MATRIX.md Кэширование CACHE-006",
+      "level": "contract",
+      "preconditions": [
+        "Router manifest cache и route cache включены явными границами MaxEntries, MaxBytes и TTL без скрытых значений по умолчанию.",
+        "Авторитетный источник ревизии маршрута доступен через ResolveRouteFingerprint."
+      ],
+      "input": "Повторные Deliver одного artifact asset, CAS-смена manifest и route assignment, отказ проверки fingerprint, затем отказ StatFile.",
+      "action": "Вызвать NewCoreDeliveryWithCache().Deliver и сравнить счётчики чтения manifest и разрешения маршрута.",
+      "expected_result": "Манifest читается из Core один раз на неизменный CAS; маршрут не перерезолвится без смены fingerprint; CAS-смена отдаёт новый вариант; отказ проверки ревизии или метаданных Core закрывает выдачу.",
+      "expected_state": "Оба кэша остаются ограниченными; stale route match недоступен после инвалидации.",
+      "test_file": "tests/go/presentation/router/cache_scenarios_test.go",
+      "test_symbol": "TestCacheRouterScenario/CACHE-006",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-007",
+      "source": "spec/architecture/SPEC-caching.md §6.2; tests/ACCEPTANCE-MATRIX.md Кэширование CACHE-007",
+      "level": "contract",
+      "preconditions": [
+        "Для хоста настроены несколько locale с разными artifact manifest.",
+        "Публичный Router использует server-owned locale catalog."
+      ],
+      "input": "Одинаковый публичный GET с cookie zubrium_locale, с Accept-Language и с произвольной cookie tracking.",
+      "action": "Выполнить HTTP-запросы через PublicHTTPHandler и проверить Cache-Control и Vary.",
+      "expected_result": "Cookie-вариант отдаёт no-store без Vary: Cookie; Accept-Language-вариант отдаёт Vary: Accept-Language; произвольная cookie не создаёт shared-cache вариант.",
+      "expected_state": "Ни один произвольный cookie не становится ключом общего кэша; выбор locale остаётся внутри настроенного каталога.",
+      "test_file": "tests/go/presentation/router/cache_scenarios_test.go",
+      "test_symbol": "TestCacheRouterScenario/CACHE-007",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-008",
+      "source": "spec/architecture/SPEC-caching.md §6.3; tests/ACCEPTANCE-MATRIX.md Кэширование CACHE-008",
+      "level": "contract",
+      "preconditions": [
+        "HTTP-сжатие включено явной конфигурацией gzip, минимального размера, лимита и media types.",
+        "Публичный representation имеет стабильный ETag."
+      ],
+      "input": "GET с Accept-Encoding: gzip, отдельно с Range и Accept-Encoding, затем conditional GET с If-None-Match; дополнительно запрещённые значения Cache-Control и неполная конфигурация сжатия.",
+      "action": "Выполнить запросы через PublicHTTPHandler и проверить заголовки и тело.",
+      "expected_result": "gzip добавляет Vary: Accept-Encoding и сохраняет ETag и Cache-Control; Range не сжимается; 304 не имеет тела и сохраняет валидаторы; запрещённые Cache-Control и неполная конфигурация отклоняются.",
+      "expected_state": "Сжатие не применяется к Range, а валидаторы representation не меняются.",
+      "test_file": "tests/go/presentation/router/cache_scenarios_test.go",
+      "test_symbol": "TestCacheRouterScenario/CACHE-008",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-009",
+      "source": "spec/architecture/SPEC-caching.md §6.3; tests/ACCEPTANCE-MATRIX.md Кэширование CACHE-009",
+      "level": "e2e",
+      "preconditions": [
+        "Перед публичным listener развёрнут изолированный disposable caching proxy/CDN с известным base URL.",
+        "Для proxy заданы отдельные пути no-store, SSE, form-session и admin."
+      ],
+      "input": "GET через proxy ответов no-store, SSE, form-session и admin с таймаутом CACHE_ROUTER_TEST_TIMEOUT.",
+      "action": "Выполнить e2e-запросы к disposable proxy с env-guard CACHE_ROUTER_TEST_DISPOSABLE=1 и путями из окружения.",
+      "expected_result": "Proxy не переопределяет no-store, учитывает Vary и не кэширует приватные, admin, SSE и form-session ответы.",
+      "expected_state": "Без изолированного proxy сценарий остаётся заблокированным и не считается пройденным.",
+      "test_file": "tests/go/presentation/router/cache_scenarios_test.go",
+      "test_symbol": "TestCacheRouterScenario/CACHE-009",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Disposable caching proxy/CDN не предоставлен: требуются CACHE_ROUTER_TEST_DISPOSABLE=1, CACHE_ROUTER_TEST_PROXY_BASE_URL, CACHE_ROUTER_TEST_NO_STORE_PATH, CACHE_ROUTER_TEST_SSE_PATH, CACHE_ROUTER_TEST_FORM_PATH, CACHE_ROUTER_TEST_ADMIN_PATH и CACHE_ROUTER_TEST_TIMEOUT. Без них e2e-тест пропускается."
+    },
+    {
+      "id": "CACHE-012",
+      "source": "spec/architecture/SPEC-caching.md §9; tests/ACCEPTANCE-MATRIX.md Кэширование CACHE-012",
+      "level": "unit",
+      "preconditions": [
+        "Диагностика модулей Router не должна печатать ключи, file ID, principal ID, URL, query, locale и пользовательские данные."
+      ],
+      "input": "Статический scan исходников presentation/router и engines/router на ad-hoc println и маркеры ROUTE_DIAG.",
+      "action": "Выполнить регрессионный тест сканирования исходников после инвалидации и отказов.",
+      "expected_result": "В исходниках Router отсутствуют ad-hoc println и отладочные маркеры ROUTE_DIAG, которые выводили бы маршруты и идентификаторы в stderr.",
+      "expected_state": "Полный сбор логов и метрик в disposable окружении остаётся отдельной проверкой; этот тест покрывает только Diagnostics в исходниках Router.",
+      "test_file": "tests/go/presentation/router/cache_scenarios_test.go",
+      "test_symbol": "TestCacheRouterScenario/CACHE-012",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    }
+  ]
+}
