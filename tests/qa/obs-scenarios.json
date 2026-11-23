@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "OBS-001",
+      "source": "spec/observability/SPEC-observability.md §§4-5 (health checks in metrics but no request-completed log; /metrics text format with no-store); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-001",
+      "level": "contract",
+      "preconditions": [
+        "A file-mode Observer with full process identity is mounted on an HTTP mux with a /healthz route and a normal API route.",
+        "The metrics endpoint is served by the same Observer."
+      ],
+      "input": "GET /healthz (204) and GET /api/admin/forms (200) through the Observer middleware, then GET /metrics.",
+      "action": "Inspect logs.jsonl, the local counter/histogram snapshot and the /metrics response headers.",
+      "expected_result": "Both routes increment zubrium_http_server_requests_total and zubrium_http_server_duration_seconds; only the API route emits http request completed, /metrics returns text/plain; version=0.0.4; charset=utf-8 with Cache-Control: no-store.",
+      "expected_state": "Health checks leave no completion log line; both routes remain fully counted and correlated.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-002",
+      "source": "spec/observability/SPEC-observability.md §5 (409 expectedRevision span/log contract); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-002",
+      "level": "contract",
+      "preconditions": [
+        "A file-mode Observer wraps an authenticated PATCH route that returns 409 conflict.",
+        "The request carries Authorization, Cookie, a form body and a raw query value."
+      ],
+      "input": "PATCH /api/admin/forms/form-42?form=do-not-leak with a conflicting revision, a credential-bearing header set and a form-values body.",
+      "action": "Read the emitted http.server span, completion log and all three signal files.",
+      "expected_result": "Business status is 409; span carries http.status_code=409, span.status=error, outcome=error and typed error attributes; the log is warn/error with the same trace_id; no secret, cookie, form value or raw query value appears in any signal.",
+      "expected_state": "Telemetry records use the route template and stay free of request bodies and credentials; the business conflict is unchanged.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-002",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-003",
+      "source": "spec/observability/SPEC-observability.md §§3.1, 5 (correlation headers, route template, mandatory identity); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-003",
+      "level": "contract",
+      "preconditions": [
+        "A file-mode Observer with presentation identity handles GET /api/admin/forms.",
+        "The request has a valid W3C traceparent and a raw query string with sensitive values."
+      ],
+      "input": "GET /api/admin/forms?token=RAW-QUERY-SECRET&file.id=file-77 with traceparent 00-0123456789abcdef0123456789abcdef-abcdef0123456789-01.",
+      "action": "Compare response correlation headers with the emitted log and http.server span; scan all signal files for query leakage.",
+      "expected_result": "Status 200, X-Request-ID equals the child span_id, X-Trace-ID equals the incoming trace_id; log and span carry the same presentation module/component/operation identity and the route template; the raw query and file ID never appear in telemetry.",
+      "expected_state": "One trace correlates response, log and span without high-cardinality or credential leakage.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-003",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-004",
+      "source": "spec/observability/SPEC-observability.md §§3.1, 4 (worker task span and worker metrics); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-004",
+      "level": "unit",
+      "preconditions": [
+        "A file-mode Observer receives the trusted worker boundary identity and emits worker.task metrics with low-cardinality labels."
+      ],
+      "input": "A completed worker.media Operation named worker.task with operation ID engine.media/derivative/v1 and a task-ID span attribute, followed by zubrium_worker_task_total and zubrium_worker_task_duration_seconds observations.",
+      "action": "Read spans.jsonl and metrics.jsonl and compare identity, outcome and exemplar trace IDs.",
+      "expected_result": "The worker.task span and both worker metric samples carry module.kind=worker, the actual module.id, component.id, operation.id and outcome; identity is not replaced by composition or bus; task IDs stay out of metric labels.",
+      "expected_state": "The worker span and metrics share one trace while keeping metric series low-cardinality.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-004",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-005",
+      "source": "spec/observability/SPEC-observability.md §§2.1, 3.1 (three JSONL files, mandatory fields, rotation bounds); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-005",
+      "level": "unit",
+      "preconditions": [
+        "File mode uses a 1024-byte limit and max_files=2 in an isolated temporary directory.",
+        "HTTP and bus calls have completed before rotation is forced."
+      ],
+      "input": "One HTTP request, one bus.dispatch span with a counter, then 25 log records large enough to rotate logs.jsonl repeatedly.",
+      "action": "Parse every active and rotated JSONL line, check mandatory fields and trace correlation, enumerate rotated files and verify the last record is in the active file.",
+      "expected_result": "logs.jsonl, spans.jsonl and metrics.jsonl exist; every line is a JSON object with UTC RFC3339Nano timestamp, signal and the §3.1 identity/trace set; .1 is created, indices never exceed max_files and the active record survives rotation.",
+      "expected_state": "Rotation removes only oldest indices; the process keeps writing valid records and the HTTP trace is present in all three signals.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-005",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-006",
+      "source": "spec/observability/SPEC-observability.md §2.2 (OTLP to Collector/OpenObserve, three signal pipelines); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-006",
+      "level": "integration",
+      "preconditions": [
+        "A disposable OTLP/HTTP Collector and OpenObserve stack is reachable.",
+        "OBS_TEST_OTEL_ENDPOINT names the Collector base URL; OBS_TEST_OQ_SEARCH_URL is a query URL template with a trace-id placeholder and optional {signal} selector."
+      ],
+      "input": "One HTTP request, one worker.task operation and one bus.dispatch with a shared trace ID in otel mode, then three stream queries by trace ID after flush.",
+      "action": "Export through the real OTLP SDK and query the logs, traces and metrics streams in OpenObserve.",
+      "expected_result": "All three streams contain the same trace ID with service.name, deployment.profile, module/component/operation identity and the expected signal names/metrics; debug exporter evidence is available for accepted batches.",
+      "expected_state": "Export is asynchronous and does not change the HTTP/business result; no credential is present in headers beyond the environment-provided values.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-006",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Нет живого OTLP Collector и OpenObserve в изолированном стеке: OBS_TEST_OTEL_ENDPOINT и OBS_TEST_OQ_SEARCH_URL не заданы, поэтому три потока сигналов и debug exporter не проверены; подтест честно t.Skip."
+    },
+    {
+      "id": "OBS-007",
+      "source": "spec/observability/SPEC-observability.md §§5-6 (W3C traceparent validation and root fallback); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-007",
+      "level": "contract",
+      "preconditions": [
+        "A file-mode Observer wraps GET /api/admin/forms and accepts a per-request traceparent header."
+      ],
+      "input": "Short trace ID, non-hex trace ID, zero span ID and one valid 00-form traceparent with a sampled flag; each sent as a separate request.",
+      "action": "Compare response trace headers and child spans with the incoming headers; scan logs for tracing errors.",
+      "expected_result": "Every invalid header is ignored: status 200, new nonzero root trace, no tracing error log. The valid header preserves the incoming trace_id in the child span and records the incoming span_id as parent_span_id.",
+      "expected_state": "No request is rejected because of trace context and no span inherits a malformed or zero identifier.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-007",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-008",
+      "source": "spec/observability/SPEC-observability.md §§2.2, 6 (Collector outage, async bounded export, recovery); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-008",
+      "level": "integration",
+      "preconditions": [
+        "A disposable product stack in otel mode is available with a running Collector and a controllable outage endpoint.",
+        "OBS_TEST_OTEL_ENDPOINT, OBS_TEST_OTEL_FAILURE_ENDPOINT and OBS_TEST_OQ_SEARCH_URL are configured."
+      ],
+      "input": "HTTP and worker calls with an unreachable OTLP endpoint, then the same calls with the live endpoint and a query for the recovery trace ID.",
+      "action": "Measure business status and shutdown duration during the outage, then verify that export resumes for the recovered endpoint.",
+      "expected_result": "HTTP/bus/worker results and process lifetime do not depend on telemetry; shutdown is bounded by timeout; after recovery the trace is present in the telemetry sink.",
+      "expected_state": "Lost batches are an honest limitation of the run; no business result or durable state changes during telemetry failure.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-008",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Нет изолированного стека с управляемым отказом и восстановлением OTLP Collector: OBS_TEST_OTEL_ENDPOINT, OBS_TEST_OTEL_FAILURE_ENDPOINT и OBS_TEST_OQ_SEARCH_URL не заданы, поэтому доступность продукта и возобновление экспорта не проверены; подтест честно t.Skip."
+    },
+    {
+      "id": "OBS-009",
+      "source": "spec/observability/SPEC-observability.md §3.2 (typed attributes, key/value redaction, cache-correlation keys); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-009",
+      "level": "unit",
+      "preconditions": [
+        "A file-mode Observer with full identity receives typed attributes from an untrusted boundary."
+      ],
+      "input": "Sensitive keys (token, cookie, authorization, body, form, query, cache.key, file.id, principal.id, url, locale, user.agent, e-mail/phone/user name), credential-shaped values, a visitor e-mail under a safe key, and an over-long control-character value.",
+      "action": "Construct typed attributes, emit log/counter/span, inspect all signal files and the /metrics snapshot.",
+      "expected_result": "Sensitive keys and all integer variants are dropped; Bearer/Basic/JWT/cookie/token values and visitor e-mail are redacted; strings are bounded and control characters removed; metric labels contain no rejected key or secret value.",
+      "expected_state": "No PII, credential, cache key, file ID or principal ID reaches logs, spans, metrics or the local Prometheus snapshot.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-009",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "OBS-010",
+      "source": "spec/observability/SPEC-observability.md §6 (parallel requests, single End, graceful shutdown); tests/ACCEPTANCE-MATRIX.md Observability criterion OBS-010",
+      "level": "unit",
+      "preconditions": [
+        "A file-mode Observer handles 12 concurrent requests with distinct traceparent headers and opens one extra component.lifecycle span."
+      ],
+      "input": "Parallel HTTP requests through the middleware, a double End on one span, bounded Close, and a late End plus counter write after Close.",
+      "action": "Verify per-trace span counts and span IDs, shutdown duration and whether signal files change after shutdown.",
+      "expected_result": "Each request has exactly one span with its own trace_id/span_id and no mixed identity; double End writes one span; Close returns within the timeout; no span or metric sample is written after Close and business results remain unchanged.",
+      "expected_state": "Concurrent traces stay isolated and shutdown is terminal for the file backend.",
+      "test_file": "tests/go/pkg/observability/obs_scenarios_test.go",
+      "test_symbol": "TestObsScenario/OBS-010",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    }
+  ]
+}

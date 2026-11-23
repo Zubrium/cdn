@@ -194,6 +194,7 @@ var (
 	credentialPairPattern = regexp.MustCompile(
 		`(?i)\b(authorization|cookie|set-cookie|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password|passwd|credential|session(?:[_-]?id)?|private[_-]?key)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)`)
 	cookieHeaderPattern = regexp.MustCompile(`(?i)\b(cookie|set-cookie)\s*:\s*[^\r\n]+`)
+	emailPattern        = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
 )
 
 const maxAttributeValue = 256
@@ -217,7 +218,10 @@ func redactValue(value string) string {
 	value = cookieHeaderPattern.ReplaceAllString(value, "$1: [REDACTED]")
 	value = bearerPattern.ReplaceAllString(value, "$1 [REDACTED]")
 	value = credentialPairPattern.ReplaceAllString(value, "$1=[REDACTED]")
-	return jwtPattern.ReplaceAllString(value, "[REDACTED]")
+	value = jwtPattern.ReplaceAllString(value, "[REDACTED]")
+	// A safe key does not make visitor PII safe: e-mail addresses are removed
+	// from values just like credential-shaped substrings.
+	return emailPattern.ReplaceAllString(value, "[REDACTED]")
 }
 
 func sanitiseKey(key string) string {

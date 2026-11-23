@@ -16,6 +16,7 @@ type signalFile struct {
 	maxBytes int64
 	maxFiles int
 	file     *os.File
+	closed   bool
 }
 
 func newSignalFile(directory, name string, maxBytes int64, maxFiles int) (*signalFile, error) {
@@ -66,6 +67,10 @@ func (w *signalFile) write(record map[string]any) error {
 	line = append(line, '\n')
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		// Shutdown is terminal: a late signal must not reopen a closed file.
+		return nil
+	}
 	if w.file == nil {
 		if err := w.open(); err != nil {
 			return err
@@ -84,6 +89,7 @@ func (w *signalFile) write(record map[string]any) error {
 func (w *signalFile) close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.closed = true
 	if w.file == nil {
 		return nil
 	}
