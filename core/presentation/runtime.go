@@ -21,25 +21,32 @@ import (
 )
 
 type RuntimeConfig struct {
-	Database             DatabaseConfig
-	MigrationDatabaseURL string
-	S3                   S3Config
-	BootstrapSecret      string
-	AtlasBinary          string
-	MigrationLockTimeout time.Duration
-	AccessGroups         map[string]access.Level
-	CacheMaxBytes        int64
-	CacheTTL             time.Duration
-	MaxMetadataBytes     int64
-	MaxObjectBytes       int64
-	MaxCachedObjectBytes int64
-	MaintenanceInterval  time.Duration
-	MaintenanceTimeout   time.Duration
-	PendingTTL           time.Duration
-	MaintenanceBatchSize int
-	SessionIdleTTL       time.Duration
-	SessionAbsoluteTTL   time.Duration
-	ModuleData           ModuleDataLimits
+	Database                DatabaseConfig
+	MigrationDatabaseURL    string
+	S3                      S3Config
+	BootstrapSecret         string
+	AtlasBinary             string
+	MigrationLockTimeout    time.Duration
+	AccessGroups            map[string]access.Level
+	CacheMaxBytes           int64
+	CacheTTL                time.Duration
+	CacheShards             int
+	CachePromotionInterval  int
+	CoalesceEnabled         bool
+	CoalesceMaxWaiters      int
+	CoalesceTimeout         time.Duration
+	InvalidationBatchSize   int
+	InvalidationBatchWindow time.Duration
+	MaxMetadataBytes        int64
+	MaxObjectBytes          int64
+	MaxCachedObjectBytes    int64
+	MaintenanceInterval     time.Duration
+	MaintenanceTimeout      time.Duration
+	PendingTTL              time.Duration
+	MaintenanceBatchSize    int
+	SessionIdleTTL          time.Duration
+	SessionAbsoluteTTL      time.Duration
+	ModuleData              ModuleDataLimits
 }
 
 const MaxS3PutObjectBytes = objectstore.MaxPutObjectBytes
@@ -169,7 +176,7 @@ type Runtime struct {
 	identities                 *appidentity.Service
 	sessions                   *appidentity.SessionService
 	maintenance                *appmaintenance.Service
-	byteCache                  *cache.Cache
+	byteCache                  *cache.ShardedCache
 	Registry                   *Registry
 	cancel                     context.CancelFunc
 	done                       chan struct{}
@@ -240,7 +247,9 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("bootstrap Core: %w", err)
 	}
-	byteCache := cache.NewByteBudget(int(cfg.CacheMaxBytes), time.Now)
+	shards := cfg.CacheShards
+	byteCache := cache.NewSharded(shards, 0, int(cfg.CacheMaxBytes), cfg.CachePromotionInterval, time.Now)
+	byteCache.ConfigureCoalescing(cfg.CoalesceEnabled, cfg.CoalesceMaxWaiters, cfg.CoalesceTimeout)
 	metadata := postgres.Objects{Pool: pool}
 	writer := postgres.Creator{Pool: pool, Store: objects, MaxMetadataBytes: cfg.MaxMetadataBytes}
 	files := storage.NewService(metadata, objects, writer, writer, writer, byteCache,

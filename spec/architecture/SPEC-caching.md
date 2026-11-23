@@ -69,7 +69,7 @@ Origin и Router обязаны использовать только:
 
 - Если представление выбрано по cookie `zubrium_locale`, ответ получает `no-store`. `Vary: Cookie` не используется: он сделал бы shared cache бесполезным из-за любых cookie и опасен для приватных данных.
 - Если locale выбрана из `Accept-Language`, ответ получает `Vary: Accept-Language`.
-- Сжатие включается конфигурацией `router.cache.http.compression`; минимально поддерживается `gzip`. `br` допускается только если runtime действительно реализует алгоритм. Сжимаются типы из явного списка и только при размере не меньше порога.
+- Сжатие включается конфигурацией `router.cache.http.compression`; минимально поддерживается `gzip`. `br` допускается только если runtime действительно реализует алгоритм. Сжимаются типы из явного списка и только при размере не меньше порога. `max_uncompressed_bytes` и `max_compressed_bytes` задают явные буферные границы; пропуск любого значения отвергается до старта, скрытые defaults не подставляются.
 - Сжатый ответ получает `Vary: Accept-Encoding`. ETag считается по несжатой representation и не меняется при сжатии. `Content-Length` описывает переданное закодированное тело. Range-запрос или несовместимый `Content-Type` отключает сжатие.
 - Deploy proxy/CDN обязан уважать `Vary`, `no-store` и `ETag`; он не может «улучшить» политику приватного ответа.
 
@@ -230,6 +230,8 @@ router:
         enabled: true
         algorithms: [gzip]
         min_bytes: 1024
+        max_uncompressed_bytes: 8388608
+        max_compressed_bytes: 2097152
         media_types:
           - text/html
           - text/css

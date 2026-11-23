@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	routerengine "github.com/Zubrium/cdn/engines/router"
 	routesapp "github.com/Zubrium/cdn/engines/router/features/routes/application"
@@ -126,7 +127,19 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	delivery, err := router.NewCoreDelivery(settings.BranchID, files, routeService, registry)
+	scales := component.config.Scales.RouterCache
+	manifestTTL, err := time.ParseDuration(scales.Manifests.TTL)
+	if err != nil {
+		return fmt.Errorf("invalid router manifest cache TTL: %w", err)
+	}
+	routeTTL, err := time.ParseDuration(scales.Routes.TTL)
+	if err != nil {
+		return fmt.Errorf("invalid router route cache TTL: %w", err)
+	}
+	delivery, err := router.NewCoreDeliveryWithCache(settings.BranchID, files, routeService, registry, router.RouterCacheConfig{
+		Manifests: router.CacheSettings{Enabled: scales.Manifests.Enabled, MaxEntries: scales.Manifests.MaxEntries, MaxBytes: scales.Manifests.MaxBytes, TTL: manifestTTL},
+		Routes:    router.CacheSettings{Enabled: scales.Routes.Enabled, MaxEntries: scales.Routes.MaxEntries, MaxBytes: scales.Routes.MaxBytes, TTL: routeTTL},
+	})
 	if err != nil {
 		return err
 	}
@@ -185,6 +198,9 @@ func (component *publicRouterComponent) Start(ctx context.Context) error {
 			Address: settings.PublicListenAddress, ReadHeaderTimeout: component.config.HTTP.ReadHeaderTimeout,
 			ReadTimeout: component.config.HTTP.ReadTimeout, WriteTimeout: component.config.HTTP.WriteTimeout,
 			IdleTimeout: component.config.HTTP.IdleTimeout, MaxHeaderBytes: component.config.HTTP.MaxHeaderBytes,
+			MaxInFlight:     component.config.Scales.RouterHTTP.MaxInFlight,
+			RequestTimeout:  component.config.Scales.RouterHTTP.RequestDuration(),
+			ShutdownTimeout: component.config.HTTP.ShutdownTimeout,
 		},
 		Router: routerPresentationConfig(component.config, component.engine.registry),
 	}, component.engine.api, component.core.IsReady)
@@ -226,6 +242,14 @@ func routerPresentationConfig(config appconfig.Resolved, operations *router.Publ
 		BranchID: settings.BranchID, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
 		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), config.AdminAPI.AllowedOrigins...),
 		PublicOperations: operations, FormSessionCookieSecure: settings.FormSessionCookieSecure,
+		Compression: router.CompressionConfig{
+			Enabled:              config.Scales.RouterCache.HTTP.Compression.Enabled,
+			Algorithms:           append([]string(nil), config.Scales.RouterCache.HTTP.Compression.Algorithms...),
+			MinBytes:             config.Scales.RouterCache.HTTP.Compression.MinBytes,
+			MaxUncompressedBytes: config.Scales.RouterCache.HTTP.Compression.MaxUncompressedBytes,
+			MaxCompressedBytes:   config.Scales.RouterCache.HTTP.Compression.MaxCompressedBytes,
+			MediaTypes:           append([]string(nil), config.Scales.RouterCache.HTTP.Compression.MediaTypes...),
+		},
 	}
 }
 

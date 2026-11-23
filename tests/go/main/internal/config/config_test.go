@@ -137,8 +137,8 @@ func TestResolveUsesExplicitEnvironmentAndPoolSettings(t *testing.T) {
 		t.Fatal("zero timeout accepted")
 	}
 	config.Core.ConnectTimeout = "2s"
-	config.Core.MaxObjectBytes = config.Core.CacheMaxBytes + 2
-	config.Core.MaxCachedObjectBytes = config.Core.CacheMaxBytes + 1
+	config.Core.MaxObjectBytes = config.Core.Cache.MaxBytes + 2
+	config.Core.Cache.MaxObjectBytes = config.Core.Cache.MaxBytes + 1
 	values["SECRET"] = "secret"
 	if _, err := config.Resolve(func(key string) string { return values[key] }); err == nil {
 		t.Fatal("cache entry larger than the total cache memory budget accepted")
@@ -291,7 +291,7 @@ func TestResolveRequiresPoolCapacityForCacheListenerAndStagedStreaming(t *testin
 
 func TestResolveRequiresPoolCapacityForCoordinatorWorkersAndLoaderCommits(t *testing.T) {
 	cfg := validRuntimeConfig()
-	cfg.Loader.MaxConcurrentCommits = 2
+	cfg.Loader.Concurrency.MaxConcurrentCommits = 2
 	values := map[string]string{
 		"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
 		"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
@@ -302,15 +302,15 @@ func TestResolveRequiresPoolCapacityForCoordinatorWorkersAndLoaderCommits(t *tes
 		return err
 	}
 	if resolve() == nil {
-		t.Fatal("pool without capacity for Core and two connections per Loader commit was accepted")
+		t.Fatal("pool below the target budget was accepted")
 	}
-	cfg.Core.MaxConnections = 8
+	cfg.Core.MaxConnections = 13
 	if resolve() == nil {
-		t.Fatal("pool without capacity for worker handlers and lease renewals was accepted")
+		t.Fatal("pool below the worker/loader budget was accepted")
 	}
-	cfg.Core.MaxConnections = 9
+	cfg.Core.MaxConnections = 14
 	if err := resolve(); err != nil {
-		t.Fatalf("pool with capacity for Core, two Loader commits, and two workers plus renewals was rejected: %v", err)
+		t.Fatalf("pool at the target budget was rejected: %v", err)
 	}
 }
 
@@ -403,16 +403,42 @@ func validRuntimeConfig() Config {
 			AtlasBinary: "atlas", MigrationLockTimeout: "30s", AccessGroups: map[string]*platform.AccessLevel{"content": &groupWrite, "coordinator_jobs": &groupWrite},
 			ModuleData:    ModuleData{MaxPayloadBytes: 1 << 20, MaxIndexBytes: 1 << 16, MaxBatchBytes: 8 << 20, MaxPageBytes: 16 << 20, MaxSelectors: 16, MaxSelectorValues: 64, MaxPageSize: 100, MaxBatchOperations: 64},
 			CacheMaxBytes: 1 << 20, CacheTTL: "5m", MaxMetadataBytes: 1 << 16, MaxObjectBytes: 1 << 20, MaxCachedObjectBytes: 512,
+			Cache: CacheTarget{MaxBytes: 1 << 20, TTL: "5m", MaxObjectBytes: 512,
+				AccessCache: CacheAccessTarget{MaxEntries: 100, MaxBytes: 1 << 16, TTL: "1m"},
+				Warmup: WarmupTarget{Enabled: true, Mode: "strict", Timeout: "30s", PerKeyTimeout: "5s", Concurrency: 1, MaxKeys: 10,
+					Retry: WarmupRetryTarget{Attempts: 1, Backoff: "10ms"}, RefreshInterval: "0s",
+					Sources: WarmupSourcesTarget{Inline: true}, Targets: WarmupTargetsTarget{Metadata: true, Bytes: true}}},
+			Concurrency: CoreConcurrency{
+				Storage:      StorageConcurrency{MaxConcurrentReads: 2, MaxConcurrentAuthorizations: 2, OperationTimeout: "5s", ReadReserve: 1},
+				Cache:        CacheConcurrency{Shards: 2, LRUPromotionInterval: 1, Coalesce: CacheCoalesce{Enabled: true, MaxWaiters: 4, Timeout: "1s"}},
+				Invalidation: InvalidationConcurrency{BatchSize: 16, BatchWindow: "1ms"}},
 			MaintenanceInterval: "1m", MaintenanceTimeout: "30s", PendingTTL: "1h", MaintenanceBatchSize: 100,
 			SessionIdleTTL: "8h", SessionAbsoluteTTL: "168h",
-			MinConnections: 0, MaxConnections: 7, ConnectTimeout: "2s", MaxLifetime: "1h", MaxIdleTime: "5m", HealthInterval: "30s"},
+			MinConnections: 0, MaxConnections: 12, ConnectTimeout: "2s", MaxLifetime: "1h", MaxIdleTime: "5m", HealthInterval: "30s"},
 		Loader: Loader{PartSize: 64 << 10, MaxFileBytes: 1 << 20, MaxPartBytes: 64 << 10, MaxParts: 16, MaxConcurrentCommits: 1, SessionTTL: "1h", CommitTimeout: "1m", Mode: "auto",
+			Concurrency:     LoaderConcurrency{MaxConcurrentCommits: 1, MaxConcurrentSessionLookups: 2},
 			BufferThreshold: 64 << 10, MaxBufferedBytes: 128 << 10, SessionCacheEntries: 100, SessionCacheMaxBytes: 1 << 20,
 			SessionCacheTTL: "1m", CleanupInterval: "1m", CleanupBatchSize: 100},
+		Admin: AdminConfig{Concurrency: AdminConcurrency{HTTP: HTTPAdmission{MaxInFlight: 16, RequestTimeout: "30s"}}},
+		Router: RouterConfig{
+			Cache: RouterCacheTarget{
+				Manifests: BoundedCacheTarget{Enabled: true, MaxEntries: 16, MaxBytes: 1 << 16, TTL: "1m"},
+				Routes:    BoundedCacheTarget{Enabled: true, MaxEntries: 16, MaxBytes: 1 << 16, TTL: "1m"},
+				HTTP: RouterHTTPCache{Compression: RouterCompression{Enabled: true, Algorithms: []string{"gzip"}, MinBytes: 64, MaxUncompressedBytes: 4096, MaxCompressedBytes: 2048, MediaTypes: []string{"text/html"}},
+					Vary: RouterVary{AcceptEncoding: true, LocaleFromCookie: "no_store"}}},
+			Concurrency: RouterConcurrency{HTTP: RouterHTTPAdmission{HTTPAdmission: HTTPAdmission{MaxInFlight: 16, RequestTimeout: "30s"},
+				PerRoute: NamedAdmission{Enabled: false, DefaultMaxInFlight: 8}}, Routes: RouterRouteCapacity{MaxConcurrentResolutions: 8}}},
+		Bus: BusConfig{Concurrency: BusConcurrency{MaxInFlight: 16, PerOperation: NamedAdmission{Enabled: false, DefaultMaxInFlight: 8}}},
+		Worker: WorkerConfig{
+			Archive:     WorkerPoolConfig{Concurrency: WorkerPoolConcurrency{Enabled: true, Limit: 1, PollInterval: "1s", TaskTimeout: "1m", LeaseDuration: "10s"}},
+			Media:       WorkerPoolConfig{Concurrency: WorkerPoolConcurrency{Enabled: true, Limit: 1, PollInterval: "1s", TaskTimeout: "1m", LeaseDuration: "10s"}},
+			Prerender:   WorkerPoolConfig{Concurrency: WorkerPoolConcurrency{Enabled: true, Limit: 1, PollInterval: "1s", TaskTimeout: "1m", LeaseDuration: "10s"}},
+			Publication: WorkerPoolConfig{Concurrency: WorkerPoolConcurrency{Enabled: true, Limit: 1, PollInterval: "1s", TaskTimeout: "1m", LeaseDuration: "10s"}},
+		},
 		FileAPI:   FileAPI{MaxJSONBytes: 1 << 20, MaxAttributeBytes: 1 << 15, MaxGroupsPerFile: 8, DefaultPageSize: 25, MaxPageSize: 100},
 		AdminAPI:  AdminAPI{MaxJSONBytes: 1 << 20, DefaultPageSize: 50, MaxPageSize: 200, SessionCookieSecure: &secureCookie, AllowedOrigins: []string{"http://127.0.0.1:8080"}},
 		RouterAPI: RouterAPI{MaxJSONBytes: 1 << 20, DefaultPageSize: 25, MaxPageSize: 100},
-		HTTP:      HTTP{ListenAddress: "127.0.0.1:8080", ReadHeaderTimeout: "5s", ReadTimeout: "5m", WriteTimeout: "0s", IdleTimeout: "1m", ShutdownTimeout: "15s", MaxHeaderBytes: 1 << 16},
+		HTTP:      HTTP{ListenAddress: "127.0.0.1:8080", ReadHeaderTimeout: "5s", ReadTimeout: "5m", WriteTimeout: "0s", IdleTimeout: "1m", ShutdownTimeout: "30s", MaxHeaderBytes: 1 << 16},
 		Coordinator: CoordinatorConfig{WorkflowAccessGroup: "coordinator_jobs", WorkflowsPageDefault: 25, WorkflowsPageMaximum: 100,
 			InstanceLease: "30s", HeartbeatInterval: "5s", ExecutorConcurrency: 2,
 			TaskLease: "20s", TaskTimeout: "15m", PollInterval: "1s", RetryBase: "2s", RetryMaximum: "1m",

@@ -41,7 +41,7 @@ func (verifiedFileCreatorFunc) RemoveFileFromManagedSet(context.Context, string,
 }
 
 func TestPrerenderArtifactWriterCallsCoreThroughScopedDataBus(t *testing.T) {
-	dispatcher, err := bus.NewAllowlisted(contracts.FileCreateVerifiedOperation().Key)
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 4}, contracts.FileCreateVerifiedOperation().Key)
 	if err != nil {
 		t.Fatal(err)
 	}

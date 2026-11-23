@@ -1,9 +1,7 @@
-# Текущие плоские ключи ниже соответствуют текущему коду. Целевая вложенная
-# схема core.cache.* / router.cache.* и параметры прогрева описаны в
-# spec/architecture/SPEC-caching.md; целевые лимиты конкуренции, backpressure,
-# шардирование кэша, coalescing и изолированные worker-пулы описаны в
-# spec/architecture/SPEC-concurrency.md. Их внедрение — отдельная волна вместе с
-# изменением конфигурационного контракта, без compatibility aliases.
+# Конфигурация соответствует целевым схемам SPEC-caching.md §7 и
+# SPEC-concurrency.md §11. Compatibility aliases не принимаются: старые плоские
+# ключи core.cache_max_bytes, core.cache_ttl, core.max_cached_object_bytes,
+# loader.max_concurrent_commits и coordinator.worker_concurrency удалены.
 core:
   database_url_env: ZUBRIUM_DATABASE_URL
   migration_database_url_env: ZUBRIUM_MIGRATION_DATABASE_URL
@@ -26,18 +24,61 @@ core:
     forms_submissions: 2
     router_routes: 2
     coordinator_jobs: 2
-  cache_max_bytes: 67108864
-  cache_ttl: 10m
   min_connections: 0
-  # Reserve one for Core, two per Loader commit, and two per Coordinator worker (handler plus lease renewal).
-  max_connections: 20
+  # Budget: 1 + 2 * loader commits + 2 * sum(worker limits) + storage read_reserve.
+  max_connections: 32
   connect_timeout: 10s
   max_lifetime: 1h
   max_idle_time: 10m
   health_interval: 30s
   max_metadata_bytes: 65536
   max_object_bytes: 104857600
-  max_cached_object_bytes: 2097152
+  cache:
+    max_bytes: 67108864
+    ttl: 10m
+    max_object_bytes: 2097152
+    access_cache:
+      max_entries: 10000
+      max_bytes: 8388608
+      ttl: 1m
+    warmup:
+      enabled: true
+      mode: strict
+      timeout: 30s
+      per_key_timeout: 5s
+      concurrency: 4
+      max_keys: 200
+      retry:
+        attempts: 2
+        backoff: 200ms
+      refresh_interval: 0s
+      sources:
+        inline: true
+        published_artifacts: true
+      targets:
+        authorization: false
+        metadata: true
+        bytes: true
+        router_manifests: true
+        router_routes: true
+      # Operator-supplied IDs only; the empty list is valid for a fresh system.
+      keys: []
+  concurrency:
+    storage:
+      max_concurrent_reads: 16
+      max_concurrent_authorizations: 16
+      operation_timeout: 10s
+      read_reserve: 4
+    cache:
+      shards: 8
+      lru_promotion_interval: 1
+      coalesce:
+        enabled: true
+        max_waiters: 32
+        timeout: 5s
+    invalidation:
+      batch_size: 256
+      batch_window: 10ms
   maintenance_interval: 1m
   maintenance_timeout: 30s
   pending_ttl: 1h
@@ -59,7 +100,9 @@ loader:
   max_file_bytes: 104857600
   max_part_bytes: 1048576
   max_parts: 100
-  max_concurrent_commits: 4
+  concurrency:
+    max_concurrent_commits: 4
+    max_concurrent_session_lookups: 8
   session_ttl: 24h
   commit_timeout: 5m
   mode: auto
@@ -70,6 +113,89 @@ loader:
   session_cache_ttl: 1m
   cleanup_interval: 1m
   cleanup_batch_size: 100
+
+admin:
+  concurrency:
+    http:
+      max_in_flight: 128
+      request_timeout: 30s
+
+router:
+  cache:
+    manifests:
+      enabled: true
+      max_entries: 512
+      max_bytes: 33554432
+      ttl: 5m
+    routes:
+      enabled: true
+      max_entries: 4096
+      max_bytes: 8388608
+      ttl: 30s
+    http:
+      compression:
+        enabled: true
+        algorithms: [gzip]
+        min_bytes: 1024
+        max_uncompressed_bytes: 8388608
+        max_compressed_bytes: 2097152
+        media_types:
+          - text/html
+          - text/css
+          - application/javascript
+          - application/json
+          - image/svg+xml
+      vary:
+        accept_encoding: true
+        locale_from_cookie: no_store
+  concurrency:
+    http:
+      max_in_flight: 512
+      request_timeout: 30s
+      per_route:
+        enabled: false
+        default_max_in_flight: 64
+        overrides: []
+    routes:
+      max_concurrent_resolutions: 64
+
+bus:
+  concurrency:
+    max_in_flight: 256
+    per_operation:
+      enabled: false
+      default_max_in_flight: 32
+      overrides: []
+
+worker:
+  archive:
+    concurrency:
+      enabled: true
+      limit: 2
+      poll_interval: 1s
+      task_timeout: 30m
+      lease_duration: 30s
+  media:
+    concurrency:
+      enabled: true
+      limit: 2
+      poll_interval: 1s
+      task_timeout: 30m
+      lease_duration: 30s
+  prerender:
+    concurrency:
+      enabled: true
+      limit: 1
+      poll_interval: 1s
+      task_timeout: 30m
+      lease_duration: 30s
+  publication:
+    concurrency:
+      enabled: true
+      limit: 2
+      poll_interval: 1s
+      task_timeout: 30m
+      lease_duration: 30s
 
 file_api:
   max_json_bytes: 1048576
@@ -163,7 +289,7 @@ http:
   # Zero keeps long file streams open; uploads are bounded by File API limits.
   write_timeout: 0s
   idle_timeout: 2m
-  shutdown_timeout: 20s
+  shutdown_timeout: 30s
   max_header_bytes: 65536
 
 # Telemetry is deployment-local: noop by default, file for cheap JSONL output,
@@ -189,7 +315,6 @@ coordinator:
   workflows_page_maximum: 100
   instance_lease: 30s
   heartbeat_interval: 5s
-  worker_concurrency: 4
   task_lease: 30s
   task_timeout: 30m
   poll_interval: 1s

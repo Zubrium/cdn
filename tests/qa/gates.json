@@ -23,6 +23,42 @@
       "cwd": "."
     },
     {
+      "id": "obs-ledger",
+      "label": "Observability scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/obs-scenarios.json"],
+      "cwd": "."
+    },
+    {
+      "id": "cache-router-ledger",
+      "label": "Router cache scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/cache-router-scenarios.json"],
+      "cwd": "."
+    },
+    {
+      "id": "concurrency-admission-ledger",
+      "label": "Concurrency admission scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/concurrency-admission-scenarios.json"],
+      "cwd": "."
+    },
+    {
+      "id": "obs-scenarios",
+      "label": "Observability OBS-001..010 executable scenarios",
+      "command": ["tests/qa/run-obs-red.sh"],
+      "cwd": "."
+    },
+    {
+      "id": "cache-router-scenarios",
+      "label": "Router cache executable scenarios",
+      "command": ["tests/qa/run-cache-router-red.sh", "go"],
+      "cwd": "."
+    },
+    {
+      "id": "concurrency-admission-scenarios",
+      "label": "Concurrency admission executable scenarios",
+      "command": ["tests/qa/run-concurrency-admission-red.sh", "unit"],
+      "cwd": "."
+    },
+    {
       "id": "website-unit",
       "label": "Website acceptance unit scenarios",
       "command": ["tests/qa/run-website-red.sh", "unit"],

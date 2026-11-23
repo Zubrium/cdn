@@ -24,6 +24,9 @@ LEDGER_PATHS = (
     ROOT / "tests/qa/website-scenarios.json",
     ROOT / "tests/qa/core-scenarios.json",
     ROOT / "tests/qa/e2e-scenarios.json",
+    ROOT / "tests/qa/obs-scenarios.json",
+    ROOT / "tests/qa/cache-router-scenarios.json",
+    ROOT / "tests/qa/concurrency-admission-scenarios.json",
 )
 DEFAULT_REPORT = ROOT / "output/test-report.json"
 LOG_DIR = ROOT / "output/test-logs"
@@ -183,7 +186,7 @@ def observed_scenario_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
     observed: dict[str, str] = {}
     for gate in gates:
         gate_id = str(gate["id"])
-        if gate["status"] != "pass" or not gate_id.startswith(("website-", "core-")):
+        if gate["status"] != "pass":
             continue
         log_path = ROOT / gate.get("log", "")
         if not log_path.is_file():

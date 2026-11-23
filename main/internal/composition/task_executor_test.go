@@ -19,7 +19,7 @@ func TestDataBusTaskExecutorDispatchesAndValidatesChildren(t *testing.T) {
 			return contracts.OperationOutcome{Result: json.RawMessage(`{"ok":true}`)}, nil
 		}},
 	}
-	dispatcher, err := bus.NewAllowlisted(key)
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 4}, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestDataBusTaskExecutorRejectsUnknownChildOperationBeforeCommit(t *testing.
 			}}}, nil
 		}},
 	}
-	dispatcher, err := bus.NewAllowlisted(key)
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 4}, key)
 	if err != nil {
 		t.Fatal(err)
 	}

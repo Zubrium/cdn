@@ -127,6 +127,7 @@ func TestWorkflowControlFailsClosedWithoutCoreRuntimeAndRegistrationStaysScoped(
 		WorkflowAccessGroup: "coordinator_jobs", WorkflowsPageDefault: 20, WorkflowsPageMaximum: 100,
 	}}
 	resolved.AdminAPI.AllowedOrigins = []string{"http://127.0.0.1:8080"}
+	resolved.Scales.Bus.MaxInFlight = 8
 	resolved.Core.AccessGroups = map[string]platform.AccessLevel{"coordinator_jobs": platform.AccessLevelWrite}
 	if err := resolved.ValidateBuildPlan(plan); err != nil {
 		t.Fatalf("configured Coordinator profile is invalid: %v", err)
@@ -151,7 +152,9 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 	basePlan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files"}}
 	withIdentity := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "admin.identity"}}
 
-	baseRegistry, _, _, baseAPI, err := registerComponents(appconfig.Resolved{}, basePlan, nil)
+	resolved := appconfig.Resolved{}
+	resolved.Scales.Bus.MaxInFlight = 8
+	baseRegistry, _, _, baseAPI, err := registerComponents(resolved, basePlan, nil)
 	if err != nil {
 		t.Fatalf("register File API without identity API: %v", err)
 	}
@@ -159,7 +162,7 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 		t.Fatal("unselected identity API was registered")
 	}
 
-	registry, _, _, api, err := registerComponents(appconfig.Resolved{}, withIdentity, nil)
+	registry, _, _, api, err := registerComponents(resolved, withIdentity, nil)
 	if err != nil {
 		t.Fatalf("register identity API: %v", err)
 	}
@@ -170,7 +173,9 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 
 func TestComponentRegistrationFailsClosedForUnimplementedSelectedAPIs(t *testing.T) {
 	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "engine.unknown"}}
-	_, _, _, _, err := registerComponents(appconfig.Resolved{}, plan, nil)
+	resolved := appconfig.Resolved{}
+	resolved.Scales.Bus.MaxInFlight = 8
+	_, _, _, _, err := registerComponents(resolved, plan, nil)
 	if err == nil || !strings.Contains(err.Error(), "has no runtime implementation") {
 		t.Fatalf("unimplemented component was silently omitted instead of failing startup: %v", err)
 	}

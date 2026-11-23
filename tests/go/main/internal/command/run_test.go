@@ -48,17 +48,59 @@ func TestCheckConfig(t *testing.T) {
     content: 2
     coordinator_jobs: 2
     router_routes: 2
-  cache_max_bytes: 1048576
-  cache_ttl: 5m
   max_metadata_bytes: 65536
   min_connections: 0
-  max_connections: 7
+  max_connections: 12
   connect_timeout: 2s
   max_lifetime: 1h
   max_idle_time: 5m
   health_interval: 30s
   max_object_bytes: 1048576
-  max_cached_object_bytes: 512
+  cache:
+    max_bytes: 1048576
+    ttl: 5m
+    max_object_bytes: 512
+    access_cache:
+      max_entries: 100
+      max_bytes: 65536
+      ttl: 1m
+    warmup:
+      enabled: false
+      mode: off
+      timeout: 30s
+      per_key_timeout: 5s
+      concurrency: 1
+      max_keys: 10
+      retry:
+        attempts: 1
+        backoff: 10ms
+      refresh_interval: 0s
+      sources:
+        inline: false
+        published_artifacts: false
+      targets:
+        authorization: false
+        metadata: true
+        bytes: true
+        router_manifests: false
+        router_routes: false
+      keys: []
+  concurrency:
+    storage:
+      max_concurrent_reads: 2
+      max_concurrent_authorizations: 2
+      operation_timeout: 5s
+      read_reserve: 1
+    cache:
+      shards: 2
+      lru_promotion_interval: 1
+      coalesce:
+        enabled: true
+        max_waiters: 4
+        timeout: 1s
+    invalidation:
+      batch_size: 16
+      batch_window: 1ms
   maintenance_interval: 1m
   maintenance_timeout: 30s
   pending_ttl: 1h
@@ -79,7 +121,9 @@ loader:
   max_file_bytes: 1048576
   max_part_bytes: 65536
   max_parts: 16
-  max_concurrent_commits: 1
+  concurrency:
+    max_concurrent_commits: 1
+    max_concurrent_session_lookups: 2
   session_ttl: 1h
   commit_timeout: 1m
   mode: auto
@@ -125,13 +169,67 @@ forms_api:
 content_api:
   service_credential_env: TEST_CONTENT_SERVICE
   locale: en-US
+admin:
+  concurrency:
+    http:
+      max_in_flight: 16
+      request_timeout: 30s
+router:
+  cache:
+    manifests:
+      enabled: true
+      max_entries: 16
+      max_bytes: 65536
+      ttl: 1m
+    routes:
+      enabled: true
+      max_entries: 16
+      max_bytes: 65536
+      ttl: 1m
+    http:
+      compression:
+        enabled: false
+        algorithms: [gzip]
+        min_bytes: 64
+        max_uncompressed_bytes: 4096
+        max_compressed_bytes: 2048
+        media_types: [text/html]
+      vary:
+        accept_encoding: true
+        locale_from_cookie: no_store
+  concurrency:
+    http:
+      max_in_flight: 16
+      request_timeout: 30s
+      per_route:
+        enabled: false
+        default_max_in_flight: 8
+        overrides: []
+    routes:
+      max_concurrent_resolutions: 8
+bus:
+  concurrency:
+    max_in_flight: 16
+    per_operation:
+      enabled: false
+      default_max_in_flight: 8
+      overrides: []
+worker:
+  archive:
+    concurrency: {enabled: true, limit: 1, poll_interval: 1s, task_timeout: 1m, lease_duration: 10s}
+  media:
+    concurrency: {enabled: true, limit: 1, poll_interval: 1s, task_timeout: 1m, lease_duration: 10s}
+  prerender:
+    concurrency: {enabled: true, limit: 1, poll_interval: 1s, task_timeout: 1m, lease_duration: 10s}
+  publication:
+    concurrency: {enabled: true, limit: 1, poll_interval: 1s, task_timeout: 1m, lease_duration: 10s}
 http:
   listen_address: 127.0.0.1:8080
   read_header_timeout: 5s
   read_timeout: 5m
   write_timeout: 0s
   idle_timeout: 1m
-  shutdown_timeout: 15s
+  shutdown_timeout: 30s
   max_header_bytes: 65536
 coordinator:
   workflow_access_group: coordinator_jobs
@@ -139,7 +237,6 @@ coordinator:
   workflows_page_maximum: 100
   instance_lease: 30s
   heartbeat_interval: 5s
-  worker_concurrency: 2
   task_lease: 20s
   task_timeout: 15m
   poll_interval: 1s

@@ -40,7 +40,7 @@ func websiteAcceptanceRecordStore(t *testing.T, runtime *core.Runtime, descripto
 		contracts.RecordListOperation().Key,
 		contracts.RecordListExpiredOperation().Key,
 	}
-	dispatcher, err := bus.NewAllowlisted(keys...)
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 32}, keys...)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func websiteAcceptanceExecutor(t *testing.T, bindings map[contracts.Key]composit
 		keys = append(keys, key)
 		handlers[key] = binding.Handler
 	}
-	dispatcher, err := bus.NewAllowlisted(keys...)
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 32}, keys...)
 	if err != nil {
 		t.Fatalf("build disposable DataBus allowlist: %v", err)
 	}

@@ -49,11 +49,13 @@ type Core struct {
 	MaxLifetime             string                           `yaml:"max_lifetime"`
 	MaxIdleTime             string                           `yaml:"max_idle_time"`
 	HealthInterval          string                           `yaml:"health_interval"`
-	CacheMaxBytes           int64                            `yaml:"cache_max_bytes"`
-	CacheTTL                string                           `yaml:"cache_ttl"`
+	CacheMaxBytes           int64                            `yaml:"-"`
+	CacheTTL                string                           `yaml:"-"`
 	MaxMetadataBytes        int64                            `yaml:"max_metadata_bytes"`
 	MaxObjectBytes          int64                            `yaml:"max_object_bytes"`
-	MaxCachedObjectBytes    int64                            `yaml:"max_cached_object_bytes"`
+	MaxCachedObjectBytes    int64                            `yaml:"-"`
+	Cache                   CacheTarget                      `yaml:"cache"`
+	Concurrency             CoreConcurrency                  `yaml:"concurrency"`
 	MaintenanceInterval     string                           `yaml:"maintenance_interval"`
 	MaintenanceTimeout      string                           `yaml:"maintenance_timeout"`
 	PendingTTL              string                           `yaml:"pending_ttl"`
@@ -75,21 +77,22 @@ type ModuleData struct {
 }
 
 type Loader struct {
-	PartSize             int64  `yaml:"part_size_bytes"`
-	MaxFileBytes         int64  `yaml:"max_file_bytes"`
-	MaxPartBytes         int64  `yaml:"max_part_bytes"`
-	MaxParts             int    `yaml:"max_parts"`
-	MaxConcurrentCommits int    `yaml:"max_concurrent_commits"`
-	SessionTTL           string `yaml:"session_ttl"`
-	CommitTimeout        string `yaml:"commit_timeout"`
-	Mode                 string `yaml:"mode"`
-	BufferThreshold      int64  `yaml:"buffer_threshold_bytes"`
-	MaxBufferedBytes     int64  `yaml:"max_buffered_bytes"`
-	SessionCacheEntries  int    `yaml:"session_cache_entries"`
-	SessionCacheMaxBytes int64  `yaml:"session_cache_max_bytes"`
-	SessionCacheTTL      string `yaml:"session_cache_ttl"`
-	CleanupInterval      string `yaml:"cleanup_interval"`
-	CleanupBatchSize     int    `yaml:"cleanup_batch_size"`
+	PartSize             int64             `yaml:"part_size_bytes"`
+	MaxFileBytes         int64             `yaml:"max_file_bytes"`
+	MaxPartBytes         int64             `yaml:"max_part_bytes"`
+	MaxParts             int               `yaml:"max_parts"`
+	MaxConcurrentCommits int               `yaml:"-"`
+	Concurrency          LoaderConcurrency `yaml:"concurrency"`
+	SessionTTL           string            `yaml:"session_ttl"`
+	CommitTimeout        string            `yaml:"commit_timeout"`
+	Mode                 string            `yaml:"mode"`
+	BufferThreshold      int64             `yaml:"buffer_threshold_bytes"`
+	MaxBufferedBytes     int64             `yaml:"max_buffered_bytes"`
+	SessionCacheEntries  int               `yaml:"session_cache_entries"`
+	SessionCacheMaxBytes int64             `yaml:"session_cache_max_bytes"`
+	SessionCacheTTL      string            `yaml:"session_cache_ttl"`
+	CleanupInterval      string            `yaml:"cleanup_interval"`
+	CleanupBatchSize     int               `yaml:"cleanup_batch_size"`
 }
 
 type FileAPI struct {
@@ -243,7 +246,7 @@ type CoordinatorConfig struct {
 	WorkflowsPageMaximum int    `yaml:"workflows_page_maximum"`
 	InstanceLease        string `yaml:"instance_lease"`
 	HeartbeatInterval    string `yaml:"heartbeat_interval"`
-	ExecutorConcurrency  int    `yaml:"worker_concurrency"`
+	ExecutorConcurrency  int    `yaml:"-"`
 	TaskLease            string `yaml:"task_lease"`
 	TaskTimeout          string `yaml:"task_timeout"`
 	PollInterval         string `yaml:"poll_interval"`
@@ -411,6 +414,7 @@ type Resolved struct {
 	Coordinator            CoordinatorSettings
 	CoordinatorFingerprint string
 	Observability          observability.Config
+	Scales                 ResolvedScales
 }
 
 var ErrCoordinatorProfileMismatch = errors.New("Coordinator settings do not match the compiled profile")
@@ -560,6 +564,15 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if getenv == nil {
 		return Resolved{}, errors.New("missing environment lookup")
 	}
+	scales, err := validateScales(c)
+	if err != nil {
+		return Resolved{}, err
+	}
+	c.Core.CacheMaxBytes = scales.CoreCache.MaxBytes
+	c.Core.CacheTTL = scales.CoreCache.TTL
+	c.Core.MaxCachedObjectBytes = scales.CoreCache.MaxObjectBytes
+	c.Loader.MaxConcurrentCommits = scales.LoaderConcurrency.MaxConcurrentCommits
+	c.Coordinator.ExecutorConcurrency = configuredWorkerLimit(c.Worker)
 	durations := []string{c.Core.ConnectTimeout, c.Core.MaxLifetime, c.Core.MaxIdleTime, c.Core.HealthInterval, c.Core.MigrationLockTimeout, c.Core.CacheTTL, c.Core.MaintenanceInterval, c.Core.MaintenanceTimeout, c.Core.PendingTTL, c.Core.SessionIdleTTL, c.Core.SessionAbsoluteTTL}
 	var parsed [11]time.Duration
 	for i, value := range durations {
@@ -658,7 +671,6 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if c.Loader.MaxFileBytes <= 0 || c.Loader.MaxFileBytes > c.Core.MaxObjectBytes || c.Loader.MaxPartBytes <= 0 || c.Loader.MaxPartBytes > c.Core.MaxObjectBytes ||
 		c.Loader.PartSize <= 0 || c.Loader.PartSize > c.Loader.MaxPartBytes || c.Loader.MaxParts <= 0 || c.Loader.MaxParts > 1000 ||
 		c.Loader.MaxConcurrentCommits <= 0 || c.Loader.MaxConcurrentCommits > 100 ||
-		int64(c.Core.MaxConnections) < 1+2*int64(c.Loader.MaxConcurrentCommits)+2*int64(c.Coordinator.ExecutorConcurrency) ||
 		c.Loader.BufferThreshold < 0 || c.Loader.MaxBufferedBytes < 0 || c.Loader.SessionCacheEntries <= 0 || c.Loader.SessionCacheEntries > 100000 ||
 		c.Loader.SessionCacheMaxBytes <= 0 || c.Loader.SessionCacheMaxBytes > 256<<20 || c.Loader.CleanupBatchSize <= 0 ||
 		(c.Loader.Mode != loaderapp.ModeAuto && c.Loader.Mode != loaderapp.ModeStream && c.Loader.Mode != loaderapp.ModeBuffered) ||
@@ -912,13 +924,18 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		BootstrapSecret:      bootstrap, AtlasBinary: c.Core.AtlasBinary, MigrationLockTimeout: parsed[4], AccessGroups: accessGroups,
 		CacheMaxBytes: c.Core.CacheMaxBytes, CacheTTL: parsed[5], MaxMetadataBytes: c.Core.MaxMetadataBytes,
 		MaxObjectBytes: c.Core.MaxObjectBytes, MaxCachedObjectBytes: c.Core.MaxCachedObjectBytes,
-		ModuleData:          moduleDataLimits,
-		MaintenanceInterval: parsed[6], MaintenanceTimeout: parsed[7], PendingTTL: parsed[8], MaintenanceBatchSize: c.Core.MaintenanceBatchSize,
+		CacheShards: scales.CoreConcurrency.Cache.Shards, CachePromotionInterval: scales.CoreConcurrency.Cache.LRUPromotionInterval,
+		CoalesceEnabled: scales.CoreConcurrency.Cache.Coalesce.Enabled, CoalesceMaxWaiters: scales.CoreConcurrency.Cache.Coalesce.MaxWaiters,
+		CoalesceTimeout: resolvedScalesTimeout(scales, "coalesce"), InvalidationBatchSize: scales.CoreConcurrency.Invalidation.BatchSize,
+		InvalidationBatchWindow: resolvedScalesTimeout(scales, "invalidation"),
+		ModuleData:              moduleDataLimits,
+		MaintenanceInterval:     parsed[6], MaintenanceTimeout: parsed[7], PendingTTL: parsed[8], MaintenanceBatchSize: c.Core.MaintenanceBatchSize,
 		SessionIdleTTL: parsed[9], SessionAbsoluteTTL: parsed[10],
 	}
 	loaderConfig := loaderapp.Config{PartSize: c.Loader.PartSize, MaxFileBytes: c.Loader.MaxFileBytes, MaxPartBytes: c.Loader.MaxPartBytes, MaxParts: c.Loader.MaxParts,
-		MaxConcurrentCommits: c.Loader.MaxConcurrentCommits,
-		SessionTTL:           loaderDurations[0], CommitTimeout: loaderDurations[1], Mode: c.Loader.Mode, BufferThreshold: c.Loader.BufferThreshold,
+		MaxConcurrentCommits:        c.Loader.MaxConcurrentCommits,
+		MaxConcurrentSessionLookups: scales.LoaderConcurrency.MaxConcurrentSessionLookups,
+		SessionTTL:                  loaderDurations[0], CommitTimeout: loaderDurations[1], Mode: c.Loader.Mode, BufferThreshold: c.Loader.BufferThreshold,
 		MaxBufferedBytes: c.Loader.MaxBufferedBytes, SessionCacheEntries: c.Loader.SessionCacheEntries,
 		SessionCacheMaxBytes: c.Loader.SessionCacheMaxBytes, SessionCacheTTL: loaderDurations[2],
 		CleanupInterval: loaderDurations[3], CleanupBatchSize: c.Loader.CleanupBatchSize}
@@ -1016,12 +1033,16 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[7],
 		}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
 			ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
-			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}, Observability: observabilityConfig}, nil
+			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}, Observability: observabilityConfig, Scales: scales}, nil
 }
 
 type Config struct {
 	Core          Core                `yaml:"core"`
 	Loader        Loader              `yaml:"loader"`
+	Admin         AdminConfig         `yaml:"admin"`
+	Router        RouterConfig        `yaml:"router"`
+	Bus           BusConfig           `yaml:"bus"`
+	Worker        WorkerConfig        `yaml:"worker"`
 	FileAPI       FileAPI             `yaml:"file_api"`
 	AdminAPI      AdminAPI            `yaml:"admin_api"`
 	RouterAPI     RouterAPI           `yaml:"router_api"`

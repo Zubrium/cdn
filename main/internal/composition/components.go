@@ -547,6 +547,9 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 			Address: c.config.HTTP.ListenAddress, ReadHeaderTimeout: c.config.HTTP.ReadHeaderTimeout,
 			ReadTimeout: c.config.HTTP.ReadTimeout, WriteTimeout: c.config.HTTP.WriteTimeout,
 			IdleTimeout: c.config.HTTP.IdleTimeout, MaxHeaderBytes: c.config.HTTP.MaxHeaderBytes,
+			MaxInFlight:     c.config.Scales.AdminHTTP.MaxInFlight,
+			RequestTimeout:  c.config.Scales.AdminHTTP.RequestDuration(),
+			ShutdownTimeout: c.config.HTTP.ShutdownTimeout,
 		},
 		FileAPI: c.config.FileAPI, AllowedOrigins: append([]string(nil), c.config.AdminAPI.AllowedOrigins...),
 		MaxJSONBytes: c.config.AdminAPI.MaxJSONBytes, DefaultPageSize: c.config.AdminAPI.DefaultPageSize,
@@ -555,7 +558,7 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		FormsExportMaxBytes: c.config.FormsAPI.ExportMaxBytes, WorkflowAccessGroup: c.config.Coordinator.WorkflowAccessGroup,
 		WorkflowPageDefault: c.config.Coordinator.WorkflowsPageDefault, WorkflowPageMaximum: c.config.Coordinator.WorkflowsPageMaximum,
 		RouterAdminEnabled: c.routerAdminEnabled,
-		UIHandler: c.uiHandler, SyntheticData: c.developmentFixtures, IdentityEnabled: c.identityAdmin,
+		UIHandler:          c.uiHandler, SyntheticData: c.developmentFixtures, IdentityEnabled: c.identityAdmin,
 		BuildIdentity: os.Getenv("ZUBRIUM_BUILD_IDENTITY"), Observer: c.observer,
 	}
 	var routerOperations *router.PublicOperationRegistry
@@ -758,7 +761,25 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			contracts.AccessRequireGroupOperation().Key,
 		)
 	}
-	dispatcher, err := bus.NewAllowlisted(keys...)
+	perOperation := bus.PerOperationLimits{}
+	if limits := resolved.Scales.Bus.PerOperation; limits.Enabled {
+		overrides := make([]bus.OperationLimit, 0, len(limits.Overrides))
+		for _, override := range limits.Overrides {
+			var matched *contracts.Key
+			for index := range keys {
+				if keys[index].ID == override.ID {
+					matched = &keys[index]
+					break
+				}
+			}
+			if matched == nil {
+				return nil, nil, nil, nil, fmt.Errorf("bus operation override %q is not in the static allowlist", override.ID)
+			}
+			overrides = append(overrides, bus.OperationLimit{Key: *matched, MaxInFlight: override.MaxInFlight})
+		}
+		perOperation = bus.PerOperationLimits{Enabled: true, DefaultMaxInFlight: limits.DefaultMaxInFlight, Overrides: overrides}
+	}
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: resolved.Scales.Bus.MaxInFlight, PerOperation: perOperation}, keys...)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
