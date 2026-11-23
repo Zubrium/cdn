@@ -111,4 +111,4 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 
 ## Верификация
 
-Каждый acceptance-сценарий проверяет предусловия, действие, ожидаемый ответ и состояние после выполнения. Browser/API checks не пишут в live API; реальная Website проверка использует отдельную disposable среду. Команды, результаты, пропуски и ограничения записываются в [QA report](../docs/QA_REPORT.md). Активные пункты находятся в [TODO](../docs/TODO-admin-snapshots-content-files.md).
+Каждый acceptance-сценарий проверяет предусловия, действие, ожидаемый ответ и состояние после выполнения. Browser/API checks не пишут в live API; реальная Website проверка использует отдельную disposable среду. Живые сценарии `E2E-PUB-001` и `E2E-RET-001` исполнены в run `e2e-20261123T160114Z-82a196`; получены точные строки `PASS E2E-PUB-001` и `PASS E2E-RET-001`, а полный release sweep — успешно (`release-final-20261123-c`). Команды, результаты, пропуски и ограничения записываются в [QA report](../docs/QA_REPORT.md). Активные пункты находятся в [TODO](../docs/TODO-admin-snapshots-content-files.md).

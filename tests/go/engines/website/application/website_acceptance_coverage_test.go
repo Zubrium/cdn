@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	"github.com/Zubrium/cdn/engines/website/features/runtime"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
@@ -31,7 +31,7 @@ func (s *web001CountingStore) Get(ctx context.Context, key recorddata.RecordKey)
 	return s.memoryStore.Get(ctx, key)
 }
 
-func newWeb001Service(t *testing.T, store *web001CountingStore, level core.AccessLevel) *websiteapp.Service {
+func newWeb001Service(t *testing.T, store *web001CountingStore, level platform.AccessLevel) *websiteapp.Service {
 	t.Helper()
 	service, err := websiteapp.NewService(websiteConfig(), store, &fakeAuthority{level: level, coordinatorLevel: level}, fakeSessions{})
 	if err != nil {
@@ -51,7 +51,7 @@ func webAcceptanceJSONEqual(left, right json.RawMessage) bool {
 func TestWebsiteScenarioSystemModelGrantCoverage(t *testing.T) {
 	t.Run("WEB-001", func(t *testing.T) {
 		store := &web001CountingStore{memoryStore: newMemoryStore()}
-		writer := newWeb001Service(t, store, core.AccessLevelWrite)
+		writer := newWeb001Service(t, store, platform.AccessLevelWrite)
 		writeCtx, err := writer.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -67,7 +67,7 @@ func TestWebsiteScenarioSystemModelGrantCoverage(t *testing.T) {
 			t.Fatalf("saved system model = %#v", created)
 		}
 
-		reader := newWeb001Service(t, store, core.AccessLevelRead)
+		reader := newWeb001Service(t, store, platform.AccessLevelRead)
 		readCtx, err := reader.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -92,7 +92,7 @@ func TestWebsiteScenarioSystemModelGrantCoverage(t *testing.T) {
 		}
 
 		deniedStore := &web001CountingStore{memoryStore: newMemoryStore()}
-		denied := newWeb001Service(t, deniedStore, core.AccessLevelNone)
+		denied := newWeb001Service(t, deniedStore, platform.AccessLevelDenied)
 		deniedCtx, err := denied.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -116,7 +116,7 @@ func TestWebsiteScenarioSystemModelGrantCoverage(t *testing.T) {
 func TestWebsiteScenarioModelCASHardeningCoverage(t *testing.T) {
 	t.Run("WEB-005", func(t *testing.T) {
 		store := newMemoryStore()
-		service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+		service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 		ctx, err := service.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -188,7 +188,7 @@ func TestWebsiteScenarioModelCASHardeningCoverage(t *testing.T) {
 func TestWebsiteScenarioDataModelCardinalityCoverage(t *testing.T) {
 	t.Run("WEB-007", func(t *testing.T) {
 		store := newMemoryStore()
-		service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+		service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 		ctx, err := service.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -230,7 +230,7 @@ func TestWebsiteScenarioDataModelCardinalityCoverage(t *testing.T) {
 func TestWebsiteScenarioTemplateApplicationCoverage(t *testing.T) {
 	t.Run("WEB-009", func(t *testing.T) {
 		store := newMemoryStore()
-		service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+		service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 		ctx, err := service.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -306,7 +306,7 @@ func TestWebsiteScenarioTemplateApplicationCoverage(t *testing.T) {
 		}
 
 		incompatibleStore := newMemoryStore()
-		incompatible := newService(t, incompatibleStore, core.AccessLevelWrite, websiteConfig())
+		incompatible := newService(t, incompatibleStore, platform.AccessLevelWrite, websiteConfig())
 		incompatibleCtx, err := incompatible.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -360,7 +360,7 @@ func TestWebsiteScenarioTemplateApplicationCoverage(t *testing.T) {
 func TestWebsiteScenarioStructuralBoundaryCoverage(t *testing.T) {
 	t.Run("WEB-010", func(t *testing.T) {
 		store := newMemoryStore()
-		service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+		service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 		ctx, err := service.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -503,7 +503,7 @@ func TestWebsiteScenarioAdminContractCoverage(t *testing.T) {
 		}
 
 		store := newMemoryStore()
-		service := newService(t, store, core.AccessLevelRead, websiteConfig())
+		service := newService(t, store, platform.AccessLevelRead, websiteConfig())
 		ctx, err := service.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)

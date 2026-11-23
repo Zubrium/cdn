@@ -44,7 +44,7 @@ func websiteAcceptanceRecordStore(t *testing.T, runtime *core.Runtime, descripto
 	if err != nil {
 		return nil, err
 	}
-	adapter := websiteAcceptanceCoreRecordStore{store: coreStore}
+	adapter := composition.NewCoreRecordDataStore(coreStore)
 	if err := bus.RegisterRecordDataStore(dispatcher, func(_ context.Context, owner string) (contracts.RecordDataStore, error) {
 		if owner != descriptor.OwnerID {
 			return nil, bus.ErrInvalidModuleIdentity
@@ -73,96 +73,6 @@ func websiteAcceptanceRecordStore(t *testing.T, runtime *core.Runtime, descripto
 		return nil, err
 	}
 	return client, nil
-}
-
-type websiteAcceptanceCoreRecordStore struct{ store *core.ModuleDataStore }
-
-func (adapter websiteAcceptanceCoreRecordStore) Get(ctx context.Context, key contracts.RecordKey) (contracts.Record, error) {
-	record, err := adapter.store.Get(ctx, websiteCoreRecordKey(key))
-	return websiteCoreRecord(record), err
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) GetExpired(ctx context.Context, key contracts.RecordKey) (contracts.Record, error) {
-	record, err := adapter.store.GetExpired(ctx, websiteCoreRecordKey(key))
-	return websiteCoreRecord(record), err
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) Put(ctx context.Context, key contracts.RecordKey, value contracts.RecordValue, revision int64) (contracts.Record, error) {
-	record, err := adapter.store.Put(ctx, websiteCoreRecordKey(key), websiteCoreRecordValue(value), revision)
-	return websiteCoreRecord(record), err
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) Delete(ctx context.Context, key contracts.RecordKey, revision int64) error {
-	return adapter.store.Delete(ctx, websiteCoreRecordKey(key), revision)
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) Batch(ctx context.Context, mutations []contracts.RecordMutation) error {
-	converted := make([]core.ModuleDataMutation, len(mutations))
-	for index, mutation := range mutations {
-		converted[index] = core.ModuleDataMutation{Key: websiteCoreRecordKey(mutation.Key), ExpectedRevision: mutation.ExpectedRevision}
-		if mutation.Value != nil {
-			value := websiteCoreRecordValue(*mutation.Value)
-			converted[index].Value = &value
-		}
-	}
-	return adapter.store.Batch(ctx, converted)
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) List(ctx context.Context, namespace, scopeType, scopeID, after string, selectors []contracts.RecordSelector, limit int) ([]contracts.RecordKey, []contracts.Record, string, error) {
-	converted := make([]core.ModuleDataSelector, len(selectors))
-	for index, selector := range selectors {
-		converted[index] = core.ModuleDataSelector{Field: selector.Field, Operator: core.SelectorOperator(selector.Operator), Values: selector.Values}
-	}
-	keys, records, cursor, err := adapter.store.List(ctx, namespace, scopeType, scopeID, after, converted, limit)
-	return websiteContractRecordKeys(keys), websiteContractRecords(records), cursor, err
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) ListExpired(ctx context.Context, namespace, scopeType, scopeID, after string, limit int) ([]contracts.RecordKey, []contracts.Record, string, error) {
-	keys, records, cursor, err := adapter.store.ListExpired(ctx, namespace, scopeType, scopeID, after, limit)
-	return websiteContractRecordKeys(keys), websiteContractRecords(records), cursor, err
-}
-
-func (adapter websiteAcceptanceCoreRecordStore) MaxPageSize() int { return adapter.store.MaxPageSize() }
-func (adapter websiteAcceptanceCoreRecordStore) MaxBatchSize() int {
-	return adapter.store.MaxBatchSize()
-}
-func (adapter websiteAcceptanceCoreRecordStore) MaxPayloadBytes() int {
-	return adapter.store.MaxPayloadBytes()
-}
-func (adapter websiteAcceptanceCoreRecordStore) MaxIndexBytes() int {
-	return adapter.store.MaxIndexBytes()
-}
-func (adapter websiteAcceptanceCoreRecordStore) MaxBatchBytes() int {
-	return adapter.store.MaxBatchBytes()
-}
-
-func websiteCoreRecordKey(key contracts.RecordKey) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: key.Namespace, ScopeType: key.ScopeType, ScopeID: key.ScopeID, RecordKey: key.RecordKey}
-}
-
-func websiteCoreRecordValue(value contracts.RecordValue) core.ModuleDataValue {
-	return core.ModuleDataValue{Payload: value.Payload, PayloadVersion: value.PayloadVersion, IndexData: value.IndexData, TTL: value.TTL}
-}
-
-func websiteCoreRecord(record core.ModuleDataRecord) contracts.Record {
-	return contracts.Record{Payload: record.Payload, PayloadVersion: record.PayloadVersion, IndexData: record.IndexData, Revision: record.Revision,
-		ExpiresAt: record.ExpiresAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
-}
-
-func websiteContractRecordKeys(keys []core.ModuleDataKey) []contracts.RecordKey {
-	result := make([]contracts.RecordKey, len(keys))
-	for index, key := range keys {
-		result[index] = contracts.RecordKey{Namespace: key.Namespace, ScopeType: key.ScopeType, ScopeID: key.ScopeID, RecordKey: key.RecordKey}
-	}
-	return result
-}
-
-func websiteContractRecords(records []core.ModuleDataRecord) []contracts.Record {
-	result := make([]contracts.Record, len(records))
-	for index, record := range records {
-		result[index] = websiteCoreRecord(record)
-	}
-	return result
 }
 
 func websiteAcceptanceExecutor(t *testing.T, bindings map[contracts.Key]composition.TaskOperationBinding) *bus.Dispatcher {

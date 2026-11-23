@@ -110,9 +110,10 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		web019AssertWorkerContractTamperingRejected(t, profile, profileJSON)
 
 		// Without a verified sandbox capability the Website path fails closed.
+		ports := composition.NewWebsiteCorePorts(runtime)
 		unavailable, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct fail-closed Website service: %v", err)
 		}
@@ -215,16 +216,19 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("issue workflow task-graph capability: %v", err)
 		}
-		workflow := &web019WorkflowClient{client: workflowClient, control: workflowControl, maxPages: 4}
+		workflow := &web019WorkflowClient{
+			client:     composition.NewWebsiteWorkflowClient(runtime, websiteworkflow.ComponentID),
+			coreClient: workflowClient, control: workflowControl, maxPages: 4,
+		}
 
 		serviceConfig := websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-			MediaWorkflow: workflow, MediaFiles: files,
+			MediaWorkflow: workflow, MediaFiles: ports.Files,
 			MediaOperationID: websiteworkflow.MediaOperationID, MediaContractVersion: websiteworkflow.MediaContractVersion,
 			MediaProcessorVersion: web019ProcessorVersion,
 			MediaSandbox:          web019SandboxProbe{state: web019WebsiteSandboxState(sandbox.SandboxState())},
 		}
-		service, err := websiteapp.NewService(serviceConfig, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		service, err := websiteapp.NewService(serviceConfig, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct configured Website service: %v", err)
 		}
@@ -445,7 +449,7 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 
 		// A fresh service over the same durable store sees the same job and the
 		// same idempotent fingerprint receipt.
-		restarted, err := websiteapp.NewService(serviceConfig, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		restarted, err := websiteapp.NewService(serviceConfig, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("restart Website service: %v", err)
 		}
@@ -491,25 +495,26 @@ type web019SandboxProbe struct{ state websiteapi.MediaSandboxState }
 func (p web019SandboxProbe) MediaSandboxState() websiteapi.MediaSandboxState { return p.state }
 
 type web019WorkflowClient struct {
-	client   *core.WorkflowClient
-	control  *core.WorkflowControl
-	maxPages int
+	client     websiteapp.BuildWorkflowClient
+	coreClient *core.WorkflowClient
+	control    *core.WorkflowControl
+	maxPages   int
 }
 
-func (c *web019WorkflowClient) Start(ctx context.Context, request core.WorkflowStartRequest) (core.WorkflowReceipt, error) {
+func (c *web019WorkflowClient) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	return c.client.Start(ctx, request)
 }
 
-func (c *web019WorkflowClient) Get(ctx context.Context, id uuid.UUID) (core.Workflow, error) {
+func (c *web019WorkflowClient) Get(ctx context.Context, id uuid.UUID) (contracts.WorkflowState, error) {
 	return c.client.Get(ctx, id)
 }
 
-func (c *web019WorkflowClient) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (core.TaskResult, error) {
+func (c *web019WorkflowClient) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (contracts.WorkflowTaskResult, error) {
 	return c.client.GetTaskResult(ctx, workflowID, taskID)
 }
 
 func (c *web019WorkflowClient) Cancel(ctx context.Context, id uuid.UUID) error {
-	return c.client.Cancel(ctx, id)
+	return c.coreClient.Cancel(ctx, id)
 }
 
 func (c *web019WorkflowClient) ResolveTaskID(ctx context.Context, workflowID uuid.UUID, emissionKey string) (uuid.UUID, error) {
@@ -521,7 +526,7 @@ func (c *web019WorkflowClient) ResolveTaskID(ctx context.Context, workflowID uui
 		}
 		if detail.Workflow.ID != uuid.Nil && detail.Workflow.ID != workflowID ||
 			detail.Workflow.OwnerClassID != "" && detail.Workflow.OwnerClassID != websiteworkflow.ComponentID {
-			return uuid.Nil, core.ErrTaskMissing
+			return uuid.Nil, contracts.ErrWorkflowTaskMissing
 		}
 		for _, task := range detail.TaskPage.Items {
 			if task.EmissionKey == emissionKey && task.ID != uuid.Nil {
@@ -533,11 +538,11 @@ func (c *web019WorkflowClient) ResolveTaskID(ctx context.Context, workflowID uui
 		}
 		cursor := *detail.TaskPage.Next
 		if cursor.ID == uuid.Nil || cursor.CreatedAt.IsZero() {
-			return uuid.Nil, core.ErrInvalid
+			return uuid.Nil, contracts.ErrInvalidOperation
 		}
 		before = &cursor
 	}
-	return uuid.Nil, core.ErrTaskMissing
+	return uuid.Nil, contracts.ErrWorkflowTaskMissing
 }
 
 type web019Runner struct {
@@ -828,10 +833,10 @@ func web019HandlerData(*media.V2Handler) media.DataCapability { return web019Rej
 type web019RejectData struct{}
 
 func (web019RejectData) Get(context.Context, contracts.RecordKey) (contracts.Record, error) {
-	return contracts.Record{}, core.ErrModuleDataNotFound
+	return contracts.Record{}, contracts.ErrRecordNotFound
 }
 func (web019RejectData) Put(context.Context, contracts.RecordKey, contracts.RecordValue, int64) (contracts.Record, error) {
-	return contracts.Record{}, core.ErrModuleDataInvalid
+	return contracts.Record{}, contracts.ErrRecordInvalid
 }
 
 func web019WorkRequest(jobID, snapshotID, sourceID, sourceSHA, inputDigest, processorVersion, outputName string, profile mediaprofile.Profile) mediaprofile.WorkRequest {

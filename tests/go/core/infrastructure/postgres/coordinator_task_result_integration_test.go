@@ -71,7 +71,7 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		claimed, err := store.Claim(ctx, owner, epoch, []string{"engine.example", "worker.example"}, 1, time.Minute, time.Hour)
+		claimed, err := store.Claim(ctx, owner, epoch, []string{"worker.prerender"}, 1, time.Minute, time.Hour)
 		if err != nil || len(claimed) != 1 || claimed[0].Kind != corecoord.TaskKindOperation {
 			t.Fatalf("claim prerender child: %+v %v", claimed, err)
 		}

@@ -161,15 +161,13 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 		if err := runtime.ActivateCoordinator(ctx); err != nil {
 			t.Fatalf("activate disposable Coordinator: %v", err)
 		}
-		workflow, err := runtime.NewWorkflowClient(archive.DataModuleID)
-		if err != nil {
-			t.Fatalf("issue owner-scoped workflow capability: %v", err)
-		}
+		ports := composition.NewWebsiteCorePorts(runtime)
+		workflow := composition.NewWebsiteWorkflowClient(runtime, archive.DataModuleID)
 		service, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-			Files: files, Workflow: workflow, Sessions: runtime.Sessions(),
+			Files: ports.Files, Workflow: workflow, Sessions: ports.Sessions,
 			FeatureImportFileSetID: fileSet.ID,
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct Website service: %v", err)
 		}

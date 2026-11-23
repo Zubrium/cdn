@@ -17,7 +17,7 @@
       "test_file": "tests/e2e/e2e_shim_test.go",
       "test_symbol": "TestPublication/E2E-PUB-001",
       "coverage_status": "covered",
-      "execution_status": "not_run",
+      "execution_status": "pass",
       "blocker": null
     },
     {
@@ -32,11 +32,11 @@
       "input": "DELETE /api/admin/pages/{pageID} с If-Match и Idempotency-Key; повтор с тем же ключом, затем с новым ключом",
       "action": "Инициировать retirement страницы, повторить запрос и наблюдать durable workflow до завершения",
       "expected_result": "Первый запрос возвращает 202 и PageRetirement с заданиями для всех route targets; повтор с тем же Idempotency-Key возвращает тот же job ID; повтор с новым Idempotency-Key отклоняется; workflow завершается success; публичные GET перестают отдавать статические артефакты страницы",
-      "expected_state": "Page остаётся доступной по тому же ID в lifecycle_state retired; snapshot, workspace, form schema и исходный feature file сохраняются; route targets больше не ссылаются на артефакты страницы",
+      "expected_state": "Page остаётся доступной по тому же ID в lifecycle_state retired; snapshot, workspace, form schema и извлечённые файлы feature version сохраняются; исходный ZIP удалён import workflow после проверки результата; route targets больше не ссылаются на артефакты страницы",
       "test_file": "tests/e2e/e2e_shim_test.go",
       "test_symbol": "TestRetirement/E2E-RET-001",
       "coverage_status": "covered",
-      "execution_status": "not_run",
+      "execution_status": "pass",
       "blocker": null
     }
   ]

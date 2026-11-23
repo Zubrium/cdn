@@ -18,6 +18,7 @@ type WorkflowStartRequest = contracts.WorkflowStartInput
 type WorkflowReceipt = contracts.WorkflowStartReceipt
 type Workflow = contracts.WorkflowState
 type TaskResult = contracts.WorkflowTaskResult
+type OperationRef = contracts.WorkflowOperationRef
 
 const (
 	AccessLevelDenied = contracts.AccessLevelDenied

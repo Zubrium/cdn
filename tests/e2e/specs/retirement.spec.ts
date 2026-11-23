@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { adminGet, adminWrite, getRoute, waitFor } from "../helpers/api";
+import { adminGet, adminWrite, waitFor } from "../helpers/api";
 import { adminURL, loadRunState, loginAdmin, publicURL } from "../helpers/target";
 
 interface PageView {
@@ -128,15 +128,28 @@ test("E2E-RET-001 retires all route targets without deleting page-owned data", a
         180_000,
       );
     }
+    // Router owns the route records. Retirement removes each registered target
+    // with a CAS delete, so an absent route (404) is the completed withdrawal
+    // state; a surviving route must no longer point at a static artifact.
     const withdrawn = await waitFor(
       `route target withdrawal ${route.id}`,
-      async () => getRoute(session, route.id),
-      (response) => response.body.target.kind !== "static-site-artifact",
+      async () =>
+        adminGet<{ target?: { kind?: string } }>(
+          session.context.request,
+          session.headers,
+          `/api/admin/router/routes/${encodeURIComponent(route.id)}`,
+        ),
+      (response) =>
+        response.status === 404 ||
+        (response.status === 200 && response.body.target?.kind !== "static-site-artifact"),
       180_000,
     );
-    expect(withdrawn.body.target.kind, `route ${route.path} target after retirement`).not.toBe(
-      "static-site-artifact",
-    );
+    expect([200, 404], `route ${route.path} status after retirement`).toContain(withdrawn.status);
+    if (withdrawn.status === 200) {
+      expect(withdrawn.body.target?.kind, `route ${route.path} target after retirement`).not.toBe(
+        "static-site-artifact",
+      );
+    }
   }
 
   const page = await adminGet<PageView>(
@@ -173,9 +186,20 @@ test("E2E-RET-001 retires all route targets without deleting page-owned data", a
   );
   expect(form.status, "form schema retained after retirement").toBe(200);
 
+  // The imported ZIP itself is removed by the archive worker after its
+  // verified outputs are durable; the immutable extracted feature files are
+  // the page-owned data that retirement must retain.
+  const featureVersion = await adminGet<{ files: Record<string, string> }>(
+    session.context.request,
+    session.headers,
+    `/api/admin/features/${encodeURIComponent(state.featureKey)}/versions/${encodeURIComponent(state.featureVersion)}`,
+  );
+  expect(featureVersion.status, "feature version retained after retirement").toBe(200);
+  const featureFileID = Object.values(featureVersion.body.files)[0];
+  expect(featureFileID, "feature artifact file index").toBeTruthy();
   const file = await session.context.request.get(
-    `${adminURL}/api/files/objects/${encodeURIComponent(state.sourceFileID)}`,
+    `${adminURL}/api/files/objects/${encodeURIComponent(featureFileID)}`,
     { headers: session.headers },
   );
-  expect(file.status(), "source file retained after retirement").toBe(200);
+  expect(file.status(), "feature artifact retained after retirement").toBe(200);
 });

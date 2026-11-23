@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	"github.com/Zubrium/cdn/engines/website/features/runtime"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 )
@@ -333,7 +333,7 @@ func newWebsiteScenarioService(t *testing.T) (*memoryStore, interface {
 }, context.Context) {
 	t.Helper()
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)

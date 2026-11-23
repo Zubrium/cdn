@@ -92,10 +92,11 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
 		files := runtime.Files()
+		ports := composition.NewWebsiteCorePorts(runtime)
 
 		base, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct bootstrap Website service: %v", err)
 		}
@@ -251,7 +252,7 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 		// workflow, or artifact reader was not supplied by composition.
 		unavailable, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct fail-closed Website service: %v", err)
 		}
@@ -376,17 +377,18 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			t.Fatalf("issue workflow task-graph capability: %v", err)
 		}
 		tracking := &web020WorkflowClient{
-			client: workflowClient, control: workflowControl, maxPages: 4,
+			client:     composition.NewWebsiteWorkflowClient(runtime, websiteworkflow.ComponentID),
+			coreClient: workflowClient, control: workflowControl, maxPages: 4,
 			started: map[uuid.UUID]web020StartedWorkflow{},
 		}
 
 		serviceConfig := websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
 			BuildWorkflow: tracking, LocaleCatalog: catalog, BuildInputResolver: resolver,
-			BuildFiles: files, BuildOperationID: websiteworkflow.OperationID,
+			BuildFiles: ports.Files, BuildOperationID: websiteworkflow.OperationID,
 			BuildContractVersion: websiteworkflow.ContractVersion, PrerenderImageDigest: web020ImageDigest,
 		}
-		service, err := websiteapp.NewService(serviceConfig, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		service, err := websiteapp.NewService(serviceConfig, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct configured Website service: %v", err)
 		}
@@ -491,7 +493,7 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			t.Fatalf("replayed artifact identity changed: %+v, %v", replayResult, err)
 		}
 
-		restarted, err := websiteapp.NewService(serviceConfig, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		restarted, err := websiteapp.NewService(serviceConfig, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("restart Website service: %v", err)
 		}
@@ -509,7 +511,7 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 		// previously ready artifact remains untouched and readable.
 		staleServiceConfig := serviceConfig
 		staleServiceConfig.BuildWorkflow = &web020StaleWorkflow{web020WorkflowClient: tracking, inputDigest: strings.Repeat("0", 64)}
-		staleService, err := websiteapp.NewService(staleServiceConfig, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		staleService, err := websiteapp.NewService(staleServiceConfig, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct stale-result Website service: %v", err)
 		}
@@ -572,22 +574,23 @@ func (w web020CoreArtifactWriter) WriteArtifact(ctx context.Context, requestKey,
 }
 
 type web020StartedWorkflow struct {
-	receipt core.WorkflowReceipt
+	receipt contracts.WorkflowStartReceipt
 	payload json.RawMessage
 }
 
 type web020WorkflowClient struct {
-	client     *core.WorkflowClient
+	client     websiteapp.BuildWorkflowClient
+	coreClient *core.WorkflowClient
 	control    *core.WorkflowControl
 	maxPages   int
 	started    map[uuid.UUID]web020StartedWorkflow
 	startOrder []uuid.UUID
 }
 
-func (c *web020WorkflowClient) Start(ctx context.Context, request core.WorkflowStartRequest) (core.WorkflowReceipt, error) {
+func (c *web020WorkflowClient) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	receipt, err := c.client.Start(ctx, request)
 	if err != nil {
-		return core.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
 	var payload struct {
 		BuildID uuid.UUID `json:"build_id"`
@@ -601,11 +604,11 @@ func (c *web020WorkflowClient) Start(ctx context.Context, request core.WorkflowS
 	return receipt, nil
 }
 
-func (c *web020WorkflowClient) Get(ctx context.Context, id uuid.UUID) (core.Workflow, error) {
+func (c *web020WorkflowClient) Get(ctx context.Context, id uuid.UUID) (contracts.WorkflowState, error) {
 	return c.client.Get(ctx, id)
 }
 
-func (c *web020WorkflowClient) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (core.TaskResult, error) {
+func (c *web020WorkflowClient) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (contracts.WorkflowTaskResult, error) {
 	return c.client.GetTaskResult(ctx, workflowID, taskID)
 }
 
@@ -626,11 +629,11 @@ func (c *web020WorkflowClient) ResolveTaskID(ctx context.Context, workflowID uui
 		}
 		cursor := *detail.TaskPage.Next
 		if cursor.ID == uuid.Nil || cursor.CreatedAt.IsZero() {
-			return uuid.Nil, core.ErrInvalid
+			return uuid.Nil, contracts.ErrInvalidOperation
 		}
 		before = &cursor
 	}
-	return uuid.Nil, core.ErrTaskMissing
+	return uuid.Nil, contracts.ErrWorkflowTaskMissing
 }
 
 func (c *web020WorkflowClient) startedFor(buildID string) (web020StartedWorkflow, bool) {
@@ -647,10 +650,10 @@ type web020StaleWorkflow struct {
 	inputDigest string
 }
 
-func (c *web020StaleWorkflow) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (core.TaskResult, error) {
+func (c *web020StaleWorkflow) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (contracts.WorkflowTaskResult, error) {
 	result, err := c.web020WorkflowClient.GetTaskResult(ctx, workflowID, taskID)
 	if err != nil {
-		return core.TaskResult{}, err
+		return contracts.WorkflowTaskResult{}, err
 	}
 	result.Result = web020JSON(map[string]any{
 		"format": "website.build-result/v2", "input_digest": c.inputDigest,

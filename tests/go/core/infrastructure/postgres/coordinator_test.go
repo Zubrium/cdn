@@ -865,7 +865,7 @@ func workflowInputHash(payload, operation string, version int) []byte {
 }
 
 func claimWorkflowRoot(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch int64) (Task, error) {
-	tasks, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 1, time.Minute, time.Hour)
+	tasks, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "engine.website", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 1, time.Minute, time.Hour)
 	if err != nil {
 		return Task{}, err
 	}

@@ -32,6 +32,7 @@ import (
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	publication "github.com/Zubrium/cdn/main/internal/publication"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
+	"github.com/Zubrium/cdn/main/internal/composition"
 	routerpresent "github.com/Zubrium/cdn/presentation/router"
 	workerprerender "github.com/Zubrium/cdn/workers/prerender"
 	"github.com/google/uuid"
@@ -111,9 +112,10 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		trackedFiles := &web021TrackedFiles{FilesCapability: files}
 		t.Cleanup(func() { trackedFiles.cleanup(t, serviceSession) })
 
+		ports := composition.NewWebsiteCorePorts(runtime)
 		base, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct bootstrap Website service: %v", err)
 		}
@@ -208,9 +210,9 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		websiteService, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
 			BuildWorkflow: workflow, LocaleCatalog: catalog, BuildInputResolver: resolver,
-			BuildFiles: files, BuildOperationID: websiteworkflow.OperationID,
+			BuildFiles: ports.Files, BuildOperationID: websiteworkflow.OperationID,
 			BuildContractVersion: websiteworkflow.ContractVersion, PrerenderImageDigest: web020ImageDigest,
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct configured Website service: %v", err)
 		}
@@ -232,8 +234,8 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Router target validator: %v", err)
 		}
-		routeService, err := routesapp.New(routeStore, web021RouterIdentity{identity: identity},
-			runtime.GroupAuthorization(), targetValidator,
+		coreAccess := composition.NewCoreAccess(runtime)
+		routeService, err := routesapp.New(routeStore, coreAccess, coreAccess, targetValidator,
 			routesapp.Config{BranchID: branchID, AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
 		if err != nil {
 			t.Fatalf("construct Router route service: %v", err)
@@ -402,7 +404,7 @@ type web021Workflow struct {
 	buildsByLocale map[string]int
 }
 
-func (w *web021Workflow) Start(ctx context.Context, request core.WorkflowStartRequest) (core.WorkflowReceipt, error) {
+func (w *web021Workflow) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	var payload struct {
 		BuildID     uuid.UUID                      `json:"build_id"`
 		Input       prerendercontract.TrustedInput `json:"input"`
@@ -411,7 +413,7 @@ func (w *web021Workflow) Start(ctx context.Context, request core.WorkflowStartRe
 	}
 	if err := json.Unmarshal(request.Payload, &payload); err != nil ||
 		prerendercontract.ValidateTrustedInput(payload.Input) != nil || payload.BuildID == uuid.Nil {
-		return core.WorkflowReceipt{}, errors.New("invalid trusted build payload")
+		return contracts.WorkflowStartReceipt{}, errors.New("invalid trusted build payload")
 	}
 	plan := prerendercontract.Plan{
 		Version: prerendercontract.PlanVersion, InputDigest: payload.InputDigest,
@@ -424,25 +426,25 @@ func (w *web021Workflow) Start(ctx context.Context, request core.WorkflowStartRe
 		BrowserVersion: "test-browser", Locale: payload.Input.Locale, DOMMarker: "web021",
 	})
 	if err != nil {
-		return core.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
 	workflowID, taskID := uuid.New(), uuid.New()
 	documentID, err := w.writer.WriteArtifact(ctx, workflowID.String()+"/index.html", "index.html",
 		prerendercontract.HTMLMediaType, int64(len(artifacts.Document)), prerendercontract.HexDigest(artifacts.Document),
 		bytes.NewReader(artifacts.Document))
 	if err != nil {
-		return core.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
 	artifacts.Manifest.Artifacts[0].FileID = documentID
 	manifestBytes, err := json.Marshal(artifacts.Manifest)
 	if err != nil {
-		return core.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
 	manifestID, err := w.writer.WriteArtifact(ctx, workflowID.String()+"/manifest.json", "manifest.json",
 		prerendercontract.ArtifactMediaType, int64(len(manifestBytes)), prerendercontract.HexDigest(manifestBytes),
 		bytes.NewReader(manifestBytes))
 	if err != nil {
-		return core.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
 	workerResult, err := json.Marshal(workerprerender.Result{
 		Format: prerendercontract.BuildResultFormat, InputDigest: payload.InputDigest,
@@ -456,7 +458,7 @@ func (w *web021Workflow) Start(ctx context.Context, request core.WorkflowStartRe
 		}},
 	})
 	if err != nil {
-		return core.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
 	w.mu.Lock()
 	w.states[workflowID] = &web021WorkflowState{
@@ -468,15 +470,15 @@ func (w *web021Workflow) Start(ctx context.Context, request core.WorkflowStartRe
 	w.results[taskID] = workerResult
 	w.buildsByLocale[payload.Input.Locale]++
 	w.mu.Unlock()
-	return core.WorkflowReceipt{WorkflowID: workflowID, RootTaskID: taskID, State: "succeeded"}, nil
+	return contracts.WorkflowStartReceipt{WorkflowID: workflowID, RootTaskID: taskID, State: "succeeded"}, nil
 }
 
-func (w *web021Workflow) Get(_ context.Context, id uuid.UUID) (core.Workflow, error) {
+func (w *web021Workflow) Get(_ context.Context, id uuid.UUID) (contracts.WorkflowState, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	state, found := w.states[id]
 	if !found {
-		return core.Workflow{}, core.ErrTaskMissing
+		return contracts.WorkflowState{}, contracts.ErrWorkflowTaskMissing
 	}
 	root, err := json.Marshal(struct {
 		Format          string `json:"format"`
@@ -485,28 +487,28 @@ func (w *web021Workflow) Get(_ context.Context, id uuid.UUID) (core.Workflow, er
 		PrerenderTaskID string `json:"prerender_task_id"`
 	}{"website.build-root/v2", state.buildID, state.inputDigest, state.taskID.String()})
 	if err != nil {
-		return core.Workflow{}, err
+		return contracts.WorkflowState{}, err
 	}
-	return core.Workflow{ID: id, State: "succeeded", RootTaskID: state.taskID, Result: root}, nil
+	return contracts.WorkflowState{ID: id, State: "succeeded", RootTaskID: state.taskID, Result: root}, nil
 }
 
-func (w *web021Workflow) GetTaskResult(_ context.Context, workflowID, taskID uuid.UUID) (core.TaskResult, error) {
+func (w *web021Workflow) GetTaskResult(_ context.Context, workflowID, taskID uuid.UUID) (contracts.WorkflowTaskResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	state, found := w.states[workflowID]
 	if !found || state.taskID != taskID {
-		return core.TaskResult{}, core.ErrTaskMissing
+		return contracts.WorkflowTaskResult{}, contracts.ErrWorkflowTaskMissing
 	}
 	if w.failSnapshots[state.snapshotID] {
-		return core.TaskResult{}, errors.New("injected build failure")
+		return contracts.WorkflowTaskResult{}, errors.New("injected build failure")
 	}
-	return core.TaskResult{TaskID: taskID, WorkflowID: workflowID, State: "succeeded",
-		Operation: &core.OperationRef{ClassID: "worker.prerender", ID: "render-page", Version: 1},
+	return contracts.WorkflowTaskResult{TaskID: taskID, WorkflowID: workflowID, State: "succeeded",
+		Operation: &contracts.WorkflowOperationRef{ClassID: "worker.prerender", ID: "render-page", Version: 1},
 		Result:    w.results[taskID]}, nil
 }
 
 func (w *web021Workflow) ResolveTaskID(_ context.Context, _ uuid.UUID, _ string) (uuid.UUID, error) {
-	return uuid.Nil, core.ErrTaskMissing
+	return uuid.Nil, contracts.ErrWorkflowTaskMissing
 }
 
 type web021Website struct {
@@ -566,17 +568,6 @@ func (r *web021Router) ReplaceLocaleTarget(ctx context.Context, request routerap
 		return routerapi.Route{}, routerapi.ErrConflict
 	}
 	return r.SettingsAPI.ReplaceLocaleTarget(ctx, request)
-}
-
-type web021RouterIdentity struct{ identity core.IdentityCapability }
-
-func (a web021RouterIdentity) Authenticate(ctx context.Context, credential string) (core.Session, error) {
-	session, _, err := a.identity.Authenticate(ctx, credential)
-	return session, err
-}
-
-func (a web021RouterIdentity) AuthenticateSession(ctx context.Context, token string) (core.Session, core.Principal, error) {
-	return a.identity.Authenticate(ctx, token)
 }
 
 func web021OperationCatalog(t *testing.T) *routerpresent.PublicOperationRegistry {

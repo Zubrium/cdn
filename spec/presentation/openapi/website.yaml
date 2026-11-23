@@ -187,7 +187,7 @@ paths:
       parameters:
         - { name: pageID, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200': { description: Page identity and latest ready snapshot metadata., content: { application/json: { schema: { $ref: '#/components/schemas/Page' } } } }
+        '200': { description: Page identity and latest ready snapshot metadata., headers: { ETag: { schema: { type: string, pattern: '^"[1-9][0-9]*"$' } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Page' } } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }

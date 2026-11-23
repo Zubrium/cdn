@@ -272,6 +272,7 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
+	setSnapshotETag(w, value.Revision)
 	writeJSON(w, http.StatusOK, value)
 }
 

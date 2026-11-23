@@ -323,10 +323,11 @@ write_config() {
 	target=$1
 	file_set_id=$2
 	bindings_json=$3
+	retirement_json=$4
 	python3 - "$checkout" "$target" "$admin_port" "$public_port" "$atlas_wrapper" \
 		"$run_dir/staging/feature-import" "$run_dir/staging/prerender" "$run_dir/staging/router" \
 		"$file_set_id" "$bindings_json" "$docker_bin" "$sandbox_platform" "$evidence_dir/observability" \
-		"$config_s3_endpoint" "$WEBSITE_TEST_S3_BUCKET" <<'PY'
+		"$config_s3_endpoint" "$WEBSITE_TEST_S3_BUCKET" "$retirement_json" <<'PY'
 import json
 import pathlib
 import re
@@ -335,8 +336,8 @@ import sys
 (
     checkout, target, admin_port, public_port, atlas,
     feature_stage, prerender_stage, router_stage, file_set_id, bindings_json,
-    docker_bin, sandbox_platform, observability_dir, s3_endpoint, s3_bucket,
-) = sys.argv[1:16]
+    docker_bin, sandbox_platform, observability_dir, s3_endpoint, s3_bucket, retirement_json,
+) = sys.argv[1:17]
 
 source = (pathlib.Path(checkout) / "main/config.example.yaml").read_text(encoding="utf-8")
 text = source
@@ -438,9 +439,21 @@ if bindings:
     ])
     publication_block = "\n".join(lines)
 
+retirement_bindings = json.loads(retirement_json)
+retirement_block = ""
+if retirement_bindings:
+    lines = ["retirement:", "  website_credential_env: ZUBRIUM_E2E_SERVICE_CREDENTIAL", "  bindings:"]
+    for binding in retirement_bindings:
+        lines.append("    - page_id: " + yaml(binding["page_id"]))
+        lines.append("      route_ids:")
+        for route_id in binding["route_ids"]:
+            lines.append("        - " + yaml(route_id))
+    lines.append("")
+    retirement_block = "\n".join(lines)
+
 if "\nhttp:\n" not in text:
     raise SystemExit("cannot locate http block")
-text = text.replace("\nhttp:\n", "\n" + feature_block + prerender_block + publication_block + "http:\n", 1)
+text = text.replace("\nhttp:\n", "\n" + feature_block + prerender_block + publication_block + retirement_block + "http:\n", 1)
 pathlib.Path(target).write_text(text, encoding="utf-8")
 PY
 }
@@ -520,7 +533,7 @@ stop_server() {
 }
 
 placeholder_file_set="00000000-0000-4000-8000-000000000001"
-write_config "$run_dir/config-bootstrap.yaml" "$placeholder_file_set" '[]' || fail "cannot write bootstrap config"
+write_config "$run_dir/config-bootstrap.yaml" "$placeholder_file_set" '[]' '[]' || fail "cannot write bootstrap config"
 cp "$run_dir/config-bootstrap.yaml" "$evidence_dir/config-bootstrap.yaml"
 
 printf '==> starting phase 1 server (locales and FileSet bootstrap)\n'
@@ -539,7 +552,7 @@ start_server "$run_dir/config-bootstrap.yaml" bootstrap
 }
 
 file_set_id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["fileSetID"])' "$state_file")
-write_config "$run_dir/config-fixtures.yaml" "$file_set_id" '[]' || fail "cannot write fixtures config"
+write_config "$run_dir/config-fixtures.yaml" "$file_set_id" '[]' '[]' || fail "cannot write fixtures config"
 cp "$run_dir/config-fixtures.yaml" "$evidence_dir/config-fixtures.yaml"
 stop_server
 wait_port_free "$admin_port" || fail "admin port was not released before restart"
@@ -571,8 +584,16 @@ print(json.dumps([
 ]))
 PY
 ) || fail "cannot build publication bindings"
+retirement_bindings=$(python3 - "$state_file" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+print(json.dumps([{"page_id": state["pageID"], "route_ids": [route["id"] for route in state["routes"]]}]))
+PY
+) || fail "cannot build retirement bindings"
 final_config="$checkout/main/qa-e2e.yaml"
-write_config "$final_config" "$file_set_id" "$bindings" || fail "cannot write final config"
+write_config "$final_config" "$file_set_id" "$bindings" "$retirement_bindings" || fail "cannot write final config"
 cp "$final_config" "$evidence_dir/config-final.yaml"
 stop_server
 wait_port_free "$admin_port" || fail "admin port was not released before final restart"
@@ -606,7 +627,9 @@ test_status=$?
 set -e
 
 for scenario in E2E-PUB-001 E2E-RET-001; do
-	if ! grep -Fxq "PASS $scenario" "$evidence_dir/playwright.log"; then
+	# Go's t.Logf indents the Playwright reporter's output; require the exact
+	# PASS line apart from that harness indentation.
+	if ! grep -Eq "^[[:space:]]*PASS $scenario[[:space:]]*$" "$evidence_dir/playwright.log"; then
 		printf 'run-website-router-e2e: missing exact PASS line for %s\n' "$scenario" >&2
 		printf '==> relevant E2E output\n' >&2
 		grep -E '^(PASS|FAIL|--- (PASS|FAIL)|[[:space:]]+--- (PASS|FAIL))' "$evidence_dir/playwright.log" >&2 || true

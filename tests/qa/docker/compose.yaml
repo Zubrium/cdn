@@ -12,7 +12,7 @@ services:
       CORE_QA_ELEVATED_PASSWORD: ${CORE_QA_ELEVATED_PASSWORD:?set CORE_QA_ELEVATED_PASSWORD}
       CORE_QA_OWNER_RESULT_DATABASE: ${CORE_QA_OWNER_RESULT_DATABASE:-zubrium_core_qa_owner_result_${WEBSITE_TEST_RUN_ID:-local}}
     ports:
-      - "127.0.0.1:${QA_PG_PORT:-55432}:5432"
+      - "127.0.0.1:${QA_PG_PORT:-55433}:5432"
     tmpfs:
       - /var/lib/postgresql/data
     volumes:

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
@@ -41,14 +41,14 @@ const (
 )
 
 type buildWorkflowFake struct {
-	startCalls    []core.WorkflowStartRequest
+	startCalls    []platform.WorkflowStartRequest
 	startErr      error
 	workflowID    uuid.UUID
 	rootTaskID    uuid.UUID
-	workflow      core.Workflow
+	workflow      platform.Workflow
 	getErr        error
 	beforeGet     func()
-	taskResult    core.TaskResult
+	taskResult    platform.TaskResult
 	taskErr       error
 	taskCalls     int
 	resolveCalls  int
@@ -62,23 +62,23 @@ func newBuildWorkflowFake() *buildWorkflowFake {
 	}
 }
 
-func (f *buildWorkflowFake) Start(_ context.Context, request core.WorkflowStartRequest) (core.WorkflowReceipt, error) {
-	f.startCalls = append(f.startCalls, core.WorkflowStartRequest{
+func (f *buildWorkflowFake) Start(_ context.Context, request platform.WorkflowStartRequest) (platform.WorkflowReceipt, error) {
+	f.startCalls = append(f.startCalls, platform.WorkflowStartRequest{
 		OperationID: request.OperationID, ContractVersion: request.ContractVersion,
 		IdempotencyKey: request.IdempotencyKey, Payload: append(json.RawMessage(nil), request.Payload...),
 	})
 	if f.startErr != nil {
-		return core.WorkflowReceipt{}, f.startErr
+		return platform.WorkflowReceipt{}, f.startErr
 	}
-	return core.WorkflowReceipt{WorkflowID: f.workflowID, RootTaskID: f.rootTaskID, State: buildStateQueued, Created: true}, nil
+	return platform.WorkflowReceipt{WorkflowID: f.workflowID, RootTaskID: f.rootTaskID, State: buildStateQueued, Created: true}, nil
 }
 
-func (f *buildWorkflowFake) Get(_ context.Context, _ uuid.UUID) (core.Workflow, error) {
+func (f *buildWorkflowFake) Get(_ context.Context, _ uuid.UUID) (platform.Workflow, error) {
 	if f.beforeGet != nil {
 		f.beforeGet()
 	}
 	if f.getErr != nil {
-		return core.Workflow{}, f.getErr
+		return platform.Workflow{}, f.getErr
 	}
 	workflow := f.workflow
 	if workflow.ID == uuid.Nil {
@@ -90,10 +90,10 @@ func (f *buildWorkflowFake) Get(_ context.Context, _ uuid.UUID) (core.Workflow, 
 	return workflow, nil
 }
 
-func (f *buildWorkflowFake) GetTaskResult(_ context.Context, _, _ uuid.UUID) (core.TaskResult, error) {
+func (f *buildWorkflowFake) GetTaskResult(_ context.Context, _, _ uuid.UUID) (platform.TaskResult, error) {
 	f.taskCalls++
 	if f.taskErr != nil {
-		return core.TaskResult{}, f.taskErr
+		return platform.TaskResult{}, f.taskErr
 	}
 	return f.taskResult, nil
 }
@@ -128,7 +128,7 @@ func (f *buildContentProjectionResolverFake) ResolveContentBuildProjection(_ con
 
 func TestModuleBuildInputResolverUsesPageSnapshotIDForContentProjection(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -220,10 +220,10 @@ func buildTaskEnvelope(inputDigest string) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"format":%q,"input_digest":%q,"manifest":{"file_id":%q,"checksum":%q,"content_type":"application/json","size":128}}`, buildTaskFormat, inputDigest, buildManifestFileID, buildManifestDigest))
 }
 
-func buildValidTaskResult(inputDigest string) core.TaskResult {
-	return core.TaskResult{
+func buildValidTaskResult(inputDigest string) platform.TaskResult {
+	return platform.TaskResult{
 		TaskID: uuid.MustParse(buildPrerenderText), WorkflowID: uuid.MustParse(buildWorkflowIDText),
-		Operation: &core.OperationRef{ClassID: "worker.prerender", ID: "render-page", Version: 1},
+		Operation: &platform.OperationRef{ClassID: "worker.prerender", ID: "render-page", Version: 1},
 		State:     "succeeded", Result: buildTaskEnvelope(inputDigest),
 	}
 }
@@ -317,7 +317,7 @@ func (s *buildStateRecordingStore) Batch(ctx context.Context, mutations []record
 
 func newBuildStateRecordingService(t *testing.T, store *buildStateRecordingStore, config websiteapp.Config) *websiteapp.Service {
 	t.Helper()
-	service, err := websiteapp.NewService(config, store, &fakeAuthority{level: core.AccessLevelWrite, coordinatorLevel: core.AccessLevelWrite}, fakeSessions{})
+	service, err := websiteapp.NewService(config, store, &fakeAuthority{level: platform.AccessLevelWrite, coordinatorLevel: platform.AccessLevelWrite}, fakeSessions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func newBuildStateRecordingService(t *testing.T, store *buildStateRecordingStore
 func TestWebsiteBuildWorkflowFailClosedWithoutCapabilities(t *testing.T) {
 	store := newMemoryStore()
 	buildReadySnapshot(t, store)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -346,7 +346,7 @@ func TestWebsiteBuildWorkflowFailClosedWithoutCapabilities(t *testing.T) {
 		}
 	}
 
-	reader := newService(t, store, core.AccessLevelRead, websiteConfig())
+	reader := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	readCtx, err := reader.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestWebsiteBuildWorkflowCreateIdempotentReplayAndTypedPayload(t *testing.T)
 	snapshot := buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
 	catalog := &buildCatalogFake{revision: 7}
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, catalog))
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, catalog))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -479,7 +479,7 @@ func TestWebsiteBuildWorkflowConflictOnChangedInput(t *testing.T) {
 	buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
 	catalog := &buildCatalogFake{revision: 7}
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, catalog))
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, catalog))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -512,7 +512,7 @@ func TestWebsiteBuildWorkflowStaleRevisionReconciliationCannotOverwrite(t *testi
 	buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
 	catalog := &buildCatalogFake{revision: 7}
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, catalog))
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, catalog))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -521,7 +521,7 @@ func TestWebsiteBuildWorkflowStaleRevisionReconciliationCannotOverwrite(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow.workflow = core.Workflow{State: "running", Result: buildRootEnvelope(job.InputDigest)}
+	workflow.workflow = platform.Workflow{State: "running", Result: buildRootEnvelope(job.InputDigest)}
 	workflow.beforeGet = func() {
 		buildMutateRecord(t, store, job.ID, func(payload map[string]any) {
 			payload["state"] = buildStateFailed
@@ -546,7 +546,7 @@ func TestWebsiteBuildWorkflowFailClosedWithoutWorkflowClient(t *testing.T) {
 	store := newMemoryStore()
 	buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -557,7 +557,7 @@ func TestWebsiteBuildWorkflowFailClosedWithoutWorkflowClient(t *testing.T) {
 	}
 	before := len(store.records)
 
-	reader := newService(t, store, core.AccessLevelRead, websiteConfig())
+	reader := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	readCtx, err := reader.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -574,7 +574,7 @@ func TestWebsiteBuildWorkflowFailClosedWithoutWorkflowClient(t *testing.T) {
 func TestWebsiteBuildWorkflowGrantsAndMissingConfiguration(t *testing.T) {
 	store := newMemoryStore()
 	buildReadySnapshot(t, store)
-	readerWrite := newServiceWithLevels(t, store, core.AccessLevelRead, core.AccessLevelWrite, buildTestConfig(newBuildWorkflowFake(), &buildCatalogFake{revision: 7}))
+	readerWrite := newServiceWithLevels(t, store, platform.AccessLevelRead, platform.AccessLevelWrite, buildTestConfig(newBuildWorkflowFake(), &buildCatalogFake{revision: 7}))
 	readCtx, err := readerWrite.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -583,7 +583,7 @@ func TestWebsiteBuildWorkflowGrantsAndMissingConfiguration(t *testing.T) {
 		t.Fatalf("build without website write = %v, want forbidden", err)
 	}
 
-	coordinatorRead := newServiceWithLevels(t, store, core.AccessLevelWrite, core.AccessLevelRead, buildTestConfig(newBuildWorkflowFake(), &buildCatalogFake{revision: 7}))
+	coordinatorRead := newServiceWithLevels(t, store, platform.AccessLevelWrite, platform.AccessLevelRead, buildTestConfig(newBuildWorkflowFake(), &buildCatalogFake{revision: 7}))
 	writeCtx, err := coordinatorRead.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -597,7 +597,7 @@ func TestWebsiteBuildWorkflowGrantsAndMissingConfiguration(t *testing.T) {
 		}
 	}
 
-	denied := newService(t, store, core.AccessLevelNone, buildTestConfig(newBuildWorkflowFake(), &buildCatalogFake{revision: 7}))
+	denied := newService(t, store, platform.AccessLevelDenied, buildTestConfig(newBuildWorkflowFake(), &buildCatalogFake{revision: 7}))
 	deniedCtx, err := denied.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -622,7 +622,7 @@ func TestWebsiteBuildWorkflowGrantsAndMissingConfiguration(t *testing.T) {
 	} {
 		incompleteStore := newMemoryStore()
 		buildReadySnapshot(t, incompleteStore)
-		incomplete := newService(t, incompleteStore, core.AccessLevelWrite, config)
+		incomplete := newService(t, incompleteStore, platform.AccessLevelWrite, config)
 		incompleteCtx, err := incomplete.Authenticate(context.Background(), "credential")
 		if err != nil {
 			t.Fatal(err)
@@ -641,7 +641,7 @@ func TestWebsiteBuildWorkflowStartFailureDoesNotLeaveReadyJob(t *testing.T) {
 	buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
 	workflow.startErr = errors.New("coordinator rejected operation")
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -685,7 +685,7 @@ func TestWebsiteBuildWorkflowRejectsInvalidAndStaleChildResults(t *testing.T) {
 			store := newMemoryStore()
 			buildReadySnapshot(t, store)
 			workflow := newBuildWorkflowFake()
-			service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
+			service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
 			ctx, err := service.Authenticate(context.Background(), "credential")
 			if err != nil {
 				t.Fatal(err)
@@ -694,7 +694,7 @@ func TestWebsiteBuildWorkflowRejectsInvalidAndStaleChildResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			workflow.workflow = core.Workflow{State: "running", Result: buildRootEnvelope(job.InputDigest)}
+			workflow.workflow = platform.Workflow{State: "running", Result: buildRootEnvelope(job.InputDigest)}
 			advancing, err := service.GetBuild(ctx, job.ID)
 			if err != nil || advancing.State != buildStatePrerender || advancing.ArtifactManifestFileID != "" {
 				t.Fatalf("prerender advancement = %#v, %v", advancing, err)
@@ -736,7 +736,7 @@ func TestWebsiteBuildWorkflowReadyOnlyAfterValidChildResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow.workflow = core.Workflow{State: "running", Result: buildRootEnvelope(job.InputDigest)}
+	workflow.workflow = platform.Workflow{State: "running", Result: buildRootEnvelope(job.InputDigest)}
 	prerendering, err := service.GetBuild(ctx, job.ID)
 	if err != nil || prerendering.State != buildStatePrerender || prerendering.ArtifactManifestFileID != "" {
 		t.Fatalf("root reconciliation = %#v, %v", prerendering, err)
@@ -781,7 +781,7 @@ func TestWebsiteBuildWorkflowResolvesPrerenderEmissionKey(t *testing.T) {
 	store := newMemoryStore()
 	buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -791,7 +791,7 @@ func TestWebsiteBuildWorkflowResolvesPrerenderEmissionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	emissionKey := "prerender:" + job.ID
-	workflow.workflow = core.Workflow{State: "running", Result: buildRootEnvelopeByEmission(job.InputDigest, emissionKey)}
+	workflow.workflow = platform.Workflow{State: "running", Result: buildRootEnvelopeByEmission(job.InputDigest, emissionKey)}
 	workflow.taskResult = buildValidTaskResult(job.InputDigest)
 
 	prerendering, err := service.GetBuild(ctx, job.ID)
@@ -823,8 +823,8 @@ func TestWebsiteBuildWorkflowFailsWhenPrerenderEmissionCannotBeResolved(t *testi
 	store := newMemoryStore()
 	buildReadySnapshot(t, store)
 	workflow := newBuildWorkflowFake()
-	workflow.resolvedError = core.ErrTaskMissing
-	service := newService(t, store, core.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
+	workflow.resolvedError = platform.ErrTaskMissing
+	service := newService(t, store, platform.AccessLevelWrite, buildTestConfig(workflow, &buildCatalogFake{revision: 7}))
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -833,7 +833,7 @@ func TestWebsiteBuildWorkflowFailsWhenPrerenderEmissionCannotBeResolved(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow.workflow = core.Workflow{State: "succeeded", Result: buildRootEnvelopeByEmission(job.InputDigest, "prerender:"+job.ID)}
+	workflow.workflow = platform.Workflow{State: "succeeded", Result: buildRootEnvelopeByEmission(job.InputDigest, "prerender:"+job.ID)}
 
 	failed, err := service.GetBuild(ctx, job.ID)
 	if err != nil {

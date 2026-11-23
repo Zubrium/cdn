@@ -83,7 +83,7 @@ if [ -e "$env_file" ]; then
 	[ "$recorded_run_id" = "$run_id" ] || fail "existing private env file belongs to another run"
 	require_env_keys "$env_file" $all_env_keys
 else
-	pg_port=${QA_PG_PORT:-55432}
+	pg_port=${QA_PG_PORT:-55433}
 	s3_api_port=${QA_S3_API_PORT:-59000}
 	s3_console_port=${QA_S3_CONSOLE_PORT:-59001}
 	for port in "$pg_port" "$s3_api_port" "$s3_console_port"; do
@@ -91,6 +91,13 @@ else
 			''|*[!0-9]*) fail "QA ports must be integers" ;;
 		esac
 		[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "QA ports must be in 1..65535"
+	done
+	# Reserved working ports must never be occupied by a disposable QA stack;
+	# tests/qa/browser/verify-target.sh enforces the same invariant.
+	for port in "$pg_port" "$s3_api_port" "$s3_console_port"; do
+		case "$port" in
+			8080|5173|55432) fail "QA port $port collides with a reserved working port" ;;
+		esac
 	done
 
 	pg_password=$(random_hex 24)

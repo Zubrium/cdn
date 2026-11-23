@@ -26,6 +26,7 @@ import (
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
+	"github.com/Zubrium/cdn/main/internal/composition"
 	"github.com/google/uuid"
 )
 
@@ -86,10 +87,11 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		// Build and locale capabilities are deliberately nil: WEB-018 does not
 		// start a durable build, and the service fails closed if build paths are
 		// reached. Only group and session capabilities are real Core capabilities.
+		ports := composition.NewWebsiteCorePorts(runtime)
 		service, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup:            "features",
 			CoordinatorAccessGroup: "features",
-		}, store, runtime.GroupAuthorization(), runtime.Sessions())
+		}, store, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct Website service with real Core capabilities: %v", err)
 		}
@@ -156,7 +158,7 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		value := contracts.RecordValue{
 			Payload: current.Payload, PayloadVersion: current.PayloadVersion, IndexData: current.IndexData,
 		}
-		if _, err := store.Put(ctx, rootKey, value, current.Revision-1); !errors.Is(err, core.ErrModuleDataConflict) {
+		if _, err := store.Put(ctx, rootKey, value, current.Revision-1); !errors.Is(err, contracts.ErrRecordConflict) {
 			t.Fatalf("stale exact-key replay = %v, want Core ErrModuleDataConflict", err)
 		}
 		afterReplay, err := store.Get(ctx, rootKey)
@@ -174,27 +176,27 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		foreignNamespace := contracts.RecordKey{
 			Namespace: "content/records", ScopeType: "global", ScopeID: "global", RecordKey: "web018-foreign",
 		}
-		if _, err := store.Get(ctx, foreignNamespace); !errors.Is(err, core.ErrModuleDataInvalid) {
+		if _, err := store.Get(ctx, foreignNamespace); !errors.Is(err, contracts.ErrRecordInvalid) {
 			t.Fatalf("foreign namespace read = %v, want Core ErrModuleDataInvalid", err)
 		}
 		if _, err := store.Put(ctx, foreignNamespace, contracts.RecordValue{
 			Payload: json.RawMessage(`{}`), PayloadVersion: 1, IndexData: json.RawMessage(`{}`),
-		}, 0); !errors.Is(err, core.ErrModuleDataInvalid) {
+		}, 0); !errors.Is(err, contracts.ErrRecordInvalid) {
 			t.Fatalf("foreign namespace write = %v, want Core ErrModuleDataInvalid", err)
 		}
-		if _, _, _, err := store.List(ctx, foreignNamespace.Namespace, foreignNamespace.ScopeType, foreignNamespace.ScopeID, "", nil, 10); !errors.Is(err, core.ErrModuleDataInvalid) {
+		if _, _, _, err := store.List(ctx, foreignNamespace.Namespace, foreignNamespace.ScopeType, foreignNamespace.ScopeID, "", nil, 10); !errors.Is(err, contracts.ErrRecordInvalid) {
 			t.Fatalf("foreign namespace list = %v, want Core ErrModuleDataInvalid", err)
 		}
 		foreignScope := contracts.RecordKey{
 			Namespace: websiterepo.SnapshotNamespace, ScopeType: "job", ScopeID: "web018", RecordKey: "web018-foreign",
 		}
-		if _, err := store.Get(ctx, foreignScope); !errors.Is(err, core.ErrModuleDataInvalid) {
+		if _, err := store.Get(ctx, foreignScope); !errors.Is(err, contracts.ErrRecordInvalid) {
 			t.Fatalf("undeclared scope read = %v, want Core ErrModuleDataInvalid", err)
 		}
 		if err := store.Batch(ctx, []contracts.RecordMutation{{
 			Key: foreignNamespace, ExpectedRevision: 0,
 			Value: &contracts.RecordValue{Payload: json.RawMessage(`{}`), PayloadVersion: 1, IndexData: json.RawMessage(`{}`)},
-		}}); !errors.Is(err, core.ErrModuleDataInvalid) {
+		}}); !errors.Is(err, contracts.ErrRecordInvalid) {
 			t.Fatalf("foreign namespace batch = %v, want Core ErrModuleDataInvalid", err)
 		}
 
@@ -466,14 +468,14 @@ func (o *websiteOwnedKeys) deleteAll(t *testing.T) {
 	defer cancel()
 	for key := range o.keys {
 		record, err := o.store.Get(ctx, key)
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, contracts.ErrRecordNotFound) {
 			continue
 		}
 		if err != nil {
 			t.Errorf("read run-owned record for cleanup %+v: %v", key, err)
 			continue
 		}
-		if err := o.store.Delete(ctx, key, record.Revision); err != nil && !errors.Is(err, core.ErrModuleDataNotFound) {
+		if err := o.store.Delete(ctx, key, record.Revision); err != nil && !errors.Is(err, contracts.ErrRecordNotFound) {
 			t.Errorf("delete run-owned record %+v: %v", key, err)
 		}
 	}
@@ -522,7 +524,7 @@ func assertCoreCASConflict(t *testing.T, ctx context.Context, store contracts.Re
 		PayloadVersion: current.PayloadVersion,
 		IndexData:      append(json.RawMessage(nil), current.IndexData...),
 	}
-	if _, err := store.Put(ctx, key, value, current.Revision-1); !errors.Is(err, core.ErrModuleDataConflict) {
+	if _, err := store.Put(ctx, key, value, current.Revision-1); !errors.Is(err, contracts.ErrRecordConflict) {
 		t.Fatalf("stale Core CAS on %+v = %v, want Core ErrModuleDataConflict", key, err)
 	}
 	after, err := store.Get(ctx, key)

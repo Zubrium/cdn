@@ -27,6 +27,7 @@ import (
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 	"github.com/Zubrium/cdn/main/internal/retirement"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/main/internal/composition"
 	routerpresent "github.com/Zubrium/cdn/presentation/router"
 	"github.com/google/uuid"
 )
@@ -121,9 +122,10 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		// checked for each file this run created.
 		t.Cleanup(func() { trackedFiles.cleanup(t, serviceSession) })
 
+		ports := composition.NewWebsiteCorePorts(runtime)
 		service, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
-		}, websiteData, runtime.GroupAuthorization(), runtime.Sessions())
+		}, websiteData, ports.Authority, ports.Sessions)
 		if err != nil {
 			t.Fatalf("construct Website service: %v", err)
 		}
@@ -236,8 +238,8 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Router target validator: %v", err)
 		}
-		routeService, err := routesapp.New(routeStore, web021RouterIdentity{identity: identity},
-			runtime.GroupAuthorization(), targetValidator,
+		coreAccess := composition.NewCoreAccess(runtime)
+		routeService, err := routesapp.New(routeStore, coreAccess, coreAccess, targetValidator,
 			routesapp.Config{BranchID: branchID, AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
 		if err != nil {
 			t.Fatalf("construct Router route service: %v", err)

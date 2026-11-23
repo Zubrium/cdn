@@ -95,9 +95,15 @@ type retirementClient struct {
 }
 
 func (client *retirementClient) RetirePage(ctx context.Context, request contracts.RetirePageRequest) (contracts.PageRetirement, error) {
+	if client == nil {
+		return contracts.PageRetirement{}, contracts.ErrDispatcherUnavailable
+	}
 	return contracts.Call(ctx, client.dispatcher, contracts.RetirePageOperation(), request)
 }
 
 func (client *retirementClient) GetPageRetirement(ctx context.Context, query contracts.PageRetirementQuery) (contracts.PageRetirement, error) {
+	if client == nil {
+		return contracts.PageRetirement{}, contracts.ErrDispatcherUnavailable
+	}
 	return contracts.Call(ctx, client.dispatcher, contracts.GetPageRetirementOperation(), query)
 }

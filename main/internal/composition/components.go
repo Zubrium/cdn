@@ -507,6 +507,7 @@ func (c *loaderComponent) IsReady() bool { return c != nil && c.service != nil }
 type fileAPIComponent struct {
 	loader              *loaderComponent
 	core                *coreComponent
+	dispatcher          contracts.Dispatcher
 	workflowControl     workflowControl
 	formsEngine         *formsEngineComponent
 	websiteEngine       *websiteEngineComponent
@@ -570,8 +571,11 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		Files:                    c.loader.service, WorkflowControl: c.workflowControl,
 		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{core: c.core},
 	}
-	if c.retirementEngine != nil {
-		dependencies.Retirement = c.retirementEngine.client
+	if c.config.Retirement.Enabled {
+		// The Admin listener may start before the retirement component's Start
+		// initializes its service. The bus client needs only the already-built
+		// dispatcher, so construct it here instead of carrying a nil pointer.
+		dependencies.Retirement = &retirementClient{dispatcher: c.dispatcher}
 	}
 	if fixtureAPIs != nil {
 		dependencies.Website, dependencies.Content, dependencies.Forms = fixtureAPIs.website, fixtureAPIs.content, fixtureAPIs.forms
@@ -582,6 +586,9 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		}
 		if c.contentEngine != nil && c.contentEngine.engine != nil {
 			dependencies.Content = c.contentEngine.engine
+			if c.config.Publication.Enabled {
+				dependencies.Content = contentPublicationAPI{API: dependencies.Content, client: publicationClient{dispatcher: c.dispatcher}}
+			}
 			dependencies.ContentSchemas = c.contentEngine.projections
 		}
 		if c.formsAdminEnabled && c.formsEngine != nil {
@@ -773,7 +780,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	}
 	core.dispatcher = dispatcher
 	loader := &loaderComponent{core: core, config: resolved}
-	fileAPI := &fileAPIComponent{loader: loader, core: core, config: resolved, observer: observer}
+	fileAPI := &fileAPIComponent{loader: loader, core: core, dispatcher: dispatcher, config: resolved, observer: observer}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]
 	if _, enabled := selected["admin.notifications"]; enabled {
 		fileAPI.notifications = transport.NewNotificationHub()

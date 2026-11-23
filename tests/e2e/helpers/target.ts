@@ -53,7 +53,7 @@ export async function loginAdmin(browser: import("@playwright/test").Browser): P
     extraHTTPHeaders: { Origin: adminURL },
   });
   const page = await context.newPage();
-  await page.goto("/login");
+  await page.goto("/admin/login");
   await page.locator("#credential").fill(credential);
   await page.getByRole("button", { name: "Войти" }).click();
   await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 30_000 });

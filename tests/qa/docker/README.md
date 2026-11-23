@@ -49,7 +49,7 @@ tests/qa/docker/down.sh <run_id>   # иначе явно
 | Переменная | Назначение | По умолчанию |
 | --- | --- | --- |
 | `WEBSITE_TEST_RUN_ID` | идентификатор прогона; нормализуется в нижний регистр, недопустимые символы заменяются на `-` | `qa-<UTC>-<random>` |
-| `QA_PG_PORT` | loopback-порт PostgreSQL | `55432` |
+| `QA_PG_PORT` | loopback-порт PostgreSQL | `55433` |
 | `QA_S3_API_PORT` | loopback-порт MinIO S3 API | `59000` |
 | `QA_S3_CONSOLE_PORT` | loopback-порт MinIO Console | `59001` |
 | `WEBSITE_QA_WAIT_TIMEOUT` | секунд ожидания healthcheck при `up` | `120` |
