@@ -364,7 +364,13 @@ func validateRuntimeConfig(cfg RuntimeConfig) error {
 		}
 	}
 	if cfg.CacheEnabled {
-		if err := cfg.CacheStore.Validate(); err != nil {
+		if cfg.CacheObserver == nil {
+			return errors.New("core cache observer is not configured")
+		}
+		// Epoch source and cache factory are internal Core dependencies and
+		// are injected by newCacheStoreConfig; only operator bounds are
+		// validated before the runtime starts.
+		if err := cfg.CacheStore.ValidateBounds(); err != nil {
 			return fmt.Errorf("invalid core cache configuration: %w", err)
 		}
 		if err := cfg.Warmup.Validate(); err != nil {

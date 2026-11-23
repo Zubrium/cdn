@@ -74,7 +74,10 @@ type StoreConfig struct {
 	CacheFactory            CacheFactory
 }
 
-func (c StoreConfig) Validate() error {
+// ValidateBounds checks operator-supplied limits before any listener starts.
+// Internal dependencies are injected later by the owning module and are
+// checked by Validate when the store is constructed.
+func (c StoreConfig) ValidateBounds() error {
 	if c.BytesMaxBytes <= 0 || c.MetadataMaxBytes <= 0 || c.MaxObjectBytes <= 0 {
 		return errors.New("cache byte budgets must be positive")
 	}
@@ -95,6 +98,13 @@ func (c StoreConfig) Validate() error {
 	}
 	if c.InvalidationBatchSize <= 0 || c.InvalidationBatchWindow <= 0 {
 		return errors.New("invalidation batch bounds must be explicit")
+	}
+	return nil
+}
+
+func (c StoreConfig) Validate() error {
+	if err := c.ValidateBounds(); err != nil {
+		return err
 	}
 	if c.Epoch == nil || c.Observer == nil || c.CacheFactory == nil {
 		return errors.New("cache epoch source, observer and cache factory are required")
