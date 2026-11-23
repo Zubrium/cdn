@@ -80,6 +80,9 @@ func reconcileAccessGroupsTx(ctx context.Context, tx pgx.Tx, groups map[string]a
 			return fmt.Errorf("disable removed access groups: %w", err)
 		}
 	}
+	if err := bumpAccessEpoch(ctx, tx); err != nil {
+		return fmt.Errorf("bump access epoch for configured groups: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
 		return fmt.Errorf("notify configured access groups: %w", err)
 	}
@@ -106,6 +109,9 @@ func SetGroupAccess(ctx context.Context, pool *pgxpool.Pool, actorID, targetID u
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO access.grants(user_id,group_key,access_level) VALUES($1,$2,$3)
 		ON CONFLICT(user_id,group_key) DO UPDATE SET access_level=EXCLUDED.access_level`, targetID, group, int16(level)); err != nil {
+		return err
+	}
+	if err := bumpAccessEpoch(ctx, tx, targetID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {

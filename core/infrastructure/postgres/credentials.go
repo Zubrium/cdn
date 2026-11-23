@@ -93,6 +93,12 @@ func CreatePrincipal(ctx context.Context, pool *pgxpool.Pool, actor access.Princ
 	if _, err := tx.Exec(ctx, `INSERT INTO access.credentials(id,user_id,secret_hash,expires_at) VALUES($1,$2,$3,$4)`, credentialID, principalID, identity.HashSecret(secret), expiresAt); err != nil {
 		return uuid.Nil, "", err
 	}
+	if err := bumpAccessEpoch(ctx, tx, principalID); err != nil {
+		return uuid.Nil, "", err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
+		return uuid.Nil, "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, "", fmt.Errorf("commit principal creation: %w", err)
 	}
@@ -156,6 +162,9 @@ func CreatePrincipalWithAccess(ctx context.Context, pool *pgxpool.Pool, actor ac
 		if _, err := tx.Exec(ctx, `INSERT INTO access.grants(user_id,group_key,access_level) VALUES($1,$2,$3)`, principalID, group, int16(level)); err != nil {
 			return uuid.Nil, "", err
 		}
+	}
+	if err := bumpAccessEpoch(ctx, tx, principalID); err != nil {
+		return uuid.Nil, "", err
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
 		return uuid.Nil, "", err
@@ -223,6 +232,12 @@ func IssueCredential(ctx context.Context, pool *pgxpool.Pool, actor access.Princ
 	if _, err := tx.Exec(ctx, `INSERT INTO access.credentials(id,user_id,secret_hash,expires_at) VALUES($1,$2,$3,$4)`, credentialID, principalID, identity.HashSecret(secret), expiresAt); err != nil {
 		return uuid.Nil, "", err
 	}
+	if err := bumpAccessEpoch(ctx, tx, principalID); err != nil {
+		return uuid.Nil, "", err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
+		return uuid.Nil, "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, "", err
 	}
@@ -280,6 +295,9 @@ func RevokeCredential(ctx context.Context, pool *pgxpool.Pool, actor access.Prin
 	if _, err := tx.Exec(ctx, `UPDATE access.sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE credential_id=$1`, credentialID); err != nil {
 		return err
 	}
+	if err := bumpAccessEpoch(ctx, tx, principalID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
 		return err
 	}
@@ -317,6 +335,12 @@ func RecoverBootstrapCredential(ctx context.Context, pool *pgxpool.Pool) (uuid.U
 		return uuid.Nil, "", err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO access.credentials(id,user_id,secret_hash) VALUES($1,$2,$3)`, credentialID, principalID, identity.HashSecret(secret)); err != nil {
+		return uuid.Nil, "", err
+	}
+	if err := bumpAccessEpoch(ctx, tx, principalID); err != nil {
+		return uuid.Nil, "", err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
 		return uuid.Nil, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {

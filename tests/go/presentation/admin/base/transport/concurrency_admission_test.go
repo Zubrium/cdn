@@ -32,30 +32,51 @@ func admissionObserver(t *testing.T) *observability.Observer {
 	return observer
 }
 
-// admissionMetricLine matches every requested label. The concurrency contract
-// publishes zero-valued series for several scopes, so matching only one label
-// could read an unrelated BUS or STORAGE series instead of the HTTP pool.
+// admissionMetricLine requires an exact label set. The concurrency contract
+// publishes zero-valued series for several scopes, so matching a single label
+// could read an unrelated BUS or STORAGE series instead of the HTTP series.
 func admissionMetricLine(t *testing.T, observer *observability.Observer, name, labels string) string {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	observer.MetricsHandler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
-	required := strings.Split(labels, ",")
+	required := labelSet(labels)
 	for _, line := range strings.Split(recorder.Body.String(), "\n") {
-		if !strings.HasPrefix(line, name+"{") && !strings.HasPrefix(line, name+" ") {
+		if !strings.HasPrefix(line, name+"{") {
 			continue
 		}
-		matches := true
-		for _, label := range required {
-			if label = strings.TrimSpace(label); label != "" && !strings.Contains(line, label) {
-				matches = false
-				break
-			}
+		open := strings.Index(line, "{")
+		closeBrace := strings.Index(line, "}")
+		if open < 0 || closeBrace < open {
+			continue
 		}
-		if matches {
-			return line
+		if !sameLabels(labelSet(line[open+1:closeBrace]), required) {
+			continue
 		}
+		return line
 	}
 	return ""
+}
+
+func labelSet(raw string) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, label := range strings.Split(raw, ",") {
+		if label = strings.TrimSpace(label); label != "" {
+			result[label] = struct{}{}
+		}
+	}
+	return result
+}
+
+func sameLabels(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for label := range a {
+		if _, ok := b[label]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func admissionMetricValue(t *testing.T, observer *observability.Observer, name, label string) float64 {
@@ -91,9 +112,9 @@ func admissionServerConfig(observer *observability.Observer, ui http.Handler) Ad
 
 func TestConcurrencyAdmissionScenario(t *testing.T) {
 	t.Run("CONC-001", func(t *testing.T) {
-		observer := admissionObserver(t)
 		for _, moduleID := range []string{"admin", "public-router"} {
 			t.Run(moduleID, func(t *testing.T) {
+				observer := admissionObserver(t)
 				limiter, err := newIngressLimiter(ServerConfig{
 					MaxInFlight: 1, RequestTimeout: 20 * time.Millisecond, ShutdownTimeout: 100 * time.Millisecond,
 				}, observer, moduleID)
@@ -150,10 +171,10 @@ func TestConcurrencyAdmissionScenario(t *testing.T) {
 				if err, ok := handlerErr.Load().(error); !ok || err == nil {
 					t.Fatalf("admitted request context error = %v, want request_timeout", err)
 				}
-				if got := admissionMetricValue(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP",pool="`+moduleID+`"`); got != 0 {
+				if got := admissionMetricValue(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP"`); got != 0 {
 					t.Fatalf("HTTP in-flight after release = %v, want 0", got)
 				}
-				if got := admissionMetricValue(t, observer, "zubrium_concurrency_rejected_total", `scope="HTTP",pool="`+moduleID+`",reason="GLOBAL"`); got != 1 {
+				if got := admissionMetricValue(t, observer, "zubrium_concurrency_rejected_total", `scope="HTTP",reason="GLOBAL"`); got != 1 {
 					t.Fatalf("rejected{GLOBAL} = %v, want 1", got)
 				}
 			})
@@ -233,10 +254,10 @@ func TestConcurrencyAdmissionScenario(t *testing.T) {
 		if err := server.Stop(context.Background()); err != nil {
 			t.Fatalf("repeated Stop = %v", err)
 		}
-		if got := admissionMetricValue(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP",pool="admin"`); got != 0 {
+		if got := admissionMetricValue(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP"`); got != 0 {
 			t.Fatalf("HTTP in-flight after shutdown = %v, want 0", got)
 		}
-		if got := admissionMetricValue(t, observer, "zubrium_concurrency_rejected_total", `scope="HTTP",pool="admin",reason="GLOBAL"`); got != 1 {
+		if got := admissionMetricValue(t, observer, "zubrium_concurrency_rejected_total", `scope="HTTP",reason="GLOBAL"`); got != 1 {
 			t.Fatalf("rejected after repeated Stop = %v, want 1", got)
 		}
 	})

@@ -97,6 +97,9 @@ func SetPrincipalManagement(ctx context.Context, pool *pgxpool.Pool, actor acces
 	if _, err := tx.Exec(ctx, `UPDATE access.users SET can_manage_administrators=$2 WHERE id=$1`, targetID, enabled); err != nil {
 		return err
 	}
+	if err := bumpAccessEpoch(ctx, tx, targetID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
 		return err
 	}
@@ -151,6 +154,9 @@ func DeactivatePrincipal(ctx context.Context, pool *pgxpool.Pool, actor access.P
 	}
 	if _, err := tx.Exec(ctx, `UPDATE access.sessions SET revoked_at=COALESCE(revoked_at,now())
 		WHERE credential_id IN (SELECT id FROM access.credentials WHERE user_id=$1)`, principalID); err != nil {
+		return err
+	}
+	if err := bumpAccessEpoch(ctx, tx, principalID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {

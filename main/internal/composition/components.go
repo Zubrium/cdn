@@ -28,8 +28,35 @@ import (
 	"github.com/google/uuid"
 )
 
+// cacheObserver maps Core's internal metric labels to the deployed observer
+// without letting identity labels leak into fixed SPEC contract series.
+type cacheObserver struct{ observer *observability.Observer }
+
+var _ platform.CacheObserver = cacheObserver{}
+
+func (o cacheObserver) attributes(labels []platform.CacheLabel) []observability.Attribute {
+	attributes := make([]observability.Attribute, 0, len(labels))
+	for _, label := range labels {
+		attributes = append(attributes, observability.String(label.Key, label.Value))
+	}
+	return attributes
+}
+
+func (o cacheObserver) IncCounter(ctx context.Context, name string, value float64, labels ...platform.CacheLabel) {
+	o.observer.IncCounterExact(ctx, name, value, o.attributes(labels)...)
+}
+
+func (o cacheObserver) SetGauge(ctx context.Context, name string, value float64, labels ...platform.CacheLabel) {
+	o.observer.SetGaugeExact(ctx, name, value, o.attributes(labels)...)
+}
+
+func (o cacheObserver) ObserveHistogram(ctx context.Context, name string, value float64, labels ...platform.CacheLabel) {
+	o.observer.ObserveHistogramExact(ctx, name, value, o.attributes(labels)...)
+}
+
 type coreComponent struct {
 	config          appconfig.Resolved
+	observer        platform.CacheObserver
 	runtime         *platform.Runtime
 	secret          string
 	operations      map[contracts.Key]TaskOperationBinding
@@ -84,6 +111,11 @@ func (c *coreComponent) Start(ctx context.Context) error {
 	}
 	coreConfig.AccessGroups = groups
 	c.config.Core.AccessGroups = groups
+	if c.observer == nil {
+		return errors.New("core cache observer is not configured")
+	}
+	coreConfig.CacheStore.Observer = c.observer
+	coreConfig.CacheObserver = c.observer
 	runtime, secret, err := platform.Start(ctx, coreConfig)
 	if err != nil {
 		return err
@@ -459,11 +491,12 @@ func (c *coreComponent) Errors() <-chan error {
 func idleFailureStream() <-chan error { return make(chan error) }
 
 type loaderComponent struct {
-	core    *coreComponent
-	config  appconfig.Resolved
-	service *loaderapp.Service
-	cancel  context.CancelFunc
-	cleanup <-chan error
+	core     *coreComponent
+	config   appconfig.Resolved
+	observer *observability.Observer
+	service  *loaderapp.Service
+	cancel   context.CancelFunc
+	cleanup  <-chan error
 }
 
 func (c *loaderComponent) Start(ctx context.Context) error {
@@ -478,6 +511,10 @@ func (c *loaderComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if c.observer == nil {
+		return errors.New("loader admission observer is not configured")
+	}
+	service.WithObserver(c.observer)
 	cleanupCtx, cancel := context.WithCancel(ctx)
 	c.service, c.cancel, c.cleanup = service, cancel, service.RunCleanup(cleanupCtx)
 	return nil
@@ -717,7 +754,11 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	for _, id := range plan.Components {
 		selected[id] = struct{}{}
 	}
-	core := &coreComponent{config: resolved, selected: selected, dispatcher: nil}
+	var coreObserver platform.CacheObserver
+	if observer != nil {
+		coreObserver = cacheObserver{observer: observer}
+	}
+	core := &coreComponent{config: resolved, selected: selected, dispatcher: nil, observer: coreObserver}
 	operations, err := registerWorkerHandlers(selected, resolved, core, observer)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("register worker handlers: %w", err)
@@ -800,7 +841,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		return nil, nil, nil, nil, err
 	}
 	core.dispatcher = dispatcher
-	loader := &loaderComponent{core: core, config: resolved}
+	loader := &loaderComponent{core: core, config: resolved, observer: observer}
 	fileAPI := &fileAPIComponent{loader: loader, core: core, dispatcher: dispatcher, config: resolved, observer: observer}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]
 	if _, enabled := selected["admin.notifications"]; enabled {

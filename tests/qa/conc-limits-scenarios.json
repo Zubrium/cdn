@@ -20,6 +20,42 @@
       "blocker": null
     },
     {
+      "id": "CONC-004",
+      "source": "spec/architecture/SPEC-concurrency.md §7 DB budget, §10 отказные случаи; main/internal/config/scales.go validateScales",
+      "level": "unit",
+      "preconditions": [
+        "Startup-конфигурация задаёт loader/commits, worker class limits и core.storage.read_reserve явно.",
+        "Конфигурация с budgets 12 connections проходит валидацию."
+      ],
+      "input": "Уменьшить core.max_connections до 11, оставив все остальные лимиты прежними.",
+      "action": "Вы resolver конфигурации до построения профиля и запуска listener'ов.",
+      "expected_result": "Конфигурация отвергается сообщением `core.max_connections 11 is below required budget 12`; никакой listener не открывается.",
+      "expected_state": "Валидная конфигурация продолжает проходить; секреты и значения environment variables в сообщении отсутствуют.",
+      "test_file": "tests/go/main/internal/config/concurrency_budget_scenario_test.go",
+      "test_symbol": "TestConcurrencyBudgetScenario/CONC-004",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-008",
+      "source": "spec/architecture/SPEC-concurrency.md §6 class-scoped claim, §11 DB budget; spec/core/SPEC-core-architecture.md Coordinator",
+      "level": "e2e",
+      "preconditions": [
+        "Требуется рабочая топология с насыщенным media pool и активными prerender/publication pools на одной disposable PostgreSQL.",
+        "Core Coordination должен выполнять class-scoped claim для всех изолированных пулов."
+      ],
+      "input": "Задать media.limit=1, одновременно отправить задачи media, prerender и publication и наблюдать попытку media claim.",
+      "action": "Проверить, что media задачи ждут lease, соседние классы работают в своих лимитах и суммарные соединения не превышают бюджет.",
+      "expected_result": "Только media ожидает lease; чужие задачи не получают handler_unavailable; budget соединений соблюдён.",
+      "expected_state": "Активные tasks восстанавливаются после release; публичный Core контракт не меняется.",
+      "test_file": "tests/go/main/internal/config/concurrency_budget_scenario_test.go",
+      "test_symbol": "TestConcurrencyClassPoolScenario/CONC-008",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Изолированные worker pools не активированы в production: Core Coordination ещё не выполняет class-scoped Claim для Media/Prerender/Publication; static pool config и SQL regression не заменяют живую проверку."
+    },
+    {
       "id": "CONC-010",
       "source": "spec/architecture/SPEC-concurrency.md §12; spec/observability/SPEC-observability.md §4",
       "level": "unit",

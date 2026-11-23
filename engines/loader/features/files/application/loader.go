@@ -145,14 +145,14 @@ func (s *Service) setInFlight(delta int64) {
 		return
 	}
 	current := s.inFlight.Add(delta)
-	s.observer.SetGauge(s.concurrencyContext(), "zubrium_concurrency_in_flight", float64(current), observability.String("scope", "LOADER"))
+	s.observer.SetGaugeExact(s.concurrencyContext(), "zubrium_concurrency_in_flight", float64(current), observability.String("scope", "LOADER"))
 }
 
 func (s *Service) reject(reason string) {
 	if s == nil || s.observer == nil {
 		return
 	}
-	s.observer.IncCounter(s.concurrencyContext(), "zubrium_concurrency_rejected_total", 1,
+	s.observer.IncCounterExact(s.concurrencyContext(), "zubrium_concurrency_rejected_total", 1,
 		observability.String("scope", "LOADER"), observability.String("reason", reason))
 }
 

@@ -203,41 +203,54 @@ func TestConcurrencyLimitsScenario(t *testing.T) {
 			t.Error("canonical BUS in-flight gauge is absent")
 		}
 
-		allowedKeys := map[string]bool{
-			"service.name": true, "service.version": true, "service.instance.id": true,
-			"deployment.profile": true, "router.branch": true, "module.kind": true,
-			"module.id": true, "component.id": true, "operation.id": true,
-			"scope": true, "pool": true, "result": true, "reason": true,
-			"cache": true, "outcome": true,
+		// SPEC-concurrency.md §12 fixes the complete label set of every
+		// contract series. Inherited identity labels and listener/pool
+		// identifiers are forbidden, even when their values are low-cardinality.
+		expectedLabels := map[string]map[string]bool{
+			"zubrium_concurrency_in_flight":          {"scope": true},
+			"zubrium_bus_in_flight":                  {"scope": true},
+			"zubrium_concurrency_rejected_total":     {"scope": true, "reason": true},
+			"zubrium_cache_coalesced_total":          {"cache": true, "result": true},
+			"zubrium_cache_invalidation_batch_total": {"result": true},
+			"zubrium_worker_pool_active":             {"pool": true},
+			"zubrium_worker_pool_tasks_total":        {"pool": true, "outcome": true},
+			"zubrium_db_pool_usage":                  {},
 		}
-		forbiddenValues := regexp.MustCompile(`(?i)(route[_-]?id|operation[_-]?id="[^"]|file[_-]?id|principal|/api/|https?://|locale|user[_-]?agent|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
-		contractNames := map[string]bool{
-			"zubrium_concurrency_in_flight": true, "zubrium_concurrency_rejected_total": true,
-			"zubrium_cache_coalesced_total": true, "zubrium_cache_invalidation_batch_total": true,
-			"zubrium_worker_pool_active": true, "zubrium_worker_pool_tasks_total": true,
-			"zubrium_db_pool_usage": true,
-		}
+		forbiddenValues := regexp.MustCompile(`(?i)(route[._-]?id|operation[._-]?id="[^"]|file[._-]?id|principal|/api/|https?://|locale|user[._-]?agent|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
 		for _, line := range strings.Split(body, "\n") {
 			fields := strings.Fields(line)
 			if len(fields) == 0 {
 				continue
 			}
 			name := strings.SplitN(fields[0], "{", 2)[0]
-			if !contractNames[name] {
+			expected, ok := expectedLabels[name]
+			if !ok {
 				continue
 			}
-			open := strings.IndexByte(line, '{')
-			if open < 0 {
-				continue
+			actual := map[string]bool{}
+			if open := strings.IndexByte(line, '{'); open >= 0 {
+				if close := strings.IndexByte(line[open:], '}'); close >= 0 {
+					for _, part := range strings.Split(line[open+1:open+close], ",") {
+						label, _, found := strings.Cut(strings.TrimSpace(part), "=")
+						if !found {
+							t.Errorf("metric %q has a malformed label", line)
+							continue
+						}
+						actual[label] = true
+					}
+				}
 			}
-			close := strings.IndexByte(line[open:], '}')
-			if close < 0 {
-				continue
+			if len(actual) != len(expected) {
+				t.Errorf("metric %q has labels %v, want exactly %v", line, actual, expected)
 			}
-			for _, part := range strings.Split(line[open+1:open+close], ",") {
-				label, _, found := strings.Cut(strings.TrimSpace(part), "=")
-				if !found || !allowedKeys[label] {
+			for label := range actual {
+				if !expected[label] {
 					t.Errorf("metric %q has unsupported label %q", line, label)
+				}
+			}
+			for label := range expected {
+				if !actual[label] {
+					t.Errorf("metric %q is missing label %q", line, label)
 				}
 			}
 			if forbiddenValues.MatchString(line) {

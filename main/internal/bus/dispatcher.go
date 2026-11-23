@@ -84,12 +84,12 @@ func (dispatcher *Dispatcher) WithObserver(observer *observability.Observer) *Di
 // zero-valued series with low-cardinality labels only.
 func (dispatcher *Dispatcher) publishConcurrencyContract(observer *observability.Observer) {
 	ctx := dispatcher.concurrencyContext()
-	observer.SetGauge(ctx, "zubrium_concurrency_in_flight", 0,
+	observer.SetGaugeExact(ctx, "zubrium_concurrency_in_flight", 0,
 		observability.String("scope", "BUS"))
-	observer.SetGauge(ctx, "zubrium_bus_in_flight", 0,
+	observer.SetGaugeExact(ctx, "zubrium_bus_in_flight", 0,
 		observability.String("scope", "BUS"))
 	for _, reason := range []string{"GLOBAL", "PER_ROUTE", "PER_OPERATION", "DB_RESERVE"} {
-		observer.IncCounter(ctx, "zubrium_concurrency_rejected_total", 0,
+		observer.IncCounterExact(ctx, "zubrium_concurrency_rejected_total", 0,
 			observability.String("scope", "BUS"), observability.String("reason", reason))
 	}
 }
@@ -357,8 +357,8 @@ func (dispatcher *Dispatcher) setInFlight(delta int64) {
 	// SPEC-concurrency.md §5.6 names the bus-specific gauge, while §12 requires
 	// the canonical scope-based gauge. Both describe the same admission load and
 	// must stay in sync; neither carries operation or caller identity.
-	observer.SetGauge(dispatcher.concurrencyContext(), "zubrium_bus_in_flight", float64(current), observability.String("scope", "BUS"))
-	observer.SetGauge(dispatcher.concurrencyContext(), "zubrium_concurrency_in_flight", float64(current), observability.String("scope", "BUS"))
+	observer.SetGaugeExact(dispatcher.concurrencyContext(), "zubrium_bus_in_flight", float64(current), observability.String("scope", "BUS"))
+	observer.SetGaugeExact(dispatcher.concurrencyContext(), "zubrium_concurrency_in_flight", float64(current), observability.String("scope", "BUS"))
 }
 
 func (dispatcher *Dispatcher) recordRejected(reason string) {
@@ -366,7 +366,7 @@ func (dispatcher *Dispatcher) recordRejected(reason string) {
 	if observer == nil {
 		return
 	}
-	observer.IncCounter(dispatcher.concurrencyContext(), "zubrium_concurrency_rejected_total", 1,
+	observer.IncCounterExact(dispatcher.concurrencyContext(), "zubrium_concurrency_rejected_total", 1,
 		observability.String("scope", "BUS"), observability.String("reason", reason))
 }
 

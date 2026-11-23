@@ -66,7 +66,7 @@ func (limiter *ingressLimiter) Wrap(next http.Handler) http.Handler {
 		limiter.mu.RLock()
 		if limiter.closed {
 			limiter.mu.RUnlock()
-			limiter.reject("SHUTDOWN")
+			limiter.reject("GLOBAL")
 			writeIngressOverload(w)
 			return
 		}
@@ -144,29 +144,23 @@ func (limiter *ingressLimiter) Close(ctx context.Context) error {
 	}
 }
 
-// concurrencyContext drops caller identity and trace attribution so admission
-// metrics stay low-cardinality: scope and pool only, never route or request IDs.
-func (limiter *ingressLimiter) concurrencyContext() context.Context {
-	return limiter.observer.WithIdentity(context.Background(), observability.Identity{
-		ModuleKind: observability.ModuleKindPresentation, ModuleID: limiter.pool, ComponentID: "http-server",
-	})
-}
-
+// Fixed contract series use the exact metric API: no inherited identity and no
+// per-listener pool label may be appended to the SPEC label set.
 func (limiter *ingressLimiter) setInFlight(delta int64) {
 	if limiter == nil || limiter.observer == nil {
 		return
 	}
 	current := limiter.inFlight.Add(delta)
-	limiter.observer.SetGauge(limiter.concurrencyContext(), "zubrium_concurrency_in_flight", float64(current),
-		observability.String("scope", "HTTP"), observability.String("pool", limiter.pool))
+	limiter.observer.SetGaugeExact(context.Background(), "zubrium_concurrency_in_flight", float64(current),
+		observability.String("scope", "HTTP"))
 }
 
 func (limiter *ingressLimiter) reject(reason string) {
 	if limiter == nil || limiter.observer == nil {
 		return
 	}
-	limiter.observer.IncCounter(limiter.concurrencyContext(), "zubrium_concurrency_rejected_total", 1,
-		observability.String("scope", "HTTP"), observability.String("pool", limiter.pool), observability.String("reason", reason))
+	limiter.observer.IncCounterExact(context.Background(), "zubrium_concurrency_rejected_total", 1,
+		observability.String("scope", "HTTP"), observability.String("reason", reason))
 }
 
 func writeIngressOverload(w http.ResponseWriter) {

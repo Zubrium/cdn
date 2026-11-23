@@ -53,7 +53,7 @@ core:
         backoff: 200ms
       refresh_interval: 0s
       sources:
-        inline: true
+        inline: false
         published_artifacts: true
       targets:
         authorization: false

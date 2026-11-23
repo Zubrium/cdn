@@ -12,6 +12,7 @@ import (
 	"time"
 
 	appaccess "github.com/Zubrium/cdn/core/application/access"
+	appcache "github.com/Zubrium/cdn/core/application/cache"
 	"github.com/Zubrium/cdn/core/domain/access"
 	"github.com/Zubrium/cdn/core/domain/files"
 )
@@ -45,6 +46,9 @@ type Service struct {
 	updates              MetadataWriter
 	deleter              Deleter
 	cache                ByteCache
+	cacheStore           *appcache.Store
+	cacheAuthorizer      appcache.Authorizer
+	concurrency          *storageConcurrency
 	maxObjectBytes       int64
 	maxMetadataBytes     int64
 	maxCachedObjectBytes int64
@@ -57,6 +61,15 @@ func NewService(metadata MetadataReader, byteStore ByteReader, creator Creator, 
 		cache: byteCache, maxObjectBytes: maxObjectBytes, maxMetadataBytes: maxMetadataBytes,
 		maxCachedObjectBytes: maxCachedObjectBytes, cacheTTL: cacheTTL,
 	}
+}
+
+// WithAuthorizationCache attaches Core's bounded cache to an existing storage
+// service. Authorization is still performed through the injected authorizer on
+// every miss and every stale hit; the cache only holds verifiable hints.
+func (s Service) WithAuthorizationCache(store *appcache.Store, authorizer appcache.Authorizer) Service {
+	s.cacheStore = store
+	s.cacheAuthorizer = authorizer
+	return s
 }
 
 func (s Service) Create(ctx context.Context, actor access.Principal, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, body io.Reader) (string, error) {
@@ -107,9 +120,38 @@ func (s Service) Read(ctx context.Context, actor access.Principal, id string) (i
 	if s.bytes == nil || s.metadata == nil {
 		return nil, Object{}, ErrUnavailable
 	}
+	release, err := s.acquire(ctx, false)
+	if err != nil {
+		return nil, Object{}, err
+	}
+	defer release()
 	object, err := s.Stat(ctx, actor, id)
 	if err != nil {
 		return nil, Object{}, err
+	}
+	if object.Size <= s.maxCachedObjectBytes && s.cacheStore != nil {
+		if view, ok := s.cacheStore.GetBytes(ctx, object.ID); ok {
+			return io.NopCloser(bytes.NewReader(view.Bytes())), object, nil
+		}
+		reader, err := s.bytes.Read(ctx, object.Key)
+		if err != nil {
+			return nil, Object{}, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(reader, object.Size+1))
+		closeErr := reader.Close()
+		if readErr != nil {
+			return nil, Object{}, fmt.Errorf("read file bytes: %w", readErr)
+		}
+		if closeErr != nil {
+			return nil, Object{}, fmt.Errorf("close file stream: %w", closeErr)
+		}
+		if int64(len(body)) != object.Size {
+			return nil, Object{}, errors.New("stored file size does not match metadata")
+		}
+		if err := s.cacheStore.PutBytes(ctx, object.ID, object.Revision, body); err != nil {
+			return nil, Object{}, err
+		}
+		return io.NopCloser(bytes.NewReader(body)), object, nil
 	}
 	if object.Size <= s.maxCachedObjectBytes && s.cache != nil {
 		if body, ok := s.cache.Get(object.ID); ok {
@@ -144,12 +186,22 @@ func (s Service) ReadRange(ctx context.Context, actor access.Principal, id strin
 	if s.bytes == nil || s.metadata == nil {
 		return nil, Object{}, ErrUnavailable
 	}
+	release, err := s.acquire(ctx, false)
+	if err != nil {
+		return nil, Object{}, err
+	}
+	defer release()
 	object, err := s.Stat(ctx, actor, id)
 	if err != nil {
 		return nil, Object{}, err
 	}
 	if start < 0 || end < start || end >= object.Size {
 		return nil, Object{}, errors.New("invalid file range")
+	}
+	if object.Size <= s.maxCachedObjectBytes && s.cacheStore != nil {
+		if view, ok := s.cacheStore.GetBytes(ctx, object.ID); ok {
+			return io.NopCloser(bytes.NewReader(view.Bytes()[start : end+1])), object, nil
+		}
 	}
 	if object.Size <= s.maxCachedObjectBytes && s.cache != nil {
 		if body, ok := s.cache.Get(object.ID); ok {
@@ -281,7 +333,19 @@ func (s Service) authorizedObject(ctx context.Context, actor access.Principal, i
 	if !appaccess.ValidAction(action) {
 		return Object{}, errors.New("invalid file action")
 	}
+	release, err := s.acquire(ctx, true)
+	if err != nil {
+		return Object{}, err
+	}
+	defer release()
 	for attempt := 0; attempt < 3; attempt++ {
+		if s.cacheStore != nil && s.cacheAuthorizer != nil {
+			object, err := s.authorizedObjectCached(ctx, actor.ID, id, action)
+			if err != nil {
+				return Object{}, err
+			}
+			return object, nil
+		}
 		revision, visibleGroups, err := s.metadata.Authorize(ctx, actor.ID, id, action)
 		if err != nil {
 			return Object{}, err
@@ -318,6 +382,50 @@ func (s Service) authorizedObject(ctx context.Context, actor access.Principal, i
 	return Object{}, errors.New("file metadata changed repeatedly during request")
 }
 
+// authorizedObjectCached uses the application-owned authorization and metadata
+// caches. A miss still performs the full authoritative check, and a cached hit
+// is accepted only while both revision and access_epoch still match.
+func (s Service) authorizedObjectCached(ctx context.Context, principalID, id string, action access.Action) (Object, error) {
+	auth, err := s.cacheStore.Authorize(ctx, principalID, id, string(action), s.cacheAuthorizer)
+	if err != nil {
+		return Object{}, err
+	}
+	if cached, ok := s.cacheStore.GetMetadata(ctx, id); ok {
+		object := objectFromCachedMetadata(cached)
+		object.Groups = filterGroups(object.Groups, auth.Groups)
+		return object, nil
+	}
+	object, err := s.metadata.Find(ctx, id)
+	if err != nil {
+		return Object{}, err
+	}
+	if object.Revision != auth.Revision {
+		s.cacheStore.Notify(id)
+		return Object{}, errors.New("file metadata changed during request")
+	}
+	if !object.Ready || object.ID != id {
+		return Object{}, ErrNotFound
+	}
+	cached := appcache.Metadata{
+		FileID: object.ID, Key: object.Key, Revision: object.Revision, Size: int(object.Size),
+		Ready: object.Ready, Groups: object.Groups, Metadata: cloneMetadata(object.Metadata),
+		SHA256: object.SHA256, ContentType: object.ContentType, State: object.State,
+	}
+	if err := s.cacheStore.PutMetadata(ctx, cached); err != nil {
+		return Object{}, err
+	}
+	object.Groups = filterGroups(object.Groups, auth.Groups)
+	return object, nil
+}
+
+func objectFromCachedMetadata(cached appcache.Metadata) Object {
+	return Object{
+		ID: cached.FileID, Key: cached.Key, Groups: append([]string(nil), cached.Groups...),
+		Metadata: cloneMetadata(cached.Metadata), SHA256: cached.SHA256, Revision: cached.Revision,
+		Size: int64(cached.Size), ContentType: cached.ContentType, Ready: cached.Ready, State: cached.State,
+	}
+}
+
 func filterGroups(groups, visible []string) []string {
 	if len(groups) == 0 || len(visible) == 0 {
 		return []string{}
@@ -336,14 +444,32 @@ func filterGroups(groups, visible []string) []string {
 }
 
 func (s Service) invalidate(id string) {
-	s.cache.Delete(id)
-	s.cache.Delete(metadataCacheKey(id))
+	if s.cacheStore != nil {
+		s.cacheStore.Notify(id)
+	}
+	if s.cache != nil {
+		s.cache.Delete(id)
+		s.cache.Delete(metadataCacheKey(id))
+	}
 }
 
 // InvalidateCache releases all locally cached state for a database object.
 func (s Service) InvalidateCache(id string) {
-	if s.cache != nil && id != "" {
+	if id == "" {
+		return
+	}
+	if s.cacheStore != nil || s.cache != nil {
 		s.invalidate(id)
+	}
+}
+
+// InvalidateAll clears local caches after a LISTEN reconnect.
+func (s Service) InvalidateAll() {
+	if s.cacheStore != nil {
+		s.cacheStore.OnReconnect()
+	}
+	if clearer, ok := s.cache.(interface{ Clear() }); ok {
+		clearer.Clear()
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/observability"
 	"github.com/google/uuid"
 )
 
@@ -168,6 +169,36 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 	}
 	if registry == nil || api == nil || !api.identityAdmin {
 		t.Fatal("selected identity API was not connected to the shared Admin listener")
+	}
+}
+
+// TestComponentRegistrationWiresObservers guards the production metric path:
+// Core cache and Loader admission observers must come from the same deployed
+// observer, and registration must not invent one when composition has none.
+func TestComponentRegistrationWiresObserversIntoCoreAndLoader(t *testing.T) {
+	observer, err := observability.New(observability.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observer.Close(context.Background()) })
+	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files"}}
+	resolved := appconfig.Resolved{}
+	resolved.Scales.Bus.MaxInFlight = 8
+
+	_, core, loader, _, err := registerComponents(resolved, plan, observer)
+	if err != nil {
+		t.Fatalf("register composition with observer: %v", err)
+	}
+	if core.observer == nil || loader.observer == nil {
+		t.Fatalf("observer was not wired into the metrics paths: core=%t loader=%t", core.observer != nil, loader.observer != nil)
+	}
+
+	_, coreWithout, loaderWithout, _, err := registerComponents(resolved, plan, nil)
+	if err != nil {
+		t.Fatalf("register composition without observer: %v", err)
+	}
+	if coreWithout.observer != nil || loaderWithout.observer != nil {
+		t.Fatal("registration silently invented an observer instead of failing closed at Start")
 	}
 }
 

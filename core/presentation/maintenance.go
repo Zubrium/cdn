@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,24 +30,74 @@ func (r *Runtime) maintain(ctx context.Context, cfg RuntimeConfig) {
 	}
 }
 
-func (r *Runtime) listenInvalidations(ctx context.Context) {
+// listenInvalidations batches PostgreSQL notifications inside the configured
+// hard window. Overflow, reconnect and shutdown clear all local caches so a
+// missed notification can never leave a stale authorization usable.
+func (r *Runtime) listenInvalidations(ctx context.Context, batchSize int, batchWindow time.Duration) {
 	defer close(r.notifyDone)
-	postgres.WatchCacheInvalidations(ctx, r.database, func() {
-		// PostgreSQL is authoritative. Clearing on every reconnect accounts for
-		// notifications missed while this instance was disconnected.
-		if r.byteCache != nil {
-			r.byteCache.Clear()
-		}
-	}, func(payload string) {
-		if r.byteCache == nil {
+	if batchSize <= 0 || batchWindow <= 0 {
+		r.report(errors.New("invalid core cache invalidation batch bounds"))
+		return
+	}
+	payloads := make(chan string, batchSize*2)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		postgres.WatchCacheInvalidations(ctx, r.database, func() {
+			r.files.InvalidateAll()
+		}, func(payload string) {
+			select {
+			case payloads <- payload:
+			default:
+				r.files.InvalidateAll()
+			}
+		}, r.report)
+	}()
+
+	timer := time.NewTimer(batchWindow)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	batch := make([]string, 0, batchSize)
+	flush := func() {
+		if len(batch) == 0 {
 			return
 		}
-		if payload == "*" {
-			r.byteCache.Clear()
+		if r.cacheStore != nil {
+			r.cacheStore.NotifyBatch(batch)
 		} else {
-			r.files.InvalidateCache(payload)
+			for _, id := range batch {
+				r.files.InvalidateCache(id)
+			}
 		}
-	}, r.report)
+		batch = batch[:0]
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(batchWindow)
+	}
+
+	for {
+		select {
+		case payload := <-payloads:
+			batch = append(batch, payload)
+			if len(batch) >= batchSize {
+				flush()
+			}
+		case <-timer.C:
+			flush()
+		case <-watchDone:
+			flush()
+			return
+		case <-ctx.Done():
+			flush()
+			return
+		}
+	}
 }
 
 func (r *Runtime) report(err error) {

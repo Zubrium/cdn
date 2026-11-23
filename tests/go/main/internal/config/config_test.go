@@ -407,7 +407,7 @@ func validRuntimeConfig() Config {
 				AccessCache: CacheAccessTarget{MaxEntries: 100, MaxBytes: 1 << 16, TTL: "1m"},
 				Warmup: WarmupTarget{Enabled: true, Mode: "strict", Timeout: "30s", PerKeyTimeout: "5s", Concurrency: 1, MaxKeys: 10,
 					Retry: WarmupRetryTarget{Attempts: 1, Backoff: "10ms"}, RefreshInterval: "0s",
-					Sources: WarmupSourcesTarget{Inline: true}, Targets: WarmupTargetsTarget{Metadata: true, Bytes: true}}},
+					Sources: WarmupSourcesTarget{PublishedArtifacts: true}, Targets: WarmupTargetsTarget{Metadata: true, Bytes: true}}},
 			Concurrency: CoreConcurrency{
 				Storage:      StorageConcurrency{MaxConcurrentReads: 2, MaxConcurrentAuthorizations: 2, OperationTimeout: "5s", ReadReserve: 1},
 				Cache:        CacheConcurrency{Shards: 2, LRUPromotionInterval: 1, Coalesce: CacheCoalesce{Enabled: true, MaxWaiters: 4, Timeout: "1s"}},
@@ -494,5 +494,39 @@ func TestResolveContentAPICredentialAndLocale(t *testing.T) {
 		if _, err := invalid.Resolve(getenv); err == nil {
 			t.Fatalf("invalid Content locale %q accepted", locale)
 		}
+	}
+}
+
+// TestResolveMapsCoreCacheAndStorageConcurrencyContracts guards the production
+// wiring: the resolved startup config must carry every bound required by the
+// Core cache and storage admission layers, and it must pass their validation.
+func TestResolveMapsCoreCacheAndStorageConcurrencyContracts(t *testing.T) {
+	values := map[string]string{
+		"DB":           "postgres://runtime:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"MIGRATION_DB": "postgres://migrator:local-secret@127.0.0.1:5432/zubrium_core_qa_unit",
+		"ACCESS":       "access", "SECRET": "secret",
+	}
+	getenv := func(key string) string { return values[key] }
+	config := validRuntimeConfig()
+	resolved, err := config.Resolve(getenv)
+	if err != nil {
+		t.Fatalf("valid Core cache configuration rejected: %v", err)
+	}
+	if !resolved.Core.CacheEnabled {
+		t.Fatal("Core cache was not enabled by the resolved target configuration")
+	}
+	if err := resolved.Core.Warmup.Validate(); err != nil {
+		t.Fatalf("resolved warm-up contract is invalid: %v", err)
+	}
+	store := resolved.Core.CacheStore
+	if store.BytesMaxBytes != int(config.Core.Cache.MaxBytes) ||
+		store.MaxObjectBytes != int(config.Core.Cache.MaxObjectBytes) ||
+		store.AccessMaxEntries != config.Core.Cache.AccessCache.MaxEntries ||
+		store.Shards != config.Core.Concurrency.Cache.Shards {
+		t.Fatalf("resolved Core cache store bounds = %+v", store)
+	}
+	limits := resolved.Core.StorageConcurrency
+	if !limits.Enabled || limits.MaxConcurrentReads != 2 || limits.MaxConcurrentAuthorizations != 2 || limits.OperationTimeout <= 0 {
+		t.Fatalf("resolved Core storage concurrency = %+v", limits)
 	}
 }

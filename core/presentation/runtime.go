@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	appcache "github.com/Zubrium/cdn/core/application/cache"
 	appcoord "github.com/Zubrium/cdn/core/application/coordination"
 	appidentity "github.com/Zubrium/cdn/core/application/identity"
 	appmaintenance "github.com/Zubrium/cdn/core/application/maintenance"
@@ -19,6 +20,15 @@ import (
 	"github.com/Zubrium/cdn/core/infrastructure/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// StorageConcurrencyRuntime carries the explicit process-local read and
+// authorization limits applied before any repository call reaches pgxpool.
+type StorageConcurrencyRuntime struct {
+	Enabled                     bool
+	MaxConcurrentReads          int
+	MaxConcurrentAuthorizations int
+	OperationTimeout            time.Duration
+}
 
 type RuntimeConfig struct {
 	Database                DatabaseConfig
@@ -37,6 +47,11 @@ type RuntimeConfig struct {
 	CoalesceTimeout         time.Duration
 	InvalidationBatchSize   int
 	InvalidationBatchWindow time.Duration
+	CacheEnabled            bool
+	CacheStore              appcache.StoreConfig
+	CacheObserver           appcache.Observer
+	Warmup                  appcache.Config
+	StorageConcurrency      StorageConcurrencyRuntime
 	MaxMetadataBytes        int64
 	MaxObjectBytes          int64
 	MaxCachedObjectBytes    int64
@@ -177,6 +192,9 @@ type Runtime struct {
 	sessions                   *appidentity.SessionService
 	maintenance                *appmaintenance.Service
 	byteCache                  *cache.ShardedCache
+	cacheStore                 *appcache.Store
+	warmup                     *appcache.Runner
+	refreshDone                chan struct{}
 	Registry                   *Registry
 	cancel                     context.CancelFunc
 	done                       chan struct{}
@@ -247,19 +265,62 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("bootstrap Core: %w", err)
 	}
-	shards := cfg.CacheShards
-	byteCache := cache.NewSharded(shards, 0, int(cfg.CacheMaxBytes), cfg.CachePromotionInterval, time.Now)
-	byteCache.ConfigureCoalescing(cfg.CoalesceEnabled, cfg.CoalesceMaxWaiters, cfg.CoalesceTimeout)
 	metadata := postgres.Objects{Pool: pool}
 	writer := postgres.Creator{Pool: pool, Store: objects, MaxMetadataBytes: cfg.MaxMetadataBytes}
+
+	var byteCache *cache.ShardedCache
+	if !cfg.CacheEnabled {
+		byteCache = cache.NewSharded(cfg.CacheShards, 0, int(cfg.CacheMaxBytes), cfg.CachePromotionInterval, time.Now)
+		byteCache.ConfigureCoalescing(cfg.CoalesceEnabled, cfg.CoalesceMaxWaiters, cfg.CoalesceTimeout)
+	}
 	files := storage.NewService(metadata, objects, writer, writer, writer, byteCache,
 		cfg.MaxObjectBytes, cfg.MaxMetadataBytes, cfg.MaxCachedObjectBytes, cfg.CacheTTL)
+
+	var cacheStore *appcache.Store
+	var warmup *appcache.Runner
+	if cfg.CacheEnabled {
+		epoch := postgres.CacheEpochSource{Pool: pool}
+		storeConfig := cfg.CacheStore
+		storeConfig.Epoch = epoch
+		storeConfig.CacheFactory = cache.Factory{}
+		cacheStore, err = appcache.NewStore(storeConfig)
+		if err != nil {
+			pool.Close()
+			return nil, "", fmt.Errorf("initialize Core cache: %w", err)
+		}
+		authorizer := coreAuthorizer{metadata: metadata, epoch: epoch}
+		files = files.WithAuthorizationCache(cacheStore, authorizer)
+		warmup, err = appcache.NewRunner(cfg.Warmup, appcache.Dependencies{
+			Store: cacheStore, Observer: cfg.CacheObserver, Authorizer: authorizer,
+			Metadata: coreMetadataSource{metadata: metadata}, Bytes: coreBytesSource{bytes: objects}, Epoch: epoch,
+		})
+		if err != nil {
+			pool.Close()
+			return nil, "", fmt.Errorf("initialize Core cache warm-up: %w", err)
+		}
+		result, runErr := warmup.Run(ctx)
+		if runErr != nil || !result.Ready {
+			pool.Close()
+			if runErr == nil {
+				runErr = errors.New("required cache warm-up keys were not ready")
+			}
+			return nil, "", fmt.Errorf("warm Core caches: %w", runErr)
+		}
+	}
+	if cfg.StorageConcurrency.Enabled {
+		files = files.WithConcurrency(
+			cfg.StorageConcurrency.MaxConcurrentReads,
+			cfg.StorageConcurrency.MaxConcurrentAuthorizations,
+			cfg.StorageConcurrency.OperationTimeout, cfg.CacheObserver)
+	}
+
 	fileIndex := storage.NewIndexService(postgres.FileIndexRepository{Pool: pool})
 	staging := storage.NewStagingService(postgres.StagingRepository{Pool: pool, Store: objects, MaxBytes: cfg.MaxObjectBytes}, cfg.MaxObjectBytes)
 	engineDataRepository := postgres.EngineDataRepository{Pool: pool}
 	maintenanceService, err := appmaintenance.NewService(
 		postgres.MaintenanceRepository{Pool: pool, Store: objects}, cfg.PendingTTL, cfg.MaintenanceBatchSize)
 	if err != nil {
+		pool.Close()
 		return nil, "", fmt.Errorf("initialize Core maintenance service: %w", err)
 	}
 	workerCtx, cancel := context.WithCancel(context.Background())
@@ -267,12 +328,21 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 		database: pool, objects: objects, files: files, fileIndex: fileIndex, staging: staging,
 		engineDataRepository: engineDataRepository,
 		identities:           identities, sessions: sessions, maintenance: maintenanceService,
-		byteCache:        byteCache,
+		byteCache: byteCache, cacheStore: cacheStore, warmup: warmup,
 		moduleDataLimits: cfg.ModuleData,
 		Registry:         NewRegistry(), cancel: cancel, done: make(chan struct{}), notifyDone: make(chan struct{}), errors: make(chan error, 8),
 	}
+	if warmup != nil {
+		r.refreshDone = make(chan struct{})
+		go func() {
+			defer close(r.refreshDone)
+			if err := warmup.RefreshLoop(workerCtx); err != nil {
+				r.report(err)
+			}
+		}()
+	}
 	go r.maintain(workerCtx, cfg)
-	go r.listenInvalidations(workerCtx)
+	go r.listenInvalidations(workerCtx, cfg.InvalidationBatchSize, cfg.InvalidationBatchWindow)
 	failed = false
 	return r, secret, nil
 }
@@ -293,6 +363,23 @@ func validateRuntimeConfig(cfg RuntimeConfig) error {
 	for key, level := range cfg.AccessGroups {
 		if !ValidAccessGroupKey(key) || level > access.LevelWrite {
 			return errors.New("invalid configured access group")
+		}
+	}
+	if cfg.CacheEnabled {
+		if err := cfg.CacheStore.Validate(); err != nil {
+			return fmt.Errorf("invalid core cache configuration: %w", err)
+		}
+		if err := cfg.Warmup.Validate(); err != nil {
+			return fmt.Errorf("invalid core cache warm-up configuration: %w", err)
+		}
+	}
+	if cfg.StorageConcurrency.Enabled {
+		limits := cfg.StorageConcurrency
+		if limits.MaxConcurrentReads <= 0 || limits.MaxConcurrentAuthorizations <= 0 || limits.OperationTimeout <= 0 {
+			return errors.New("invalid core storage concurrency configuration")
+		}
+		if int64(limits.MaxConcurrentReads) > int64(cfg.Database.MaxConnections) || int64(limits.MaxConcurrentAuthorizations) > int64(cfg.Database.MaxConnections) {
+			return errors.New("core storage concurrency exceeds the database connection budget")
 		}
 	}
 	return nil
@@ -343,7 +430,7 @@ func (r *Runtime) CloseContext(ctx context.Context) error {
 	}
 	if r.cancel != nil {
 		r.cancel()
-		for _, done := range []<-chan struct{}{r.done, r.notifyDone} {
+		for _, done := range []<-chan struct{}{r.done, r.notifyDone, r.refreshDone} {
 			if done == nil {
 				continue
 			}

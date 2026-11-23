@@ -238,6 +238,59 @@ func (o *Observer) IncCounter(ctx context.Context, name string, value float64, a
 	o.backend.Counter(ctx, clean, all, value)
 }
 
+// IncCounterExact emits a counter with exactly the supplied attributes. It is
+// reserved for fixed contract series whose label set is defined by SPEC;
+// inherited telemetry identity is not appended.
+func (o *Observer) IncCounterExact(ctx context.Context, name string, value float64, attrs ...Attribute) {
+	if o == nil {
+		return
+	}
+	clean := sanitiseKey(name)
+	if clean == "" {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	all := nonEmpty(attrs)
+	o.metrics.inc(clean, sortedAttributes(all), value)
+	o.backend.Counter(ctx, clean, all, value)
+}
+
+// SetGaugeExact emits a gauge with exactly the supplied attributes.
+func (o *Observer) SetGaugeExact(ctx context.Context, name string, value float64, attrs ...Attribute) {
+	if o == nil {
+		return
+	}
+	clean := sanitiseKey(name)
+	if clean == "" {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	all := nonEmpty(attrs)
+	o.metrics.setGauge(clean, sortedAttributes(all), value)
+	o.backend.Gauge(ctx, clean, all, value)
+}
+
+// ObserveHistogramExact emits a histogram with exactly the supplied attributes.
+func (o *Observer) ObserveHistogramExact(ctx context.Context, name string, value float64, attrs ...Attribute) {
+	if o == nil {
+		return
+	}
+	clean := sanitiseKey(name)
+	if clean == "" {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	all := nonEmpty(attrs)
+	o.metrics.observe(clean, sortedAttributes(all), value)
+	o.backend.Histogram(ctx, clean, all, value)
+}
+
 // ObserveHistogram records a duration or size observation in both sinks.
 func (o *Observer) ObserveHistogram(ctx context.Context, name string, value float64, attrs ...Attribute) {
 	if o == nil {

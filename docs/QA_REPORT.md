@@ -1,5 +1,16 @@
 # QA-отчёт
 
+## Core-cache / concurrency / security wave (2026-11-24, текущий checkout)
+
+Проверяемое состояние: ветка `readiness-20261123`, HEAD `3e920f7` с незакоммиченными правками этой волны. Результаты ниже относятся только к этому рабочему дереву; чистый checkout итогового коммита и полный `run-release-checks.sh --with-e2e` ещё не выполнялись.
+
+- Статические проверки: `git diff --check`, `gofmt`, `make lint-core-boundary` (`Architecture boundaries OK ... across 20 repository-local Go modules`), `make vet`, `make test`, `make test-full`, `make test-router`, `make build`, `make build-full`, `make build-router`, а также `go test/vet/build ./...` из `core/` и `presentation/router/` завершились exit 0. Логи: `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-final-wave-checks.log`, `zubrium-modules-final.log`.
+- `./tests/qa/run-core-cache-red.sh all` — exit 0, ровно 34 строки `--- PASS: TestCoreCacheScenarios/...`; log `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-core-cache-final.log`. Сценарии `CACHE-001..005`, `CACHE-010..011`, `CONC-005..007` исполнены с `-race`.
+- `./tests/qa/run-conc-limits-red.sh all` — exit 0; `CONC-002` и `CONC-010` (точные label sets), `CONC-012` (router topology), новый `CONC-004` (fail-fast DB budget) дали PASS; `CONC-008` явно выведен как BLOCKED до class-scoped claim. Log `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-conc-limits-final.log`.
+- Сводный прогон `python3 tests/qa/run-test-suite.py run --report output/test-report-all-ledgers-core5.json`: `82 pass, 0 fail, 0 blocked` gates; `67 pass, 0 fail, 0 not_run, 14 blocked`, coverage `67/67 executable = 100.00%`. Отчёт сохраняет все blocked-сценарии: `OBS-006/008`, `CACHE-009`, `CONTENT-005`, `FORMS-005`, `LOADER-005`, `CONC-008`, `CORE-001`, `WEB-012/018-022`, `E2E-PUB-001`, `E2E-RET-001`, `UI-POL-011`.
+- Production wiring проверен regression-тестами: `TestStorageConcurrencyLimitsRejectBeforeRepositoryCall` (отказ до repository call), `TestResolveMapsCoreCacheAndStorageConcurrencyContracts` (все bounds доходят до RuntimeConfig), `TestComponentRegistrationWiresObserversIntoCoreAndLoader` (один deployed observer, без скрытого fallback), `TestConcurrencyBudgetScenario/CONC-004`.
+- Ограничения сохранены: sources `published_artifacts` пока не выводит file ID из Router artifacts; отдельные worker pools не активированы; LISTEN/reconnect, pg_notify и epoch/revision на реальной PostgreSQL, а также браузерный QA на текущем HEAD не прогонялись. Эти пункты не считаются `verified`.
+
 ## Полный release sweep (2026-11-23, финальная волна)
 
 - Полная команда: `bash tests/qa/run-release-checks.sh --integration-env /var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/website-qa-release-final-20261123-c.env --with-e2e --report-prefix output/test-report-release-final-20261123-c`. Использован свежий disposable стек PostgreSQL/S3 `release-final-20261123-c`; команда завершилась успешно, лог заканчивается `release checks completed successfully` (`output/release-final-20261123-c.log`). Проверяемый HEAD — `2409d92ea62c9db47dc771c115e62a9f24a7c627` с незакоммиченными правками этой волны.
@@ -8,7 +19,7 @@
 - Интеграционный отчёт `output/test-report-release-final-20261123-c-integration.json`: `2 pass, 0 fail, 0 blocked` gates; `32 pass, 0 fail, 0 not_run, 0 blocked`, coverage `32/32 executable = 100.00%`. Реально исполнены `WEB-012`, `WEB-018`, `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022`, `CORE-001` на disposable PostgreSQL/S3, без `t.Skip`.
 - Живой E2E внутри полного sweep: run `e2e-20261123T160114Z-82a196`, evidence `output/e2e/e2e-20261123T160114Z-82a196/`. `verify-target.log` подтвердил отдельный checkout того же HEAD, отсутствие слушателей на рабочих портах и принадлежность admin/public listener'ов этому checkout. В `playwright.log` получены точные строки `PASS E2E-PUB-001` и `PASS E2E-RET-001`, без `FAIL`; Bootstrap secret в логи не попал.
 - Ранее в этой же волне отдельный live run `e2e-20261123T155637Z-b63f32` также дал обе точные PASS-строки. Исправления, которые это обеспечили: Content publish теперь запускает trusted `contracts.PublicationPublishOperation` через composition; Retirement client строится из dispatcher до старта Admin listener; `GET /api/admin/pages/{pageID}` выставляет `ETag` и это отражено в OpenAPI; E2E runner создаёт server-owned retirement bindings; сценарий retirement проверяет удалённый route target как корректный исход CAS-withdrawal и сохраняющиеся извлечённые файлы feature version (исходный ZIP удаляется import workflow после проверки результата).
-- Ограничение: успешный release sweep подтверждает исполняемые сценарии в ledger; он не заменяет нереализованные/неисполняемые требования `SPEC-caching.md` и `SPEC-concurrency.md` (`CACHE-001..012`, `CONC-001..012`) и не снимает остальные незавершённые пункты плана.
+- Ограничение исторического sweep: он подтверждал исполняемые Website/Core/E2E сценарии того checkout, но не заменял требования `SPEC-caching.md` и `SPEC-concurrency.md`. Текущее состояние этих требований — в разделе выше; blocked-сценарии остаются blocked.
 
 ## DataBus/Core isolation slice (2026-11-23, исторический проход)
 

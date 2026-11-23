@@ -179,12 +179,12 @@ func TestConcurrencyLimitsScenario(t *testing.T) {
 			if got := routeAdmissionRejections(t, observer); got != 1 {
 				t.Fatalf("rejected{PER_ROUTE} = %v, want 1", got)
 			}
-			if got := admissionMetricValue(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP",pool="public-router"`); got != 0 {
+			if got := admissionMetricValue(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP"`); got != 0 {
 				t.Fatalf("HTTP in-flight after release = %v, want 0", got)
 			}
 			for _, metricLine := range []string{
-				admissionMetricLine(t, observer, "zubrium_concurrency_rejected_total", `scope="HTTP",pool="public-router",reason="PER_ROUTE"`),
-				admissionMetricLine(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP",pool="public-router"`),
+				admissionMetricLine(t, observer, "zubrium_concurrency_rejected_total", `scope="HTTP",reason="PER_ROUTE"`),
+				admissionMetricLine(t, observer, "zubrium_concurrency_in_flight", `scope="HTTP"`),
 			} {
 				lowered := strings.ToLower(metricLine)
 				for _, forbidden := range []string{"route_id", "route-id", "routeid", "path=", "url=", "principal", "operation_id", "operation-id"} {

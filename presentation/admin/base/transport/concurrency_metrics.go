@@ -52,12 +52,11 @@ func publishConcurrencyContract(observer *observability.Observer, pool string) {
 	httpContext := observer.WithIdentity(context.Background(), observability.Identity{
 		ModuleKind: observability.ModuleKindPresentation, ModuleID: pool, ComponentID: "http-server",
 	})
-	observer.SetGauge(httpContext, "zubrium_concurrency_in_flight", 0,
-		observability.String("scope", "HTTP"), observability.String("pool", pool))
+	observer.SetGaugeExact(httpContext, "zubrium_concurrency_in_flight", 0,
+		observability.String("scope", "HTTP"))
 	for _, reason := range concurrencyReasons {
-		observer.IncCounter(httpContext, "zubrium_concurrency_rejected_total", 0,
-			observability.String("scope", "HTTP"), observability.String("pool", pool),
-			observability.String("reason", reason))
+		observer.IncCounterExact(httpContext, "zubrium_concurrency_rejected_total", 0,
+			observability.String("scope", "HTTP"), observability.String("reason", reason))
 	}
 
 	busContext := observer.WithIdentity(context.Background(), observability.Identity{
@@ -80,12 +79,12 @@ func publishConcurrencyContract(observer *observability.Observer, pool string) {
 	})
 	for _, cache := range coalesceCaches {
 		for _, result := range coalesceResults {
-			observer.IncCounter(cacheContext, "zubrium_cache_coalesced_total", 0,
+			observer.IncCounterExact(cacheContext, "zubrium_cache_coalesced_total", 0,
 				observability.String("cache", cache), observability.String("result", result))
 		}
 	}
 	for _, result := range batchResults {
-		observer.IncCounter(cacheContext, "zubrium_cache_invalidation_batch_total", 0,
+		observer.IncCounterExact(cacheContext, "zubrium_cache_invalidation_batch_total", 0,
 			observability.String("result", result))
 	}
 
@@ -93,20 +92,20 @@ func publishConcurrencyContract(observer *observability.Observer, pool string) {
 		ModuleKind: observability.ModuleKindWorker, ModuleID: "worker-pools", ComponentID: "task-executor",
 	})
 	for _, poolName := range workerPools {
-		observer.SetGauge(workerContext, "zubrium_worker_pool_active", 0,
+		observer.SetGaugeExact(workerContext, "zubrium_worker_pool_active", 0,
 			observability.String("pool", poolName))
 		for _, outcome := range workerOutcomes {
-			observer.IncCounter(workerContext, "zubrium_worker_pool_tasks_total", 0,
+			observer.IncCounterExact(workerContext, "zubrium_worker_pool_tasks_total", 0,
 				observability.String("pool", poolName), observability.String("outcome", outcome))
 		}
 	}
-	observer.SetGauge(context.Background(), "zubrium_db_pool_usage", 0)
+	observer.SetGaugeExact(context.Background(), "zubrium_db_pool_usage", 0)
 }
 
 func publishScope(observer *observability.Observer, ctx context.Context, scope string) {
-	observer.SetGauge(ctx, "zubrium_concurrency_in_flight", 0, observability.String("scope", scope))
+	observer.SetGaugeExact(ctx, "zubrium_concurrency_in_flight", 0, observability.String("scope", scope))
 	for _, reason := range concurrencyReasons {
-		observer.IncCounter(ctx, "zubrium_concurrency_rejected_total", 0,
+		observer.IncCounterExact(ctx, "zubrium_concurrency_rejected_total", 0,
 			observability.String("scope", scope), observability.String("reason", reason))
 	}
 }

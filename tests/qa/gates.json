@@ -47,6 +47,12 @@
       "cwd": "."
     },
     {
+      "id": "core-cache-ledger",
+      "label": "Core cache and cache/concurrency scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/core-cache-scenarios.json"],
+      "cwd": "."
+    },
+    {
       "id": "content-ledger",
       "label": "Content scenario ledger validation",
       "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/content-scenarios.json"],
@@ -86,6 +92,12 @@
       "id": "conc-limits-scenarios",
       "label": "Concurrency limits, metrics and topology executable scenarios",
       "command": ["tests/qa/run-conc-limits-red.sh", "all"],
+      "cwd": "."
+    },
+    {
+      "id": "core-cache-scenarios",
+      "label": "Core cache and cache/concurrency executable scenarios (unit and race)",
+      "command": ["tests/qa/run-core-cache-red.sh", "all"],
       "cwd": "."
     },
     {

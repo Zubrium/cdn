@@ -917,6 +917,57 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			return Resolved{}, errors.New("configured bootstrap secret is empty")
 		}
 	}
+	accessTTL, err := time.ParseDuration(c.Core.Cache.AccessCache.TTL)
+	if err != nil {
+		return Resolved{}, fmt.Errorf("invalid core.cache.access_cache.ttl: %w", err)
+	}
+	warmupKeys := make([]platform.CacheKey, 0, len(c.Core.Cache.Warmup.Keys))
+	for _, key := range c.Core.Cache.Warmup.Keys {
+		entry := platform.CacheKey{FileID: key.FileID, Tier: platform.CacheTier(strings.ToUpper(key.Tier))}
+		for _, principalID := range key.Authorization.Principals {
+			for _, action := range key.Authorization.Actions {
+				entry.Authorizations = append(entry.Authorizations, platform.CachePrincipalAction{PrincipalID: principalID, Action: action})
+			}
+		}
+		warmupKeys = append(warmupKeys, entry)
+	}
+	warmup := c.Core.Cache.Warmup
+	coreCacheStore := platform.CacheStoreConfig{
+		BytesMaxBytes:           int(c.Core.Cache.MaxBytes),
+		MetadataMaxBytes:        int(c.Core.Cache.MaxBytes),
+		MaxObjectBytes:          int(c.Core.Cache.MaxObjectBytes),
+		BytesTTL:                parsed[5],
+		MetadataTTL:             parsed[5],
+		Shards:                  scales.CoreConcurrency.Cache.Shards,
+		PromotionInterval:       scales.CoreConcurrency.Cache.LRUPromotionInterval,
+		CoalesceEnabled:         scales.CoreConcurrency.Cache.Coalesce.Enabled,
+		CoalesceMaxWaiters:      scales.CoreConcurrency.Cache.Coalesce.MaxWaiters,
+		CoalesceTimeout:         scales.WarmupTimeouts.CoalesceTimeout,
+		AccessMaxEntries:        c.Core.Cache.AccessCache.MaxEntries,
+		AccessMaxBytes:          int(c.Core.Cache.AccessCache.MaxBytes),
+		AccessTTL:               accessTTL,
+		InvalidationBatchSize:   scales.CoreConcurrency.Invalidation.BatchSize,
+		InvalidationBatchWindow: scales.WarmupTimeouts.BatchWindow,
+	}
+	coreWarmup := platform.CacheConfig{
+		Enabled:         warmup.Enabled && warmup.Mode != "off",
+		Mode:            platform.CacheMode(warmup.Mode),
+		Timeout:         scales.WarmupTimeouts.Timeout,
+		PerKeyTimeout:   scales.WarmupTimeouts.PerKeyTimeout,
+		RefreshInterval: scales.WarmupTimeouts.RefreshInterval,
+		Concurrency:     warmup.Concurrency,
+		MaxKeys:         warmup.MaxKeys,
+		Retry:           platform.CacheRetry{Attempts: warmup.Retry.Attempts, Backoff: scales.WarmupTimeouts.Backoff},
+		Sources: platform.CacheSources{
+			Inline: warmup.Sources.Inline, PublishedArtifacts: warmup.Sources.PublishedArtifacts,
+		},
+		Targets: platform.CacheTargets{
+			Authorization: warmup.Targets.Authorization, Metadata: warmup.Targets.Metadata,
+			Bytes: warmup.Targets.Bytes, RouterManifests: warmup.Targets.RouterManifests,
+			RouterRoutes: warmup.Targets.RouterRoutes,
+		},
+		Keys: warmupKeys,
+	}
 	coreConfig := platform.RuntimeConfig{
 		Database:             platform.DatabaseConfig{URL: dbURL, MinConnections: c.Core.MinConnections, MaxConnections: c.Core.MaxConnections, ConnectTimeout: parsed[0], MaxLifetime: parsed[1], MaxIdleTime: parsed[2], HealthInterval: parsed[3]},
 		MigrationDatabaseURL: migrationDBURL,
@@ -928,8 +979,16 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		CoalesceEnabled: scales.CoreConcurrency.Cache.Coalesce.Enabled, CoalesceMaxWaiters: scales.CoreConcurrency.Cache.Coalesce.MaxWaiters,
 		CoalesceTimeout: resolvedScalesTimeout(scales, "coalesce"), InvalidationBatchSize: scales.CoreConcurrency.Invalidation.BatchSize,
 		InvalidationBatchWindow: resolvedScalesTimeout(scales, "invalidation"),
-		ModuleData:              moduleDataLimits,
-		MaintenanceInterval:     parsed[6], MaintenanceTimeout: parsed[7], PendingTTL: parsed[8], MaintenanceBatchSize: c.Core.MaintenanceBatchSize,
+		CacheEnabled:            true,
+		CacheStore:              coreCacheStore,
+		Warmup:                  coreWarmup,
+		StorageConcurrency: platform.StorageConcurrencyRuntime{
+			Enabled: true, MaxConcurrentReads: scales.CoreConcurrency.Storage.MaxConcurrentReads,
+			MaxConcurrentAuthorizations: scales.CoreConcurrency.Storage.MaxConcurrentAuthorizations,
+			OperationTimeout:            scales.WarmupTimeouts.OperationTimeout,
+		},
+		ModuleData:          moduleDataLimits,
+		MaintenanceInterval: parsed[6], MaintenanceTimeout: parsed[7], PendingTTL: parsed[8], MaintenanceBatchSize: c.Core.MaintenanceBatchSize,
 		SessionIdleTTL: parsed[9], SessionAbsoluteTTL: parsed[10],
 	}
 	loaderConfig := loaderapp.Config{PartSize: c.Loader.PartSize, MaxFileBytes: c.Loader.MaxFileBytes, MaxPartBytes: c.Loader.MaxPartBytes, MaxParts: c.Loader.MaxParts,

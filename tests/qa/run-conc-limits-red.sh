@@ -3,7 +3,7 @@
 set -u
 
 usage() {
-	printf '%s\n' "usage: $0 {unit|contract|all}" >&2
+	printf '%s\n' "usage: $0 {unit|contract|e2e|all}" >&2
 }
 
 if [ "$#" -ne 1 ]; then
@@ -13,7 +13,7 @@ fi
 
 selector=$1
 case "$selector" in
-	unit|contract|all) ;;
+	unit|contract|e2e|all) ;;
 	*)
 		usage
 		exit 64
@@ -38,6 +38,9 @@ python3 "$checker" "$ledger" || exit $?
 
 module_and_package() {
 	case "$1" in
+		tests/go/main/internal/config/*)
+			printf '%s\n' "main|./internal/config"
+			;;
 		tests/go/main/internal/bus/*)
 			printf '%s\n' "main|./internal/bus"
 			;;
@@ -105,16 +108,48 @@ run_target() {
 	fi
 }
 
+blocked_scenario_text() {
+	python3 - "$ledger" <<'PY'
+import json
+import sys
+
+ledger = json.load(open(sys.argv[1], encoding="utf-8"))
+for scenario in ledger["scenarios"]:
+    if scenario.get("coverage_status") == "blocked" or scenario.get("execution_status") == "blocked":
+        print(f"{scenario['id']}: {scenario['blocker']}")
+PY
+}
+
+run_e2e() {
+	printf '%s\n' "==> class-pool e2e scenarios are BLOCKED"
+	blocked_scenario_text
+}
+
 status=0
-python3 "$checker" --test-targets unit "$ledger" > "$work_dir/unit-targets" || exit $?
-python3 "$checker" --test-targets contract "$ledger" > "$work_dir/contract-targets" || exit $?
-while IFS='|' read -r test_file test_symbol; do
-	[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
-	run_target "$test_file" "$test_symbol" unit || status=1
-done < "$work_dir/unit-targets"
-while IFS='|' read -r test_file test_symbol; do
-	[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
-	run_target "$test_file" "$test_symbol" contract || status=1
-done < "$work_dir/contract-targets"
+case "$selector" in
+	e2e)
+		run_e2e || status=1
+		;;
+	unit|contract)
+		python3 "$checker" --test-targets "$selector" "$ledger" > "$work_dir/$selector-targets" || exit $?
+		while IFS='|' read -r test_file test_symbol; do
+			[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
+			run_target "$test_file" "$test_symbol" "$selector" || status=1
+		done < "$work_dir/$selector-targets"
+		;;
+	all)
+		python3 "$checker" --test-targets unit "$ledger" > "$work_dir/unit-targets" || exit $?
+		python3 "$checker" --test-targets contract "$ledger" > "$work_dir/contract-targets" || exit $?
+		while IFS='|' read -r test_file test_symbol; do
+			[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
+			run_target "$test_file" "$test_symbol" unit || status=1
+		done < "$work_dir/unit-targets"
+		while IFS='|' read -r test_file test_symbol; do
+			[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
+			run_target "$test_file" "$test_symbol" contract || status=1
+		done < "$work_dir/contract-targets"
+		run_e2e || status=1
+		;;
+esac
 
 exit "$status"

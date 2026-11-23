@@ -75,6 +75,12 @@ func BootstrapWithGroups(ctx context.Context, pool *pgxpool.Pool, configuredSecr
 		if _, err = tx.Exec(ctx, `INSERT INTO access.credentials(id,user_id,secret_hash) VALUES($1,$2,$3)`, credentialID, bootstrapID, identity.HashSecret(secret)); err != nil {
 			return "", false, fmt.Errorf("create bootstrap credential: %w", err)
 		}
+		if err := bumpAccessEpoch(ctx, tx, bootstrapID); err != nil {
+			return "", false, fmt.Errorf("bump access epoch for bootstrap: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
+			return "", false, fmt.Errorf("notify bootstrap creation: %w", err)
+		}
 	}
 	if groups != nil {
 		if err := reconcileAccessGroupsTx(ctx, tx, groups, bootstrapID); err != nil {

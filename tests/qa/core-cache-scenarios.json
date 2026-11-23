@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "CACHE-001",
+      "source": "spec/architecture/SPEC-caching.md §2-4, §8; tests/ACCEPTANCE-MATRIX.md CACHE-001",
+      "level": "unit",
+      "preconditions": [
+        "Core cache store uses explicit byte, entry, TTL, shard and coalescing bounds.",
+        "Warm-up runner receives only explicit inline keys and verified Core sources."
+      ],
+      "input": "Strict warm-up with one required file key and authorization, metadata and byte targets enabled.",
+      "action": "Run the bounded pipeline, read cached authorization and bytes, inspect cache metrics.",
+      "expected_result": "Readiness is reached; all Core targets are populated; cache hit metrics and warm-up counters/histogram are emitted.",
+      "expected_state": "No authorizer call is repeated on a fresh cache hit after warm-up.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-002",
+      "source": "spec/architecture/SPEC-caching.md §3; tests/ACCEPTANCE-MATRIX.md CACHE-002",
+      "level": "unit",
+      "preconditions": [
+        "Required and optional warm-up keys are distinguished explicitly.",
+        "Authoritative source can return a permanent error."
+      ],
+      "input": "Required key fails; separately, an optional key fails.",
+      "action": "Run strict warm-up for both configurations and inspect readiness and warm-up metrics.",
+      "expected_result": "Required failure blocks readiness with an error; optional failure keeps readiness and increments result=FAILED for tier OPTIONAL.",
+      "expected_state": "Failure attribution uses only cache and tier labels.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-002",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-003",
+      "source": "spec/architecture/SPEC-caching.md §3, §8; tests/ACCEPTANCE-MATRIX.md CACHE-003",
+      "level": "unit",
+      "preconditions": [
+        "Every timeout, concurrency, retry and cache bound is supplied explicitly.",
+        "More keys than max_keys are configured."
+      ],
+      "input": "Omit or invalidate each bound; run a six-key configuration with max_keys=3; force a per-key timeout and transient/permanent source errors.",
+      "action": "Validate configuration, run the pipeline, measure maximum authorizer concurrency and retry counts.",
+      "expected_result": "Invalid config is rejected before start; keys are deterministically trimmed; concurrency never exceeds 2; timeouts are enforced; only transient errors retry.",
+      "expected_state": "No hidden defaults substitute missing values.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-003",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-004",
+      "source": "spec/architecture/SPEC-caching.md §4; spec/architecture/SPEC-core-architecture.md access grants; tests/ACCEPTANCE-MATRIX.md CACHE-004",
+      "level": "unit",
+      "preconditions": [
+        "Access epoch and file revision are exposed by the internal Core epoch source.",
+        "PostgreSQL mutations bump access_epoch and notify invalidation in one transaction."
+      ],
+      "input": "A warmed authorization is followed by an epoch bump, revoked grant, and an epoch-source outage.",
+      "action": "Attempt repeated authorized reads and statically verify access-epoch mutation order in Core adapters and migration.",
+      "expected_result": "Stale authorization is never reused; a fresh authoritative check occurs; an unavailable epoch source fails closed.",
+      "expected_state": "Public credential-bound session contract is unchanged.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-004",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-005",
+      "source": "spec/architecture/SPEC-caching.md §4; tests/ACCEPTANCE-MATRIX.md CACHE-005",
+      "level": "unit",
+      "preconditions": [
+        "Warmed byte, metadata and authorization entries exist for one file.",
+        "Targeted notification and reconnect paths are available."
+      ],
+      "input": "Targeted invalidation, revision change, and reconnect after a missed notification.",
+      "action": "Invalidate through Store.Notify/NotifyBatch and Store.OnReconnect, then read bytes and metadata.",
+      "expected_result": "Targeted invalidation removes exact keys; revision mismatch prevents stale bytes; reconnect clears all caches.",
+      "expected_state": "Invalidation emits bounded, low-cardinality cache metrics.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-005",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-010",
+      "source": "spec/architecture/SPEC-caching.md §8; spec/observability/SPEC-observability.md §4; tests/ACCEPTANCE-MATRIX.md CACHE-010",
+      "level": "unit",
+      "preconditions": [
+        "Observer captures the local Prometheus-compatible metric snapshot.",
+        "Cache and warm-up operations have run."
+      ],
+      "input": "GET /metrics from the observer after warm-up and invalidation.",
+      "action": "Verify required cache metric families and audit every cache label set.",
+      "expected_result": "All cache metric families are present; labels stay in the allowed low-cardinality vocabulary; no file ID, principal ID, URL, query or locale is exposed.",
+      "expected_state": "Metrics endpoint remains no-store via the shared observer handler.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-010",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CACHE-011",
+      "source": "spec/architecture/SPEC-caching.md §3; tests/ACCEPTANCE-MATRIX.md CACHE-011",
+      "level": "unit",
+      "preconditions": [
+        "Refresh interval, total timeout, per-key timeout and max_keys are explicit.",
+        "Authorization entries expire between cycles so repeated work is observable."
+      ],
+      "input": "Run an initial cycle, then a 120 ms refresh loop over three keys with concurrency=1.",
+      "action": "Count authoritative calls and maximum in-flight work; inspect cache inventory.",
+      "expected_result": "Cycles repeat without overlap, cache entries do not grow beyond max_keys, and context cancellation ends the loop cleanly.",
+      "expected_state": "Warm-up metrics accumulate across cycles without duplicate counters.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CACHE-011",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-005",
+      "source": "spec/architecture/SPEC-concurrency.md §6; tests/ACCEPTANCE-MATRIX.md CONC-005",
+      "level": "unit",
+      "preconditions": [
+        "Coalescing is enabled with explicit max_waiters and timeout.",
+        "One cold authorization key is requested concurrently."
+      ],
+      "input": "Eight concurrent authorization misses; separately, a leader whose source returns an error.",
+      "action": "Hold the leader until waiters join, release it, and inspect results and coalescing metrics.",
+      "expected_result": "One leader load serves all waiters; each waiter is counted once; a leader error is shared and no stale value is cached.",
+      "expected_state": "Coalescing counters are published exactly once through a monotonic cursor.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CONC-005",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-006",
+      "source": "spec/architecture/SPEC-concurrency.md §6; tests/ACCEPTANCE-MATRIX.md CONC-006",
+      "level": "unit",
+      "preconditions": [
+        "A byte-cache entry has been warmed through the verified metadata path.",
+        "View.Intact exists to detect illegal buffer mutation."
+      ],
+      "input": "Two consecutive cache hits, followed by an intentional mutation of the exposed byte slice.",
+      "action": "Compare buffer identity and check Intact before and after mutation; run the scenario with -race.",
+      "expected_result": "A hit returns the same buffer without allocating a copy; mutation is detected by the integrity digest.",
+      "expected_state": "Public HTTP/cache contract is unchanged; no mutation guard is disabled.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CONC-006",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-007",
+      "source": "spec/architecture/SPEC-concurrency.md §7; tests/ACCEPTANCE-MATRIX.md CONC-007",
+      "level": "unit",
+      "preconditions": [
+        "Invalidation batch size and window are explicit.",
+        "Warmed byte, metadata and authorization entries exist."
+      ],
+      "input": "A notification batch within the size bound and a batch exceeding the bound.",
+      "action": "Apply both batches through Store.NotifyBatch and inspect inventory and batch metrics.",
+      "expected_result": "Within-bound notifications invalidate exact keys; overflow clears every cache and increments result=OVERFLOW.",
+      "expected_state": "No stale entry survives overflow; reconnect and targeted paths remain distinct.",
+      "test_file": "tests/go/core/infrastructure/cache/core_cache_scenarios_test.go",
+      "test_symbol": "TestCoreCacheScenarios/CONC-007",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    }
+  ]
+}
