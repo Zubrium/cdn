@@ -77,6 +77,9 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 		return err
 	}
 	component.engine, component.projections, component.serviceCtx, component.cancel = engine, provider, serviceCtx, cancel
+	if component.core != nil {
+		component.core.contentHandle.Store(component)
+	}
 	return nil
 }
 

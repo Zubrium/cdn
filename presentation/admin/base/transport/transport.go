@@ -11,6 +11,7 @@ import (
 	"time"
 
 	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content/presentation"
 	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
@@ -64,11 +65,14 @@ type AdminConfig struct {
 }
 
 type AdminDependencies struct {
-	Core             *core.Runtime
-	Files            fileapi.Loader
-	WorkflowControl  coordinatoradmin.WorkflowControl
-	Website          websiteengine.API
-	Retirement       sitesapi.PageRetirementAPI
+	Core                 *core.Runtime
+	Files                fileapi.Loader
+	WorkflowControl      coordinatoradmin.WorkflowControl
+	Website              websiteengine.API
+	Retirement           sitesapi.PageRetirementAPI
+	SnapshotForkWorkflow interface {
+		Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
+	}
 	Content          contentengine.API
 	ContentSchemas   contentadmin.SchemaSnapshots
 	Forms            formsengine.API
@@ -202,7 +206,7 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		handler, err := sitesapi.NewHandler(s.deps.Website, sitesapi.Config{
 			MaxJSONBytes: s.config.MaxJSONBytes, DefaultPageSize: s.config.DefaultPageSize,
 			MaxPageSize: s.config.MaxPageSize, AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-			Retirement: s.deps.Retirement,
+			Retirement: s.deps.Retirement, SnapshotForkWorkflow: s.deps.SnapshotForkWorkflow,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("initialize Website API: %w", err)

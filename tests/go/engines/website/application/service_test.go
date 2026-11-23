@@ -36,7 +36,7 @@ func TestBuildRejectsProvisioningSnapshot(t *testing.T) {
 	}
 }
 
-func TestMarkSnapshotReadyFailsClosedWithoutForkWorkflow(t *testing.T) {
+func TestMarkSnapshotReadyFinalizesProvisioningChild(t *testing.T) {
 	store := newMemoryStore()
 	rootID := "66666666-6666-4666-8666-666666666666"
 	putSnapshot(t, store, rootID, 1)
@@ -48,20 +48,26 @@ func TestMarkSnapshotReadyFailsClosedWithoutForkWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = service.MarkSnapshotReady(ctx, snapshotA, 3)
-	if !errors.Is(err, websiteapi.ErrUnavailable) {
-		t.Fatalf("finalization without a durable fork workflow = %v, want unavailable", err)
+	snapshot, err := service.MarkSnapshotReady(ctx, snapshotA, 3)
+	if err != nil {
+		t.Fatalf("MarkSnapshotReady: %v", err)
 	}
-	stored := store.records[snapshotRecordKey(snapshotA)]
-	if stored.Revision != 3 {
-		t.Fatalf("fail-closed finalization changed revision to %d, want 3", stored.Revision)
+	if snapshot.State != "ready" || snapshot.Revision != 4 {
+		t.Fatalf("snapshot = %#v, want ready revision 4", snapshot)
 	}
-	snapshot, err := service.GetSnapshot(ctx, snapshotA)
+	stored, err := service.GetSnapshot(ctx, snapshotA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.State != "provisioning" {
-		t.Fatalf("snapshot state = %q, want provisioning until fork completion", snapshot.State)
+	if stored.State != "ready" || stored.Revision != 4 {
+		t.Fatalf("stored snapshot = %#v", stored)
+	}
+	replayed, err := service.MarkSnapshotReady(ctx, snapshotA, 3)
+	if err != nil {
+		t.Fatalf("idempotent MarkSnapshotReady: %v", err)
+	}
+	if replayed.State != "ready" || replayed.Revision != 4 {
+		t.Fatalf("replayed = %#v, want ready revision 4", replayed)
 	}
 }
 
@@ -516,15 +522,12 @@ func TestCreatePageRootAndSnapshotChildUseSequenceAndLifecycle(t *testing.T) {
 	if _, exists := config["dataModel"]; exists {
 		t.Fatalf("child page snapshot contains global dataModel: %s", child.Payload.Config)
 	}
-	if _, err := service.MarkSnapshotReady(ctx, child.ID, child.Revision); !errors.Is(err, websiteapi.ErrUnavailable) {
-		t.Fatalf("child finalization without a durable fork workflow = %v, want unavailable", err)
-	}
-	stored, err := service.GetSnapshot(ctx, child.ID)
+	ready, err := service.MarkSnapshotReady(ctx, child.ID, child.Revision)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("MarkSnapshotReady: %v", err)
 	}
-	if stored.State != "provisioning" || stored.Revision != child.Revision {
-		t.Fatalf("child snapshot changed without fork completion: %#v", stored)
+	if ready.State != "ready" || ready.Revision != child.Revision+1 {
+		t.Fatalf("ready child = %#v", ready)
 	}
 }
 

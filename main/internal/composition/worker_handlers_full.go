@@ -69,6 +69,11 @@ func registerWorkerHandlers(registry *core.RuntimeRegistry, selected map[string]
 			websiteworkflow.OperationID + "/v1":      handler.WorkerHandler,
 			websiteworkflow.MediaOperationID + "/v1": handler.MediaWorkerHandler,
 		}
+		forkHandler, err := websiteworkflow.NewForkHandler(snapshotForkContentCopierHandle{component: component}, snapshotForkWebsiteFinalizerHandle{component: component}, config.Coordinator.MaxAttempts)
+		if err != nil {
+			return err
+		}
+		workflowHandlers[websiteworkflow.ForkOperationID+"/v1"] = forkHandler.WorkerHandler
 		if err := registry.RegisterWorkerHandlers(websiteworkflow.ComponentID, observedWorkerHandlers(observer, websiteworkflow.ComponentID, workflowHandlers)); err != nil {
 			return err
 		}

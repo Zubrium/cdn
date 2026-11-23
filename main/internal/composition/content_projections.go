@@ -40,6 +40,10 @@ func (provider *contentProjectionProvider) GetContentProjections(ctx context.Con
 }
 
 func (provider *contentProjectionProvider) GetContentProjectionsForLocale(ctx context.Context, pageSnapshotID, locale string) (contentapi.Projections, error) {
+	return provider.getContentProjectionsForLocaleAllowState(ctx, pageSnapshotID, locale, false)
+}
+
+func (provider *contentProjectionProvider) getContentProjectionsForLocaleAllowState(ctx context.Context, pageSnapshotID, locale string, allowProvisioning bool) (contentapi.Projections, error) {
 	if provider == nil || provider.website == nil || provider.ctx == nil || ctx == nil || locale == "" {
 		return contentapi.Projections{}, contentapi.ErrUnavailable
 	}
@@ -57,7 +61,7 @@ func (provider *contentProjectionProvider) GetContentProjectionsForLocale(ctx co
 	if err != nil {
 		return contentapi.Projections{}, err
 	}
-	if snapshot.State != "ready" || snapshot.PageID == "" {
+	if snapshot.PageID == "" || (snapshot.State != "ready" && !(allowProvisioning && snapshot.State == "provisioning")) {
 		return contentapi.Projections{}, fmt.Errorf("%w: page snapshot is not ready", contentapi.ErrNotFound)
 	}
 	if err := ctx.Err(); err != nil {
@@ -77,7 +81,7 @@ func (provider *contentProjectionProvider) GetContentProjectionsForLocale(ctx co
 	if err != nil {
 		return contentapi.Projections{}, err
 	}
-	if page.PageSnapshotID != pageSnapshotID || page.PageID != snapshot.PageID || page.State != "ready" {
+	if page.PageSnapshotID != pageSnapshotID || page.PageID != snapshot.PageID || (page.State != "ready" && !(allowProvisioning && page.State == "provisioning")) {
 		return contentapi.Projections{}, fmt.Errorf("%w: page placement projection scope or state", contentapi.ErrNotFound)
 	}
 	placements, err := provider.buildPlacements(ctx, page.Placements, snapshot.FeaturePins)

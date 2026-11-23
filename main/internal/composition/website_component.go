@@ -29,6 +29,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	component.core.websiteHandle.Store(component)
 	data, err := component.core.runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
 	if err != nil {
 		return err

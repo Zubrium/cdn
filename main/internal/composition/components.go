@@ -38,6 +38,8 @@ type coreComponent struct {
 	mediaHandle     atomic.Pointer[media.V2Handler]
 	mediaSandbox    atomic.Pointer[media.DockerSandbox]
 	prerenderHandle atomic.Pointer[prerender.DockerWorker]
+	websiteHandle   atomic.Pointer[websiteEngineComponent]
+	contentHandle   atomic.Pointer[contentEngineComponent]
 }
 
 func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descriptors []platform.ComponentDescriptor) (map[string]platform.AccessLevel, error) {
@@ -437,7 +439,7 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 	adminConfig.Router = routerPresentationConfig(c.config, routerOperations)
 	dependencies := transport.AdminDependencies{
 		Core: c.core.runtime, Files: c.loader.service, WorkflowControl: c.workflowControl,
-		Notifications: c.notifications,
+		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{core: c.core},
 	}
 	if c.retirementEngine != nil {
 		dependencies.Retirement = c.retirementEngine.client

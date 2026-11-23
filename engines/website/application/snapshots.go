@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
 
 const snapshotPageCursorVersion = 1
@@ -87,9 +90,9 @@ func (s *Service) GetSnapshot(ctx context.Context, snapshotID string) (websiteap
 	return snapshot, err
 }
 
-// MarkSnapshotReady remains fail-closed until composition provides the durable
-// child-fork workflow that is responsible for validating and finalizing a child.
-// A revision check alone cannot prove that the fork actually completed.
+// MarkSnapshotReady finalizes a provisioning child snapshot after the durable
+// fork workflow has confirmed content copy. It is idempotent for an already-ready
+// snapshot and refuses stale or non-provisioning transitions.
 func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expectedRevision int64) (websiteapi.Snapshot, error) {
 	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
 		return websiteapi.Snapshot{}, err
@@ -97,7 +100,7 @@ func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expe
 	if expectedRevision < 1 {
 		return websiteapi.Snapshot{}, websiteapi.ErrInvalid
 	}
-	snapshot, _, record, err := s.findSnapshot(ctx, snapshotID)
+	snapshot, key, record, err := s.findSnapshot(ctx, snapshotID)
 	if err != nil {
 		return websiteapi.Snapshot{}, err
 	}
@@ -107,7 +110,56 @@ func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expe
 	if snapshot.State != "provisioning" || snapshot.ParentID == "" || record.Revision != expectedRevision {
 		return websiteapi.Snapshot{}, websiteapi.ErrConflict
 	}
-	return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	if record.Revision == math.MaxInt64 {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	updated := snapshot
+	updated.State = "ready"
+	updated.Revision = record.Revision + 1
+	updated.CreatedAt = snapshot.CreatedAt
+	payload, err := json.Marshal(updated)
+	if err != nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	if len(payload) > s.store.MaxPayloadBytes() {
+		return websiteapi.Snapshot{}, websiteapi.ErrTooLarge
+	}
+	index, err := json.Marshal(map[string]any{
+		"record_type": "snapshot", "snapshot_id": updated.ID, "page_id": updated.PageID, "state": updated.State,
+		"revision": updated.Revision, "parent_id": updated.ParentID,
+	})
+	if err != nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	mutations := []core.ModuleDataMutation{{
+		Key: key, ExpectedRevision: record.Revision,
+		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: 1, IndexData: index},
+	}}
+	pageRecord, pageData, err := s.loadPage(ctx, updated.PageID)
+	if err == nil && pageRecord.LatestSnapshotID == updated.ID && pageRecord.LatestSnapshotState != "ready" {
+		pageRecord.LatestSnapshotState = "ready"
+		pageValue, err := pageModuleDataValue(pageRecord, pageRecord.Revision+1)
+		if err != nil {
+			return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+		}
+		mutations = append(mutations, core.ModuleDataMutation{Key: websiterepo.PageKey(updated.PageID), ExpectedRevision: pageData.Revision, Value: pageValue})
+	} else if err != nil && !errors.Is(err, websiteapi.ErrNotFound) {
+		return websiteapi.Snapshot{}, err
+	}
+	if err := s.store.Batch(ctx, mutations); err != nil {
+		mapped := mapCoreError(err)
+		if errors.Is(mapped, websiteapi.ErrConflict) {
+			current, _, currentRecord, getErr := s.findSnapshot(ctx, snapshotID)
+			if getErr == nil && current.State == "ready" {
+				return current, nil
+			}
+			if getErr == nil && currentRecord.Revision != expectedRevision {
+				return websiteapi.Snapshot{}, websiteapi.ErrConflict
+			}
+		}
+		return websiteapi.Snapshot{}, mapped
+	}
+	return updated, nil
 }
 
 func (s *Service) findSnapshot(ctx context.Context, snapshotID string) (websiteapi.Snapshot, core.ModuleDataKey, core.ModuleDataRecord, error) {
