@@ -106,7 +106,7 @@
       "test_symbol": "TestObsScenario/OBS-006",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Нет живого OTLP Collector и OpenObserve в изолированном стеке: OBS_TEST_OTEL_ENDPOINT и OBS_TEST_OQ_SEARCH_URL не заданы, поэтому три потока сигналов и debug exporter не проверены; подтест честно t.Skip."
+      "blocker": "Изолированный стек поднимается (проверено: OTLP/HTTP :14318 и OpenObserve :15080 доступны, Collector'ом приняты логи/трейсы/метрики), но исполняемый контракт подтеста ожидает один неаутентифицированный GET-поиск с подстановкой {signal}. OpenObserve v1.1.2 требует аутентифицированный POST /api/default/_search с query{sql,start_time,end_time} и отдельные stream'ы для каждой метрики; адаптация test harness к этому API не выполнена. Переменные OBS_TEST_OTEL_ENDPOINT и OBS_TEST_OQ_SEARCH_URL не заданы, поэтому три потока сигналов и debug exporter не проверены; подтест честно t.Skip."
     },
     {
       "id": "OBS-007",
@@ -141,7 +141,7 @@
       "test_symbol": "TestObsScenario/OBS-008",
       "coverage_status": "blocked",
       "execution_status": "blocked",
-      "blocker": "Нет изолированного стека с управляемым отказом и восстановлением OTLP Collector: OBS_TEST_OTEL_ENDPOINT, OBS_TEST_OTEL_FAILURE_ENDPOINT и OBS_TEST_OQ_SEARCH_URL не заданы, поэтому доступность продукта и возобновление экспорта не проверены; подтест честно t.Skip."
+      "blocker": "Изолированный стек Collector+OpenObserve поднимается, но для OBS-008 нужен дополнительно управляемый отказ Collector и совместимый с OpenObserve v1.1.2 поиск (аутентифицированный POST /_search с query{sql,start_time,end_time} и отдельными stream'ами метрик), чего исполняемый контракт подтеста не поддерживает. Переменные OBS_TEST_OTEL_ENDPOINT, OBS_TEST_OTEL_FAILURE_ENDPOINT и OBS_TEST_OQ_SEARCH_URL не заданы, поэтому доступность продукта и возобновление экспорта не проверены; подтест честно t.Skip."
     },
     {
       "id": "OBS-009",
