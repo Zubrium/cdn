@@ -57,9 +57,19 @@ public_port = parse_port(public_arg, "public")
 if admin_port == public_port:
     fail("admin and public ports must differ")
 
-working_ports = (8080, 5173, 55432)
+# The defaults are deployment ports that must never be touched by disposable
+# QA. An operator may explicitly replace the list when a local machine runs a
+# different stack; the override never widens implicitly and is validated like
+# every other port input.
+working_raw = os.environ.get("QA_BROWSER_WORKING_PORTS", "8080,5173,55432")
+working_parts = [part.strip() for part in working_raw.split(",")]
+if not working_parts or any(not part for part in working_parts):
+    fail("QA_BROWSER_WORKING_PORTS must be a comma-separated list of ports")
+working_ports = tuple(parse_port(part, "working") for part in working_parts)
+if len(set(working_ports)) != len(working_ports):
+    fail("QA_BROWSER_WORKING_PORTS contains duplicate ports")
 if admin_port in working_ports or public_port in working_ports:
-    fail("QA ports must not use the working ports 8080, 5173, or 55432")
+    fail("QA ports must not use the configured working ports")
 
 checkout = os.path.realpath(checkout_arg)
 if not os.path.isdir(checkout):
@@ -116,7 +126,7 @@ if busy:
         for port, pids in busy
     )
     fail("working ports are occupied: " + detail)
-ok("working ports 8080, 5173, and 55432 have no listeners")
+ok("working ports %s have no listeners" % ", ".join(str(port) for port in working_ports))
 
 
 def process_command(pid):
