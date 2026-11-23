@@ -5,27 +5,26 @@ import (
 	"errors"
 	"testing"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
 type workflowControlStub struct {
-	listFilter platform.WorkflowListFilter
+	listFilter contracts.AdminWorkflowListFilter
 	getID      uuid.UUID
-	getFilter  platform.WorkflowDetailFilter
+	getFilter  contracts.AdminWorkflowDetailFilter
 	retryPair  [2]uuid.UUID
 	err        error
 }
 
-func (stub *workflowControlStub) List(_ context.Context, filter platform.WorkflowListFilter) (platform.WorkflowPage, error) {
+func (stub *workflowControlStub) List(_ context.Context, filter contracts.AdminWorkflowListFilter) (contracts.AdminWorkflowPage, error) {
 	stub.listFilter = filter
-	return platform.WorkflowPage{}, stub.err
+	return contracts.AdminWorkflowPage{}, stub.err
 }
 
-func (stub *workflowControlStub) Get(_ context.Context, id uuid.UUID, filter platform.WorkflowDetailFilter) (platform.WorkflowDetail, error) {
+func (stub *workflowControlStub) Get(_ context.Context, id uuid.UUID, filter contracts.AdminWorkflowDetailFilter) (contracts.AdminWorkflowDetail, error) {
 	stub.getID, stub.getFilter = id, filter
-	return platform.WorkflowDetail{}, stub.err
+	return contracts.AdminWorkflowDetail{}, stub.err
 }
 
 func (stub *workflowControlStub) RetryTask(_ context.Context, workflowID, taskID uuid.UUID) error {

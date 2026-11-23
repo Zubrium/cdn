@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 	"github.com/google/uuid"
 )
@@ -33,8 +33,8 @@ const (
 )
 
 type WorkflowControl interface {
-	List(context.Context, platform.WorkflowListFilter) (platform.WorkflowPage, error)
-	Get(context.Context, uuid.UUID, platform.WorkflowDetailFilter) (platform.WorkflowDetail, error)
+	List(context.Context, contracts.AdminWorkflowListFilter) (contracts.AdminWorkflowPage, error)
+	Get(context.Context, uuid.UUID, contracts.AdminWorkflowDetailFilter) (contracts.AdminWorkflowDetail, error)
 	RetryTask(context.Context, uuid.UUID, uuid.UUID) error
 }
 
@@ -45,29 +45,29 @@ type AuthorizeFunc func(context.Context, string, Permission) error
 // GroupAuthorization authenticates a credential and rechecks direct group
 // access against PostgreSQL for every request.
 type GroupAuthorization interface {
-	Authenticate(context.Context, string) (platform.Session, error)
-	RequireGroupLevel(context.Context, platform.Session, string, platform.AccessLevel) error
+	Authenticate(context.Context, string) (contracts.AuthorizationSubject, error)
+	RequireGroupLevel(context.Context, contracts.AuthorizationSubject, string, contracts.AccessLevel) error
 }
 
 // NewGroupAuthorizer maps workflow reads to group read and task retry to group
 // write. No administrator-management or global-role shortcut is accepted.
 func NewGroupAuthorizer(core GroupAuthorization, group string) (AuthorizeFunc, error) {
-	if nilInterface(core) || !platform.ValidAccessGroupKey(group) {
-		return nil, platform.ErrCoordinatorInputInvalid
+	if nilInterface(core) || !contracts.ValidAccessGroupKey(group) {
+		return nil, contracts.ErrWorkflowInputInvalid
 	}
 	return func(ctx context.Context, credential string, permission Permission) error {
 		if ctx == nil || credential == "" {
-			return platform.ErrUnauthorized
+			return contracts.ErrAccessUnauthorized
 		}
 		session, err := core.Authenticate(ctx, credential)
 		if err != nil {
 			return err
 		}
-		level := platform.AccessLevelRead
+		level := contracts.AccessLevelRead
 		if permission == RetryTasks {
-			level = platform.AccessLevelWrite
+			level = contracts.AccessLevelWrite
 		} else if permission != ReadWorkflows {
-			return platform.ErrForbidden
+			return contracts.ErrAccessForbidden
 		}
 		return core.RequireGroupLevel(ctx, session, group, level)
 	}, nil
@@ -116,7 +116,7 @@ type WorkflowListResponse struct {
 type TaskSummary struct {
 	ID           string              `json:"id"`
 	WorkflowID   string              `json:"workflow_id"`
-	Kind         platform.TaskKind   `json:"kind"`
+	Kind         contracts.AdminTaskKind   `json:"kind"`
 	Operation    *OperationReference `json:"worker,omitempty"`
 	ParentTaskID string              `json:"parent_task_id,omitempty"`
 	DependsOn    []string            `json:"depends_on"`
@@ -166,18 +166,18 @@ type errorResponse struct {
 
 func NewHandler(control WorkflowControl, authorize AuthorizeFunc, config Config) (*Handler, error) {
 	if nilInterface(control) || authorize == nil || config.DefaultPageSize < 1 || config.MaxPageSize < config.DefaultPageSize || config.MaxPageSize > maxPageLimit {
-		return nil, platform.ErrCoordinatorInputInvalid
+		return nil, contracts.ErrWorkflowInputInvalid
 	}
 	var transport *adminhttpauth.Transport
 	if len(config.AllowedOrigins) > 0 {
 		var err error
 		transport, err = adminhttpauth.New(config.AllowedOrigins)
 		if err != nil {
-			return nil, platform.ErrCoordinatorInputInvalid
+			return nil, contracts.ErrWorkflowInputInvalid
 		}
 	}
 	if config.SessionAuthorize != nil && transport == nil {
-		return nil, platform.ErrCoordinatorInputInvalid
+		return nil, contracts.ErrWorkflowInputInvalid
 	}
 	handler := &Handler{control: control, authorize: authorize, sessionAuthorize: config.SessionAuthorize,
 		transport: transport, cfg: config, mux: http.NewServeMux()}
@@ -193,7 +193,7 @@ func (h *Handler) permissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := h.authorizationError(r, RetryTasks)
-	if errors.Is(err, platform.ErrForbidden) {
+	if errors.Is(err, contracts.ErrAccessForbidden) {
 		writeJSON(w, http.StatusOK, PermissionsResponse{CanRetryTasks: false})
 		return
 	}
@@ -236,7 +236,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	var before *platform.WorkflowCursor
+	var before *contracts.AdminWorkflowCursor
 	if beforeValue != "" {
 		cursor, err := decodeWorkflowCursor(beforeValue)
 		if err != nil {
@@ -245,7 +245,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		before = cursor
 	}
-	page, err := h.control.List(r.Context(), platform.WorkflowListFilter{State: state, Limit: limit, Before: before})
+	page, err := h.control.List(r.Context(), contracts.AdminWorkflowListFilter{State: state, Limit: limit, Before: before})
 	if err != nil {
 		writeOperationError(w, err)
 		return
@@ -287,7 +287,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	var before *platform.TaskCursor
+	var before *contracts.AdminTaskCursor
 	if beforeValue != "" {
 		before, err = decodeTaskCursor(beforeValue)
 		if err != nil {
@@ -295,7 +295,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	detail, err := h.control.Get(r.Context(), workflowID, platform.WorkflowDetailFilter{Limit: limit, Before: before})
+	detail, err := h.control.Get(r.Context(), workflowID, contracts.AdminWorkflowDetailFilter{Limit: limit, Before: before})
 	if err != nil {
 		writeOperationError(w, err)
 		return
@@ -327,8 +327,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func externalTaskKind(kind platform.TaskKind) platform.TaskKind {
-	if kind == platform.TaskKindOperation {
+func externalTaskKind(kind contracts.AdminTaskKind) contracts.AdminTaskKind {
+	if kind == contracts.AdminTaskKindOperation {
 		return "worker"
 	}
 	return kind
@@ -427,50 +427,50 @@ func encodeCursor(createdAt time.Time, id uuid.UUID) string {
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
 
-func decodeWorkflowCursor(value string) (*platform.WorkflowCursor, error) {
+func decodeWorkflowCursor(value string) (*contracts.AdminWorkflowCursor, error) {
 	cursor, err := decodeCursor(value)
 	if err != nil {
 		return nil, err
 	}
-	return &platform.WorkflowCursor{CreatedAt: cursor.CreatedAt, ID: cursor.ID}, nil
+	return &contracts.AdminWorkflowCursor{CreatedAt: cursor.CreatedAt, ID: cursor.ID}, nil
 }
 
-func decodeTaskCursor(value string) (*platform.TaskCursor, error) {
+func decodeTaskCursor(value string) (*contracts.AdminTaskCursor, error) {
 	cursor, err := decodeCursor(value)
 	if err != nil {
 		return nil, err
 	}
-	return &platform.TaskCursor{CreatedAt: cursor.CreatedAt, ID: cursor.ID}, nil
+	return &contracts.AdminTaskCursor{CreatedAt: cursor.CreatedAt, ID: cursor.ID}, nil
 }
 
 func decodeCursor(value string) (decodedCursor, error) {
 	if value == "" || len(value) > maxCursorBytes {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(decoded))
 	decoder.DisallowUnknownFields()
 	var cursor Cursor
 	if err := decoder.Decode(&cursor); err != nil {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	canonical, err := json.Marshal(cursor)
 	if err != nil || !bytes.Equal(canonical, decoded) {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
 	if err != nil || createdAt.IsZero() || createdAt.UTC().Format(time.RFC3339Nano) != cursor.CreatedAt {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	id, err := uuid.Parse(cursor.ID)
 	if err != nil || id == uuid.Nil || id.String() != cursor.ID {
-		return decodedCursor{}, platform.ErrCoordinatorInputInvalid
+		return decodedCursor{}, contracts.ErrWorkflowInputInvalid
 	}
 	return decodedCursor{CreatedAt: createdAt.UTC(), ID: id}, nil
 }
@@ -478,16 +478,16 @@ func decodeCursor(value string) (decodedCursor, error) {
 func parsePathID(value string) (uuid.UUID, error) {
 	id, err := uuid.Parse(value)
 	if err != nil || id == uuid.Nil {
-		return uuid.Nil, platform.ErrCoordinatorInputInvalid
+		return uuid.Nil, contracts.ErrWorkflowInputInvalid
 	}
 	return id, nil
 }
 
 func writeAuthorizationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, platform.ErrUnauthorized), errors.Is(err, adminhttpauth.ErrUnauthorized):
+	case errors.Is(err, contracts.ErrAccessUnauthorized), errors.Is(err, adminhttpauth.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, platform.ErrForbidden), errors.Is(err, adminhttpauth.ErrForbidden):
+	case errors.Is(err, contracts.ErrAccessForbidden), errors.Is(err, adminhttpauth.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
 	case errors.Is(err, adminhttpauth.ErrAmbiguous):
 		writeError(w, http.StatusBadRequest, "ambiguous_authentication")
@@ -498,11 +498,11 @@ func writeAuthorizationError(w http.ResponseWriter, err error) {
 
 func writeOperationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, platform.ErrCoordinatorInputInvalid):
+	case errors.Is(err, contracts.ErrWorkflowInputInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request")
-	case errors.Is(err, platform.ErrTaskMissing):
+	case errors.Is(err, contracts.ErrWorkflowTaskMissing):
 		writeError(w, http.StatusNotFound, "not_found")
-	case errors.Is(err, platform.ErrCoordinatorConflict), errors.Is(err, platform.ErrCoordinatorStale):
+	case errors.Is(err, contracts.ErrWorkflowConflict), errors.Is(err, contracts.ErrWorkflowStale):
 		writeError(w, http.StatusConflict, "conflict")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusServiceUnavailable, "unavailable")

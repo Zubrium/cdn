@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -38,38 +38,20 @@ func TestWebsiteLocaleCatalogPinsRevisionOnlyForConfiguredLocale(t *testing.T) {
 	}
 }
 
-type workflowDetailFake struct {
-	detail platform.WorkflowDetail
-	err    error
-	calls  int
-}
-
-func (f *workflowDetailFake) Get(_ context.Context, _ uuid.UUID, _ platform.WorkflowDetailFilter) (platform.WorkflowDetail, error) {
-	f.calls++
-	return f.detail, f.err
-}
-
-func TestWebsiteBuildWorkflowResolvesOnlyOwnedEmissionKey(t *testing.T) {
-	id := uuid.MustParse("55555555-5555-4555-8555-555555555555")
-	other := uuid.MustParse("44444444-4444-4444-8444-444444444444")
-	details := &workflowDetailFake{detail: platform.WorkflowDetail{
-		Workflow: platform.Workflow{ID: id, OwnerClassID: "engine.website"},
-		TaskPage: platform.TaskPage{Items: []platform.TaskSummary{{ID: other, EmissionKey: "prerender:other"}}},
-	}}
-	client := &websiteBuildWorkflowClient{details: details, maxPages: 1}
-
-	resolved, err := client.ResolveTaskID(context.Background(), id, "prerender:other")
-	if err != nil || resolved != other {
-		t.Fatalf("owned emission resolution = %s, %v", resolved, err)
+func TestWebsiteBuildWorkflowClientFailsClosedWithoutCore(t *testing.T) {
+	client := newWebsiteBuildWorkflowClient(nil, "engine.website")
+	ctx := context.Background()
+	id := uuid.New()
+	if _, err := client.Start(ctx, contracts.WorkflowStartInput{}); !errors.Is(err, errWebsiteBuildUnavailable) {
+		t.Fatalf("start without Core = %v", err)
 	}
-	if _, err := client.ResolveTaskID(context.Background(), id, "prerender:missing"); !errors.Is(err, platform.ErrTaskMissing) {
-		t.Fatalf("missing emission error = %v", err)
+	if _, err := client.Get(ctx, id); !errors.Is(err, errWebsiteBuildUnavailable) {
+		t.Fatalf("get without Core = %v", err)
 	}
-
-	foreign := &websiteBuildWorkflowClient{details: &workflowDetailFake{detail: platform.WorkflowDetail{
-		Workflow: platform.Workflow{ID: id, OwnerClassID: "engine.content"},
-	}}, maxPages: 1}
-	if _, err := foreign.ResolveTaskID(context.Background(), id, "prerender:other"); !errors.Is(err, platform.ErrTaskMissing) {
-		t.Fatalf("foreign owner emission resolution = %v", err)
+	if _, err := client.GetTaskResult(ctx, id, id); !errors.Is(err, errWebsiteBuildUnavailable) {
+		t.Fatalf("task result without Core = %v", err)
+	}
+	if _, err := client.ResolveTaskID(ctx, id, "prerender:child"); !errors.Is(err, errWebsiteBuildUnavailable) {
+		t.Fatalf("resolve without Core = %v", err)
 	}
 }

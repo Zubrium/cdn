@@ -69,7 +69,7 @@ func TestComponentLifecycleAdaptersFailClosedBeforeInitialization(t *testing.T) 
 	if err := core.Ready(ctx); err == nil {
 		t.Fatal("Core component reported ready before runtime startup")
 	}
-	if err := core.ActivateAfterComponents(ctx); !errors.Is(err, platform.ErrCoordinatorNotReady) {
+	if err := core.ActivateAfterComponents(ctx); !errors.Is(err, contracts.ErrWorkflowUnavailable) {
 		t.Fatalf("uninitialized Core activated Coordinator: %v", err)
 	}
 	if err := core.QuiesceBeforeComponents(ctx); err != nil {
@@ -111,14 +111,14 @@ func TestComponentLifecycleAdaptersFailClosedBeforeInitialization(t *testing.T) 
 
 func TestWorkflowControlFailsClosedWithoutCoreRuntimeAndRegistrationStaysScoped(t *testing.T) {
 	ctx := context.Background()
-	workflowControl := liveWorkflowControl{}
-	if _, err := workflowControl.List(ctx, platform.WorkflowListFilter{Limit: 10}); !errors.Is(err, platform.ErrCoordinatorNotReady) {
+	workflowControl := adminWorkflowControl{}
+	if _, err := workflowControl.List(ctx, contracts.AdminWorkflowListFilter{Limit: 10}); !errors.Is(err, contracts.ErrWorkflowUnavailable) {
 		t.Fatalf("workflow listing without Core runtime did not fail closed: %v", err)
 	}
-	if _, err := workflowControl.Get(ctx, uuid.New(), platform.WorkflowDetailFilter{Limit: 10}); !errors.Is(err, platform.ErrCoordinatorNotReady) {
+	if _, err := workflowControl.Get(ctx, uuid.New(), contracts.AdminWorkflowDetailFilter{Limit: 10}); !errors.Is(err, contracts.ErrWorkflowUnavailable) {
 		t.Fatalf("workflow detail without Core runtime did not fail closed: %v", err)
 	}
-	if err := workflowControl.RetryTask(ctx, uuid.New(), uuid.New()); !errors.Is(err, platform.ErrCoordinatorNotReady) {
+	if err := workflowControl.RetryTask(ctx, uuid.New(), uuid.New()); !errors.Is(err, contracts.ErrWorkflowUnavailable) {
 		t.Fatalf("task retry without Core runtime did not fail closed: %v", err)
 	}
 

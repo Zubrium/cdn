@@ -13,7 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 	"github.com/google/uuid"
@@ -34,22 +34,22 @@ type Config struct {
 }
 
 type IdentityAdminAPI interface {
-	Authenticate(context.Context, string) (platform.Session, error)
-	CreatePrincipal(context.Context, platform.Session, CreatePrincipalRequest) (PrincipalCreated, error)
-	ListPrincipals(context.Context, platform.Session) ([]platform.Principal, error)
-	SetPrincipalManagement(context.Context, platform.Session, string, bool) error
-	DeactivatePrincipal(context.Context, platform.Session, string) error
-	IssueCredential(context.Context, platform.Session, string, *time.Time) (string, string, error)
-	ListCredentials(context.Context, platform.Session, string) ([]platform.Credential, error)
-	RevokeCredential(context.Context, platform.Session, string) error
-	SetGroupAccess(context.Context, platform.Session, string, string, platform.AccessLevel) error
-	GroupAccess(context.Context, platform.Session, string, string) (platform.AccessLevel, error)
-	ListAccessGroups(context.Context, platform.Session) ([]platform.Group, error)
+	Authenticate(context.Context, string) (contracts.AuthorizationSubject, error)
+	CreatePrincipal(context.Context, contracts.AuthorizationSubject, CreatePrincipalRequest) (PrincipalCreated, error)
+	ListPrincipals(context.Context, contracts.AuthorizationSubject) ([]contracts.Principal, error)
+	SetPrincipalManagement(context.Context, contracts.AuthorizationSubject, string, bool) error
+	DeactivatePrincipal(context.Context, contracts.AuthorizationSubject, string) error
+	IssueCredential(context.Context, contracts.AuthorizationSubject, string, *time.Time) (string, string, error)
+	ListCredentials(context.Context, contracts.AuthorizationSubject, string) ([]contracts.Credential, error)
+	RevokeCredential(context.Context, contracts.AuthorizationSubject, string) error
+	SetGroupAccess(context.Context, contracts.AuthorizationSubject, string, string, contracts.AccessLevel) error
+	GroupAccess(context.Context, contracts.AuthorizationSubject, string, string) (contracts.AccessLevel, error)
+	ListAccessGroups(context.Context, contracts.AuthorizationSubject) ([]contracts.AccessGroup, error)
 }
 
 type SessionAdminAPI interface {
-	CreateSession(context.Context, string) (platform.CreatedSession, error)
-	AuthenticateSession(context.Context, string) (platform.Session, platform.Principal, error)
+	CreateSession(context.Context, string) (contracts.CreatedSession, error)
+	AuthenticateSession(context.Context, string) (contracts.AuthorizationSubject, contracts.Principal, error)
 	RevokeSession(context.Context, string) error
 }
 
@@ -57,14 +57,14 @@ type SessionAdminAPI interface {
 // levels through already-issued Core authorization capabilities. It does not
 // mutate Core and never trusts a principal or group list from the request.
 type SessionGroupAccessResolver interface {
-	ResolveGroupAccess(context.Context, string) (map[string]platform.AccessLevel, error)
+	ResolveGroupAccess(context.Context, string) (map[string]contracts.AccessLevel, error)
 }
 
 type CreatePrincipalRequest struct {
 	Name                    string                          `json:"name"`
 	ExpiresAt               *time.Time                      `json:"expires_at,omitempty"`
 	CanManageAdministrators bool                            `json:"can_manage_administrators"`
-	GroupAccess             map[string]platform.AccessLevel `json:"group_access,omitempty"`
+	GroupAccess             map[string]contracts.AccessLevel `json:"group_access,omitempty"`
 }
 
 type PrincipalCreated struct {
@@ -91,7 +91,7 @@ type credentialResponse struct {
 type accessGroupResponse struct {
 	Key    string               `json:"key"`
 	Active bool                 `json:"active"`
-	Level  platform.AccessLevel `json:"level"`
+	Level  contracts.AccessLevel `json:"level"`
 }
 
 type Handler struct {
@@ -166,10 +166,10 @@ type principalResponse struct {
 	Name                    string                          `json:"name"`
 	Active                  bool                            `json:"active"`
 	CanManageAdministrators bool                            `json:"can_manage_administrators"`
-	GroupAccess             map[string]platform.AccessLevel `json:"group_access"`
+	GroupAccess             map[string]contracts.AccessLevel `json:"group_access"`
 }
 
-func (h *Handler) resolvePrincipal(ctx context.Context, token string, value platform.Principal) (principalResponse, error) {
+func (h *Handler) resolvePrincipal(ctx context.Context, token string, value contracts.Principal) (principalResponse, error) {
 	response := publicPrincipal(value)
 	if h.groupAccess != nil {
 		resolved, err := h.groupAccess.ResolveGroupAccess(ctx, token)
@@ -179,19 +179,19 @@ func (h *Handler) resolvePrincipal(ctx context.Context, token string, value plat
 		response.GroupAccess = resolved
 	}
 	for group, level := range response.GroupAccess {
-		if !platform.ValidAccessGroupKey(group) || level > platform.AccessLevelWrite {
+		if !contracts.ValidAccessGroupKey(group) || level > contracts.AccessLevelWrite {
 			return principalResponse{}, errors.New("invalid group access resolver result")
 		}
 	}
 	if response.GroupAccess == nil {
-		response.GroupAccess = make(map[string]platform.AccessLevel)
+		response.GroupAccess = make(map[string]contracts.AccessLevel)
 	}
 	return response, nil
 }
 
-func publicPrincipal(value platform.Principal) principalResponse {
+func publicPrincipal(value contracts.Principal) principalResponse {
 	return principalResponse{ID: value.ID, Name: value.Name, Active: value.Active,
-		CanManageAdministrators: value.CanManageAdministrators, GroupAccess: map[string]platform.AccessLevel{}}
+		CanManageAdministrators: value.CanManageAdministrators, GroupAccess: map[string]contracts.AccessLevel{}}
 }
 
 func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
@@ -524,13 +524,13 @@ func (h *Handler) setGroupAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Level *platform.AccessLevel `json:"level"`
+		Level *contracts.AccessLevel `json:"level"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
 		return
 	}
-	if input.Level == nil || *input.Level > platform.AccessLevelWrite {
+	if input.Level == nil || *input.Level > contracts.AccessLevelWrite {
 		writeCodeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -541,20 +541,20 @@ func (h *Handler) setGroupAccess(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) principalRequest(w http.ResponseWriter, r *http.Request) (platform.Session, string, bool) {
+func (h *Handler) principalRequest(w http.ResponseWriter, r *http.Request) (contracts.AuthorizationSubject, string, bool) {
 	session, ok := h.authenticate(w, r)
 	if !ok {
-		return platform.Session{}, "", false
+		return contracts.AuthorizationSubject{}, "", false
 	}
 	id := r.PathValue("id")
 	if !validID(id) {
 		writeCodeError(w, http.StatusNotFound, "not_found")
-		return platform.Session{}, "", false
+		return contracts.AuthorizationSubject{}, "", false
 	}
 	return session, id, true
 }
 
-func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (platform.Session, bool) {
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (contracts.AuthorizationSubject, bool) {
 	credential, err := adminhttpauth.Resolve(r)
 	if err != nil {
 		if errors.Is(err, adminhttpauth.ErrAmbiguous) {
@@ -562,34 +562,34 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (platform
 		} else {
 			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
 		}
-		return platform.Session{}, false
+		return contracts.AuthorizationSubject{}, false
 	}
 	if credential.Session {
 		if h.sessions == nil {
 			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
-			return platform.Session{}, false
+			return contracts.AuthorizationSubject{}, false
 		}
 		if isStateChanging(r.Method) {
 			if !h.trustedOrigin(r) {
 				writeCodeError(w, http.StatusForbidden, "origin_forbidden")
-				return platform.Session{}, false
+				return contracts.AuthorizationSubject{}, false
 			}
 			if !validCSRFProof(r) {
 				writeCodeError(w, http.StatusForbidden, "csrf_forbidden")
-				return platform.Session{}, false
+				return contracts.AuthorizationSubject{}, false
 			}
 		}
 		session, _, err := h.sessions.AuthenticateSession(r.Context(), credential.Value)
 		if err != nil {
 			writeError(w, err)
-			return platform.Session{}, false
+			return contracts.AuthorizationSubject{}, false
 		}
 		return session, true
 	}
 	session, err := h.api.Authenticate(r.Context(), credential.Value)
 	if err != nil {
 		writeError(w, err)
-		return platform.Session{}, false
+		return contracts.AuthorizationSubject{}, false
 	}
 	return session, true
 }
@@ -612,12 +612,12 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 
 func writeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, platform.ErrUnauthorized):
+	case errors.Is(err, contracts.ErrAccessUnauthorized):
 		w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
 		writeCodeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, platform.ErrForbidden):
+	case errors.Is(err, contracts.ErrAccessForbidden):
 		writeCodeError(w, http.StatusForbidden, "forbidden")
-	case errors.Is(err, platform.ErrManagerInvariant), errors.Is(err, platform.ErrModuleDataConflict), errors.Is(err, platform.ErrFileSetConflict):
+	case errors.Is(err, contracts.ErrAccessManagerInvariant), errors.Is(err, contracts.ErrRecordConflict), errors.Is(err, contracts.ErrFileSetConflict):
 		writeCodeError(w, http.StatusConflict, "conflict")
 	default:
 		writeCodeError(w, http.StatusServiceUnavailable, "unavailable")
@@ -649,12 +649,12 @@ func validPrincipalName(name string) bool {
 
 func validExpiry(expires *time.Time) bool { return expires == nil || expires.After(time.Now()) }
 
-func validGroupAccess(groups map[string]platform.AccessLevel) bool {
+func validGroupAccess(groups map[string]contracts.AccessLevel) bool {
 	if len(groups) > 128 {
 		return false
 	}
 	for group, level := range groups {
-		if !platform.ValidAccessGroupKey(group) || level > platform.AccessLevelWrite {
+		if !contracts.ValidAccessGroupKey(group) || level > contracts.AccessLevelWrite {
 			return false
 		}
 	}
@@ -663,7 +663,7 @@ func validGroupAccess(groups map[string]platform.AccessLevel) bool {
 
 func groupPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	group := r.PathValue("group")
-	if !platform.ValidAccessGroupKey(group) {
+	if !contracts.ValidAccessGroupKey(group) {
 		writeCodeError(w, http.StatusNotFound, "not_found")
 		return "", false
 	}

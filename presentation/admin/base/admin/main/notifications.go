@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 	"github.com/google/uuid"
 )
@@ -124,7 +124,7 @@ func validProfileDigest(value string) bool {
 	return true
 }
 
-func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, requireOrigin bool) (platform.Principal, func(), bool) {
+func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, requireOrigin bool) (contracts.Principal, func(), bool) {
 	credential, err := adminhttpauth.Resolve(r)
 	if err != nil {
 		if errors.Is(err, adminhttpauth.ErrAmbiguous) {
@@ -132,28 +132,28 @@ func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, 
 		} else {
 			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
 		}
-		return platform.Principal{}, nil, false
+		return contracts.Principal{}, nil, false
 	}
 	if credential.Session {
 		if h.sessions == nil {
 			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
-			return platform.Principal{}, nil, false
+			return contracts.Principal{}, nil, false
 		}
 		if requireOrigin && !h.trustedReadOrigin(r) {
 			writeCodeError(w, http.StatusForbidden, "origin_forbidden")
-			return platform.Principal{}, nil, false
+			return contracts.Principal{}, nil, false
 		}
 		_, principal, err := h.sessions.AuthenticateSession(r.Context(), credential.Value)
 		if err != nil {
 			writeError(w, err)
-			return platform.Principal{}, nil, false
+			return contracts.Principal{}, nil, false
 		}
 		return principal, func() {}, true
 	}
 	created, err := h.sessions.CreateSession(r.Context(), credential.Value)
 	if err != nil {
 		writeError(w, err)
-		return platform.Principal{}, nil, false
+		return contracts.Principal{}, nil, false
 	}
 	return created.Principal, func() { _ = h.sessions.RevokeSession(context.Background(), created.Token) }, true
 }

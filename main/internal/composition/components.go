@@ -173,12 +173,11 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		}
 	}
 	if _, selected := c.selected["admin.coordinator"]; selected {
-		control, err := runtime.NewWorkflowControl()
-		if err != nil {
+		if _, err := runtime.NewWorkflowControl(); err != nil {
 			_ = runtime.Close()
 			return fmt.Errorf("configure workflow control operation: %w", err)
 		}
-		if err := bus.RegisterWorkflowControl(c.dispatcher, control); err != nil {
+		if err := bus.RegisterWorkflowControl(c.dispatcher, adminWorkflowControl{core: c}); err != nil {
 			_ = runtime.Close()
 			return fmt.Errorf("register workflow control operations: %w", err)
 		}
@@ -411,7 +410,7 @@ func (c *coreComponent) Ready(ctx context.Context) error {
 
 func (c *coreComponent) ActivateAfterComponents(ctx context.Context) error {
 	if c == nil || c.runtime == nil {
-		return platform.ErrCoordinatorNotReady
+		return contracts.ErrWorkflowUnavailable
 	}
 	return c.runtime.ActivateCoordinator(ctx)
 }
@@ -554,7 +553,7 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		FormsExportMaxConcurrent: c.config.FormsAPI.ExportMaxConcurrent, FormsExportMaxRows: c.config.FormsAPI.ExportMaxRows,
 		FormsExportMaxBytes: c.config.FormsAPI.ExportMaxBytes, WorkflowAccessGroup: c.config.Coordinator.WorkflowAccessGroup,
 		WorkflowPageDefault: c.config.Coordinator.WorkflowsPageDefault, WorkflowPageMaximum: c.config.Coordinator.WorkflowsPageMaximum,
-		AccessGroups: configuredGroupNames(c.core.config.Core.AccessGroups), RouterAdminEnabled: c.routerAdminEnabled,
+		RouterAdminEnabled: c.routerAdminEnabled,
 		UIHandler: c.uiHandler, SyntheticData: c.developmentFixtures, IdentityEnabled: c.identityAdmin,
 		BuildIdentity: os.Getenv("ZUBRIUM_BUILD_IDENTITY"), Observer: c.observer,
 	}
@@ -563,8 +562,12 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		routerOperations = c.routerEngine.registry
 	}
 	adminConfig.Router = routerPresentationConfig(c.config, routerOperations)
+	identity := adminIdentityAdapter{runtime: c.core.runtime}
 	dependencies := transport.AdminDependencies{
-		Core: c.core.runtime, Files: c.loader.service, WorkflowControl: c.workflowControl,
+		CoreReady: c.core.runtime.CoordinatorReady, Identity: identity, Sessions: identity,
+		GroupAccess:              adminGroupAccessResolver{runtime: c.core.runtime, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
+		CoordinatorAuthorization: adminCoordinatorAuthorization{runtime: c.core.runtime},
+		Files:                    c.loader.service, WorkflowControl: c.workflowControl,
 		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{core: c.core},
 	}
 	if c.retirementEngine != nil {
@@ -597,76 +600,41 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 }
 
 type workflowControl interface {
-	List(context.Context, platform.WorkflowListFilter) (platform.WorkflowPage, error)
-	Get(context.Context, uuid.UUID, platform.WorkflowDetailFilter) (platform.WorkflowDetail, error)
+	List(context.Context, contracts.AdminWorkflowListFilter) (contracts.AdminWorkflowPage, error)
+	Get(context.Context, uuid.UUID, contracts.AdminWorkflowDetailFilter) (contracts.AdminWorkflowDetail, error)
 	RetryTask(context.Context, uuid.UUID, uuid.UUID) error
-}
-
-type liveWorkflowControl struct{ core *coreComponent }
-
-func (c liveWorkflowControl) List(ctx context.Context, filter platform.WorkflowListFilter) (platform.WorkflowPage, error) {
-	if c.core == nil || c.core.runtime == nil {
-		return platform.WorkflowPage{}, platform.ErrCoordinatorNotReady
-	}
-	control, err := c.core.runtime.NewWorkflowControl()
-	if err != nil {
-		return platform.WorkflowPage{}, err
-	}
-	return control.List(ctx, filter)
-}
-
-func (c liveWorkflowControl) Get(ctx context.Context, id uuid.UUID, filter platform.WorkflowDetailFilter) (platform.WorkflowDetail, error) {
-	if c.core == nil || c.core.runtime == nil {
-		return platform.WorkflowDetail{}, platform.ErrCoordinatorNotReady
-	}
-	control, err := c.core.runtime.NewWorkflowControl()
-	if err != nil {
-		return platform.WorkflowDetail{}, err
-	}
-	return control.Get(ctx, id, filter)
-}
-
-func (c liveWorkflowControl) RetryTask(ctx context.Context, workflowID, taskID uuid.UUID) error {
-	if c.core == nil || c.core.runtime == nil {
-		return platform.ErrCoordinatorNotReady
-	}
-	control, err := c.core.runtime.NewWorkflowControl()
-	if err != nil {
-		return err
-	}
-	return control.RetryTask(ctx, workflowID, taskID)
 }
 
 type busWorkflowControl struct{ dispatcher contracts.Dispatcher }
 
-func (c busWorkflowControl) List(ctx context.Context, filter platform.WorkflowListFilter) (platform.WorkflowPage, error) {
+func (c busWorkflowControl) List(ctx context.Context, filter contracts.AdminWorkflowListFilter) (contracts.AdminWorkflowPage, error) {
 	request := contracts.WorkflowListRequest{State: filter.State, Limit: filter.Limit}
 	if filter.Before != nil {
 		request.Before = &contracts.WorkflowCursor{ID: filter.Before.ID.String(), CreatedAt: filter.Before.CreatedAt}
 	}
 	response, err := contracts.Call(ctx, c.dispatcher, contracts.WorkflowListOperation(), request)
 	if err != nil {
-		return platform.WorkflowPage{}, err
+		return contracts.AdminWorkflowPage{}, err
 	}
-	var page platform.WorkflowPage
+	var page contracts.AdminWorkflowPage
 	if err := json.Unmarshal(response.Payload, &page); err != nil {
-		return platform.WorkflowPage{}, err
+		return contracts.AdminWorkflowPage{}, err
 	}
 	return page, nil
 }
 
-func (c busWorkflowControl) Get(ctx context.Context, id uuid.UUID, filter platform.WorkflowDetailFilter) (platform.WorkflowDetail, error) {
+func (c busWorkflowControl) Get(ctx context.Context, id uuid.UUID, filter contracts.AdminWorkflowDetailFilter) (contracts.AdminWorkflowDetail, error) {
 	request := contracts.WorkflowGetRequest{WorkflowID: id.String(), Limit: filter.Limit}
 	if filter.Before != nil {
 		request.Before = &contracts.TaskCursor{ID: filter.Before.ID.String(), CreatedAt: filter.Before.CreatedAt}
 	}
 	response, err := contracts.Call(ctx, c.dispatcher, contracts.WorkflowGetOperation(), request)
 	if err != nil {
-		return platform.WorkflowDetail{}, err
+		return contracts.AdminWorkflowDetail{}, err
 	}
-	var detail platform.WorkflowDetail
+	var detail contracts.AdminWorkflowDetail
 	if err := json.Unmarshal(response.Payload, &detail); err != nil {
-		return platform.WorkflowDetail{}, err
+		return contracts.AdminWorkflowDetail{}, err
 	}
 	return detail, nil
 }

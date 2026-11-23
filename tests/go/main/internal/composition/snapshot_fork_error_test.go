@@ -1,3 +1,5 @@
+//go:build full && !devfixtures && !router
+
 package composition
 
 import (

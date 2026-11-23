@@ -7,16 +7,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	api "github.com/Zubrium/cdn/engines/loader/presentation"
 )
 
 type fileOperationsSpy struct {
 	Files
-	file               core.File
-	set                core.FileSet
+	file               contracts.File
+	set                contracts.FileSet
 	searchQuery        [5]any
 	setListQuery       [5]any
 	setFileQuery       [4]any
@@ -59,48 +58,47 @@ func TestCleanupWorkerStopsAfterContextCancellation(t *testing.T) {
 
 func newFileOperationsSpy() *fileOperationsSpy {
 	return &fileOperationsSpy{
-		file: core.File{ID: "file-1", Groups: []string{"assets"}, Metadata: map[string]string{"name": "before.txt", "keep": "yes"},
+		file: contracts.File{ID: "file-1", Groups: []string{"assets"}, Metadata: map[string]string{"name": "before.txt", "keep": "yes"},
 			ContentType: "text/plain", SHA256: strings.Repeat("a", 64), Revision: 3, Size: 4},
-		set: core.FileSet{ID: "set-1", Namespace: "features", Name: "initial", ManagementGroup: "assets", Revision: 1,
-			CreatedAt: time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(100, 0).UTC()},
+		set: contracts.FileSet{ID: "set-1", Namespace: "features", Name: "initial", ManagementGroup: "assets", Revision: 1},
 	}
 }
 
-func (s *fileOperationsSpy) SearchFiles(_ context.Context, _ core.Session, query, group, cursor, setID string, limit int) ([]core.File, string, error) {
+func (s *fileOperationsSpy) SearchFiles(_ context.Context, _ contracts.AuthorizationSubject, query, group, cursor, setID string, limit int) ([]contracts.File, string, error) {
 	s.searchQuery = [5]any{query, group, cursor, setID, limit}
 	if s.failure != nil {
 		return nil, "", s.failure
 	}
-	return []core.File{s.file}, "next-file", nil
+	return []contracts.File{s.file}, "next-file", nil
 }
 
-func (s *fileOperationsSpy) StatFile(context.Context, core.Session, string) (core.File, error) {
+func (s *fileOperationsSpy) StatFile(context.Context, contracts.AuthorizationSubject, string) (contracts.File, error) {
 	if s.failure != nil {
-		return core.File{}, s.failure
+		return contracts.File{}, s.failure
 	}
 	return s.file, nil
 }
 
-func (s *fileOperationsSpy) ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error) {
+func (s *fileOperationsSpy) ReadFile(context.Context, contracts.AuthorizationSubject, string) (io.ReadCloser, contracts.File, error) {
 	if s.failure != nil {
-		return nil, core.File{}, s.failure
+		return nil, contracts.File{}, s.failure
 	}
 	return io.NopCloser(strings.NewReader("data")), s.file, nil
 }
 
-func (s *fileOperationsSpy) ReadFileRange(context.Context, core.Session, string, int64, int64) (io.ReadCloser, core.File, error) {
+func (s *fileOperationsSpy) ReadFileRange(context.Context, contracts.AuthorizationSubject, string, int64, int64) (io.ReadCloser, contracts.File, error) {
 	if s.failure != nil {
-		return nil, core.File{}, s.failure
+		return nil, contracts.File{}, s.failure
 	}
 	return io.NopCloser(strings.NewReader("at")), s.file, nil
 }
 
-func (s *fileOperationsSpy) UpdateFileWithContentType(_ context.Context, _ core.Session, _ string, expected int64, metadata map[string]string, contentType string) error {
+func (s *fileOperationsSpy) UpdateFileWithContentType(_ context.Context, _ contracts.AuthorizationSubject, _ string, expected int64, metadata map[string]string, contentType string) error {
 	if s.failure != nil {
 		return s.failure
 	}
 	if expected != s.file.Revision {
-		return core.ErrRevisionConflict
+		return contracts.ErrFileRevisionConflict
 	}
 	s.updatedMetadata, s.updatedContentType = clone(metadata), contentType
 	s.file.Metadata, s.file.ContentType = clone(metadata), contentType
@@ -108,24 +106,24 @@ func (s *fileOperationsSpy) UpdateFileWithContentType(_ context.Context, _ core.
 	return nil
 }
 
-func (s *fileOperationsSpy) AddFileToGroup(_ context.Context, _ core.Session, _ string, group string, expected int64) error {
+func (s *fileOperationsSpy) AddFileToGroup(_ context.Context, _ contracts.AuthorizationSubject, _ string, group string, expected int64) error {
 	if s.failure != nil {
 		return s.failure
 	}
 	if expected != s.file.Revision {
-		return core.ErrRevisionConflict
+		return contracts.ErrFileRevisionConflict
 	}
 	s.file.Groups = append(s.file.Groups, group)
 	s.file.Revision++
 	return nil
 }
 
-func (s *fileOperationsSpy) RemoveFileFromGroup(_ context.Context, _ core.Session, _ string, group string, expected int64) error {
+func (s *fileOperationsSpy) RemoveFileFromGroup(_ context.Context, _ contracts.AuthorizationSubject, _ string, group string, expected int64) error {
 	if s.failure != nil {
 		return s.failure
 	}
 	if expected != s.file.Revision {
-		return core.ErrRevisionConflict
+		return contracts.ErrFileRevisionConflict
 	}
 	for i, current := range s.file.Groups {
 		if current == group {
@@ -137,94 +135,94 @@ func (s *fileOperationsSpy) RemoveFileFromGroup(_ context.Context, _ core.Sessio
 	return nil
 }
 
-func (s *fileOperationsSpy) DeleteFile(_ context.Context, _ core.Session, _ string, expected int64) error {
+func (s *fileOperationsSpy) DeleteFile(_ context.Context, _ contracts.AuthorizationSubject, _ string, expected int64) error {
 	if s.failure != nil {
 		return s.failure
 	}
 	if expected != s.file.Revision {
-		return core.ErrRevisionConflict
+		return contracts.ErrFileRevisionConflict
 	}
 	s.deletedFile = true
 	return nil
 }
 
-func (s *fileOperationsSpy) CreateManagedFileSet(_ context.Context, _ core.Session, namespace, name, group string) (core.FileSet, error) {
+func (s *fileOperationsSpy) CreateManagedFileSet(_ context.Context, _ contracts.AuthorizationSubject, namespace, name, group string) (contracts.FileSet, error) {
 	if s.failure != nil {
-		return core.FileSet{}, s.failure
+		return contracts.FileSet{}, s.failure
 	}
 	s.set.Namespace, s.set.Name, s.set.ManagementGroup = namespace, name, group
 	s.set.Revision = 1
 	return s.set, nil
 }
 
-func (s *fileOperationsSpy) GetManagedFileSet(context.Context, core.Session, string) (core.FileSet, error) {
+func (s *fileOperationsSpy) GetManagedFileSet(context.Context, contracts.AuthorizationSubject, string) (contracts.FileSet, error) {
 	if s.failure != nil {
-		return core.FileSet{}, s.failure
+		return contracts.FileSet{}, s.failure
 	}
 	return s.set, nil
 }
 
-func (s *fileOperationsSpy) UpdateManagedFileSet(_ context.Context, _ core.Session, _ string, expected int64, name string) (core.FileSet, error) {
+func (s *fileOperationsSpy) UpdateManagedFileSet(_ context.Context, _ contracts.AuthorizationSubject, _ string, expected int64, name string) (contracts.FileSet, error) {
 	if s.failure != nil {
-		return core.FileSet{}, s.failure
+		return contracts.FileSet{}, s.failure
 	}
 	if expected != s.set.Revision {
-		return core.FileSet{}, core.ErrRevisionConflict
+		return contracts.FileSet{}, contracts.ErrFileRevisionConflict
 	}
 	s.set.Name = name
 	s.set.Revision++
 	return s.set, nil
 }
 
-func (s *fileOperationsSpy) DeleteManagedFileSet(_ context.Context, _ core.Session, _ string, expected int64) error {
+func (s *fileOperationsSpy) DeleteManagedFileSet(_ context.Context, _ contracts.AuthorizationSubject, _ string, expected int64) error {
 	if s.failure != nil {
 		return s.failure
 	}
 	if expected != s.set.Revision {
-		return core.ErrRevisionConflict
+		return contracts.ErrFileRevisionConflict
 	}
 	s.deletedSet = true
 	return nil
 }
 
-func (s *fileOperationsSpy) AddFileToManagedSet(_ context.Context, _ core.Session, _, _ string, expected int64) (core.FileSet, error) {
+func (s *fileOperationsSpy) AddFileToManagedSet(_ context.Context, _ contracts.AuthorizationSubject, _, _ string, expected int64) (contracts.FileSet, error) {
 	if s.failure != nil {
-		return core.FileSet{}, s.failure
+		return contracts.FileSet{}, s.failure
 	}
 	if expected != s.set.Revision {
-		return core.FileSet{}, core.ErrRevisionConflict
+		return contracts.FileSet{}, contracts.ErrFileRevisionConflict
 	}
 	s.setAdds++
 	s.set.Revision++
 	return s.set, nil
 }
 
-func (s *fileOperationsSpy) RemoveFileFromManagedSet(_ context.Context, _ core.Session, _, _ string, expected int64) (core.FileSet, error) {
+func (s *fileOperationsSpy) RemoveFileFromManagedSet(_ context.Context, _ contracts.AuthorizationSubject, _, _ string, expected int64) (contracts.FileSet, error) {
 	if s.failure != nil {
-		return core.FileSet{}, s.failure
+		return contracts.FileSet{}, s.failure
 	}
 	if expected != s.set.Revision {
-		return core.FileSet{}, core.ErrRevisionConflict
+		return contracts.FileSet{}, contracts.ErrFileRevisionConflict
 	}
 	s.setRemoves++
 	s.set.Revision++
 	return s.set, nil
 }
 
-func (s *fileOperationsSpy) ListManagedFileSets(_ context.Context, _ core.Session, namespace, query, cursor string, limit int) ([]core.FileSet, string, error) {
+func (s *fileOperationsSpy) ListManagedFileSets(_ context.Context, _ contracts.AuthorizationSubject, namespace, query, cursor string, limit int) ([]contracts.FileSet, string, error) {
 	s.setListQuery = [5]any{namespace, query, cursor, limit, ""}
 	if s.failure != nil {
 		return nil, "", s.failure
 	}
-	return []core.FileSet{s.set}, "next-set", nil
+	return []contracts.FileSet{s.set}, "next-set", nil
 }
 
-func (s *fileOperationsSpy) ListFileSet(_ context.Context, _ core.Session, setID, cursor string, limit int) ([]core.File, string, error) {
+func (s *fileOperationsSpy) ListFileSet(_ context.Context, _ contracts.AuthorizationSubject, setID, cursor string, limit int) ([]contracts.File, string, error) {
 	s.setFileQuery = [4]any{setID, cursor, limit, ""}
 	if s.failure != nil {
 		return nil, "", s.failure
 	}
-	return []core.File{s.file}, "next-set-file", nil
+	return []contracts.File{s.file}, "next-set-file", nil
 }
 
 func TestFileOperationsDelegateThroughAuthenticatedCoreSession(t *testing.T) {
@@ -314,7 +312,7 @@ func TestFileOperationsDelegateThroughAuthenticatedCoreSession(t *testing.T) {
 		t.Fatalf("set deletion delegation: deleted=%v err=%v", files.deletedSet, err)
 	}
 
-	files.failure = core.ErrForbidden
+	files.failure = contracts.ErrAccessForbidden
 	if _, err := service.ListFiles(ctx, api.ListQuery{Limit: 1}); !errors.Is(err, api.ErrForbidden) {
 		t.Fatalf("Core authorization failure was not mapped to the Loader contract: %v", err)
 	}

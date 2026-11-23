@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sort"
 	"sync"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content/presentation"
 	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteengine "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
 	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
 	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
@@ -53,7 +52,6 @@ type AdminConfig struct {
 	WorkflowAccessGroup      string
 	WorkflowPageDefault      int
 	WorkflowPageMaximum      int
-	AccessGroups             []string
 	RouterAdminEnabled       bool
 	Router                   routerhttp.Config
 	UIHandler                http.Handler
@@ -64,18 +62,22 @@ type AdminConfig struct {
 }
 
 type AdminDependencies struct {
-	Core                 *core.Runtime
-	Files                fileapi.Loader
-	WorkflowControl      coordinatoradmin.WorkflowControl
-	Website              websiteengine.API
-	Retirement           sitesapi.PageRetirementAPI
-	SnapshotForkWorkflow sitesapi.SnapshotForkWorkflowStarter
-	Content              contentengine.API
-	ContentSchemas       contentadmin.SchemaSnapshots
-	Forms                formsengine.API
-	Router               *routerenginepresentation.APIAdapter
-	RouterOperations     *routerhttp.PublicOperationRegistry
-	Notifications        *adminapi.NotificationHub
+	CoreReady                func() bool
+	Identity                 adminapi.IdentityAdminAPI
+	Sessions                 adminapi.SessionAdminAPI
+	GroupAccess              adminapi.SessionGroupAccessResolver
+	CoordinatorAuthorization coordinatoradmin.GroupAuthorization
+	Files                    fileapi.Loader
+	WorkflowControl          coordinatoradmin.WorkflowControl
+	Website                  websiteengine.API
+	Retirement               sitesapi.PageRetirementAPI
+	SnapshotForkWorkflow     sitesapi.SnapshotForkWorkflowStarter
+	Content                  contentengine.API
+	ContentSchemas           contentadmin.SchemaSnapshots
+	Forms                    formsengine.API
+	Router                   *routerenginepresentation.APIAdapter
+	RouterOperations         *routerhttp.PublicOperationRegistry
+	Notifications            *adminapi.NotificationHub
 }
 
 type Readiness interface {
@@ -95,8 +97,14 @@ type AdminServer struct {
 }
 
 func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, error) {
-	if config.Server.Address == "" || deps.Core == nil || deps.Files == nil {
+	if config.Server.Address == "" || deps.CoreReady == nil || deps.Files == nil {
 		return nil, errors.New("Admin transport dependencies are incomplete")
+	}
+	if config.IdentityEnabled && (deps.Identity == nil || deps.Sessions == nil || deps.GroupAccess == nil) {
+		return nil, errors.New("Admin identity dependencies are incomplete")
+	}
+	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
+		return nil, errors.New("Admin coordinator dependencies are incomplete")
 	}
 	return &AdminServer{config: config, deps: deps}, nil
 }
@@ -162,8 +170,7 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 	mux.Handle("/api/files", guard(fileHandler))
 	mux.Handle("/api/files/", guard(fileHandler))
 	if s.deps.WorkflowControl != nil {
-		authorization := coordinatorRuntimeAuthorization{runtime: s.deps.Core}
-		authorize, err := coordinatoradmin.NewGroupAuthorizer(authorization, s.config.WorkflowAccessGroup)
+		authorize, err := coordinatoradmin.NewGroupAuthorizer(s.deps.CoordinatorAuthorization, s.config.WorkflowAccessGroup)
 		if err != nil {
 			return nil, err
 		}
@@ -179,14 +186,10 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		mux.Handle("/api/coordinator/workflows/", guard(handler))
 	}
 	if s.config.IdentityEnabled {
-		coreAdapter, err := adminapi.NewCoreAdapter(s.deps.Core.IdentityAdmin(), s.deps.Core.Sessions())
-		if err != nil {
-			return nil, err
-		}
-		handler, err := adminapi.NewHandlerWithSessions(coreAdapter, coreAdapter, adminapi.Config{
+		handler, err := adminapi.NewHandlerWithSessions(s.deps.Identity, s.deps.Sessions, adminapi.Config{
 			MaxJSONBytes: s.config.MaxJSONBytes, SessionCookieSecure: s.config.SessionCookieSecure,
 			AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-			GroupAccess:    runtimeGroupAccess{s.deps.Core, append([]string(nil), s.config.AccessGroups...)},
+			GroupAccess:    s.deps.GroupAccess,
 			Notifications:  s.deps.Notifications,
 		})
 		if err != nil {
@@ -314,7 +317,7 @@ func (s *AdminServer) requireCoreRuntime(next http.Handler) http.Handler {
 }
 
 func (s *AdminServer) readyForRequests() bool {
-	if s == nil || !s.IsReady() || !s.deps.Core.CoordinatorReady() {
+	if s == nil || !s.IsReady() || !s.deps.CoreReady() {
 		return false
 	}
 	s.mu.RLock()
@@ -543,70 +546,18 @@ func syntheticDataMode(next http.Handler) http.Handler {
 	})
 }
 
-type coordinatorRuntimeAuthorization struct{ runtime *core.Runtime }
-
-func (a coordinatorRuntimeAuthorization) Authenticate(ctx context.Context, credential string) (core.Session, error) {
-	return a.runtime.CoordinatorAuthorization().Authenticate(ctx, credential)
-}
-
-func (a coordinatorRuntimeAuthorization) RequireGroupLevel(ctx context.Context, session core.Session, group string, level core.AccessLevel) error {
-	return a.runtime.CoordinatorAuthorization().RequireGroupLevel(ctx, session, group, level)
-}
-
 func (s *AdminServer) coordinatorSessionAuthorize(ctx context.Context, token string, permission coordinatoradmin.Permission) error {
-	session, _, err := s.deps.Core.Sessions().AuthenticateSession(ctx, token)
+	session, _, err := s.deps.Sessions.AuthenticateSession(ctx, token)
 	if err != nil {
 		return err
 	}
-	level := core.AccessLevelRead
+	level := contracts.AccessLevelRead
 	if permission == coordinatoradmin.RetryTasks {
-		level = core.AccessLevelWrite
+		level = contracts.AccessLevelWrite
 	} else if permission != coordinatoradmin.ReadWorkflows {
-		return core.ErrForbidden
+		return contracts.ErrAccessForbidden
 	}
-	return s.deps.Core.CoordinatorAuthorization().RequireGroupLevel(ctx, session, s.config.WorkflowAccessGroup, level)
-}
-
-type runtimeGroupAccess struct {
-	runtime *core.Runtime
-	groups  []string
-}
-
-func (r runtimeGroupAccess) ResolveGroupAccess(ctx context.Context, token string) (map[string]core.AccessLevel, error) {
-	if r.runtime == nil || token == "" {
-		return nil, core.ErrUnavailable
-	}
-	session, _, err := r.runtime.Sessions().AuthenticateSession(ctx, token)
-	if err != nil {
-		return nil, err
-	}
-	access := make(map[string]core.AccessLevel)
-	for _, group := range r.groups {
-		err := r.runtime.GroupAuthorization().RequireGroupLevel(ctx, session, []string{group}, core.AccessLevelWrite)
-		if err == nil {
-			access[group] = core.AccessLevelWrite
-			continue
-		}
-		if !errors.Is(err, core.ErrForbidden) {
-			return nil, err
-		}
-		err = r.runtime.GroupAuthorization().RequireGroupLevel(ctx, session, []string{group}, core.AccessLevelRead)
-		if err == nil {
-			access[group] = core.AccessLevelRead
-		} else if !errors.Is(err, core.ErrForbidden) {
-			return nil, err
-		}
-	}
-	return access, nil
-}
-
-func configuredGroupNames(groups map[string]core.AccessLevel) []string {
-	names := make([]string, 0, len(groups))
-	for group := range groups {
-		names = append(names, group)
-	}
-	sort.Strings(names)
-	return names
+	return s.deps.CoordinatorAuthorization.RequireGroupLevel(ctx, session, s.config.WorkflowAccessGroup, level)
 }
 
 func closedErrors() <-chan error {

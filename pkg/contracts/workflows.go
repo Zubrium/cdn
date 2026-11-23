@@ -104,6 +104,9 @@ func CallWorkflowTaskIDResolve(ctx context.Context, dispatcher Dispatcher, workf
 var ErrWorkflowTaskMissing = errors.New("workflow task is missing")
 var ErrWorkflowTaskNotOwned = errors.New("workflow task is not owned")
 var ErrWorkflowUnavailable = errors.New("workflow service unavailable")
+var ErrWorkflowInputInvalid = errors.New("invalid workflow operation request")
+var ErrWorkflowConflict = errors.New("workflow state conflict")
+var ErrWorkflowStale = errors.New("workflow state is stale")
 
 func WorkflowStartOperation() Operation[WorkflowStartRequest, WorkflowStartResponse] {
 	return Operation[WorkflowStartRequest, WorkflowStartResponse]{

@@ -8,13 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	recorddata "github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"sort"
 	"testing"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )
@@ -23,33 +22,31 @@ type testIdentity struct {
 	principalID string
 	writable    bool
 	active      bool
+	sessions    *testIdentitySessions
 }
 
-type testCoreSessions struct {
-	session   core.Session
-	principal core.Principal
+type testIdentitySessions struct {
+	principal contracts.Principal
 	err       error
 	token     string
+	enabled   bool
 }
 
-func (*testCoreSessions) CreateSession(context.Context, string) (core.CreatedSession, error) {
-	return core.CreatedSession{}, nil
+func (i *testIdentity) AuthenticateSession(_ context.Context, token string) (contracts.AuthorizationSubject, contracts.Principal, error) {
+	if i.sessions == nil || !i.sessions.enabled {
+		return contracts.AuthorizationSubject{}, contracts.Principal{}, contracts.ErrAccessUnauthorized
+	}
+	i.sessions.token = token
+	return contracts.AuthorizationSubject{SessionToken: token}, i.sessions.principal, i.sessions.err
 }
 
-func (s *testCoreSessions) AuthenticateSession(_ context.Context, token string) (core.Session, core.Principal, error) {
-	s.token = token
-	return s.session, s.principal, s.err
+func (i *testIdentity) Authenticate(context.Context, string) (contracts.AuthorizationSubject, contracts.Principal, error) {
+	return contracts.AuthorizationSubject{}, contracts.Principal{ID: i.principalID, Active: i.active}, nil
 }
 
-func (*testCoreSessions) RevokeSession(context.Context, string) error { return nil }
-
-func (i *testIdentity) Authenticate(context.Context, string) (core.Session, core.Principal, error) {
-	return core.Session{}, core.Principal{ID: i.principalID, Active: i.active}, nil
-}
-
-func (i *testIdentity) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, required core.AccessLevel) error {
-	if !i.writable || len(groups) == 0 || required != core.AccessLevelWrite {
-		return core.ErrForbidden
+func (i *testIdentity) RequireGroupLevel(_ context.Context, _ contracts.AuthorizationSubject, groups []string, required contracts.AccessLevel) error {
+	if !i.writable || len(groups) == 0 || required != contracts.AccessLevelWrite {
+		return contracts.ErrAccessForbidden
 	}
 	return nil
 }
@@ -57,22 +54,22 @@ func (i *testIdentity) RequireGroupLevel(_ context.Context, _ core.Session, grou
 type testFiles struct {
 	Files
 	staged        map[string][]byte
-	files         map[string]core.File
+	files         map[string]contracts.File
 	byKey         map[string]string
 	last          []byte
 	beforeCreate  func()
-	requestStatus core.UploadRequestStatus
+	requestStatus contracts.UploadRequestStatus
 	requestErr    error
 }
 
 func newTestFiles() *testFiles {
-	return &testFiles{staged: make(map[string][]byte), files: make(map[string]core.File), byKey: make(map[string]string)}
+	return &testFiles{staged: make(map[string][]byte), files: make(map[string]contracts.File), byKey: make(map[string]string)}
 }
 
-func (f *testFiles) PutStagedObject(_ context.Context, _ core.Session, id string, _ []string, size int64, checksum string, body io.Reader) error {
+func (f *testFiles) PutStagedObject(_ context.Context, _ contracts.AuthorizationSubject, id string, _ []string, size int64, checksum string, body io.Reader) error {
 	if existing, ok := f.staged[id]; ok {
 		if int64(len(existing)) != size || digest(existing) != checksum {
-			return core.ErrRequestConflict
+			return contracts.ErrFileRequestConflict
 		}
 		return nil
 	}
@@ -87,10 +84,10 @@ func (f *testFiles) PutStagedObject(_ context.Context, _ core.Session, id string
 	return nil
 }
 
-func (f *testFiles) ReadStagedObject(_ context.Context, _ core.Session, id string) (io.ReadCloser, int64, string, error) {
+func (f *testFiles) ReadStagedObject(_ context.Context, _ contracts.AuthorizationSubject, id string) (io.ReadCloser, int64, string, error) {
 	value, ok := f.staged[id]
 	if !ok {
-		return nil, 0, "", core.ErrFileNotFound
+		return nil, 0, "", contracts.ErrFileNotFound
 	}
 	return io.NopCloser(bytes.NewReader(value)), int64(len(value)), digest(value), nil
 }
@@ -100,7 +97,7 @@ func (f *testFiles) PurgeStagedObject(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *testFiles) CreateFileVerified(_ context.Context, _ core.Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
+func (f *testFiles) CreateFileVerified(_ context.Context, _ contracts.AuthorizationSubject, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
 	if f.beforeCreate != nil {
 		f.beforeCreate()
 	}
@@ -115,38 +112,38 @@ func (f *testFiles) CreateFileVerified(_ context.Context, _ core.Session, reques
 		return "", api.ErrInvalid
 	}
 	id := uuid.NewString()
-	f.files[id] = core.File{ID: id, Groups: append([]string(nil), groups...), Metadata: clone(metadata), ContentType: contentType, SHA256: checksum, Revision: 1, Size: size}
+	f.files[id] = contracts.File{ID: id, Groups: append([]string(nil), groups...), Metadata: clone(metadata), ContentType: contentType, SHA256: checksum, Revision: 1, Size: size}
 	f.byKey[requestKey] = id
 	f.last = append([]byte(nil), value...)
 	return id, nil
 }
 
-func (f *testFiles) StatFile(_ context.Context, _ core.Session, id string) (core.File, error) {
+func (f *testFiles) StatFile(_ context.Context, _ contracts.AuthorizationSubject, id string) (contracts.File, error) {
 	file, ok := f.files[id]
 	if !ok {
-		return core.File{}, core.ErrFileNotFound
+		return contracts.File{}, contracts.ErrFileNotFound
 	}
 	file.Groups = append([]string(nil), file.Groups...)
 	file.Metadata = clone(file.Metadata)
 	return file, nil
 }
 
-func (f *testFiles) ResolveUploadRequest(context.Context, string, string) (core.UploadRequestStatus, error) {
+func (f *testFiles) ResolveUploadRequest(context.Context, string, string) (contracts.UploadRequestStatus, error) {
 	return f.requestStatus, f.requestErr
 }
 
 type testData struct {
-	records      map[recorddata.RecordKey]recorddata.Record
+	records      map[contracts.RecordKey]contracts.Record
 	now          func() time.Time
 	next         int64
 	page         int
 	indexBytes   int
 	batchBytes   int
-	beforeDelete func(recorddata.RecordKey)
+	beforeDelete func(contracts.RecordKey)
 }
 
 func newTestData() *testData {
-	return &testData{records: make(map[recorddata.RecordKey]recorddata.Record), now: time.Now, page: 100,
+	return &testData{records: make(map[contracts.RecordKey]contracts.Record), now: time.Now, page: 100,
 		indexBytes: 1 << 16, batchBytes: 4 << 20}
 }
 
@@ -156,50 +153,50 @@ func (d *testData) MaxPayloadBytes() int { return 1 << 20 }
 func (d *testData) MaxIndexBytes() int   { return d.indexBytes }
 func (d *testData) MaxBatchBytes() int   { return d.batchBytes }
 
-func (d *testData) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
+func (d *testData) Get(_ context.Context, key contracts.RecordKey) (contracts.Record, error) {
 	record, ok := d.records[key]
 	if !ok || expired(record, d.now()) {
-		return recorddata.Record{}, recorddata.ErrRecordNotFound
+		return contracts.Record{}, contracts.ErrRecordNotFound
 	}
 	return cloneRecord(record), nil
 }
 
-func (d *testData) GetExpired(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
+func (d *testData) GetExpired(_ context.Context, key contracts.RecordKey) (contracts.Record, error) {
 	record, ok := d.records[key]
 	if !ok || !expired(record, d.now()) {
-		return recorddata.Record{}, recorddata.ErrRecordNotFound
+		return contracts.Record{}, contracts.ErrRecordNotFound
 	}
 	return cloneRecord(record), nil
 }
 
-func (d *testData) Put(_ context.Context, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
+func (d *testData) Put(_ context.Context, key contracts.RecordKey, value contracts.RecordValue, expected int64) (contracts.Record, error) {
 	records := cloneRecords(d.records)
 	record, err := d.write(records, key, value, expected)
 	if err != nil {
-		return recorddata.Record{}, err
+		return contracts.Record{}, err
 	}
 	d.records = records
 	return record, nil
 }
 
-func (d *testData) Delete(_ context.Context, key recorddata.RecordKey, expected int64) error {
+func (d *testData) Delete(_ context.Context, key contracts.RecordKey, expected int64) error {
 	if d.beforeDelete != nil {
 		d.beforeDelete(key)
 	}
 	record, ok := d.records[key]
 	if !ok || expired(record, d.now()) {
-		return recorddata.ErrRecordNotFound
+		return contracts.ErrRecordNotFound
 	}
 	if record.Revision != expected {
-		return recorddata.ErrRecordConflict
+		return contracts.ErrRecordConflict
 	}
 	delete(d.records, key)
 	return nil
 }
 
-func (d *testData) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
+func (d *testData) Batch(_ context.Context, mutations []contracts.RecordMutation) error {
 	if err := validateTestDataBatch(mutations); err != nil {
-		return recorddata.ErrRecordInvalid
+		return contracts.ErrRecordInvalid
 	}
 	records := cloneRecords(d.records)
 	next := d.next
@@ -207,10 +204,10 @@ func (d *testData) Batch(_ context.Context, mutations []recorddata.RecordMutatio
 		if mutation.Value == nil {
 			current, ok := records[mutation.Key]
 			if !ok || expired(current, d.now()) {
-				return recorddata.ErrRecordNotFound
+				return contracts.ErrRecordNotFound
 			}
 			if current.Revision != mutation.ExpectedRevision {
-				return recorddata.ErrRecordConflict
+				return contracts.ErrRecordConflict
 			}
 			delete(records, mutation.Key)
 			continue
@@ -229,28 +226,28 @@ func (d *testData) Batch(_ context.Context, mutations []recorddata.RecordMutatio
 	return nil
 }
 
-func validateTestDataBatch(mutations []recorddata.RecordMutation) error {
+func validateTestDataBatch(mutations []contracts.RecordMutation) error {
 	if len(mutations) == 0 {
-		return recorddata.ErrRecordInvalid
+		return contracts.ErrRecordInvalid
 	}
 	first := mutations[0].Key
-	seen := make(map[recorddata.RecordKey]struct{}, len(mutations))
+	seen := make(map[contracts.RecordKey]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		key := mutation.Key
 		if key.Namespace != first.Namespace || key.ScopeType != first.ScopeType || key.ScopeID != first.ScopeID || mutation.ExpectedRevision < 0 ||
 			(mutation.Value == nil && mutation.ExpectedRevision == 0) {
-			return recorddata.ErrRecordInvalid
+			return contracts.ErrRecordInvalid
 		}
 		if _, exists := seen[key]; exists {
-			return recorddata.ErrRecordInvalid
+			return contracts.ErrRecordInvalid
 		}
 		seen[key] = struct{}{}
 	}
 	return nil
 }
 
-func (d *testData) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []recorddata.RecordSelector, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
-	var keys []recorddata.RecordKey
+func (d *testData) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []contracts.RecordSelector, limit int) ([]contracts.RecordKey, []contracts.Record, string, error) {
+	var keys []contracts.RecordKey
 	for key, record := range d.records {
 		if key.Namespace == namespace && key.ScopeType == scopeType && key.ScopeID == scopeID && key.RecordKey > after && !expired(record, d.now()) && matchesSelectors(record.IndexData, selectors) {
 			keys = append(keys, key)
@@ -259,8 +256,8 @@ func (d *testData) List(_ context.Context, namespace, scopeType, scopeID, after 
 	return d.pageRecords(keys, limit)
 }
 
-func (d *testData) ListExpired(_ context.Context, namespace, scopeType, scopeID, after string, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
-	var keys []recorddata.RecordKey
+func (d *testData) ListExpired(_ context.Context, namespace, scopeType, scopeID, after string, limit int) ([]contracts.RecordKey, []contracts.Record, string, error) {
+	var keys []contracts.RecordKey
 	for key, record := range d.records {
 		if key.Namespace == namespace && key.ScopeType == scopeType && key.ScopeID == scopeID && key.RecordKey > after && expired(record, d.now()) {
 			keys = append(keys, key)
@@ -269,30 +266,30 @@ func (d *testData) ListExpired(_ context.Context, namespace, scopeType, scopeID,
 	return d.pageRecords(keys, limit)
 }
 
-func (d *testData) pageRecords(keys []recorddata.RecordKey, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
+func (d *testData) pageRecords(keys []contracts.RecordKey, limit int) ([]contracts.RecordKey, []contracts.Record, string, error) {
 	sort.Slice(keys, func(i, j int) bool { return keys[i].RecordKey < keys[j].RecordKey })
 	next := ""
 	if len(keys) > limit {
 		keys = keys[:limit]
 		next = keys[len(keys)-1].RecordKey
 	}
-	records := make([]recorddata.Record, len(keys))
+	records := make([]contracts.Record, len(keys))
 	for i, key := range keys {
 		records[i] = cloneRecord(d.records[key])
 	}
 	return keys, records, next, nil
 }
 
-func (d *testData) write(records map[recorddata.RecordKey]recorddata.Record, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
+func (d *testData) write(records map[contracts.RecordKey]contracts.Record, key contracts.RecordKey, value contracts.RecordValue, expected int64) (contracts.Record, error) {
 	current, exists := records[key]
 	if exists && expired(current, d.now()) {
 		exists = false
 	}
 	if (!exists && expected != 0) || (exists && current.Revision != expected) || (exists && expected == 0) {
-		return recorddata.Record{}, recorddata.ErrRecordConflict
+		return contracts.Record{}, contracts.ErrRecordConflict
 	}
 	d.next++
-	record := recorddata.Record{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion,
+	record := contracts.Record{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion,
 		IndexData: append(json.RawMessage(nil), value.IndexData...), Revision: d.next, CreatedAt: d.now(), UpdatedAt: d.now()}
 	if value.TTL > 0 {
 		expires := d.now().Add(value.TTL)
@@ -305,15 +302,15 @@ func (d *testData) write(records map[recorddata.RecordKey]recorddata.Record, key
 	return record, nil
 }
 
-func cloneRecords(source map[recorddata.RecordKey]recorddata.Record) map[recorddata.RecordKey]recorddata.Record {
-	result := make(map[recorddata.RecordKey]recorddata.Record, len(source))
+func cloneRecords(source map[contracts.RecordKey]contracts.Record) map[contracts.RecordKey]contracts.Record {
+	result := make(map[contracts.RecordKey]contracts.Record, len(source))
 	for key, record := range source {
 		result[key] = cloneRecord(record)
 	}
 	return result
 }
 
-func cloneRecord(record recorddata.Record) recorddata.Record {
+func cloneRecord(record contracts.Record) contracts.Record {
 	record.Payload = append(json.RawMessage(nil), record.Payload...)
 	record.IndexData = append(json.RawMessage(nil), record.IndexData...)
 	if record.ExpiresAt != nil {
@@ -323,11 +320,11 @@ func cloneRecord(record recorddata.Record) recorddata.Record {
 	return record
 }
 
-func expired(record recorddata.Record, now time.Time) bool {
+func expired(record contracts.Record, now time.Time) bool {
 	return record.ExpiresAt != nil && !record.ExpiresAt.After(now)
 }
 
-func matchesSelectors(encoded json.RawMessage, selectors []recorddata.RecordSelector) bool {
+func matchesSelectors(encoded json.RawMessage, selectors []contracts.RecordSelector) bool {
 	var values map[string]any
 	if json.Unmarshal(encoded, &values) != nil {
 		return false
@@ -339,13 +336,13 @@ func matchesSelectors(encoded json.RawMessage, selectors []recorddata.RecordSele
 		}
 		match := false
 		switch selector.Operator {
-		case recorddata.RecordSelectorEqual:
+		case contracts.RecordSelectorEqual:
 			match = len(selector.Values) == 1 && fmt.Sprint(actual) == fmt.Sprint(selector.Values[0])
-		case recorddata.RecordSelectorIn:
+		case contracts.RecordSelectorIn:
 			for _, expected := range selector.Values {
 				match = match || fmt.Sprint(actual) == fmt.Sprint(expected)
 			}
-		case recorddata.RecordSelectorContains:
+		case contracts.RecordSelectorContains:
 			array, ok := actual.([]any)
 			if ok {
 				for _, item := range array {
@@ -389,9 +386,9 @@ func newTestServiceWithFiles(t *testing.T, files Files, data *testData) (*Servic
 
 func TestAuthenticateSessionUsesCoreSessionAndRejectsInactivePrincipal(t *testing.T) {
 	identity := &testIdentity{principalID: uuid.NewString(), writable: true, active: true}
+	identity.sessions = &testIdentitySessions{enabled: true, principal: contracts.Principal{ID: identity.principalID, Active: true}}
 	data := newTestData()
-	sessions := &testCoreSessions{principal: core.Principal{ID: identity.principalID, Active: true}}
-	service, err := New(identity, newTestFiles(), data, testLoaderConfig(), sessions)
+	service, err := New(identity, newTestFiles(), data, testLoaderConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,20 +396,21 @@ func TestAuthenticateSessionUsesCoreSessionAndRejectsInactivePrincipal(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sessions.token != "opaque-session-token" {
-		t.Fatalf("Core session token=%q", sessions.token)
+	if identity.sessions.token != "opaque-session-token" {
+		t.Fatalf("Core session token=%q", identity.sessions.token)
 	}
 	principal, ok := ctx.Value(authKey{}).(authenticated)
 	if !ok || principal.principalID != identity.principalID {
 		t.Fatalf("authenticated context=%+v", principal)
 	}
 
-	sessions.principal.Active = false
+	identity.sessions.principal.Active = false
 	if _, err := service.AuthenticateSession(context.Background(), "opaque-session-token"); !errors.Is(err, api.ErrUnauthorized) {
 		t.Fatalf("inactive session principal returned %v", err)
 	}
 
-	serviceWithoutSessions, err := New(identity, newTestFiles(), newTestData(), testLoaderConfig())
+	identityWithoutSessions := &testIdentity{principalID: uuid.NewString(), writable: true, active: true}
+	serviceWithoutSessions, err := New(identityWithoutSessions, newTestFiles(), newTestData(), testLoaderConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +634,7 @@ func TestAbortSchedulesDurableStagingCleanup(t *testing.T) {
 	if len(files.staged) != 0 {
 		t.Fatalf("aborted staging objects were not removed: %d remain", len(files.staged))
 	}
-	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, recorddata.ErrRecordNotFound) {
+	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, contracts.ErrRecordNotFound) {
 		t.Fatalf("cleanup job was not retired: %v", err)
 	}
 }
@@ -672,7 +670,7 @@ func TestPendingCoreCommitRetainsExpiredSessionAndPartData(t *testing.T) {
 		t.Fatal(err)
 	}
 	markCommittingExpired(t, service, data, upload.ID, now.Add(30*time.Minute))
-	service.files.(*testFiles).requestStatus = core.UploadRequestStatus{State: "pending"}
+	service.files.(*testFiles).requestStatus = contracts.UploadRequestStatus{State: "pending"}
 	now = now.Add(2 * time.Hour)
 
 	if err := service.CleanupOnce(ctx); err != nil {
@@ -705,7 +703,7 @@ func TestExpiredCommitRecoveryPromotesReadyFileBeforeCleanup(t *testing.T) {
 	}
 	markCommittingExpired(t, service, data, upload.ID, now.Add(30*time.Minute))
 	fileID := uuid.NewString()
-	files.requestStatus = core.UploadRequestStatus{State: "ready", FileID: fileID}
+	files.requestStatus = contracts.UploadRequestStatus{State: "ready", FileID: fileID}
 	now = now.Add(2 * time.Hour)
 
 	if err := service.CleanupOnce(ctx); err != nil {
@@ -722,7 +720,7 @@ func TestExpiredCommitRecoveryPromotesReadyFileBeforeCleanup(t *testing.T) {
 	if len(files.staged) != 0 {
 		t.Fatalf("recovered commit left staged bytes behind: %d remain", len(files.staged))
 	}
-	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, recorddata.ErrRecordNotFound) {
+	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, contracts.ErrRecordNotFound) {
 		t.Fatalf("cleanup job was not retired after confirmed Core commit: %v", err)
 	}
 }
@@ -740,7 +738,7 @@ func TestExpiredCommitRecoveryMarksFailedCoreRequestAborted(t *testing.T) {
 		t.Fatal(err)
 	}
 	markCommittingExpired(t, service, data, upload.ID, now.Add(30*time.Minute))
-	service.files.(*testFiles).requestStatus = core.UploadRequestStatus{State: "failed"}
+	service.files.(*testFiles).requestStatus = contracts.UploadRequestStatus{State: "failed"}
 	now = now.Add(2 * time.Hour)
 
 	if err := service.CleanupOnce(ctx); err != nil {
@@ -799,14 +797,14 @@ func TestCleanupCursorRotatesPastPendingCoreCommits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files.requestStatus = core.UploadRequestStatus{State: "pending"}
+	files.requestStatus = contracts.UploadRequestStatus{State: "pending"}
 	if err := service.CleanupOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.CleanupOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.Get(context.Background(), cleanupDataKey(readyID)); !errors.Is(err, recorddata.ErrRecordNotFound) {
+	if _, err := data.Get(context.Background(), cleanupDataKey(readyID)); !errors.Is(err, contracts.ErrRecordNotFound) {
 		t.Fatalf("a pending earlier commit starved a later cleanup job: %v", err)
 	}
 	if _, err := data.Get(context.Background(), cleanupDataKey(pendingID)); err != nil {
@@ -857,7 +855,7 @@ func TestCleanupToleratesJobRemovedByAnotherInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobKey := cleanupDataKey(upload.ID)
-	data.beforeDelete = func(key recorddata.RecordKey) {
+	data.beforeDelete = func(key contracts.RecordKey) {
 		if key == jobKey {
 			delete(data.records, key)
 		}
@@ -919,13 +917,13 @@ func digest(value []byte) string {
 }
 
 func TestFileSetNameConflictMapsToClientConflict(t *testing.T) {
-	if got := mapCoreError(core.ErrFileSetConflict); !errors.Is(got, api.ErrConflict) {
+	if got := mapCoreError(contracts.ErrFileSetConflict); !errors.Is(got, api.ErrConflict) {
 		t.Fatalf("file-set name conflict mapped to %v", got)
 	}
 }
 
 func TestInvalidCoreSearchInputMapsToClientError(t *testing.T) {
-	if got := mapCoreError(core.ErrInvalidSearch); !errors.Is(got, api.ErrInvalid) {
+	if got := mapCoreError(contracts.ErrFileInvalidSearch); !errors.Is(got, api.ErrInvalid) {
 		t.Fatalf("invalid Core search input mapped to %v", got)
 	}
 }

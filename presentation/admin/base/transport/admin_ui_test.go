@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
 	fileapi "github.com/Zubrium/cdn/presentation/fileapi"
 )
@@ -29,7 +28,7 @@ func uiTestServer(t *testing.T, uiHandler http.Handler) *AdminServer {
 		MaxJSONBytes: 1 << 20, DefaultPageSize: 1, MaxPageSize: 10,
 		UIHandler: uiHandler,
 	}, AdminDependencies{
-		Core: &core.Runtime{}, Files: &uiTestLoader{}, Website: &uiTestWebsite{},
+		CoreReady: func() bool { return false }, Files: &uiTestLoader{}, Website: &uiTestWebsite{},
 	})
 	if err != nil {
 		t.Fatalf("create Admin server: %v", err)
