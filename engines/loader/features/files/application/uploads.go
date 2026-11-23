@@ -282,6 +282,16 @@ func (s *Service) markPartReady(ctx context.Context, request authenticated, uplo
 }
 
 func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error) {
+	var file api.File
+	err := s.observe(ctx, "commit", func(ctx context.Context) error {
+		var commitErr error
+		file, commitErr = s.commitUpload(ctx, id)
+		return commitErr
+	})
+	return file, err
+}
+
+func (s *Service) commitUpload(ctx context.Context, id string) (api.File, error) {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(ctx, s.cfg.CommitTimeout)
 	defer cancel()
@@ -427,23 +437,31 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 // each staged part. The listener has its own reserved connection in the same
 // pool, so config validation matches the slot count to that capacity.
 func (s *Service) acquireCommitSlot(ctx context.Context) (func(), error) {
-	if s == nil || s.commitSlots == nil {
+	if s == nil || s.commitSlots == nil || ctx == nil {
 		return nil, api.ErrUnavailable
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("%w: commit capacity wait ended", api.ErrUnavailable)
+		s.reject("GLOBAL")
+		return nil, fmt.Errorf("%w: commit capacity unavailable", api.ErrUnavailable)
 	}
 	select {
 	case s.commitSlots <- struct{}{}:
-		if err := ctx.Err(); err != nil {
-			<-s.commitSlots
-			return nil, fmt.Errorf("%w: commit capacity wait ended", api.ErrUnavailable)
-		}
-		var once sync.Once
-		return func() { once.Do(func() { <-s.commitSlots }) }, nil
-	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: commit capacity wait ended", api.ErrUnavailable)
+	default:
+		s.reject("GLOBAL")
+		return nil, fmt.Errorf("%w: commit capacity exhausted", api.ErrUnavailable)
 	}
+	if err := ctx.Err(); err != nil {
+		<-s.commitSlots
+		return nil, fmt.Errorf("%w: commit capacity unavailable", api.ErrUnavailable)
+	}
+	s.setInFlight(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.setInFlight(-1)
+			<-s.commitSlots
+		})
+	}, nil
 }
 
 func (s *Service) AbortUpload(ctx context.Context, id string) error {

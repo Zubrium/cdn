@@ -1,17 +1,17 @@
 package application
 
 import (
-	"github.com/Zubrium/cdn/pkg/contracts"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"sync"
 	"time"
 
-		api "github.com/Zubrium/cdn/engines/loader/presentation"
+	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )
 
@@ -24,6 +24,11 @@ func (s *Service) request(ctx context.Context) (authenticated, error) {
 }
 
 func (s *Service) loadUpload(ctx context.Context, request authenticated, id string) (storedUpload, contracts.Record, error) {
+	release, err := s.acquireSessionLookupSlot(ctx)
+	if err != nil {
+		return storedUpload{}, contracts.Record{}, err
+	}
+	defer release()
 	if _, err := uuid.Parse(id); err != nil {
 		return storedUpload{}, contracts.Record{}, api.ErrNotFound
 	}
@@ -34,22 +39,35 @@ func (s *Service) loadUpload(ctx context.Context, request authenticated, id stri
 	if record.PayloadVersion != 1 {
 		return storedUpload{}, contracts.Record{}, api.ErrUnavailable
 	}
-	if cached, ok := s.cache.get(id, request.principalID, record.Revision, s.now()); ok {
-		if !s.now().Before(cached.ExpiresAt) {
-			s.cache.remove(id)
-			return storedUpload{}, contracts.Record{}, api.ErrNotFound
+	var (
+		upload storedUpload
+		cached storedUpload
+		found  bool
+	)
+	err = s.observe(ctx, "session-lookup", func(context.Context) error {
+		if cached, found = s.cache.get(id, request.principalID, record.Revision, s.now()); found {
+			if !s.now().Before(cached.ExpiresAt) {
+				s.cache.remove(id)
+				return api.ErrNotFound
+			}
+			return nil
 		}
+		if json.Unmarshal(record.Payload, &upload) != nil || !s.validUpload(upload, id, request.principalID) {
+			return api.ErrNotFound
+		}
+		if !s.now().Before(upload.ExpiresAt) {
+			s.cache.remove(id)
+			return api.ErrNotFound
+		}
+		s.cache.put(id, request.principalID, upload, record.Revision, int64(len(record.Payload)), s.now())
+		return nil
+	})
+	if err != nil {
+		return storedUpload{}, contracts.Record{}, err
+	}
+	if found {
 		return cached, record, nil
 	}
-	var upload storedUpload
-	if json.Unmarshal(record.Payload, &upload) != nil || !s.validUpload(upload, id, request.principalID) {
-		return storedUpload{}, contracts.Record{}, api.ErrNotFound
-	}
-	if !s.now().Before(upload.ExpiresAt) {
-		s.cache.remove(id)
-		return storedUpload{}, contracts.Record{}, api.ErrNotFound
-	}
-	s.cache.put(id, request.principalID, upload, record.Revision, int64(len(record.Payload)), s.now())
 	return upload, record, nil
 }
 

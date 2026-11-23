@@ -14,7 +14,7 @@ type pingResponse struct{ Value string }
 
 func TestStaticAllowlistRestrictsRegistrationAndDispatch(t *testing.T) {
 	allowed := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
-	dispatcher, err := NewAllowlisted(allowed.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, allowed.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestStaticAllowlistRestrictsRegistrationAndDispatch(t *testing.T) {
 
 func TestDispatcherRequiresSealAndRejectsDuplicateOperations(t *testing.T) {
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestDispatcherRequiresSealAndRejectsDuplicateOperations(t *testing.T) {
 
 func TestDispatcherPropagatesHandlerErrorsAndRejectsUnknownOrWrongTypes(t *testing.T) {
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestDispatcherPropagatesHandlerErrorsAndRejectsUnknownOrWrongTypes(t *testi
 
 func TestEnvelopeRejectsMalformedDuplicateAndUnknownPayloadFields(t *testing.T) {
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestEnvelopeRejectsMalformedDuplicateAndUnknownPayloadFields(t *testing.T) 
 
 func TestCloseStopsAdmissionAndWaitsForInFlightHandlers(t *testing.T) {
 	operation := contracts.Operation[pingRequest, pingResponse]{Key: contracts.Key{ID: "core.ping", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestCloseStopsAdmissionAndWaitsForInFlightHandlers(t *testing.T) {
 
 func TestCoreReadinessUsesTypedOperationAndPropagatesFailures(t *testing.T) {
 	operation := contracts.CoreReadinessOperation()
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestCoreReadinessUsesTypedOperationAndPropagatesFailures(t *testing.T) {
 		t.Fatalf("readiness failure = %v", err)
 	}
 
-	readyDispatcher, err := NewAllowlisted(operation.Key)
+	readyDispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}

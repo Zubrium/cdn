@@ -369,7 +369,7 @@ func newTestService(t *testing.T) (*Service, context.Context, *testIdentity, *te
 func newTestServiceWithFiles(t *testing.T, files Files, data *testData) (*Service, context.Context, *testIdentity) {
 	t.Helper()
 	id := &testIdentity{principalID: uuid.NewString(), writable: true, active: true}
-	cfg := Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, SessionTTL: time.Hour,
+	cfg := Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, MaxConcurrentSessionLookups: 1, SessionTTL: time.Hour,
 		CommitTimeout: time.Minute, Mode: ModeAuto, BufferThreshold: 8, MaxBufferedBytes: 16,
 		SessionCacheEntries: 8, SessionCacheMaxBytes: 1 << 20, SessionCacheTTL: time.Minute,
 		CleanupInterval: time.Minute, CleanupBatchSize: 16}
@@ -420,7 +420,7 @@ func TestAuthenticateSessionUsesCoreSessionAndRejectsInactivePrincipal(t *testin
 }
 
 func testLoaderConfig() Config {
-	return Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, SessionTTL: time.Hour,
+	return Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, MaxConcurrentSessionLookups: 1, SessionTTL: time.Hour,
 		CommitTimeout: time.Minute, Mode: ModeAuto, BufferThreshold: 8, MaxBufferedBytes: 16,
 		SessionCacheEntries: 8, SessionCacheMaxBytes: 1 << 20, SessionCacheTTL: time.Minute,
 		CleanupInterval: time.Minute, CleanupBatchSize: 16}
@@ -451,7 +451,7 @@ func TestBeginUploadIdempotencyIsPrincipalScopedAndDoesNotCollapseKeys(t *testin
 func TestNewRequiresModuleDataCapacityForLoaderTransactions(t *testing.T) {
 	identity := &testIdentity{principalID: uuid.NewString(), writable: true, active: true}
 	files := newTestFiles()
-	cfg := Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, SessionTTL: time.Hour,
+	cfg := Config{PartSize: 4, MaxFileBytes: 128, MaxPartBytes: 4, MaxParts: 32, MaxConcurrentCommits: 1, MaxConcurrentSessionLookups: 1, SessionTTL: time.Hour,
 		CommitTimeout: time.Minute, Mode: ModeAuto, BufferThreshold: 8, MaxBufferedBytes: 16,
 		SessionCacheEntries: 8, SessionCacheMaxBytes: 1 << 20, SessionCacheTTL: time.Minute,
 		CleanupInterval: time.Minute, CleanupBatchSize: 16}
@@ -568,7 +568,7 @@ func TestUploadPartsCommitAndCommitRetryReturnSameFile(t *testing.T) {
 	}
 }
 
-func TestCommitWaitsWithinConfiguredConcurrencyLimit(t *testing.T) {
+func TestCommitFailsFastWithinConfiguredConcurrencyLimit(t *testing.T) {
 	service, ctx, _, files, _ := newTestService(t)
 	body := []byte("data")
 	upload, err := service.BeginUpload(ctx, uploadInput("commit-slot", body))
@@ -585,7 +585,7 @@ func TestCommitWaitsWithinConfiguredConcurrencyLimit(t *testing.T) {
 	blockedCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	if _, err := service.CommitUpload(blockedCtx, upload.ID); !errors.Is(err, api.ErrUnavailable) {
-		t.Fatalf("commit without a reserved DB connection pair did not stop at its deadline: %v", err)
+		t.Fatalf("commit without a reserved DB connection pair did not fail fast: %v", err)
 	}
 	if len(files.files) != 0 {
 		t.Fatal("commit waiting for a slot changed upload state or created a file")

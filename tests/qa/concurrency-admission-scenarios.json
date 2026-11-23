@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "CONC-001",
+      "source": "spec/architecture/SPEC-concurrency.md §4 HTTP ingress и backpressure; §10 отказные случаи; §12 Observability",
+      "level": "unit",
+      "preconditions": [
+        "HTTP listener снован с явным max_in_flight, request_timeout и shutdown_timeout не короче request_timeout.",
+        "Один активный запрос удерживает единственный in-flight слот."
+      ],
+      "input": "Дополнительные запросы к admin и public ingress, а также /healthz и /readyz во время насыщения; отдельно неполные и противоречивые конфигурации.",
+      "action": "Применить in-flight semaphore к входящим запросам и проверить метрики, исключения и валидацию конфигурации.",
+      "expected_result": "Избыточные запросы получают 503 с Cache-Control: no-store и стандартной формой ошибки без ожидания; /healthz и /readyz не учитываются; невалидная конфигурация отклоняется до старта; rejected{scope=HTTP,reason=GLOBAL} увеличивается.",
+      "expected_state": "Активные запросы работают в рамках request_timeout; in-flight gauge возвращается к нулю после завершения, состояние приложения не меняется.",
+      "test_file": "tests/go/presentation/admin/base/transport/concurrency_admission_test.go",
+      "test_symbol": "TestConcurrencyAdmissionScenario/CONC-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-003",
+      "source": "spec/architecture/SPEC-concurrency.md §5 Process-local bus; §10 отказные случаи",
+      "level": "unit",
+      "preconditions": [
+        "Dispatcher сконфигурирован явным global лимитом и, отдельно, per-operation лимитом из статического allowlist.",
+        "Активный sync dispatch удерживает слот."
+      ],
+      "input": "Повторный dispatch того же operation ID при исчерпанном global и per-operation лимите.",
+      "action": "Вызвать Dispatch в горутине вызывающего и проверить типы ошибок, счётчики вызовов handler и метрики.",
+      "expected_result": "Возвращается ErrOverloaded без queueing, reasons GLOBAL и PER_OPERATION фиксируются отдельно, handler не вызывается повторно, dispatch остаётся синхронным.",
+      "expected_state": "Активный dispatch завершается нормально; in-flight gauge возвращается к нулю; allowlist и stream capability не меняются.",
+      "test_file": "tests/go/main/internal/bus/concurrency_admission_test.go",
+      "test_symbol": "TestConcurrencyAdmissionScenario/CONC-003",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-009",
+      "source": "spec/architecture/SPEC-concurrency.md §8 Loader; §10 отказные случаи; §12 Observability",
+      "level": "unit",
+      "preconditions": [
+        "Loader имеет явные лимиты commit и session lookup.",
+        "Один commit удерживает слот, один session lookup слот занят отдельно."
+      ],
+      "input": "Дополнительный CommitUpload и UploadStatus при исчерпанных лимитах.",
+      "action": "Вызвать операции Loader и проверить ошибки, состояние сессии и метрики.",
+      "expected_result": "Избыточные операции сразу получают ErrUnavailable, который HTTP-слой мапит в 503; rejected{scope=LOADER,reason=GLOBAL} увеличивается; staging, revision и upload records не меняются.",
+      "expected_state": "Разрешённый commit создаёт ровно один файл; после снятия блокировки session lookup снова доступен.",
+      "test_file": "tests/go/engines/loader/features/files/application/concurrency_admission_test.go",
+      "test_symbol": "TestConcurrencyAdmissionScenario/CONC-009",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-011",
+      "source": "spec/architecture/SPEC-concurrency.md §4.6, §5.5, §10; shutdown под нагрузкой",
+      "level": "unit",
+      "preconditions": [
+        "Активные HTTP, bus и loader операции удерживают admission слоты.",
+        "Shutdown timeout и request timeout заданы явно."
+      ],
+      "input": "Shutdown listener и dispatcher под нагрузкой, повторный Stop/Close и повторный release слотов.",
+      "action": "Дождаться drain/отмены по deadline и снять каждый слот повторно.",
+      "expected_result": "Admission закрывается, активные операции завершаются или отменяются по deadline, повторный release не создаёт дубликаты метрик и не падает.",
+      "expected_state": "In-flight gauge равен нулю, счётчики rejection не дублируются, повторный Stop/Close безопасен.",
+      "test_file": "tests/go/presentation/admin/base/transport/concurrency_admission_test.go",
+      "test_symbol": "TestConcurrencyAdmissionScenario/CONC-011",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    }
+  ]
+}

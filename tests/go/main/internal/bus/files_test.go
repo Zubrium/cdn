@@ -19,7 +19,7 @@ func (fileCreatorFunc) DeleteFile(context.Context, string, int64) error { return
 
 func TestRegisterVerifiedFileCreateResolvesByBusModuleAndStreamsBody(t *testing.T) {
 	operation := contracts.FileCreateVerifiedOperation()
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func (reader coreFileReaderFunc) ReadFile(ctx context.Context, fileID string) (i
 
 func TestRegisterFileReadStreamsBytesAndReturnsMetadata(t *testing.T) {
 	operation := contracts.FileReadOperation()
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func (*failingFileBody) Close() error { return nil }
 
 func TestRegisterFileReadPropagatesProducerFailureToStreamReader(t *testing.T) {
 	operation := contracts.FileReadOperation()
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func (stat fileStatFunc) StatFile(ctx context.Context, fileID string) (contracts
 
 func TestRegisterFileStatUsesCompositionBoundModuleScope(t *testing.T) {
 	operation := contracts.FileStatOperation()
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestRegisterFileSetOperationsKeepExpectedRevisionAndScope(t *testing.T) {
 		contracts.FileSetGetOperation().Key, contracts.FileSetListOperation().Key, contracts.FileSetMembersOperation().Key,
 		contracts.FileSetAddOperation().Key, contracts.FileSetRemoveOperation().Key,
 	}
-	dispatcher, err := NewAllowlisted(operations...)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operations...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func (deleteFile fileDeleteFunc) DeleteFile(ctx context.Context, fileID string, 
 
 func TestRegisterFileDeleteForwardsRevisionWithinModuleScope(t *testing.T) {
 	operation := contracts.FileDeleteOperation()
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}

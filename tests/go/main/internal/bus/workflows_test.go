@@ -38,7 +38,7 @@ func TestWorkflowOperationsAreStaticAndOwned(t *testing.T) {
 		contracts.WorkflowGetOperation().Key,
 		contracts.WorkflowRetryOperation().Key,
 	}
-	dispatcher, err := NewAllowlisted(operations...)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operations...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestWorkflowOperationsAreStaticAndOwned(t *testing.T) {
 }
 
 func TestWorkflowOperationsRejectInvalidIdentifiers(t *testing.T) {
-	dispatcher, err := NewAllowlisted(
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1},
 		contracts.WorkflowListOperation().Key,
 		contracts.WorkflowGetOperation().Key,
 		contracts.WorkflowRetryOperation().Key,

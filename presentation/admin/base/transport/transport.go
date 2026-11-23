@@ -36,6 +36,9 @@ type ServerConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
+	MaxInFlight       int
+	RequestTimeout    time.Duration
+	ShutdownTimeout   time.Duration
 }
 
 type AdminConfig struct {
@@ -87,6 +90,7 @@ type Readiness interface {
 type AdminServer struct {
 	config      AdminConfig
 	deps        AdminDependencies
+	ingress     *ingressLimiter
 	mu          sync.RWMutex
 	server      *http.Server
 	listener    net.Listener
@@ -100,13 +104,17 @@ func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, e
 	if config.Server.Address == "" || deps.CoreReady == nil || deps.Files == nil {
 		return nil, errors.New("Admin transport dependencies are incomplete")
 	}
+	ingress, err := newIngressLimiter(config.Server, config.Observer, "admin")
+	if err != nil {
+		return nil, err
+	}
 	if config.IdentityEnabled && (deps.Identity == nil || deps.Sessions == nil || deps.GroupAccess == nil) {
 		return nil, errors.New("Admin identity dependencies are incomplete")
 	}
 	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
 		return nil, errors.New("Admin coordinator dependencies are incomplete")
 	}
-	return &AdminServer{config: config, deps: deps}, nil
+	return &AdminServer{config: config, deps: deps, ingress: ingress}, nil
 }
 
 func (s *AdminServer) SetApplicationReadiness(readiness Readiness) {
@@ -133,6 +141,7 @@ func (s *AdminServer) Start(ctx context.Context) error {
 			ModuleKind: observability.ModuleKindPresentation, ModuleID: "admin", ComponentID: "http-server",
 		}, mux)
 	}
+	handler = s.ingress.Wrap(handler)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: s.config.Server.ReadHeaderTimeout,
 		ReadTimeout: s.config.Server.ReadTimeout, WriteTimeout: s.config.Server.WriteTimeout,
 		IdleTimeout: s.config.Server.IdleTimeout, MaxHeaderBytes: s.config.Server.MaxHeaderBytes}
@@ -344,6 +353,7 @@ func (s *AdminServer) Stop(ctx context.Context) error {
 	if server == nil {
 		return nil
 	}
+	ingressErr := s.ingress.Close(ctx)
 	err := server.Shutdown(ctx)
 	if err != nil {
 		_ = server.Close()
@@ -356,6 +366,7 @@ func (s *AdminServer) Stop(ctx context.Context) error {
 	if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
 		err = errors.Join(err, closeErr)
 	}
+	err = errors.Join(ingressErr, err)
 	s.mu.Lock()
 	s.server, s.listener, s.done = nil, nil, nil
 	s.mu.Unlock()
@@ -405,6 +416,7 @@ type PublicServer struct {
 	config   PublicConfig
 	api      *routerenginepresentation.APIAdapter
 	readyFn  func() bool
+	ingress  *ingressLimiter
 	mu       sync.RWMutex
 	server   *http.Server
 	listener net.Listener
@@ -417,7 +429,11 @@ func NewPublicServer(config PublicConfig, api *routerenginepresentation.APIAdapt
 	if config.Server.Address == "" || api == nil || ready == nil {
 		return nil, errors.New("public Router transport dependencies are incomplete")
 	}
-	return &PublicServer{config: config, api: api, readyFn: ready}, nil
+	ingress, err := newIngressLimiter(config.Server, config.Observer, "public-router")
+	if err != nil {
+		return nil, err
+	}
+	return &PublicServer{config: config, api: api, readyFn: ready, ingress: ingress}, nil
 }
 
 func (s *PublicServer) Start(ctx context.Context) error {
@@ -444,6 +460,7 @@ func (s *PublicServer) Start(ctx context.Context) error {
 			ModuleKind: observability.ModuleKindPresentation, ModuleID: "public-router", ComponentID: "http-server",
 		}, guarded)
 	}
+	observed = s.ingress.Wrap(observed)
 	server := &http.Server{Handler: observed, ReadHeaderTimeout: s.config.Server.ReadHeaderTimeout,
 		ReadTimeout: s.config.Server.ReadTimeout, WriteTimeout: s.config.Server.WriteTimeout,
 		IdleTimeout: s.config.Server.IdleTimeout, MaxHeaderBytes: s.config.Server.MaxHeaderBytes}
@@ -487,6 +504,7 @@ func (s *PublicServer) Stop(ctx context.Context) error {
 	if server == nil {
 		return nil
 	}
+	ingressErr := s.ingress.Close(ctx)
 	err := server.Shutdown(ctx)
 	if err != nil {
 		_ = server.Close()
@@ -499,6 +517,7 @@ func (s *PublicServer) Stop(ctx context.Context) error {
 	if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
 		err = errors.Join(err, closeErr)
 	}
+	err = errors.Join(ingressErr, err)
 	s.mu.Lock()
 	s.server, s.listener, s.done = nil, nil, nil
 	s.mu.Unlock()

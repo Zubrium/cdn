@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
@@ -20,9 +21,33 @@ var (
 	ErrHandlerNotFound     = errors.New("operation handler is not registered")
 	ErrOperationNotAllowed = errors.New("operation is not in the static allowlist")
 	ErrInvalidAllowlist    = errors.New("invalid operation allowlist")
+	ErrOverloaded          = errors.New("dispatcher is overloaded")
+	ErrInvalidConcurrency  = errors.New("invalid dispatcher concurrency configuration")
 )
 
 type Handler func(context.Context, json.RawMessage) (json.RawMessage, error)
+
+// OperationLimit is an explicit per-operation ceiling. Its key must belong to
+// the static allowlist; callers cannot choose it through an HTTP request.
+type OperationLimit struct {
+	Key         contracts.Key
+	MaxInFlight int
+}
+
+// PerOperationLimits narrows concurrency for operations compiled into the
+// dispatcher. Disabled limits are not represented in the runtime path at all.
+type PerOperationLimits struct {
+	Enabled            bool
+	DefaultMaxInFlight int
+	Overrides          []OperationLimit
+}
+
+// ConcurrencyLimits is supplied explicitly by the composition root. There are
+// no implicit limits and no compatibility aliases for older constructors.
+type ConcurrencyLimits struct {
+	MaxInFlight  int
+	PerOperation PerOperationLimits
+}
 
 type Dispatcher struct {
 	mu       sync.RWMutex
@@ -35,6 +60,10 @@ type Dispatcher struct {
 	drained  chan struct{}
 	drain    sync.Once
 	observer *observability.Observer
+
+	globalSlots   chan struct{}
+	operationSlot map[contracts.Key]chan struct{}
+	inFlight      atomic.Int64
 }
 
 // WithObserver attaches the process observer to the bus dispatcher. It must
@@ -46,7 +75,10 @@ func (dispatcher *Dispatcher) WithObserver(observer *observability.Observer) *Di
 	return dispatcher
 }
 
-func NewAllowlisted(keys ...contracts.Key) (*Dispatcher, error) {
+func NewAllowlisted(limits ConcurrencyLimits, keys ...contracts.Key) (*Dispatcher, error) {
+	if limits.MaxInFlight <= 0 {
+		return nil, ErrInvalidConcurrency
+	}
 	allowed := make(map[contracts.Key]struct{}, len(keys))
 	for _, key := range keys {
 		if key.Validate() != nil {
@@ -57,7 +89,35 @@ func NewAllowlisted(keys ...contracts.Key) (*Dispatcher, error) {
 		}
 		allowed[key] = struct{}{}
 	}
-	return &Dispatcher{handlers: make(map[contracts.Key]Handler), allowed: allowed, drained: make(chan struct{})}, nil
+	operationSlot := make(map[contracts.Key]chan struct{})
+	if limits.PerOperation.Enabled {
+		if limits.PerOperation.DefaultMaxInFlight <= 0 || limits.PerOperation.DefaultMaxInFlight > limits.MaxInFlight {
+			return nil, ErrInvalidConcurrency
+		}
+		for _, key := range keys {
+			operationSlot[key] = make(chan struct{}, limits.PerOperation.DefaultMaxInFlight)
+		}
+		seen := make(map[contracts.Key]struct{}, len(limits.PerOperation.Overrides))
+		for _, override := range limits.PerOperation.Overrides {
+			if override.MaxInFlight <= 0 || override.MaxInFlight > limits.MaxInFlight || override.Key.Validate() != nil {
+				return nil, ErrInvalidConcurrency
+			}
+			if _, exists := seen[override.Key]; exists {
+				return nil, ErrInvalidConcurrency
+			}
+			if _, allowedKey := allowed[override.Key]; !allowedKey {
+				return nil, ErrOperationNotAllowed
+			}
+			seen[override.Key] = struct{}{}
+			operationSlot[override.Key] = make(chan struct{}, override.MaxInFlight)
+		}
+	} else if limits.PerOperation.DefaultMaxInFlight != 0 || len(limits.PerOperation.Overrides) != 0 {
+		return nil, ErrInvalidConcurrency
+	}
+	return &Dispatcher{
+		handlers: make(map[contracts.Key]Handler), allowed: allowed, drained: make(chan struct{}),
+		globalSlots: make(chan struct{}, limits.MaxInFlight), operationSlot: operationSlot,
+	}, nil
 }
 
 func Register[Request, Response any](dispatcher *Dispatcher, operation contracts.Operation[Request, Response], handler contracts.Handler[Request, Response]) error {
@@ -140,13 +200,17 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 	if dispatcher == nil {
 		return contracts.Envelope{}, contracts.ErrDispatcherUnavailable
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	key := request.Key()
 	if err := key.Validate(); err != nil {
 		return contracts.Envelope{}, err
 	}
 	started := time.Now()
+	observer := dispatcher.observer
 	dispatchCtx := ctx
-	if observer := dispatcher.observer; observer != nil {
+	if observer != nil {
 		source := observer.CurrentIdentity(ctx)
 		identity := observability.Identity{
 			ModuleKind: observability.ModuleKindBus, ModuleID: "bus", ComponentID: "dispatcher", OperationID: key.ID,
@@ -167,6 +231,9 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 			observer.ObserveHistogram(dispatchCtx, "zubrium_bus_dispatch_duration_seconds", time.Since(started).Seconds(), labels...)
 		}()
 	}
+
+	// Hold the read lock across admission and active.Add so Close cannot start
+	// waiting before an admitted dispatch is registered in the drain set.
 	dispatcher.mu.RLock()
 	if dispatcher.closed {
 		dispatcher.mu.RUnlock()
@@ -185,8 +252,31 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 		dispatcher.mu.RUnlock()
 		return contracts.Envelope{}, ErrHandlerNotFound
 	}
-	withStreams := dispatcher.streams
+	if err := ctx.Err(); err != nil {
+		dispatcher.mu.RUnlock()
+		return contracts.Envelope{}, err
+	}
+	select {
+	case dispatcher.globalSlots <- struct{}{}:
+	default:
+		dispatcher.mu.RUnlock()
+		dispatcher.recordRejected("GLOBAL")
+		return contracts.Envelope{}, ErrOverloaded
+	}
+	var operationSlot chan struct{}
+	if slot, configured := dispatcher.operationSlot[key]; configured {
+		select {
+		case slot <- struct{}{}:
+			operationSlot = slot
+		default:
+			<-dispatcher.globalSlots
+			dispatcher.mu.RUnlock()
+			dispatcher.recordRejected("PER_OPERATION")
+			return contracts.Envelope{}, ErrOverloaded
+		}
+	}
 	dispatcher.active.Add(1)
+	withStreams := dispatcher.streams
 	if withStreams {
 		if capability, provided := contracts.StreamCapabilityFromContext(ctx); provided {
 			if scoped, ok := capability.(*ScopedStreams); ok {
@@ -196,7 +286,20 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 		}
 	}
 	dispatcher.mu.RUnlock()
-	defer dispatcher.active.Done()
+
+	dispatcher.setInFlight(1)
+	var released sync.Once
+	release := func() {
+		released.Do(func() {
+			dispatcher.setInFlight(-1)
+			if operationSlot != nil {
+				<-operationSlot
+			}
+			<-dispatcher.globalSlots
+			dispatcher.active.Done()
+		})
+	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		return contracts.Envelope{}, err
 	}
@@ -216,6 +319,32 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 		return contracts.Envelope{}, err
 	}
 	return contracts.Envelope{OperationID: key.ID, Version: key.Version, Payload: payload}, nil
+}
+
+// concurrencyContext drops operation and trace attribution inherited from the
+// dispatch span so admission metrics stay low-cardinality.
+func (dispatcher *Dispatcher) concurrencyContext() context.Context {
+	return dispatcher.observer.WithIdentity(context.Background(), observability.Identity{
+		ModuleKind: observability.ModuleKindBus, ModuleID: "bus", ComponentID: "dispatcher",
+	})
+}
+
+func (dispatcher *Dispatcher) setInFlight(delta int64) {
+	observer := dispatcher.observer
+	if observer == nil {
+		return
+	}
+	current := dispatcher.inFlight.Add(delta)
+	observer.SetGauge(dispatcher.concurrencyContext(), "zubrium_bus_in_flight", float64(current), observability.String("scope", "BUS"))
+}
+
+func (dispatcher *Dispatcher) recordRejected(reason string) {
+	observer := dispatcher.observer
+	if observer == nil {
+		return
+	}
+	observer.IncCounter(dispatcher.concurrencyContext(), "zubrium_concurrency_rejected_total", 1,
+		observability.String("scope", "BUS"), observability.String("reason", reason))
 }
 
 func targetModule(operationID string) string {
@@ -243,6 +372,9 @@ func outcome(err error) string {
 func (dispatcher *Dispatcher) Close(ctx context.Context) error {
 	if dispatcher == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	dispatcher.mu.Lock()
 	dispatcher.closed = true

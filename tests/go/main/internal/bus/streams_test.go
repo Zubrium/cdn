@@ -28,7 +28,7 @@ type streamProbeResponse struct {
 
 func TestDispatcherExposesScopedStreamCapabilityPerCall(t *testing.T) {
 	operation := contracts.Operation[streamProbeRequest, streamProbeResponse]{Key: contracts.Key{ID: "bus.streams.probe", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestDispatcherExposesScopedStreamCapabilityPerCall(t *testing.T) {
 
 func TestCallWithStreamsPassesRegisteredBodyToHandler(t *testing.T) {
 	operation := contracts.Operation[streamBodyRequest, streamProbeResponse]{Key: contracts.Key{ID: "bus.streams.body", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestCallWithStreamsPassesRegisteredBodyToHandler(t *testing.T) {
 
 func TestDispatcherWaitsForProvidedScopedStreamsToClose(t *testing.T) {
 	operation := contracts.Operation[streamProbeRequest, streamProbeResponse]{Key: contracts.Key{ID: "bus.streams.lifetime", Version: 1}}
-	dispatcher, err := NewAllowlisted(operation.Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, operation.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestScopedStreamsRejectUnknownConsumedAndClosedRefs(t *testing.T) {
 }
 
 func TestEnableScopedStreamsRequiresUnsealedDispatcher(t *testing.T) {
-	dispatcher, err := NewAllowlisted(contracts.Key{ID: "bus.streams.sealed", Version: 1})
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, contracts.Key{ID: "bus.streams.sealed", Version: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

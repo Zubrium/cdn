@@ -33,7 +33,7 @@ func (access *fakeCoreAccess) RequireGroupLevel(_ context.Context, _ contracts.A
 }
 
 func TestCoreAccessBusBindsModuleAndDeclaredGroups(t *testing.T) {
-	dispatcher, err := bus.NewAllowlisted(
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 1},
 		contracts.AccessAuthenticateOperation().Key,
 		contracts.AccessAuthenticateSessionOperation().Key,
 		contracts.AccessRequireGroupOperation().Key,
@@ -68,7 +68,7 @@ func TestCoreAccessBusBindsModuleAndDeclaredGroups(t *testing.T) {
 }
 
 func TestCoreAccessBusRejectsUnboundModule(t *testing.T) {
-	dispatcher, err := bus.NewAllowlisted(
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 1},
 		contracts.AccessAuthenticateOperation().Key,
 		contracts.AccessAuthenticateSessionOperation().Key,
 		contracts.AccessRequireGroupOperation().Key,

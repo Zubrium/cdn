@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	website "github.com/Zubrium/cdn/engines/website/presentation"
 	fileapi "github.com/Zubrium/cdn/presentation/fileapi"
@@ -18,7 +19,8 @@ type uiTestWebsite struct{ website.API }
 func uiTestServer(t *testing.T, uiHandler http.Handler) *AdminServer {
 	t.Helper()
 	server, err := NewAdminServer(AdminConfig{
-		Server:         ServerConfig{Address: "127.0.0.1:0"},
+		Server: ServerConfig{Address: "127.0.0.1:0", MaxInFlight: 1,
+			RequestTimeout: time.Second, ShutdownTimeout: 2 * time.Second},
 		AllowedOrigins: []string{"http://localhost:5173"},
 		FileAPI: fileapi.Config{
 			MaxFileBytes: 1 << 20, MaxPartBytes: 1 << 20, MaxUploadParts: 1,

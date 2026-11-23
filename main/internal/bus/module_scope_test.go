@@ -8,7 +8,7 @@ import (
 )
 
 func TestModuleDispatcherBindsSourceIdentityOutsidePayload(t *testing.T) {
-	dispatcher, err := NewAllowlisted(contracts.CoreReadinessOperation().Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, contracts.CoreReadinessOperation().Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestModuleDispatcherRejectsEmptyOwner(t *testing.T) {
 }
 
 func TestRecordOperationsResolveCapabilityFromBoundModuleScope(t *testing.T) {
-	dispatcher, err := NewAllowlisted(
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1},
 		contracts.RecordGetOperation().Key, contracts.RecordGetExpiredOperation().Key,
 		contracts.RecordPutOperation().Key, contracts.RecordDeleteOperation().Key,
 		contracts.RecordBatchOperation().Key, contracts.RecordListOperation().Key,

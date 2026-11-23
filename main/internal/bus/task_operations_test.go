@@ -14,7 +14,7 @@ func TestTaskOperationsDispatchThroughAllowlistedBus(t *testing.T) {
 	handlers := map[contracts.Key]TaskOperationHandler{key: func(_ context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
 		return contracts.OperationOutcome{Result: json.RawMessage(`{"task_id":"` + task.TaskID + `"}`)}, nil
 	}}
-	dispatcher, err := NewAllowlisted(key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, key)
 	if err != nil {
 		t.Fatal(err)
 	}

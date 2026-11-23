@@ -22,7 +22,7 @@ func (stub *publishedContentReaderStub) Read(_ context.Context, pageSnapshotID, 
 }
 
 func TestPublishedContentOperationIsStaticAndOwned(t *testing.T) {
-	dispatcher, err := NewAllowlisted(contracts.PublishedContentReadOperation().Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, contracts.PublishedContentReadOperation().Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPublishedContentOperationIsStaticAndOwned(t *testing.T) {
 }
 
 func TestPublishedContentOperationFailsClosed(t *testing.T) {
-	dispatcher, err := NewAllowlisted(contracts.PublishedContentReadOperation().Key)
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1}, contracts.PublishedContentReadOperation().Key)
 	if err != nil {
 		t.Fatal(err)
 	}
