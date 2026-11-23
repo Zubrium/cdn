@@ -57,7 +57,15 @@ func (h snapshotForkWebsiteFinalizerHandle) MarkSnapshotReady(ctx context.Contex
 	if website == nil || website.service == nil {
 		return websiteapi.Snapshot{}, errors.New("website fork dependency is not initialized")
 	}
-	return website.service.MarkSnapshotReady(ctx, snapshotID, expectedRevision)
+	credential := h.component.config.ContentAPI.ServiceCredential
+	if credential == "" {
+		return websiteapi.Snapshot{}, errors.New("website service credential is not configured")
+	}
+	authCtx, err := website.service.Authenticate(ctx, credential)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	return website.service.MarkSnapshotReady(authCtx, snapshotID, expectedRevision)
 }
 
 type snapshotForkContentCopier struct {
