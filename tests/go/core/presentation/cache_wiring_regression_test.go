@@ -127,3 +127,20 @@ func TestValidateRuntimeConfigDefersInternalCacheDependencies(t *testing.T) {
 		t.Fatal("runtime configuration without a cache observer was accepted")
 	}
 }
+
+func TestLegacyByteCacheIsNotATypedNilWhenStoreOwnsBytes(t *testing.T) {
+	enabled := validCacheEnabledRuntimeConfig(wiringObserver{})
+	enabled.CacheShards = 4
+	enabled.CachePromotionInterval = 1
+	enabled.CoalesceMaxWaiters = 8
+	enabled.CoalesceTimeout = time.Second
+	if cache := legacyByteCache(enabled); cache != nil {
+		t.Fatal("legacy byte cache was passed to storage while the bounded store owns bytes")
+	}
+
+	disabled := enabled
+	disabled.CacheEnabled = false
+	if cache := legacyByteCache(disabled); cache == nil {
+		t.Fatal("legacy byte cache was omitted when the bounded store is disabled")
+	}
+}

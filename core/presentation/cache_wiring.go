@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	appcache "github.com/Zubrium/cdn/core/application/cache"
+	"github.com/Zubrium/cdn/core/application/storage"
 	"github.com/Zubrium/cdn/core/domain/access"
 	"github.com/Zubrium/cdn/core/domain/files"
 	"github.com/Zubrium/cdn/core/infrastructure/cache"
@@ -14,6 +16,18 @@ import (
 // newCacheStoreConfig is the single production wiring point for Core's bounded
 // caches. Every dependency is injected explicitly; a missing observer is
 // rejected by StoreConfig.Validate instead of being replaced by a no-op sink.
+// legacyByteCache returns the pre-store byte cache only when the bounded store
+// is disabled. A typed nil *ShardedCache must never be passed as a ByteCache:
+// it would pass every nil check and panic when invalidations call Clear.
+func legacyByteCache(cfg RuntimeConfig) storage.ByteCache {
+	if cfg.CacheEnabled {
+		return nil
+	}
+	sharded := cache.NewSharded(cfg.CacheShards, 0, int(cfg.CacheMaxBytes), cfg.CachePromotionInterval, time.Now)
+	sharded.ConfigureCoalescing(cfg.CoalesceEnabled, cfg.CoalesceMaxWaiters, cfg.CoalesceTimeout)
+	return sharded
+}
+
 func newCacheStoreConfig(cfg RuntimeConfig, epoch appcache.EpochSource) appcache.StoreConfig {
 	storeConfig := cfg.CacheStore
 	storeConfig.Epoch = epoch

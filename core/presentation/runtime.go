@@ -14,7 +14,6 @@ import (
 	"github.com/Zubrium/cdn/core/application/storage"
 	"github.com/Zubrium/cdn/core/domain/access"
 	"github.com/Zubrium/cdn/core/domain/engine_data"
-	"github.com/Zubrium/cdn/core/infrastructure/cache"
 	"github.com/Zubrium/cdn/core/infrastructure/identity"
 	"github.com/Zubrium/cdn/core/infrastructure/objectstore"
 	"github.com/Zubrium/cdn/core/infrastructure/postgres"
@@ -191,7 +190,7 @@ type Runtime struct {
 	identities                 *appidentity.Service
 	sessions                   *appidentity.SessionService
 	maintenance                *appmaintenance.Service
-	byteCache                  *cache.ShardedCache
+	byteCache                  storage.ByteCache
 	cacheStore                 *appcache.Store
 	warmup                     *appcache.Runner
 	refreshDone                chan struct{}
@@ -268,11 +267,7 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 	metadata := postgres.Objects{Pool: pool}
 	writer := postgres.Creator{Pool: pool, Store: objects, MaxMetadataBytes: cfg.MaxMetadataBytes}
 
-	var byteCache *cache.ShardedCache
-	if !cfg.CacheEnabled {
-		byteCache = cache.NewSharded(cfg.CacheShards, 0, int(cfg.CacheMaxBytes), cfg.CachePromotionInterval, time.Now)
-		byteCache.ConfigureCoalescing(cfg.CoalesceEnabled, cfg.CoalesceMaxWaiters, cfg.CoalesceTimeout)
-	}
+	byteCache := legacyByteCache(cfg)
 	files := storage.NewService(metadata, objects, writer, writer, writer, byteCache,
 		cfg.MaxObjectBytes, cfg.MaxMetadataBytes, cfg.MaxCachedObjectBytes, cfg.CacheTTL)
 
