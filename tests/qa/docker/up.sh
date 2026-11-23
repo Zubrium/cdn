@@ -23,6 +23,7 @@ command -v docker >/dev/null 2>&1 || fail "docker is not available"
 command -v python3 >/dev/null 2>&1 || fail "python3 is not available"
 [ -f "$compose_file" ] || fail "compose file not found: $compose_file"
 [ -f "$bucket_helper" ] || fail "bucket helper not found: $bucket_helper"
+[ -x "$script_dir/atlas-wrapper.py" ] || fail "pinned Atlas wrapper is missing or not executable"
 [ -d "$tmp_root" ] || fail "TMPDIR does not exist: $tmp_root"
 case "$wait_timeout" in
 	''|*[!0-9]*) fail "WEBSITE_QA_WAIT_TIMEOUT must be a positive integer" ;;
@@ -59,6 +60,7 @@ CORE_QA_OWNER_RESULT_DATABASE TEST_CORE_OWNER_TASK_RESULT_DATABASE_URL \
 QA_S3_ACCESS_KEY QA_S3_SECRET_KEY WEBSITE_TEST_S3_ACCESS_KEY WEBSITE_TEST_S3_SECRET_KEY \
 WEBSITE_TEST_S3_ENDPOINT WEBSITE_TEST_S3_BUCKET WEBSITE_TEST_S3_REGION \
 WEBSITE_TEST_POSTGRES_DSN WEBSITE_TEST_POSTGRES_MIGRATION_DSN \
+TEST_ATLAS_BINARY \
 CORE_QA_POSTGRES_DSN CORE_QA_RUNTIME_DATABASE_URL CORE_QA_MIGRATION_DATABASE_URL \
 TEST_CORE_PLATFORM_DATABASE_URL TEST_CORE_PLATFORM_MIGRATION_DATABASE_URL TEST_CORE_PLATFORM_ADMIN_DATABASE_URL \
 TEST_CORE_PLATFORM_S3_ENDPOINT TEST_CORE_PLATFORM_S3_BUCKET TEST_CORE_PLATFORM_S3_ACCESS_KEY TEST_CORE_PLATFORM_S3_SECRET_KEY \
@@ -100,6 +102,7 @@ else
 	bucket="zubrium-core-qa-$run_id"
 	owner_result_db="zubrium_core_qa_owner_result_$run_id"
 	[ "${#owner_result_db}" -le 63 ] || fail "run ID is too long for the disposable owner-result database name"
+	repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd -P) || fail "cannot resolve repository root"
 
 	umask 077
 	tmp_env=$(mktemp "$tmp_root/website-qa-${run_id}.env.XXXXXX") || fail "cannot create a temporary env file"
@@ -126,6 +129,7 @@ WEBSITE_TEST_S3_BUCKET=$bucket
 WEBSITE_TEST_S3_REGION=us-east-1
 WEBSITE_TEST_POSTGRES_DSN=postgres://core_qa_runtime:$runtime_password@127.0.0.1:$pg_port/zubrium_core_qa_platform?sslmode=disable
 WEBSITE_TEST_POSTGRES_MIGRATION_DSN=postgres://core_qa_migrator:$migration_password@127.0.0.1:$pg_port/zubrium_core_qa_platform?sslmode=disable
+TEST_ATLAS_BINARY="$repo_root/tests/qa/docker/atlas-wrapper.py"
 CORE_QA_POSTGRES_DSN=postgres://core_qa_admin:$pg_password@127.0.0.1:$pg_port/postgres?sslmode=disable
 CORE_QA_RUNTIME_DATABASE_URL=postgres://core_qa_runtime:$runtime_password@127.0.0.1:$pg_port/zubrium_core_qa_platform?sslmode=disable
 CORE_QA_MIGRATION_DATABASE_URL=postgres://core_qa_migrator:$migration_password@127.0.0.1:$pg_port/zubrium_core_qa_platform?sslmode=disable

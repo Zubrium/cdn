@@ -57,6 +57,17 @@ run() {
 	"$@"
 }
 
+run_with_integration_env() {
+	(
+		set +u
+		set -a
+		. "$INTEGRATION_ENV"
+		set +a
+		set -u
+		"$@"
+	)
+}
+
 section() {
 	printf '\n===== %s =====\n' "$1"
 }
@@ -117,7 +128,8 @@ run tests/qa/run-website-red.sh contract
 section 'unified QA gates'
 run python3 tests/qa/run-test-suite.py ci --with-build --report "${REPORT_PREFIX}.json"
 if [ -n "$INTEGRATION_ENV" ]; then
-	run python3 tests/qa/run-test-suite.py ci --with-build --integration --report "${REPORT_PREFIX}-integration.json"
+	printf '\n==> python3 tests/qa/run-test-suite.py ci --with-build --integration --report %s\n' "${REPORT_PREFIX}-integration.json"
+	run_with_integration_env python3 tests/qa/run-test-suite.py ci --with-build --integration --report "${REPORT_PREFIX}-integration.json"
 fi
 
 if [ "$WITH_E2E" -eq 1 ]; then
