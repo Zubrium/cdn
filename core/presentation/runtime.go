@@ -280,9 +280,7 @@ func Start(ctx context.Context, cfg RuntimeConfig) (*Runtime, string, error) {
 	var warmup *appcache.Runner
 	if cfg.CacheEnabled {
 		epoch := postgres.CacheEpochSource{Pool: pool}
-		storeConfig := cfg.CacheStore
-		storeConfig.Epoch = epoch
-		storeConfig.CacheFactory = cache.Factory{}
+		storeConfig := newCacheStoreConfig(cfg, epoch)
 		cacheStore, err = appcache.NewStore(storeConfig)
 		if err != nil {
 			pool.Close()

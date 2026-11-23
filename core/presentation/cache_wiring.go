@@ -8,7 +8,19 @@ import (
 	appcache "github.com/Zubrium/cdn/core/application/cache"
 	"github.com/Zubrium/cdn/core/domain/access"
 	"github.com/Zubrium/cdn/core/domain/files"
+	"github.com/Zubrium/cdn/core/infrastructure/cache"
 )
+
+// newCacheStoreConfig is the single production wiring point for Core's bounded
+// caches. Every dependency is injected explicitly; a missing observer is
+// rejected by StoreConfig.Validate instead of being replaced by a no-op sink.
+func newCacheStoreConfig(cfg RuntimeConfig, epoch appcache.EpochSource) appcache.StoreConfig {
+	storeConfig := cfg.CacheStore
+	storeConfig.Epoch = epoch
+	storeConfig.Observer = cfg.CacheObserver
+	storeConfig.CacheFactory = cache.Factory{}
+	return storeConfig
+}
 
 // coreAuthorizer adapts the existing authoritative Core access check to the
 // application-owned cache port. It also reads epoch and revision in one
