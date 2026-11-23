@@ -165,7 +165,8 @@ bus:
       overrides: []          # только operation ID из статического allowlist
 
 core:
-  max_connections: 20
+  # Бюджет по §7: 1 + 2*4 (loader) + 2*(2+2+1+2) (worker) + 4 (read_reserve) = 27; 32 оставляет запас.
+  max_connections: 32
   concurrency:
     storage:
       max_concurrent_reads: 16
