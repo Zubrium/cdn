@@ -8,7 +8,6 @@ import (
 	"context"
 	"regexp"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
@@ -45,16 +44,16 @@ var (
 	ifMatchPattern = regexp.MustCompile(`^"[1-9][0-9]*"$`)
 )
 
-func ModuleDataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{
-		ModuleID: moduleID,
-		Namespaces: []core.ModuleDataNamespace{{
+func ModuleDataDescriptor() contracts.RecordDescriptor {
+	return contracts.RecordDescriptor{
+		OwnerID: moduleID,
+		Namespaces: []contracts.RecordNamespace{{
 			Name:       namespace,
 			ScopeTypes: []string{scopeType},
-			Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString},
-				"page_id":     {Type: core.SelectorString},
-				"state":       {Type: core.SelectorString},
+			Fields: map[string]contracts.RecordSelectorField{
+				"record_type": {Type: contracts.RecordSelectorString},
+				"page_id":     {Type: contracts.RecordSelectorString},
+				"state":       {Type: contracts.RecordSelectorString},
 			},
 		}},
 	}
@@ -64,10 +63,8 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 // engine-specific operation to other modules.
 type Module struct{}
 
-func (Module) Operations() []core.Operation { return nil }
-
-func (Module) ComponentDescriptor() core.ComponentDescriptor {
-	return core.ComponentDescriptor{ID: moduleID, Kind: "composition", Version: 1}
+func (Module) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: moduleID, Kind: "composition", Version: 1}
 }
 
 // Website is the narrow, authenticated lifecycle facade. Route selection and
@@ -90,7 +87,7 @@ type Router interface {
 // trusted capability and the page-to-route registry.
 type Config struct {
 	BranchID          string
-	Store             *core.ModuleDataStore
+	Store             contracts.RecordDataStore
 	Routes            map[string][]string
 	Website           Website
 	WebsiteCredential string

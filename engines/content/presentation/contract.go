@@ -8,10 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"strings"
 	"time"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/content/domain"
 )
 
@@ -26,7 +26,6 @@ var (
 )
 
 type Contract interface {
-	platform.Module
 	API
 }
 
@@ -287,21 +286,6 @@ type CopySnapshotContentResult struct {
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.content", Kind: "engine", Version: 1, AccessGroups: []string{"content"}}
+func (Descriptor) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: "engine.content", Kind: "engine", Version: 1, AccessGroups: []string{"content"}}
 }
-
-func (Descriptor) Operations() []platform.Operation {
-	return []platform.Operation{
-		{Name: "locales.read", Action: platform.AccessActionRead, ResourceType: "content-locales"},
-		{Name: "locales.write", Action: platform.AccessActionWrite, ResourceType: "content-locales"},
-		{Name: "workspace.read", Action: platform.AccessActionRead, ResourceType: "content-workspace"},
-		{Name: "workspace.write", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
-		{Name: "workspace.publish", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
-		{Name: "workspace.history", Action: platform.AccessActionRead, ResourceType: "content-history"},
-		{Name: "workspace.restore", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
-		{Name: "snapshot.copy-content", Action: platform.AccessActionWrite, ResourceType: "content-workspace"},
-	}
-}
-
-var _ platform.Module = Descriptor{}

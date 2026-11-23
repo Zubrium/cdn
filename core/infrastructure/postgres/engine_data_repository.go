@@ -8,7 +8,7 @@ import (
 )
 
 // EngineDataRepository implements the shared scoped JSON record port over
-// engine_data.records. The caller must obtain a per-engine application
+// engine_data.records. The caller must obtain a per-owner application
 // capability before any operation reaches this adapter.
 type EngineDataRepository struct{ Pool *pgxpool.Pool }
 

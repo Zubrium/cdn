@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -100,6 +101,101 @@ func TestPresentationEngineInternalImportRule(t *testing.T) {
 	}
 	if presentationImportAllowed("presentation/admin/content/handler.go", "github.com/Zubrium/cdn/engines/content/application") {
 		t.Fatal("new internal engine import must be rejected")
+	}
+}
+
+func TestRuntimeModulesUseDataBusInsteadOfImportingCore(t *testing.T) {
+	root, err := repositoryRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreModule := "github.com/Zubrium/cdn/core"
+	compositionModule := "github.com/Zubrium/cdn/main"
+	for _, owner := range []string{"engines", "workers", "presentation", "pkg"} {
+		base := filepath.Join(root, owner)
+		if err := filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || entry.Name() != "go.mod" {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(data), coreModule) || strings.Contains(string(data), compositionModule) {
+				t.Errorf("%s declares Core/composition as a module dependency; depend on pkg/contracts and use DataBus through main", path)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("scan %s module manifests: %v", owner, err)
+		}
+		err := filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".go" {
+				return nil
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+			if err != nil {
+				return err
+			}
+			for _, imported := range file.Imports {
+				importPath, err := strconv.Unquote(imported.Path.Value)
+				if err != nil {
+					return err
+				}
+				if importPath == coreModule || strings.HasPrefix(importPath, coreModule+"/") || importPath == compositionModule || strings.HasPrefix(importPath, compositionModule+"/") {
+					t.Errorf("%s imports Core/composition directly; depend on pkg/contracts and use DataBus through main", path)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("scan %s: %v", owner, err)
+		}
+	}
+}
+
+func TestCoreDoesNotModelEngineOrWorkerComponents(t *testing.T) {
+	root, err := repositoryRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := map[string]struct{}{
+		"ComponentDescriptor": {}, "ComponentDescriptorProvider": {},
+		"ComponentWorkerSet": {}, "WorkerCatalog": {}, "WorkerHandler": {},
+		"WorkerRef": {}, "EngineIdentityCapability": {}, "EngineFilesCapability": {},
+		"engineIdentityCapability": {}, "engineFilesCapability": {},
+	}
+	base := filepath.Join(root, "core")
+	err = filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			identifier, ok := node.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, prohibited := forbidden[identifier.Name]; prohibited {
+				t.Errorf("%s models %s; Core must use generic DataBus operation and task contracts", path, identifier.Name)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan Core sources: %v", err)
 	}
 }
 

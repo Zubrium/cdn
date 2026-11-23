@@ -89,7 +89,7 @@ func (client *websiteBuildWorkflowClient) ResolveTaskID(ctx context.Context, wor
 			return uuid.Nil, err
 		}
 		if detail.Workflow.ID != uuid.Nil && detail.Workflow.ID != workflowID ||
-			detail.Workflow.OwnerEngineID != "" && detail.Workflow.OwnerEngineID != websiteworkflow.ComponentID {
+			detail.Workflow.OwnerClassID != "" && detail.Workflow.OwnerClassID != websiteworkflow.ComponentID {
 			return uuid.Nil, platform.ErrTaskMissing
 		}
 		for _, task := range detail.TaskPage.Items {

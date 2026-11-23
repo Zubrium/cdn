@@ -7,31 +7,55 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 	"github.com/Zubrium/cdn/engines/router/features/routes/repository"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type fakeIdentity struct{ err error }
 
-func (identity fakeIdentity) Authenticate(context.Context, string) (core.Session, error) {
-	return core.Session{}, identity.err
+func (identity fakeIdentity) Authenticate(context.Context, string) (contracts.Principal, error) {
+	return contracts.Principal{ID: "principal", Active: true}, identity.err
 }
-func (identity fakeIdentity) AuthenticateSession(context.Context, string) (core.Session, core.Principal, error) {
-	return core.Session{}, core.Principal{}, identity.err
+func (identity fakeIdentity) AuthenticateSession(context.Context, string) (contracts.Principal, error) {
+	return contracts.Principal{ID: "principal", Active: true}, identity.err
 }
 
 type fakeAuthorizer struct {
-	maximum core.AccessLevel
-	levels  []core.AccessLevel
+	maximum  contracts.AccessLevel
+	levels   []contracts.AccessLevel
+	subjects []contracts.AuthorizationSubject
 }
 
-func (authorizer *fakeAuthorizer) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, required core.AccessLevel) error {
+func (authorizer *fakeAuthorizer) RequireGroupLevel(_ context.Context, subject contracts.AuthorizationSubject, groups []string, required contracts.AccessLevel) error {
 	authorizer.levels = append(authorizer.levels, required)
+	authorizer.subjects = append(authorizer.subjects, subject)
 	if len(groups) != 1 || groups[0] != "router_routes" || authorizer.maximum < required {
-		return core.ErrForbidden
+		return contracts.ErrAccessForbidden
 	}
 	return nil
+}
+
+func TestSessionTokenIsRetainedOnlyAsDataBusAuthorizationSubject(t *testing.T) {
+	repo := newFakeRouteRepository()
+	authorizer := &fakeAuthorizer{maximum: contracts.AccessLevelRead}
+	service, err := New(repo, fakeIdentity{}, authorizer, fakeTargetValidator{}, Config{
+		BranchID: "main", AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := service.AuthenticateSession(context.Background(), "opaque-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.ListRoutes(ctx, "main", "", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	want := contracts.AuthorizationSubject{SessionToken: "opaque-token"}
+	if len(authorizer.subjects) != 1 || authorizer.subjects[0] != want {
+		t.Fatalf("authorization subject = %#v, want %#v", authorizer.subjects, want)
+	}
 }
 
 type fakeTargetValidator struct{ err error }
@@ -161,7 +185,7 @@ func (repo *fakeRouteRepository) Delete(_ context.Context, branchID, id string, 
 func (*fakeRouteRepository) ErrConflict() error { return repository.ErrConflict }
 func (*fakeRouteRepository) ErrNotFound() error { return repository.ErrNotFound }
 
-func newTestService(t *testing.T, level core.AccessLevel, targetValidator TargetValidator) (*Service, *fakeRouteRepository, *fakeAuthorizer, context.Context) {
+func newTestService(t *testing.T, level contracts.AccessLevel, targetValidator TargetValidator) (*Service, *fakeRouteRepository, *fakeAuthorizer, context.Context) {
 	t.Helper()
 	repo := newFakeRouteRepository()
 	authorizer := &fakeAuthorizer{maximum: level}
@@ -183,7 +207,7 @@ func uploadTarget() model.Target {
 }
 
 func TestGroupLevelOneReadsButCannotChangeRoutes(t *testing.T) {
-	service, _, authorizer, ctx := newTestService(t, core.AccessLevelRead, fakeTargetValidator{})
+	service, _, authorizer, ctx := newTestService(t, contracts.AccessLevelRead, fakeTargetValidator{})
 	if _, _, err := service.ListRoutes(ctx, "main", "", "", 0); err != nil {
 		t.Fatalf("read at level 1 failed: %v", err)
 	}
@@ -191,13 +215,16 @@ func TestGroupLevelOneReadsButCannotChangeRoutes(t *testing.T) {
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("write at level 1 = %v, want forbidden", err)
 	}
-	if len(authorizer.levels) != 2 || authorizer.levels[0] != core.AccessLevelRead || authorizer.levels[1] != core.AccessLevelWrite {
+	if len(authorizer.levels) != 2 || authorizer.levels[0] != contracts.AccessLevelRead || authorizer.levels[1] != contracts.AccessLevelWrite {
 		t.Fatalf("group access checks = %v", authorizer.levels)
+	}
+	if len(authorizer.subjects) != 2 || authorizer.subjects[0].Credential != "user-credential" || authorizer.subjects[1].Credential != "user-credential" {
+		t.Fatalf("credential authorization subjects = %#v", authorizer.subjects)
 	}
 }
 
 func TestCreateNormalizesRouteAndIdempotentlyReplaysRequest(t *testing.T) {
-	service, repo, _, ctx := newTestService(t, core.AccessLevelWrite, fakeTargetValidator{})
+	service, repo, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
 	input := CreateRouteInput{BranchID: "main", Host: "EXAMPLE.COM.", Path: "/uploads/a%20b", Match: model.MatchExact,
 		Target: uploadTarget(), IdempotencyKey: "router-route-create-002"}
 	first, err := service.CreateRoute(ctx, input)
@@ -219,7 +246,7 @@ func TestCreateNormalizesRouteAndIdempotentlyReplaysRequest(t *testing.T) {
 }
 
 func TestCreateRejectsVisitorControlledBranchTraversalAndUnavailableTarget(t *testing.T) {
-	service, repo, _, ctx := newTestService(t, core.AccessLevelWrite, fakeTargetValidator{})
+	service, repo, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
 	base := CreateRouteInput{BranchID: "main", Host: "example.com", Path: "/safe", Match: model.MatchExact, Target: uploadTarget(), IdempotencyKey: "router-route-create-003"}
 	wrongBranch := base
 	wrongBranch.BranchID = "other"
@@ -232,7 +259,7 @@ func TestCreateRejectsVisitorControlledBranchTraversalAndUnavailableTarget(t *te
 			t.Errorf("%s input = %v, want invalid", name, err)
 		}
 	}
-	blocked, _, _, blockedCtx := newTestService(t, core.AccessLevelWrite, fakeTargetValidator{err: core.ErrForbidden})
+	blocked, _, _, blockedCtx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{err: contracts.ErrAccessForbidden})
 	if _, err := blocked.CreateRoute(blockedCtx, base); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("target permission failure = %v, want forbidden", err)
 	}
@@ -242,7 +269,7 @@ func TestCreateRejectsVisitorControlledBranchTraversalAndUnavailableTarget(t *te
 }
 
 func TestReplaceAndDeleteRequireCurrentRevision(t *testing.T) {
-	service, _, _, ctx := newTestService(t, core.AccessLevelWrite, fakeTargetValidator{})
+	service, _, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
 	created, err := service.CreateRoute(ctx, CreateRouteInput{BranchID: "main", Host: "example.com", Path: "/upload", Match: model.MatchExact,
 		Target: uploadTarget(), IdempotencyKey: "router-route-create-004"})
 	if err != nil {
@@ -264,7 +291,7 @@ func TestReplaceAndDeleteRequireCurrentRevision(t *testing.T) {
 }
 
 func TestPublicResolutionNormalizesRequestAndUsesConfiguredBranch(t *testing.T) {
-	service, _, _, ctx := newTestService(t, core.AccessLevelWrite, fakeTargetValidator{})
+	service, _, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
 	baseTarget, err := model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
 		{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301", Revision: 1},
 	})

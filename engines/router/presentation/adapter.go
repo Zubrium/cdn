@@ -5,7 +5,6 @@ import (
 	"errors"
 	"reflect"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	routesapp "github.com/Zubrium/cdn/engines/router/features/routes/application"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
@@ -167,4 +166,3 @@ func isNilAdapterDependency(value any) bool {
 }
 
 var _ Contract = (*APIAdapter)(nil)
-var _ platform.Module = (*APIAdapter)(nil)

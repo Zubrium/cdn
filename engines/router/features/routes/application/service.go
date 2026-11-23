@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 	"github.com/Zubrium/cdn/engines/router/features/routes/repository"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -30,12 +30,12 @@ var (
 )
 
 type Identity interface {
-	Authenticate(context.Context, string) (core.Session, error)
-	AuthenticateSession(context.Context, string) (core.Session, core.Principal, error)
+	Authenticate(context.Context, string) (contracts.Principal, error)
+	AuthenticateSession(context.Context, string) (contracts.Principal, error)
 }
 
 type GroupAuthorizer interface {
-	RequireGroupLevel(context.Context, core.Session, []string, core.AccessLevel) error
+	RequireGroupLevel(context.Context, contracts.AuthorizationSubject, []string, contracts.AccessLevel) error
 }
 
 type TargetValidator interface {
@@ -93,40 +93,40 @@ type sessionKey struct{}
 func New(repo repository.Repository, identity Identity, authorizer GroupAuthorizer, validator TargetValidator, config Config) (*Service, error) {
 	if nilDependency(repo) || nilDependency(identity) || nilDependency(authorizer) || nilDependency(validator) ||
 		config.BranchID == "" || len(config.BranchID) > 128 || strings.TrimSpace(config.BranchID) != config.BranchID ||
-		!core.ValidAccessGroupKey(config.AccessGroup) || config.DefaultPageSize < 1 || config.MaxPageSize < config.DefaultPageSize || config.MaxPageSize > 100 {
+		!contracts.ValidAccessGroupKey(config.AccessGroup) || config.DefaultPageSize < 1 || config.MaxPageSize < config.DefaultPageSize || config.MaxPageSize > 100 {
 		return nil, ErrInvalid
 	}
 	return &Service{repository: repo, identity: identity, authorizer: authorizer, validator: validator, config: config, now: time.Now}, nil
 }
 
-// Authenticate validates an ordinary credential and records only its opaque
-// Core session in the request context. Cookie parsing stays in Presentation.
+// Authenticate validates a configured credential and retains it only as an
+// internal DataBus authorization subject. Cookie parsing stays in Presentation.
 func (service *Service) Authenticate(ctx context.Context, credential string) (context.Context, error) {
 	if service == nil || ctx == nil || credential == "" {
 		return nil, ErrUnauthorized
 	}
-	session, err := service.identity.Authenticate(ctx, credential)
+	_, err := service.identity.Authenticate(ctx, credential)
 	if err != nil {
 		return nil, mapCoreError(err)
 	}
-	return context.WithValue(ctx, sessionKey{}, session), nil
+	return context.WithValue(ctx, sessionKey{}, contracts.AuthorizationSubject{Credential: credential}), nil
 }
 
-// AuthenticateSession resolves a Core session token; it does not inspect HTTP
-// cookies or accept any browser transport data.
+// AuthenticateSession validates a Core session token through DataBus; it does
+// not inspect HTTP cookies or accept browser transport data.
 func (service *Service) AuthenticateSession(ctx context.Context, token string) (context.Context, error) {
 	if service == nil || ctx == nil || token == "" {
 		return nil, ErrUnauthorized
 	}
-	session, _, err := service.identity.AuthenticateSession(ctx, token)
+	_, err := service.identity.AuthenticateSession(ctx, token)
 	if err != nil {
 		return nil, mapCoreError(err)
 	}
-	return context.WithValue(ctx, sessionKey{}, session), nil
+	return context.WithValue(ctx, sessionKey{}, contracts.AuthorizationSubject{SessionToken: token}), nil
 }
 
 func (service *Service) ListRoutes(ctx context.Context, branchID, host, cursor string, limit int) ([]model.Route, string, error) {
-	if err := service.authorize(ctx, core.AccessLevelRead); err != nil {
+	if err := service.authorize(ctx, contracts.AccessLevelRead); err != nil {
 		return nil, "", err
 	}
 	if branchID != service.config.BranchID || len(cursor) > 256 {
@@ -153,7 +153,7 @@ func (service *Service) ListRoutes(ctx context.Context, branchID, host, cursor s
 }
 
 func (service *Service) GetRoute(ctx context.Context, branchID, id string) (model.Route, error) {
-	if err := service.authorize(ctx, core.AccessLevelRead); err != nil {
+	if err := service.authorize(ctx, contracts.AccessLevelRead); err != nil {
 		return model.Route{}, err
 	}
 	if branchID != service.config.BranchID || !validUUID(id) {
@@ -167,40 +167,48 @@ func (service *Service) GetRoute(ctx context.Context, branchID, id string) (mode
 }
 
 func (service *Service) CreateRoute(ctx context.Context, input CreateRouteInput) (model.Route, error) {
-	if err := service.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
+		println("ROUTE_DIAG app_authorize_error", err.Error())
 		return model.Route{}, err
 	}
 	if input.BranchID != "" && input.BranchID != service.config.BranchID || !validIdempotency.MatchString(input.IdempotencyKey) {
+		println("ROUTE_DIAG app_input_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	host, err := model.NormalizeHost(input.Host)
 	if err != nil {
+		println("ROUTE_DIAG app_host_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	path, err := model.NormalizePath(input.Path)
 	if err != nil {
+		println("ROUTE_DIAG app_path_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	if err := service.validator.ValidateRouteTarget(ctx, input.Target, input.Match); err != nil {
+		println("ROUTE_DIAG app_target_invalid", err.Error())
 		return model.Route{}, mapTargetError(err)
 	}
 	route, err := model.NewRoute(uuid.NewString(), service.config.BranchID, host, path, input.Match, input.Target, service.now())
 	if err != nil {
+		println("ROUTE_DIAG app_new_route_invalid", err.Error())
 		return model.Route{}, ErrInvalid
 	}
 	fingerprint, err := fingerprint(route)
 	if err != nil {
+		println("ROUTE_DIAG app_fingerprint_invalid")
 		return model.Route{}, ErrInvalid
 	}
 	created, err := service.repository.Create(ctx, route, input.IdempotencyKey, fingerprint)
 	if err != nil {
+		println("ROUTE_DIAG app_repository_error", err.Error())
 		return model.Route{}, mapRepositoryError(err)
 	}
 	return created, nil
 }
 
 func (service *Service) ReplaceTarget(ctx context.Context, branchID string, input ReplaceTargetInput) (model.Route, error) {
-	if err := service.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return model.Route{}, err
 	}
 	if branchID != service.config.BranchID || !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
@@ -229,7 +237,7 @@ func (service *Service) ReplaceTarget(ctx context.Context, branchID string, inpu
 // ReplaceLocaleTarget performs an independent, retry-safe CAS for one route
 // locale. Sibling locale revisions and unverified artifacts are untouched.
 func (service *Service) ReplaceLocaleTarget(ctx context.Context, branchID string, input ReplaceLocaleTargetInput) (model.Route, error) {
-	if err := service.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return model.Route{}, err
 	}
 	locale, err := model.CanonicalLocale(input.Locale)
@@ -272,7 +280,7 @@ func (service *Service) ReplaceLocaleTarget(ctx context.Context, branchID string
 }
 
 func (service *Service) DeleteRoute(ctx context.Context, branchID string, input DeleteRouteInput) error {
-	if err := service.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return err
 	}
 	if branchID != service.config.BranchID || !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
@@ -303,15 +311,15 @@ func (service *Service) ResolveRoute(ctx context.Context, host, escapedPath stri
 	return route, nil
 }
 
-func (service *Service) authorize(ctx context.Context, minimum core.AccessLevel) error {
+func (service *Service) authorize(ctx context.Context, minimum contracts.AccessLevel) error {
 	if service == nil || ctx == nil {
 		return ErrUnavailable
 	}
-	session, ok := ctx.Value(sessionKey{}).(core.Session)
+	subject, ok := ctx.Value(sessionKey{}).(contracts.AuthorizationSubject)
 	if !ok {
 		return ErrUnauthorized
 	}
-	if err := service.authorizer.RequireGroupLevel(ctx, session, []string{service.config.AccessGroup}, minimum); err != nil {
+	if err := service.authorizer.RequireGroupLevel(ctx, subject, []string{service.config.AccessGroup}, minimum); err != nil {
 		return mapCoreError(err)
 	}
 	return nil
@@ -340,9 +348,9 @@ func validUUID(value string) bool {
 
 func mapCoreError(err error) error {
 	switch {
-	case errors.Is(err, core.ErrUnauthorized):
+	case errors.Is(err, contracts.ErrAccessUnauthorized):
 		return ErrUnauthorized
-	case errors.Is(err, core.ErrForbidden):
+	case errors.Is(err, contracts.ErrAccessForbidden):
 		return ErrForbidden
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
@@ -375,13 +383,13 @@ func mapTargetError(err error) error {
 	if errors.Is(err, ErrUnavailable) {
 		return ErrUnavailable
 	}
-	if errors.Is(err, core.ErrUnavailable) || errors.Is(err, core.ErrUnauthorized) {
+	if errors.Is(err, contracts.ErrAccessUnavailable) || errors.Is(err, contracts.ErrAccessUnauthorized) {
 		return ErrUnavailable
 	}
-	if errors.Is(err, ErrForbidden) || errors.Is(err, core.ErrForbidden) {
+	if errors.Is(err, ErrForbidden) || errors.Is(err, contracts.ErrAccessForbidden) || errors.Is(err, contracts.ErrFileForbidden) {
 		return ErrForbidden
 	}
-	if errors.Is(err, ErrNotFound) || errors.Is(err, core.ErrFileNotFound) {
+	if errors.Is(err, ErrNotFound) || errors.Is(err, contracts.ErrFileNotFound) {
 		return ErrNotFound
 	}
 	return ErrInvalid

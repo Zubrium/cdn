@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	forms "github.com/Zubrium/cdn/engines/forms"
 	formapi "github.com/Zubrium/cdn/engines/forms/presentation"
 )
 
 func TestPublicFormSessionValidatesAndAcceptsImmutableSubmission(t *testing.T) {
-	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	api, _, _, _ := newEngine(t, recorddata.AccessLevelWrite, nil)
 	admin := authenticatedContext(t, api)
 	schema, err := api.SaveSchema(admin, formapi.SaveSchemaRequest{
 		Key: "contact", Fields: map[string]any{
@@ -75,7 +75,7 @@ func TestPublicFormSessionValidatesAndAcceptsImmutableSubmission(t *testing.T) {
 }
 
 func TestPublicFormSessionCannotSubmitInvalidOrUnknownValues(t *testing.T) {
-	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	api, _, _, _ := newEngine(t, recorddata.AccessLevelWrite, nil)
 	schema, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
 		Key: "contact", Fields: map[string]any{
 			"email": map[string]any{"type": "email", "required": true},
@@ -109,7 +109,7 @@ func TestPublicFormSessionCannotSubmitInvalidOrUnknownValues(t *testing.T) {
 }
 
 func TestCompletedUploadRetryRemainsSafeAfterItsFormWasSubmitted(t *testing.T) {
-	api, _, _, files := newEngine(t, core.AccessLevelWrite, nil)
+	api, _, _, files := newEngine(t, recorddata.AccessLevelWrite, nil)
 	schema, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
 		Key: "attachments", Fields: map[string]any{
 			"document": map[string]any{"type": "file", "required": true, "max_files": 1, "max_file_bytes": 1024, "allowed_content_types": []any{"application/pdf"}},
@@ -135,7 +135,7 @@ func TestCompletedUploadRetryRemainsSafeAfterItsFormWasSubmitted(t *testing.T) {
 	const fileID = "01938f7a-68af-7c10-a51d-78b6ca125312"
 	const checksum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	files.mu.Lock()
-	files.files[fileID] = core.File{ID: fileID, Groups: []string{"uploads"}, ContentType: "application/pdf", SHA256: checksum, Revision: 1, Size: 3}
+	files.files[fileID] = recorddata.File{ID: fileID, Groups: []string{"uploads"}, ContentType: "application/pdf", SHA256: checksum, Revision: 1, Size: 3}
 	files.mu.Unlock()
 	complete := formapi.CompleteVisitorUploadRequest{
 		PublicFormBinding: formapi.PublicFormBinding{FormID: schema.ID, SchemaVersion: schema.Version},
@@ -159,7 +159,7 @@ func TestCompletedUploadRetryRemainsSafeAfterItsFormWasSubmitted(t *testing.T) {
 }
 
 func TestPublicFormRouteVersionChangeRejectsExistingSession(t *testing.T) {
-	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	api, _, _, _ := newEngine(t, recorddata.AccessLevelWrite, nil)
 	admin := authenticatedContext(t, api)
 	schema, err := api.SaveSchema(admin, formapi.SaveSchemaRequest{
 		Key: "contact", Fields: map[string]any{"email": map[string]any{"type": "email", "required": true}},
@@ -191,7 +191,7 @@ func TestPublicFormRouteVersionChangeRejectsExistingSession(t *testing.T) {
 }
 
 func TestSchemaValidationRejectsUnsupportedAndUnsafeFieldDefinitions(t *testing.T) {
-	api, data, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	api, data, _, _ := newEngine(t, recorddata.AccessLevelWrite, nil)
 	for _, fields := range []map[string]any{
 		{"value": map[string]any{"type": "unknown", "required": false}},
 		{"value": map[string]any{"type": "text", "required": false, "pattern": "("}},
@@ -210,7 +210,7 @@ func TestSchemaValidationRejectsUnsupportedAndUnsafeFieldDefinitions(t *testing.
 }
 
 func TestSchemaAcceptsExplicitSupportedFieldTypesAndConstraints(t *testing.T) {
-	api, _, _, _ := newEngine(t, core.AccessLevelWrite, nil)
+	api, _, _, _ := newEngine(t, recorddata.AccessLevelWrite, nil)
 	schema, err := api.SaveSchema(authenticatedContext(t, api), formapi.SaveSchemaRequest{
 		Key: "typed-contact", Fields: map[string]any{
 			"name":       map[string]any{"type": "text", "required": true, "min_length": 2, "max_length": 80, "pattern": "^[A-Za-z ]+$"},

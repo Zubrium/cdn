@@ -10,7 +10,9 @@ import (
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
@@ -44,7 +46,15 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 	if component.config.ContentAPI.Locale == "" {
 		return errors.New("Content service locale is required")
 	}
-	identity := component.core.runtime.EngineIdentity()
+	moduleDispatcher := bus.NewModuleDispatcher(component.core.dispatcher, "engine.content")
+	coreAccess, err := contracts.NewCoreAccessClient(moduleDispatcher)
+	if err != nil {
+		return errors.New("Content Core access DataBus client could not be initialized")
+	}
+	identity := moduleCoreIdentity{access: coreAccess}
+	sessions := moduleCoreSessions{access: coreAccess}
+	authorization := moduleCoreAuthorization{access: coreAccess}
+	files := moduleCoreFileStat{dispatcher: moduleDispatcher}
 	_, principal, err := identity.Authenticate(ctx, credential)
 	if err != nil {
 		return errors.New("Content service credential could not be authenticated")
@@ -52,31 +62,41 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 	if principal.ID == "" || !principal.Active {
 		return errors.New("Content service identity is inactive")
 	}
-	serviceCtx, err := component.website.Authenticate(ctx, credential)
-	if err != nil || serviceCtx == nil {
+	websiteCtx, err := component.website.Authenticate(ctx, credential)
+	if err != nil || websiteCtx == nil {
 		return errors.New("Content Website service context could not be established")
 	}
-	serviceCtx, cancel := context.WithCancel(serviceCtx)
-	data, err := component.core.runtime.RegisterDataModule(contentengine.ModuleDataDescriptor())
+	websiteCtx, cancel := context.WithCancel(websiteCtx)
+	data, err := component.core.registerModuleData(contentengine.RecordDescriptor())
 	if err != nil {
 		cancel()
 		return err
 	}
-	provider, err := newContentProjectionProvider(component.website, serviceCtx, component.config.ContentAPI.Locale)
+	provider, err := newContentProjectionProvider(component.website, websiteCtx, component.config.ContentAPI.Locale)
 	if err != nil {
 		cancel()
 		return err
 	}
 	engine, err := contentengine.New(contentengine.Dependencies{
-		Identity: identity, Sessions: component.core.runtime.Sessions(),
-		Authorization: component.core.runtime.GroupAuthorization(), Files: component.core.runtime.EngineFiles(),
+		Identity: identity, Sessions: sessions,
+		Authorization: authorization, Files: files,
 		Data: data, Projections: provider,
 	})
 	if err != nil {
 		cancel()
 		return err
 	}
-	component.engine, component.projections, component.serviceCtx, component.cancel = engine, provider, serviceCtx, cancel
+	contentCtx, err := engine.Authenticate(ctx, credential)
+	if err != nil || contentCtx == nil {
+		cancel()
+		return errors.New("Content service context could not be established")
+	}
+	contentCtx, contentCancel := context.WithCancel(contentCtx)
+	component.engine, component.projections, component.serviceCtx = engine, provider, contentCtx
+	component.cancel = func() {
+		contentCancel()
+		cancel()
+	}
 	if component.core != nil {
 		component.core.contentHandle.Store(component)
 	}

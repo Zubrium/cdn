@@ -1,14 +1,14 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"sort"
 	"time"
-
-	core "github.com/Zubrium/cdn/core/presentation"
-	api "github.com/Zubrium/cdn/engines/loader/presentation"
 )
 
 // persistRecoveredSession keeps the upload result and idempotency mapping in
@@ -27,11 +27,11 @@ func (s *Service) persistRecoveredSession(ctx context.Context, upload storedUplo
 	if err != nil {
 		return err
 	}
-	if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: expectedRevision, Value: &sessionValue},
 		idempotencyMutation,
 	}); err != nil {
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			current, readErr := s.data.Get(ctx, sessionDataKey(upload.ID))
 			if readErr == nil {
 				var latest storedUpload
@@ -48,24 +48,24 @@ func (s *Service) persistRecoveredSession(ctx context.Context, upload storedUplo
 	return nil
 }
 
-func (s *Service) idempotencyMutation(ctx context.Context, upload storedUpload, ttl time.Duration) (core.ModuleDataMutation, error) {
+func (s *Service) idempotencyMutation(ctx context.Context, upload storedUpload, ttl time.Duration) (recorddata.RecordMutation, error) {
 	key := idempotencyDataKeyHash(upload.PrincipalID, upload.IdempotencyKeyHash)
 	expectedRevision := int64(0)
 	if current, err := s.data.Get(ctx, key); err == nil {
 		var existing idempotencyRecord
 		if current.PayloadVersion != 1 || json.Unmarshal(current.Payload, &existing) != nil || existing.SessionID != upload.ID || existing.InputHash != upload.InputHash {
-			return core.ModuleDataMutation{}, api.ErrUnavailable
+			return recorddata.RecordMutation{}, api.ErrUnavailable
 		}
 		expectedRevision = current.Revision
-	} else if !errors.Is(err, core.ErrModuleDataNotFound) {
-		return core.ModuleDataMutation{}, mapDataError(err)
+	} else if !errors.Is(err, recorddata.ErrRecordNotFound) {
+		return recorddata.RecordMutation{}, mapDataError(err)
 	}
 	value, err := dataValue(idempotencyRecord{InputHash: upload.InputHash, SessionID: upload.ID},
 		uploadIndex("idempotency", upload.ID, "active", upload.PrincipalID), ttl)
 	if err != nil {
-		return core.ModuleDataMutation{}, api.ErrUnavailable
+		return recorddata.RecordMutation{}, api.ErrUnavailable
 	}
-	return core.ModuleDataMutation{Key: key, ExpectedRevision: expectedRevision, Value: &value}, nil
+	return recorddata.RecordMutation{Key: key, ExpectedRevision: expectedRevision, Value: &value}, nil
 }
 
 func (s *Service) recoverCommittedSession(ctx context.Context, uploadID, fileID string) error {
@@ -75,7 +75,7 @@ func (s *Service) recoverCommittedSession(ctx context.Context, uploadID, fileID 
 	key := sessionDataKey(uploadID)
 	record, err := s.data.Get(ctx, key)
 	expectedRevision := int64(0)
-	if errors.Is(err, core.ErrModuleDataNotFound) {
+	if errors.Is(err, recorddata.ErrRecordNotFound) {
 		record, err = s.data.GetExpired(ctx, key)
 	} else if err == nil {
 		expectedRevision = record.Revision
@@ -108,7 +108,7 @@ func (s *Service) recoverAbortedSession(ctx context.Context, uploadID string) er
 	key := sessionDataKey(uploadID)
 	record, err := s.data.Get(ctx, key)
 	expectedRevision := int64(0)
-	if errors.Is(err, core.ErrModuleDataNotFound) {
+	if errors.Is(err, recorddata.ErrRecordNotFound) {
 		record, err = s.data.GetExpired(ctx, key)
 	} else if err == nil {
 		expectedRevision = record.Revision
@@ -134,15 +134,15 @@ func (s *Service) recoverAbortedSession(ctx context.Context, uploadID string) er
 	return s.persistRecoveredSession(ctx, upload, expectedRevision)
 }
 
-func (s *Service) getPart(ctx context.Context, uploadID string, number int) (storedPart, core.ModuleDataRecord, error) {
+func (s *Service) getPart(ctx context.Context, uploadID string, number int) (storedPart, recorddata.Record, error) {
 	record, err := s.data.Get(ctx, partDataKey(uploadID, number))
 	if err != nil {
-		return storedPart{}, core.ModuleDataRecord{}, err
+		return storedPart{}, recorddata.Record{}, err
 	}
 	var part storedPart
 	if record.PayloadVersion != 1 || json.Unmarshal(record.Payload, &part) != nil || part.Number != number || part.Number > s.cfg.MaxParts || part.Size <= 0 || part.Size > s.cfg.MaxPartBytes ||
 		part.Stage != stageID(uploadID, number) || !validDigest(part.SHA256) || (part.State != "staging" && part.State != "ready") {
-		return storedPart{}, core.ModuleDataRecord{}, api.ErrUnavailable
+		return storedPart{}, recorddata.Record{}, api.ErrUnavailable
 	}
 	return part, record, nil
 }
@@ -152,8 +152,8 @@ func (s *Service) partsForUpload(ctx context.Context, uploadID string) ([]stored
 	if pageSize < 1 {
 		return nil, api.ErrUnavailable
 	}
-	selectors := []core.ModuleDataSelector{{Field: "kind", Operator: core.SelectorEqual, Values: []any{"part"}},
-		{Field: "upload_id", Operator: core.SelectorEqual, Values: []any{uploadID}}}
+	selectors := []recorddata.RecordSelector{{Field: "kind", Operator: recorddata.RecordSelectorEqual, Values: []any{"part"}},
+		{Field: "upload_id", Operator: recorddata.RecordSelectorEqual, Values: []any{uploadID}}}
 	cursor := ""
 	parts := make([]storedPart, 0, s.cfg.MaxParts)
 	for len(parts) <= s.cfg.MaxParts {
@@ -216,31 +216,31 @@ func expectedPartCount(size, partSize int64) int {
 	return int(count)
 }
 
-func (s *Service) getCleanup(ctx context.Context, uploadID string) (cleanupRecord, core.ModuleDataRecord, error) {
+func (s *Service) getCleanup(ctx context.Context, uploadID string) (cleanupRecord, recorddata.Record, error) {
 	record, err := s.data.Get(ctx, cleanupDataKey(uploadID))
 	if err != nil {
-		return cleanupRecord{}, core.ModuleDataRecord{}, mapDataError(err)
+		return cleanupRecord{}, recorddata.Record{}, mapDataError(err)
 	}
 	var job cleanupRecord
 	if record.PayloadVersion != 1 || json.Unmarshal(record.Payload, &job) != nil || job.UploadID != uploadID || job.ExpectedParts < 0 || job.ExpectedParts > s.cfg.MaxParts ||
 		!validPrincipalID(job.PrincipalID) || (job.State != "waiting" && job.State != "pending") {
-		return cleanupRecord{}, core.ModuleDataRecord{}, api.ErrUnavailable
+		return cleanupRecord{}, recorddata.Record{}, api.ErrUnavailable
 	}
 	return job, record, nil
 }
 
-func (s *Service) loadCleanupUpload(ctx context.Context, uploadID string) (storedUpload, core.ModuleDataRecord, error) {
+func (s *Service) loadCleanupUpload(ctx context.Context, uploadID string) (storedUpload, recorddata.Record, error) {
 	key := sessionDataKey(uploadID)
 	record, err := s.data.Get(ctx, key)
-	if errors.Is(err, core.ErrModuleDataNotFound) {
+	if errors.Is(err, recorddata.ErrRecordNotFound) {
 		record, err = s.data.GetExpired(ctx, key)
 	}
 	if err != nil {
-		return storedUpload{}, core.ModuleDataRecord{}, mapDataError(err)
+		return storedUpload{}, recorddata.Record{}, mapDataError(err)
 	}
 	var upload storedUpload
 	if record.PayloadVersion != 1 || json.Unmarshal(record.Payload, &upload) != nil || !s.validUpload(upload, uploadID, upload.PrincipalID) {
-		return storedUpload{}, core.ModuleDataRecord{}, api.ErrUnavailable
+		return storedUpload{}, recorddata.Record{}, api.ErrUnavailable
 	}
 	return upload, record, nil
 }

@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"archive/zip"
 	"bytes"
@@ -13,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 	"github.com/google/uuid"
@@ -97,7 +99,7 @@ type importWorkerResult struct {
 
 type importState struct {
 	record   importRecord
-	key      core.ModuleDataKey
+	key      recorddata.RecordKey
 	revision int64
 }
 
@@ -117,7 +119,7 @@ type featureVersionRecord struct {
 // BeginFeatureImport validates the request, commits one CAS-protected job with
 // its idempotency receipt, and starts the composition-owned archive workflow.
 func (s *Service) BeginFeatureImport(ctx context.Context, request websiteapi.ImportFeatureRequest) (websiteapi.FeatureImport, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.FeatureImport{}, err
 	}
 	if err := s.requireCoordinatorWrite(ctx); err != nil {
@@ -189,8 +191,8 @@ func (s *Service) BeginFeatureImport(ctx context.Context, request websiteapi.Imp
 	if err != nil {
 		return websiteapi.FeatureImport{}, err
 	}
-	mutations := []core.ModuleDataMutation{
-		{Key: jobKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index}},
+	mutations := []recorddata.RecordMutation{
+		{Key: jobKey, ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index}},
 		{Key: receiptKey, ExpectedRevision: 0, Value: receiptValue},
 	}
 	if err := s.store.Batch(ctx, mutations); err != nil {
@@ -217,7 +219,7 @@ func (s *Service) BeginFeatureImport(ctx context.Context, request websiteapi.Imp
 		job, _ := s.failImport(ctx, state, "invalid_workflow_payload")
 		return job, websiteapi.ErrUnavailable
 	}
-	receipt, err := s.config.Workflow.Start(ctx, core.WorkflowStartRequest{
+	receipt, err := s.config.Workflow.Start(ctx, platform.WorkflowStartRequest{
 		OperationID: s.config.FeatureImportOperationID, ContractVersion: s.config.FeatureImportContractVersion,
 		IdempotencyKey: "feature-import/" + jobID, Payload: startPayload,
 	})
@@ -251,7 +253,7 @@ func (s *Service) BeginFeatureImport(ctx context.Context, request websiteapi.Imp
 // only after the archive task proves every output and the source cleanup are
 // complete; transient coordinator reads leave the record untouched.
 func (s *Service) GetFeatureImport(ctx context.Context, jobID string) (websiteapi.FeatureImport, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.FeatureImport{}, err
 	}
 	if !validInterface(s.config.Workflow) {
@@ -284,7 +286,7 @@ func (s *Service) GetFeatureImport(ctx context.Context, jobID string) (websiteap
 	case "queued", "running":
 		result, err := s.config.Workflow.GetTaskResult(ctx, workflowID, rootID)
 		if err != nil {
-			if errors.Is(err, core.ErrTaskMissing) || errors.Is(err, core.ErrModuleDataNotFound) {
+			if errors.Is(err, platform.ErrTaskMissing) || errors.Is(err, recorddata.ErrRecordNotFound) {
 				return importJobFromRecord(state.record), nil
 			}
 			return s.failImport(ctx, state, importTaskErrorCode(err))
@@ -305,7 +307,7 @@ func (s *Service) GetFeatureImport(ctx context.Context, jobID string) (websiteap
 	}
 }
 
-func (s *Service) reconcileImportResult(ctx context.Context, state importState, workflowID, rootID uuid.UUID, result core.TaskResult, terminal bool) (websiteapi.FeatureImport, error) {
+func (s *Service) reconcileImportResult(ctx context.Context, state importState, workflowID, rootID uuid.UUID, result platform.TaskResult, terminal bool) (websiteapi.FeatureImport, error) {
 	// A retried durable task can leave a failed attempt result while the
 	// workflow is still active. That result is not an import decision.
 	if !terminal && result.State != "" && result.State != "succeeded" {
@@ -314,8 +316,8 @@ func (s *Service) reconcileImportResult(ctx context.Context, state importState, 
 	if result.WorkflowID != uuid.Nil && result.WorkflowID != workflowID ||
 		result.TaskID != uuid.Nil && result.TaskID != rootID ||
 		result.State != "" && result.State != "succeeded" ||
-		result.Worker != nil && (result.Worker.ComponentID != importWorkerComponentID ||
-			result.Worker.OperationID != importWorkerOperationID || result.Worker.ContractVersion != importWorkerContractVer) {
+		result.Operation != nil && (result.Operation.ClassID != importWorkerComponentID ||
+			result.Operation.ID != importWorkerOperationID || result.Operation.Version != importWorkerContractVer) {
 		return s.failImport(ctx, state, "invalid_task_result")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(result.Result))
@@ -357,7 +359,7 @@ func (s *Service) reconcileImportResult(ctx context.Context, state importState, 
 		// The durable worker sets Ready only after deletion, but a stale read
 		// must never publish a version while the source is still present.
 		return importJobFromRecord(state.record), nil
-	} else if !errors.Is(err, core.ErrFileNotFound) {
+	} else if !errors.Is(err, platform.ErrFileNotFound) {
 		return importJobFromRecord(state.record), nil
 	}
 	if state.record.FeatureID == "" || state.record.Version == "" {
@@ -419,8 +421,8 @@ func (s *Service) publishFeatureVersion(ctx context.Context, record importRecord
 	if len(payload) > s.store.MaxPayloadBytes() {
 		return websiteapi.ErrTooLarge
 	}
-	candidate := &core.ModuleDataValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index}
-	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{Key: key, ExpectedRevision: 0, Value: candidate}}); err != nil {
+	candidate := &recorddata.RecordValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index}
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{{Key: key, ExpectedRevision: 0, Value: candidate}}); err != nil {
 		mapped := mapCoreError(err)
 		if !errors.Is(mapped, websiteapi.ErrConflict) {
 			return mapped
@@ -453,10 +455,10 @@ func (s *Service) failImport(ctx context.Context, state importState, code string
 	return importJobFromRecord(updated), nil
 }
 
-func (s *Service) readImportReceipt(ctx context.Context, key core.ModuleDataKey, fingerprint string) (string, bool, error) {
+func (s *Service) readImportReceipt(ctx context.Context, key recorddata.RecordKey, fingerprint string) (string, bool, error) {
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return "", false, nil
 		}
 		return "", false, mapCoreError(err)
@@ -483,7 +485,7 @@ func (s *Service) loadImportState(ctx context.Context, jobID string) (importStat
 	key := websiterepo.FeatureImportKey(id)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return importState{}, websiteapi.ErrNotFound
 		}
 		return importState{}, mapCoreError(err)
@@ -511,7 +513,7 @@ func (s *Service) loadFeatureImport(ctx context.Context, jobID string) (websitea
 	return importJobFromRecord(state.record), nil
 }
 
-func (s *Service) putImportRecord(ctx context.Context, key core.ModuleDataKey, expectedRevision int64, record importRecord) error {
+func (s *Service) putImportRecord(ctx context.Context, key recorddata.RecordKey, expectedRevision int64, record importRecord) error {
 	payload, index, err := importModuleDataValue(record)
 	if err != nil {
 		return err
@@ -519,9 +521,9 @@ func (s *Service) putImportRecord(ctx context.Context, key core.ModuleDataKey, e
 	if len(payload) > s.store.MaxPayloadBytes() {
 		return websiteapi.ErrTooLarge
 	}
-	return mapCoreError(s.store.Batch(ctx, []core.ModuleDataMutation{{
+	return mapCoreError(s.store.Batch(ctx, []recorddata.RecordMutation{{
 		Key: key, ExpectedRevision: expectedRevision,
-		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index},
+		Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index},
 	}}))
 }
 
@@ -538,7 +540,7 @@ func importModuleDataValue(record importRecord) ([]byte, []byte, error) {
 	return payload, index, nil
 }
 
-func importReceiptValue(record importRecord, fingerprint string) (*core.ModuleDataValue, error) {
+func importReceiptValue(record importRecord, fingerprint string) (*recorddata.RecordValue, error) {
 	payload, err := json.Marshal(importReceipt{RecordType: "feature_import_idempotency", JobID: record.ID,
 		Fingerprint: fingerprint, State: "created"})
 	if err != nil {
@@ -549,7 +551,7 @@ func importReceiptValue(record importRecord, fingerprint string) (*core.ModuleDa
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
 	}
-	return &core.ModuleDataValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index}, nil
+	return &recorddata.RecordValue{Payload: payload, PayloadVersion: importPayloadVersion, IndexData: index}, nil
 }
 
 func importFingerprint(sourceFileID, digest string) string {
@@ -557,7 +559,7 @@ func importFingerprint(sourceFileID, digest string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func importSession(ctx context.Context) (core.Session, bool) {
+func importSession(ctx context.Context) (platform.Session, bool) {
 	current, ok := ctx.Value(actorContextKey{}).(actor)
 	return current.session, ok
 }
@@ -565,7 +567,7 @@ func importSession(ctx context.Context) (core.Session, bool) {
 // inspectImportSource extracts only the catalog identity and entry ordering.
 // The archive worker remains authoritative for full ZIP and manifest
 // verification; a malformed source simply leaves this metadata empty.
-func (s *Service) inspectImportSource(ctx context.Context, session core.Session, sourceID string, limit int64) (string, string, []byte, []string) {
+func (s *Service) inspectImportSource(ctx context.Context, session platform.Session, sourceID string, limit int64) (string, string, []byte, []string) {
 	if limit <= 0 {
 		return "", "", nil, nil
 	}
@@ -633,9 +635,9 @@ func importJobFromRecord(record importRecord) websiteapi.FeatureImport {
 
 func importWorkflowErrorCode(err error) string {
 	switch {
-	case errors.Is(err, core.ErrTaskMissing), errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, platform.ErrTaskMissing), errors.Is(err, recorddata.ErrRecordNotFound):
 		return "workflow_not_found"
-	case errors.Is(err, core.ErrUnauthorized), errors.Is(err, core.ErrForbidden), errors.Is(err, core.ErrTaskNotOwned):
+	case errors.Is(err, platform.ErrUnauthorized), errors.Is(err, platform.ErrForbidden), errors.Is(err, platform.ErrTaskNotOwned):
 		return "workflow_access_denied"
 	default:
 		return "workflow_unavailable"
@@ -644,9 +646,9 @@ func importWorkflowErrorCode(err error) string {
 
 func importTaskErrorCode(err error) string {
 	switch {
-	case errors.Is(err, core.ErrTaskMissing), errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, platform.ErrTaskMissing), errors.Is(err, recorddata.ErrRecordNotFound):
 		return "task_result_missing"
-	case errors.Is(err, core.ErrUnauthorized), errors.Is(err, core.ErrForbidden), errors.Is(err, core.ErrTaskNotOwned):
+	case errors.Is(err, platform.ErrUnauthorized), errors.Is(err, platform.ErrForbidden), errors.Is(err, platform.ErrTaskNotOwned):
 		return "task_result_access_denied"
 	default:
 		return "task_result_unavailable"

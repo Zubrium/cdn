@@ -1,5 +1,7 @@
 package repository
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"bytes"
 	"context"
@@ -11,7 +13,6 @@ import (
 	"sort"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/content/domain"
 )
 
@@ -25,10 +26,10 @@ const (
 )
 
 type Store interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Batch(context.Context, []core.ModuleDataMutation) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Batch(context.Context, []recorddata.RecordMutation) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 	MaxBatchSize() int
 	MaxPayloadBytes() int
@@ -108,7 +109,7 @@ func (repo *Repository) ReplaceLocaleConfig(ctx context.Context, request domain.
 				return domain.LocaleConfig{}, domain.ErrConflict
 			}
 		}
-	} else if !errors.Is(getErr, core.ErrModuleDataNotFound) {
+	} else if !errors.Is(getErr, recorddata.ErrRecordNotFound) {
 		return domain.LocaleConfig{}, mapStoreError(getErr)
 	} else if request.ExpectedRevision != 0 {
 		return domain.LocaleConfig{}, domain.ErrConflict
@@ -118,7 +119,7 @@ func (repo *Repository) ReplaceLocaleConfig(ctx context.Context, request domain.
 		return domain.LocaleConfig{}, err
 	}
 	if _, err := repo.store.Put(ctx, key, value, request.ExpectedRevision); err != nil {
-		if errors.Is(err, core.ErrModuleDataConflict) || errors.Is(err, core.ErrRevisionConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			latest, latestErr := repo.store.Get(ctx, key)
 			if latestErr == nil {
 				stored, decodeErr := decodeLocaleConfig(latest)
@@ -138,7 +139,7 @@ type localeConfigPayload struct {
 	Fingerprint string              `json:"fingerprint"`
 }
 
-func decodeLocaleConfig(record core.ModuleDataRecord) (localeConfigPayload, error) {
+func decodeLocaleConfig(record recorddata.Record) (localeConfigPayload, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return localeConfigPayload{}, domain.ErrUnavailable
 	}
@@ -168,8 +169,8 @@ func containsLocale(locales []string, locale string) bool {
 	return false
 }
 
-func localeConfigKey() core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: "locale-catalog"}
+func localeConfigKey() recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: "locale-catalog"}
 }
 
 func (repo *Repository) Get(ctx context.Context, locale string) (domain.StoredWorkspace, error) {
@@ -229,7 +230,7 @@ func (repo *Repository) Create(ctx context.Context, stored domain.StoredWorkspac
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	mutations := []core.ModuleDataMutation{{Key: workspaceKey(stored.Aggregate.Locale), ExpectedRevision: 0, Value: &value}}
+	mutations := []recorddata.RecordMutation{{Key: workspaceKey(stored.Aggregate.Locale), ExpectedRevision: 0, Value: &value}}
 	for _, pageID := range pageIDs {
 		page := stored.PageSelections[pageID]
 		selectionValue, encodeErr := encodePageSelections(pageID, stored.Aggregate.Locale, page.Draft, page.Published, page.LastMutation)
@@ -237,8 +238,8 @@ func (repo *Repository) Create(ctx context.Context, stored domain.StoredWorkspac
 			return domain.StoredWorkspace{}, encodeErr
 		}
 		mutations = append(mutations,
-			core.ModuleDataMutation{Key: pageSelectionKey(pageID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: &selectionValue},
-			core.ModuleDataMutation{Key: pageIndexKey(pageID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: pageIndexValue(pageID, stored.Aggregate.Locale)})
+			recorddata.RecordMutation{Key: pageSelectionKey(pageID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: &selectionValue},
+			recorddata.RecordMutation{Key: pageIndexKey(pageID, stored.Aggregate.Locale), ExpectedRevision: 0, Value: pageIndexValue(pageID, stored.Aggregate.Locale)})
 	}
 	if len(mutations) > repo.store.MaxBatchSize() {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
@@ -246,17 +247,7 @@ func (repo *Repository) Create(ctx context.Context, stored domain.StoredWorkspac
 	if err := repo.store.Batch(ctx, mutations); err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
 	}
-	created := domain.StoredWorkspace{
-		Aggregate:      stored.Aggregate,
-		StoreRevision:  1,
-		PageSelections: make(map[string]domain.StoredPageSelections, len(pageIDs)),
-	}
-	for _, pageID := range pageIDs {
-		page := stored.PageSelections[pageID]
-		page.StoreRevision = 1
-		created.PageSelections[pageID] = page
-	}
-	return created, nil
+	return repo.Get(ctx, stored.Aggregate.Locale)
 }
 
 // Commit atomically replaces the current workspace and, when publishing, adds
@@ -272,7 +263,7 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	mutations := []core.ModuleDataMutation{{Key: workspaceKey(stored.Aggregate.Locale), ExpectedRevision: expectedStoreRevision, Value: &value}}
+	mutations := []recorddata.RecordMutation{{Key: workspaceKey(stored.Aggregate.Locale), ExpectedRevision: expectedStoreRevision, Value: &value}}
 	changedIDs := stored.ChangedPageSelectionIDs
 	if changedIDs == nil {
 		changedIDs = storedPageIDs(stored)
@@ -282,7 +273,6 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 	if len(changedIDs) > repo.store.MaxBatchSize()-len(mutations) {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
 	}
-	updatedPages := make(map[string]domain.StoredPageSelections, len(changedIDs))
 	seenChanged := make(map[string]struct{}, len(changedIDs))
 	for _, pageID := range changedIDs {
 		if !domain.ValidID(pageID) {
@@ -300,16 +290,14 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 		if encodeErr != nil {
 			return domain.StoredWorkspace{}, encodeErr
 		}
-		mutations = append(mutations, core.ModuleDataMutation{Key: pageSelectionKey(pageID, stored.Aggregate.Locale), ExpectedRevision: page.StoreRevision, Value: &selectionValue})
+		mutations = append(mutations, recorddata.RecordMutation{Key: pageSelectionKey(pageID, stored.Aggregate.Locale), ExpectedRevision: page.StoreRevision, Value: &selectionValue})
 		indexKey := pageIndexKey(pageID, stored.Aggregate.Locale)
 		_, indexErr := repo.store.Get(ctx, indexKey)
-		if errors.Is(indexErr, core.ErrModuleDataNotFound) {
-			mutations = append(mutations, core.ModuleDataMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID, stored.Aggregate.Locale)})
+		if errors.Is(indexErr, recorddata.ErrRecordNotFound) {
+			mutations = append(mutations, recorddata.RecordMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID, stored.Aggregate.Locale)})
 		} else if indexErr != nil {
 			return domain.StoredWorkspace{}, mapStoreError(indexErr)
 		}
-		page.StoreRevision++
-		updatedPages[pageID] = page
 	}
 	if publication != nil {
 		if publication.ContentRevision != stored.Aggregate.PublishedRevision || publication.ID == "" || publication.ContentRevision < 1 || publication.DraftRevision < 0 {
@@ -319,7 +307,7 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 		if err != nil {
 			return domain.StoredWorkspace{}, err
 		}
-		mutations = append(mutations, core.ModuleDataMutation{Key: historyKeyForRevision(publication.Locale, publication.ContentRevision), ExpectedRevision: 0, Value: &historyValue})
+		mutations = append(mutations, recorddata.RecordMutation{Key: historyKeyForRevision(publication.Locale, publication.ContentRevision), ExpectedRevision: 0, Value: &historyValue})
 	}
 	if len(mutations) > repo.store.MaxBatchSize() {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
@@ -327,18 +315,7 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 	if err := repo.store.Batch(ctx, mutations); err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
 	}
-	committed := domain.StoredWorkspace{
-		Aggregate:      stored.Aggregate,
-		StoreRevision:  expectedStoreRevision + 1,
-		PageSelections: make(map[string]domain.StoredPageSelections, len(stored.PageSelections)),
-	}
-	for pageID, page := range stored.PageSelections {
-		if updated, exists := updatedPages[pageID]; exists {
-			page = updated
-		}
-		committed.PageSelections[pageID] = page
-	}
-	return committed, nil
+	return repo.Get(ctx, stored.Aggregate.Locale)
 }
 
 func (repo *Repository) CommitPageSelections(ctx context.Context, pageID, locale string, expectedRevision int64, draft, published []domain.Selection, receipt *domain.MutationReceipt) (domain.StoredPageSelections, error) {
@@ -350,11 +327,11 @@ func (repo *Repository) CommitPageSelections(ctx context.Context, pageID, locale
 	if err != nil {
 		return domain.StoredPageSelections{}, err
 	}
-	mutations := []core.ModuleDataMutation{{Key: pageSelectionKey(pageID, locale), ExpectedRevision: expectedRevision, Value: &value}}
+	mutations := []recorddata.RecordMutation{{Key: pageSelectionKey(pageID, locale), ExpectedRevision: expectedRevision, Value: &value}}
 	indexKey := pageIndexKey(pageID, locale)
 	_, indexErr := repo.store.Get(ctx, indexKey)
-	if errors.Is(indexErr, core.ErrModuleDataNotFound) {
-		mutations = append(mutations, core.ModuleDataMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID, locale)})
+	if errors.Is(indexErr, recorddata.ErrRecordNotFound) {
+		mutations = append(mutations, recorddata.RecordMutation{Key: indexKey, ExpectedRevision: 0, Value: pageIndexValue(pageID, locale)})
 	} else if indexErr != nil {
 		return domain.StoredPageSelections{}, mapStoreError(indexErr)
 	}
@@ -364,7 +341,15 @@ func (repo *Repository) CommitPageSelections(ctx context.Context, pageID, locale
 	if err := repo.store.Batch(ctx, mutations); err != nil {
 		return domain.StoredPageSelections{}, mapStoreError(err)
 	}
-	return domain.StoredPageSelections{Draft: draft, Published: published, StoreRevision: expectedRevision + 1, LastMutation: receipt}, nil
+	stored, err := repo.store.Get(ctx, pageSelectionKey(pageID, locale))
+	if err != nil {
+		return domain.StoredPageSelections{}, mapStoreError(err)
+	}
+	actualDraft, actualPublished, actualReceipt, err := decodePageSelections(pageID, locale, stored)
+	if err != nil {
+		return domain.StoredPageSelections{}, err
+	}
+	return domain.StoredPageSelections{Draft: actualDraft, Published: actualPublished, StoreRevision: stored.Revision, LastMutation: actualReceipt}, nil
 }
 
 func (repo *Repository) GetHistoryByID(ctx context.Context, locale, historyID string) (domain.Publication, error) {
@@ -413,7 +398,7 @@ func (repo *Repository) ListHistory(ctx context.Context, locale, after string, l
 	if limit < 1 || limit > repo.MaxPageSize() || (after != "" && !validAfterCursor(after)) {
 		return nil, "", domain.ErrInvalid
 	}
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"history"}}, {Field: "locale", Operator: core.SelectorEqual, Values: []any{locale}}}
+	selectors := []recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"history"}}, {Field: "locale", Operator: recorddata.RecordSelectorEqual, Values: []any{locale}}}
 	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, globalScopeID, after, selectors, limit)
 	if err != nil {
 		return nil, "", mapStoreError(err)
@@ -485,11 +470,11 @@ func (repo *Repository) PutCopiedHistory(ctx context.Context, publication domain
 		}
 		return domain.ErrConflict
 	}
-	if !errors.Is(err, core.ErrModuleDataNotFound) {
+	if !errors.Is(err, recorddata.ErrRecordNotFound) {
 		return mapStoreError(err)
 	}
 	if _, err := repo.store.Put(ctx, key, expected, 0); err != nil {
-		if !errors.Is(err, core.ErrModuleDataConflict) {
+		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return mapStoreError(err)
 		}
 		existing, getErr := repo.store.Get(ctx, key)
@@ -519,26 +504,25 @@ func (repo *Repository) CompleteCopy(ctx context.Context, markerRevision int64, 
 	if err != nil {
 		return domain.StoredWorkspace{}, err
 	}
-	if err := repo.store.Batch(ctx, []core.ModuleDataMutation{
+	if err := repo.store.Batch(ctx, []recorddata.RecordMutation{
 		{Key: workspaceKey(stored.Aggregate.Locale), ExpectedRevision: 0, Value: &workspaceValue},
 		{Key: markerKey(), ExpectedRevision: markerRevision, Value: &markerValue},
 	}); err != nil {
 		return domain.StoredWorkspace{}, mapStoreError(err)
 	}
-	stored.StoreRevision = 1
-	return stored, nil
+	return repo.Get(ctx, stored.Aggregate.Locale)
 }
 
-func workspaceKey(locale string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: "workspace/" + locale}
+func workspaceKey(locale string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: "workspace/" + locale}
 }
-func pageSelectionKey(pageSnapshotID, locale string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: pageScopeType, ScopeID: pageSnapshotID, RecordKey: "page-selections/" + locale}
+func pageSelectionKey(pageSnapshotID, locale string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: pageScopeType, ScopeID: pageSnapshotID, RecordKey: "page-selections/" + locale}
 }
-func pageIndexKey(pageSnapshotID, locale string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: "page-index/" + locale + "/" + pageSnapshotID}
+func pageIndexKey(pageSnapshotID, locale string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: "page-index/" + locale + "/" + pageSnapshotID}
 }
-func pageIndexValue(pageSnapshotID, locale string) *core.ModuleDataValue {
+func pageIndexValue(pageSnapshotID, locale string) *recorddata.RecordValue {
 	value, _ := encodePayload(struct {
 		PageSnapshotID string `json:"page_snapshot_id"`
 		Locale         string `json:"locale"`
@@ -550,7 +534,7 @@ func (repo *Repository) listPageSelectionIDs(ctx context.Context, locale string)
 	after := ""
 	for {
 		keys, records, next, err := repo.store.List(ctx, namespace, scopeType, globalScopeID, after,
-			[]core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"page-index"}}, {Field: "locale", Operator: core.SelectorEqual, Values: []any{locale}}}, repo.MaxPageSize())
+			[]recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"page-index"}}, {Field: "locale", Operator: recorddata.RecordSelectorEqual, Values: []any{locale}}}, repo.MaxPageSize())
 		if err != nil {
 			return nil, mapStoreError(err)
 		}
@@ -593,7 +577,7 @@ func storedPageIDs(stored domain.StoredWorkspace) []string {
 	sort.Strings(ids)
 	return ids
 }
-func encodePageSelections(pageSnapshotID, locale string, draft, published []domain.Selection, receipt *domain.MutationReceipt) (core.ModuleDataValue, error) {
+func encodePageSelections(pageSnapshotID, locale string, draft, published []domain.Selection, receipt *domain.MutationReceipt) (recorddata.RecordValue, error) {
 	if draft == nil {
 		draft = []domain.Selection{}
 	}
@@ -606,7 +590,7 @@ func encodePageSelections(pageSnapshotID, locale string, draft, published []doma
 		LastMutation *domain.MutationReceipt `json:"last_mutation,omitempty"`
 	}{draft, published, receipt}, map[string]any{"record_type": "page-selections", "content_revision": 0, "page_snapshot_id": pageSnapshotID, "locale": locale})
 }
-func decodePageSelections(pageSnapshotID, locale string, record core.ModuleDataRecord) ([]domain.Selection, []domain.Selection, *domain.MutationReceipt, error) {
+func decodePageSelections(pageSnapshotID, locale string, record recorddata.Record) ([]domain.Selection, []domain.Selection, *domain.MutationReceipt, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return nil, nil, nil, domain.ErrUnavailable
 	}
@@ -629,21 +613,21 @@ func decodePageSelections(pageSnapshotID, locale string, record core.ModuleDataR
 	}
 	return payload.Draft, payload.Published, payload.LastMutation, nil
 }
-func markerKey() core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: copyKey}
+func markerKey() recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: copyKey}
 }
-func historyKeyForRevision(locale string, revision int64) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: fmt.Sprintf("history/%s/%020d", locale, revision)}
+func historyKeyForRevision(locale string, revision int64) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: fmt.Sprintf("history/%s/%020d", locale, revision)}
 }
 
-func encodeAggregate(aggregate domain.Aggregate) (core.ModuleDataValue, error) {
+func encodeAggregate(aggregate domain.Aggregate) (recorddata.RecordValue, error) {
 	if !validAggregate(aggregate) {
-		return core.ModuleDataValue{}, domain.ErrInvalid
+		return recorddata.RecordValue{}, domain.ErrInvalid
 	}
 	return encodePayload(aggregate, map[string]any{"record_type": "workspace", "content_revision": aggregate.PublishedRevision, "locale": aggregate.Locale})
 }
 
-func decodeAggregate(record core.ModuleDataRecord) (domain.Aggregate, error) {
+func decodeAggregate(record recorddata.Record) (domain.Aggregate, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return domain.Aggregate{}, domain.ErrUnavailable
 	}
@@ -666,20 +650,20 @@ func decodeAggregate(record core.ModuleDataRecord) (domain.Aggregate, error) {
 	return payload.Aggregate, nil
 }
 
-func encodePublication(publication domain.Publication) (core.ModuleDataValue, error) {
+func encodePublication(publication domain.Publication) (recorddata.RecordValue, error) {
 	locale, localeErr := domain.CanonicalLocale(publication.Locale)
 	if localeErr != nil || locale != publication.Locale || publication.ID == "" || publication.DraftRevision < 0 || publication.ContentRevision < 1 || publication.CreatedAt.IsZero() || publication.Records == nil || publication.Selections == nil {
-		return core.ModuleDataValue{}, domain.ErrInvalid
+		return recorddata.RecordValue{}, domain.ErrInvalid
 	}
 	for _, record := range publication.Records {
 		if record.Locale != locale {
-			return core.ModuleDataValue{}, domain.ErrInvalid
+			return recorddata.RecordValue{}, domain.ErrInvalid
 		}
 	}
 	return encodePayload(publication, map[string]any{"record_type": "history", "content_revision": publication.ContentRevision, "locale": publication.Locale})
 }
 
-func decodePublication(id string, record core.ModuleDataRecord) (domain.Publication, error) {
+func decodePublication(id string, record recorddata.Record) (domain.Publication, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return domain.Publication{}, domain.ErrUnavailable
 	}
@@ -703,17 +687,17 @@ func decodePublication(id string, record core.ModuleDataRecord) (domain.Publicat
 	return publication, nil
 }
 
-func encodeMarker(marker domain.CopyMarker) (core.ModuleDataValue, error) {
+func encodeMarker(marker domain.CopyMarker) (recorddata.RecordValue, error) {
 	if marker.SourceSnapshotID == "" || marker.TargetSnapshotID == "" || marker.SourceRevision < 0 || marker.KeyHash == "" || marker.Fingerprint == "" || (marker.State != "copying" && marker.State != "complete") {
-		return core.ModuleDataValue{}, domain.ErrInvalid
+		return recorddata.RecordValue{}, domain.ErrInvalid
 	}
 	if marker.State == "complete" && marker.Result == nil {
-		return core.ModuleDataValue{}, domain.ErrInvalid
+		return recorddata.RecordValue{}, domain.ErrInvalid
 	}
 	return encodePayload(marker, map[string]any{"record_type": "copy-marker", "content_revision": marker.SourceRevision})
 }
 
-func decodeMarker(record core.ModuleDataRecord) (domain.CopyMarker, error) {
+func decodeMarker(record recorddata.Record) (domain.CopyMarker, error) {
 	if record.PayloadVersion != domain.PayloadVersion {
 		return domain.CopyMarker{}, domain.ErrUnavailable
 	}
@@ -728,19 +712,19 @@ func decodeMarker(record core.ModuleDataRecord) (domain.CopyMarker, error) {
 	return marker, nil
 }
 
-func encodePayload(payload any, index map[string]any) (core.ModuleDataValue, error) {
+func encodePayload(payload any, index map[string]any) (recorddata.RecordValue, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return core.ModuleDataValue{}, domain.ErrInvalid
+		return recorddata.RecordValue{}, domain.ErrInvalid
 	}
 	indexBytes, err := json.Marshal(index)
 	if err != nil {
-		return core.ModuleDataValue{}, domain.ErrInvalid
+		return recorddata.RecordValue{}, domain.ErrInvalid
 	}
 	if len(encoded) > 0 && len(indexBytes) > 0 {
-		return core.ModuleDataValue{Payload: encoded, PayloadVersion: domain.PayloadVersion, IndexData: indexBytes}, nil
+		return recorddata.RecordValue{Payload: encoded, PayloadVersion: domain.PayloadVersion, IndexData: indexBytes}, nil
 	}
-	return core.ModuleDataValue{}, domain.ErrInvalid
+	return recorddata.RecordValue{}, domain.ErrInvalid
 }
 
 func decodeStrict(raw []byte, target any) error {
@@ -822,13 +806,13 @@ func mapStoreError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, recorddata.ErrRecordNotFound):
 		return domain.ErrNotFound
-	case errors.Is(err, core.ErrModuleDataConflict), errors.Is(err, core.ErrRevisionConflict):
+	case errors.Is(err, recorddata.ErrRecordConflict):
 		return domain.ErrConflict
-	case errors.Is(err, core.ErrModuleDataInvalid):
+	case errors.Is(err, recorddata.ErrRecordInvalid):
 		return domain.ErrInvalid
-	case errors.Is(err, core.ErrModuleDataLimitExceeded):
+	case errors.Is(err, recorddata.ErrRecordLimit):
 		return domain.ErrTooLarge
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

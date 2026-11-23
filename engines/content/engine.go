@@ -1,11 +1,13 @@
 package content
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	contentapp "github.com/Zubrium/cdn/engines/content/application"
 	"github.com/Zubrium/cdn/engines/content/domain"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
@@ -15,10 +17,10 @@ import (
 const accessGroup = "content"
 
 type DataStore interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Batch(context.Context, []core.ModuleDataMutation) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Batch(context.Context, []recorddata.RecordMutation) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 	MaxBatchSize() int
 	MaxPayloadBytes() int
@@ -27,13 +29,13 @@ type DataStore interface {
 }
 
 type FileOperations interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
+	StatFile(context.Context, recorddata.AuthorizationSubject, string) (recorddata.File, error)
 }
 
 type Dependencies struct {
-	Identity      core.EngineIdentityCapability
-	Sessions      core.SessionCapability
-	Authorization core.GroupAuthorizationCapability
+	Identity      Identity
+	Sessions      Sessions
+	Authorization Authorization
 	Files         FileOperations
 	Data          DataStore
 	Projections   contentapi.ProjectionsProvider
@@ -41,9 +43,9 @@ type Dependencies struct {
 
 type Engine struct {
 	contentapi.Descriptor
-	identity      core.EngineIdentityCapability
-	sessions      core.SessionCapability
-	authorization core.GroupAuthorizationCapability
+	identity      Identity
+	sessions      Sessions
+	authorization Authorization
 	projections   contentapi.ProjectionsProvider
 	service       *contentapp.Service
 }
@@ -52,8 +54,8 @@ type authenticatedContextKey struct{}
 
 type authenticatedState struct {
 	owner     *Engine
-	session   core.Session
-	principal core.Principal
+	session   recorddata.AuthorizationSubject
+	principal recorddata.Principal
 }
 
 func New(dependencies Dependencies) (*Engine, error) {
@@ -97,7 +99,7 @@ func (engine *Engine) AuthenticateSession(ctx context.Context, token string) (co
 	return engine.authenticatedContext(ctx, session, principal)
 }
 
-func (engine *Engine) authenticatedContext(ctx context.Context, session core.Session, principal core.Principal) (context.Context, error) {
+func (engine *Engine) authenticatedContext(ctx context.Context, session recorddata.AuthorizationSubject, principal recorddata.Principal) (context.Context, error) {
 	if ctx == nil || principal.ID == "" || !principal.Active {
 		return nil, contentapi.ErrUnauthorized
 	}
@@ -105,7 +107,7 @@ func (engine *Engine) authenticatedContext(ctx context.Context, session core.Ses
 	return context.WithValue(ctx, authenticatedContextKey{}, state), nil
 }
 
-func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) (authenticatedState, error) {
+func (engine *Engine) authorize(ctx context.Context, required recorddata.AccessLevel) (authenticatedState, error) {
 	if engine == nil || ctx == nil || nilCapability(engine.authorization) {
 		return authenticatedState{}, contentapi.ErrUnauthorized
 	}
@@ -120,7 +122,7 @@ func (engine *Engine) authorize(ctx context.Context, required core.AccessLevel) 
 }
 
 func (engine *Engine) GetContentProjections(ctx context.Context, pageSnapshotID string) (contentapi.Projections, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, recorddata.AccessLevelRead); err != nil {
 		return contentapi.Projections{}, err
 	}
 	if nilCapability(engine.projections) {
@@ -137,7 +139,7 @@ func (engine *Engine) GetContentProjections(ctx context.Context, pageSnapshotID 
 }
 
 func (engine *Engine) GetLocaleConfig(ctx context.Context) (domain.LocaleConfig, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, recorddata.AccessLevelRead); err != nil {
 		return domain.LocaleConfig{}, err
 	}
 	config, err := engine.service.GetLocaleConfig(ctx)
@@ -148,7 +150,7 @@ func (engine *Engine) GetLocaleConfig(ctx context.Context) (domain.LocaleConfig,
 }
 
 func (engine *Engine) ReplaceLocaleConfig(ctx context.Context, request domain.ReplaceLocaleConfigRequest) (domain.LocaleConfig, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, recorddata.AccessLevelWrite); err != nil {
 		return domain.LocaleConfig{}, err
 	}
 	config, err := engine.service.ReplaceLocaleConfig(ctx, request)
@@ -159,23 +161,23 @@ func (engine *Engine) ReplaceLocaleConfig(ctx context.Context, request domain.Re
 }
 
 func (engine *Engine) GetWorkspace(ctx context.Context, projection contentapi.Projections) (contentapi.Workspace, error) {
-	state, err := engine.authorize(ctx, core.AccessLevelRead)
+	state, err := engine.authorize(ctx, recorddata.AccessLevelRead)
 	if err != nil {
-		return contentapi.Workspace{}, err
+		return contentapi.Workspace{}, fmt.Errorf("authorize content workspace: %w", err)
 	}
 	schema, err := engine.resolveSchema(ctx, projection, projection.Page.PageSnapshotID, false)
 	if err != nil {
-		return contentapi.Workspace{}, err
+		return contentapi.Workspace{}, fmt.Errorf("resolve content workspace projection: %w", err)
 	}
 	workspace, err := engine.service.GetWorkspace(ctx, state.session, schema, projection.Page.PageSnapshotID)
 	if err != nil {
-		return contentapi.Workspace{}, mapError(err)
+		return contentapi.Workspace{}, fmt.Errorf("load content workspace data: %w", mapError(err))
 	}
 	return toAPIWorkspace(workspace), nil
 }
 
 func (engine *Engine) SaveWorkspaceDraft(ctx context.Context, projection contentapi.Projections, request contentapi.SaveWorkspaceDraftRequest) (contentapi.Workspace, error) {
-	state, err := engine.authorize(ctx, core.AccessLevelWrite)
+	state, err := engine.authorize(ctx, recorddata.AccessLevelWrite)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -191,7 +193,7 @@ func (engine *Engine) SaveWorkspaceDraft(ctx context.Context, projection content
 }
 
 func (engine *Engine) PublishWorkspace(ctx context.Context, projection contentapi.Projections, request contentapi.PublishWorkspaceRequest) (contentapi.Workspace, error) {
-	state, err := engine.authorize(ctx, core.AccessLevelWrite)
+	state, err := engine.authorize(ctx, recorddata.AccessLevelWrite)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -207,7 +209,7 @@ func (engine *Engine) PublishWorkspace(ctx context.Context, projection contentap
 }
 
 func (engine *Engine) ListHistory(ctx context.Context, projection contentapi.Projections, cursor string, limit int) (contentapi.HistoryPage, error) {
-	if _, err := engine.authorize(ctx, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, recorddata.AccessLevelRead); err != nil {
 		return contentapi.HistoryPage{}, err
 	}
 	schema, err := engine.resolveSchema(ctx, projection, projection.Page.PageSnapshotID, false)
@@ -229,7 +231,7 @@ func (engine *Engine) ListHistory(ctx context.Context, projection contentapi.Pro
 }
 
 func (engine *Engine) RestoreHistory(ctx context.Context, projection contentapi.Projections, request contentapi.RestoreHistoryRequest) (contentapi.Workspace, error) {
-	state, err := engine.authorize(ctx, core.AccessLevelWrite)
+	state, err := engine.authorize(ctx, recorddata.AccessLevelWrite)
 	if err != nil {
 		return contentapi.Workspace{}, err
 	}
@@ -265,7 +267,7 @@ func (engine *Engine) CopySnapshotContent(ctx context.Context, request contentap
 	if !contentapi.ValidSelectionPolicy(request.SelectionPolicy) {
 		return contentapi.CopySnapshotContentResult{}, contentapi.ErrInvalid
 	}
-	state, err := engine.authorize(ctx, core.AccessLevelWrite)
+	state, err := engine.authorize(ctx, recorddata.AccessLevelWrite)
 	if err != nil {
 		return contentapi.CopySnapshotContentResult{}, err
 	}
@@ -283,7 +285,11 @@ func (engine *Engine) CopySnapshotContent(ctx context.Context, request contentap
 	}
 	result, err := engine.service.CopySnapshotContent(ctx, state.session, source, target, request)
 	if err != nil {
-		return contentapi.CopySnapshotContentResult{}, mapError(err)
+		mapped := mapError(err)
+		if errors.Is(err, domain.ErrConflict) {
+			return contentapi.CopySnapshotContentResult{}, fmt.Errorf("%w: %s", mapped, err)
+		}
+		return contentapi.CopySnapshotContentResult{}, mapped
 	}
 	return contentapi.CopySnapshotContentResult{
 		TargetSnapshotID: result.TargetSnapshotID, SourceRevision: result.SourceRevision,
@@ -408,17 +414,17 @@ func mapError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, contentapi.ErrUnauthorized), errors.Is(err, core.ErrUnauthorized):
+	case errors.Is(err, contentapi.ErrUnauthorized), errors.Is(err, recorddata.ErrAccessUnauthorized):
 		return contentapi.ErrUnauthorized
-	case errors.Is(err, contentapi.ErrForbidden), errors.Is(err, core.ErrForbidden):
+	case errors.Is(err, contentapi.ErrForbidden), errors.Is(err, recorddata.ErrAccessForbidden):
 		return contentapi.ErrForbidden
-	case errors.Is(err, contentapi.ErrNotFound), errors.Is(err, domain.ErrNotFound), errors.Is(err, core.ErrFileNotFound):
+	case errors.Is(err, contentapi.ErrNotFound), errors.Is(err, domain.ErrNotFound), errors.Is(err, recorddata.ErrFileNotFound):
 		return contentapi.ErrNotFound
-	case errors.Is(err, contentapi.ErrConflict), errors.Is(err, domain.ErrConflict), errors.Is(err, core.ErrModuleDataConflict), errors.Is(err, core.ErrRevisionConflict):
+	case errors.Is(err, contentapi.ErrConflict), errors.Is(err, domain.ErrConflict), errors.Is(err, recorddata.ErrRecordConflict), errors.Is(err, recorddata.ErrFileRevisionConflict):
 		return contentapi.ErrConflict
-	case errors.Is(err, contentapi.ErrInvalid), errors.Is(err, domain.ErrInvalid), errors.Is(err, core.ErrModuleDataInvalid):
+	case errors.Is(err, contentapi.ErrInvalid), errors.Is(err, domain.ErrInvalid), errors.Is(err, recorddata.ErrRecordInvalid):
 		return contentapi.ErrInvalid
-	case errors.Is(err, contentapi.ErrTooLarge), errors.Is(err, domain.ErrTooLarge), errors.Is(err, core.ErrModuleDataLimitExceeded):
+	case errors.Is(err, contentapi.ErrTooLarge), errors.Is(err, domain.ErrTooLarge), errors.Is(err, recorddata.ErrRecordLimit):
 		return contentapi.ErrTooLarge
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
@@ -441,4 +447,3 @@ func nilCapability(value any) bool {
 }
 
 var _ contentapi.Contract = (*Engine)(nil)
-var _ core.Module = (*Engine)(nil)

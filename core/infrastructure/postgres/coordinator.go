@@ -32,7 +32,7 @@ var (
 )
 
 var (
-	coordinatorComponentID = regexp.MustCompile(`^[a-z][a-z0-9.-]{0,63}$`)
+	coordinatorTaskClassID = regexp.MustCompile(`^[a-z][a-z0-9.-]{0,63}$`)
 	coordinatorOperationID = regexp.MustCompile(`^[a-z][a-z0-9._/-]{0,127}$`)
 	coordinatorErrorCode   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,127}$`)
 	coordinatorFingerprint = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -142,22 +142,22 @@ func ReleaseCoordinatorInstance(ctx context.Context, pool *pgxpool.Pool, instanc
 func StartCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, request coordination.WorkflowRequest) (coordination.Workflow, bool, error) {
 	root := request.Root
 	var inputMaterial string
-	if root.Worker != nil {
-		inputMaterial = root.Worker.OperationID + "\x00" + fmt.Sprint(root.Worker.ContractVersion) + "\x00" + string(root.Payload)
+	if root.Operation != nil {
+		inputMaterial = root.Operation.ID + "\x00" + fmt.Sprint(root.Operation.Version) + "\x00" + string(root.Payload)
 	}
 	inputHash := sha256.Sum256([]byte(inputMaterial))
 	if ctx == nil || pool == nil || request.ID == uuid.Nil || request.Owner == uuid.Nil || request.ConfigEpoch <= 0 ||
-		!coordinatorComponentID.MatchString(request.OwnerEngineID) || !validCoordinatorIdempotencyKey(request.IdempotencyKey) ||
+		!coordinatorTaskClassID.MatchString(request.OwnerClassID) || !validCoordinatorIdempotencyKey(request.IdempotencyKey) ||
 		len(request.InputHash) != sha256.Size || !equalBytes(request.InputHash, inputHash[:]) || root.ID == uuid.Nil ||
-		root.Kind != coordination.TaskKindWorker || root.Worker == nil || root.Worker.ComponentID != request.OwnerEngineID ||
-		!coordinatorOperationID.MatchString(root.Worker.OperationID) || root.Worker.ContractVersion < 1 || root.Worker.ContractVersion > 1<<16 ||
+		root.Kind != coordination.TaskKindOperation || root.Operation == nil || root.Operation.ClassID != request.OwnerClassID ||
+		!coordinatorOperationID.MatchString(root.Operation.ID) || root.Operation.Version < 1 || root.Operation.Version > 1<<16 ||
 		root.MaxAttempts < 1 || root.MaxAttempts > 100 || !validCoordinatorJSON(root.Payload) ||
 		request.Retention <= 0 || request.Retention > maxCoordinatorWorkflowRetention ||
 		(root.WorkflowID != uuid.Nil && root.WorkflowID != request.ID) || root.ParentTaskID != uuid.Nil || root.EmissionKey != "" ||
 		len(root.DependsOn) > 0 || len(root.DependsOnEmissions) > 0 {
 		return coordination.Workflow{}, false, ErrCoordinatorInvalid
 	}
-	keyHash := sha256.Sum256([]byte(request.OwnerEngineID + "\x00" + request.IdempotencyKey))
+	keyHash := sha256.Sum256([]byte(request.OwnerClassID + "\x00" + request.IdempotencyKey))
 	idempotencyKey := hex.EncodeToString(keyHash[:])
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -167,7 +167,7 @@ func StartCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, request c
 	if err := verifyCoordinatorInstance(ctx, tx, request.Owner, request.ConfigEpoch); err != nil {
 		return coordination.Workflow{}, false, err
 	}
-	workflow, err := getWorkflowByIdempotencyKey(ctx, tx, request.OwnerEngineID, idempotencyKey)
+	workflow, err := getWorkflowByIdempotencyKey(ctx, tx, request.OwnerClassID, idempotencyKey)
 	if err == nil {
 		if !equalBytes(workflow.inputHash, request.InputHash) {
 			return coordination.Workflow{}, false, ErrCoordinatorConflict
@@ -181,12 +181,12 @@ func StartCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, request c
 		return coordination.Workflow{}, false, err
 	}
 	var insertedID uuid.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO coordination.workflows(workflow_id,root_task_id,owner_engine_id,idempotency_key,
+	err = tx.QueryRow(ctx, `INSERT INTO coordination.workflows(workflow_id,root_task_id,owner_class_id,idempotency_key,
 		input_hash,config_epoch,state) VALUES($1,$2,$3,$4,$5,$6,'queued')
-		ON CONFLICT(owner_engine_id,idempotency_key) DO NOTHING RETURNING workflow_id`, request.ID, root.ID,
-		request.OwnerEngineID, idempotencyKey, request.InputHash, request.ConfigEpoch).Scan(&insertedID)
+		ON CONFLICT(owner_class_id,idempotency_key) DO NOTHING RETURNING workflow_id`, request.ID, root.ID,
+		request.OwnerClassID, idempotencyKey, request.InputHash, request.ConfigEpoch).Scan(&insertedID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		workflow, err = getWorkflowByIdempotencyKey(ctx, tx, request.OwnerEngineID, idempotencyKey)
+		workflow, err = getWorkflowByIdempotencyKey(ctx, tx, request.OwnerClassID, idempotencyKey)
 		if err != nil {
 			return coordination.Workflow{}, false, err
 		}
@@ -201,14 +201,14 @@ func StartCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, request c
 	if err != nil {
 		return coordination.Workflow{}, false, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO coordination.tasks(task_id,workflow_id,task_kind,component_id,operation_id,contract_version,
+	_, err = tx.Exec(ctx, `INSERT INTO coordination.tasks(task_id,workflow_id,task_kind,task_class_id,operation_id,contract_version,
 		payload,state,max_attempts,available_at,config_epoch) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,'queued',$8,
-		clock_timestamp(),$9)`, root.ID, request.ID, root.Kind, root.Worker.ComponentID, root.Worker.OperationID, root.Worker.ContractVersion,
+		clock_timestamp(),$9)`, root.ID, request.ID, root.Kind, root.Operation.ClassID, root.Operation.ID, root.Operation.Version,
 		[]byte(root.Payload), root.MaxAttempts, request.ConfigEpoch)
 	if err != nil {
 		return coordination.Workflow{}, false, err
 	}
-	result := coordination.Workflow{ID: request.ID, OwnerEngineID: request.OwnerEngineID, RootTaskID: root.ID, State: "queued"}
+	result := coordination.Workflow{ID: request.ID, OwnerClassID: request.OwnerClassID, RootTaskID: root.ID, State: "queued"}
 	if err := tx.QueryRow(ctx, `SELECT created_at,updated_at FROM coordination.workflows WHERE workflow_id=$1`, request.ID).
 		Scan(&result.CreatedAt, &result.UpdatedAt); err != nil {
 		return coordination.Workflow{}, false, err
@@ -226,13 +226,13 @@ type workflowRow struct {
 
 func getWorkflowByIdempotencyKey(ctx context.Context, db interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}, ownerEngineID, key string) (workflowRow, error) {
-	return scanWorkflow(db.QueryRow(ctx, `SELECT workflow_id,owner_engine_id,state,root_task_id,result,input_hash,created_at,updated_at
-		FROM coordination.workflows WHERE owner_engine_id=$1 AND idempotency_key=$2`, ownerEngineID, key))
+}, ownerClassID, key string) (workflowRow, error) {
+	return scanWorkflow(db.QueryRow(ctx, `SELECT workflow_id,owner_class_id,state,root_task_id,result,input_hash,created_at,updated_at
+		FROM coordination.workflows WHERE owner_class_id=$1 AND idempotency_key=$2`, ownerClassID, key))
 }
 
-func GetCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerEngineID string, instanceID uuid.UUID, epoch int64, workflowID uuid.UUID) (coordination.Workflow, error) {
-	if ctx == nil || pool == nil || !coordinatorComponentID.MatchString(ownerEngineID) || instanceID == uuid.Nil || epoch <= 0 || workflowID == uuid.Nil {
+func GetCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerClassID string, instanceID uuid.UUID, epoch int64, workflowID uuid.UUID) (coordination.Workflow, error) {
+	if ctx == nil || pool == nil || !coordinatorTaskClassID.MatchString(ownerClassID) || instanceID == uuid.Nil || epoch <= 0 || workflowID == uuid.Nil {
 		return coordination.Workflow{}, ErrCoordinatorInvalid
 	}
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
@@ -243,8 +243,8 @@ func GetCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerEngine
 	if err := verifyCoordinatorInstance(ctx, tx, instanceID, epoch); err != nil {
 		return coordination.Workflow{}, err
 	}
-	workflow, err := scanWorkflow(tx.QueryRow(ctx, `SELECT workflow_id,owner_engine_id,state,root_task_id,result,input_hash,created_at,updated_at
-		FROM coordination.workflows WHERE owner_engine_id=$1 AND workflow_id=$2`, ownerEngineID, workflowID))
+	workflow, err := scanWorkflow(tx.QueryRow(ctx, `SELECT workflow_id,owner_class_id,state,root_task_id,result,input_hash,created_at,updated_at
+		FROM coordination.workflows WHERE owner_class_id=$1 AND workflow_id=$2`, ownerClassID, workflowID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return coordination.Workflow{}, ErrTaskMissing
 	}
@@ -257,8 +257,8 @@ func GetCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerEngine
 	return workflow.Workflow, nil
 }
 
-func CancelCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerEngineID string, instanceID uuid.UUID, epoch int64, workflowID uuid.UUID, retention time.Duration) error {
-	if ctx == nil || pool == nil || !coordinatorComponentID.MatchString(ownerEngineID) || instanceID == uuid.Nil || epoch <= 0 || workflowID == uuid.Nil ||
+func CancelCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerClassID string, instanceID uuid.UUID, epoch int64, workflowID uuid.UUID, retention time.Duration) error {
+	if ctx == nil || pool == nil || !coordinatorTaskClassID.MatchString(ownerClassID) || instanceID == uuid.Nil || epoch <= 0 || workflowID == uuid.Nil ||
 		retention <= 0 || retention > maxCoordinatorWorkflowRetention {
 		return ErrCoordinatorInvalid
 	}
@@ -271,7 +271,7 @@ func CancelCoordinatorWorkflow(ctx context.Context, pool *pgxpool.Pool, ownerEng
 		return err
 	}
 	var state string
-	err = tx.QueryRow(ctx, `SELECT state FROM coordination.workflows WHERE owner_engine_id=$1 AND workflow_id=$2 FOR UPDATE`, ownerEngineID, workflowID).Scan(&state)
+	err = tx.QueryRow(ctx, `SELECT state FROM coordination.workflows WHERE owner_class_id=$1 AND workflow_id=$2 FOR UPDATE`, ownerClassID, workflowID).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrTaskMissing
 	}
@@ -313,7 +313,7 @@ func PruneCoordinatorWorkflows(ctx context.Context, pool *pgxpool.Pool, limit in
 func scanWorkflow(row rowScanner) (workflowRow, error) {
 	var result workflowRow
 	var payload []byte
-	err := row.Scan(&result.Workflow.ID, &result.Workflow.OwnerEngineID, &result.Workflow.State,
+	err := row.Scan(&result.Workflow.ID, &result.Workflow.OwnerClassID, &result.Workflow.State,
 		&result.Workflow.RootTaskID, &payload, &result.inputHash, &result.Workflow.CreatedAt, &result.Workflow.UpdatedAt)
 	if err != nil {
 		return workflowRow{}, err
@@ -322,10 +322,20 @@ func scanWorkflow(row rowScanner) (workflowRow, error) {
 	return result, nil
 }
 
-func ClaimTasks(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch int64, limit int, lease, workflowRetention time.Duration) ([]Task, error) {
-	if ctx == nil || pool == nil || owner == uuid.Nil || epoch <= 0 || limit < 1 || limit > 256 || lease < time.Second || lease > time.Hour ||
+func ClaimTasks(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch int64, taskClasses []string, limit int, lease, workflowRetention time.Duration) ([]Task, error) {
+	if ctx == nil || pool == nil || owner == uuid.Nil || epoch <= 0 || len(taskClasses) == 0 || len(taskClasses) > 256 || limit < 1 || limit > 256 || lease < time.Second || lease > time.Hour ||
 		workflowRetention <= 0 || workflowRetention > maxCoordinatorWorkflowRetention {
 		return nil, ErrCoordinatorInvalid
+	}
+	seenComponents := make(map[string]struct{}, len(taskClasses))
+	for _, taskClass := range taskClasses {
+		if taskClass == "" || len(taskClass) > 64 {
+			return nil, ErrCoordinatorInvalid
+		}
+		if _, exists := seenComponents[taskClass]; exists {
+			return nil, ErrCoordinatorInvalid
+		}
+		seenComponents[taskClass] = struct{}{}
 	}
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -361,7 +371,7 @@ func ClaimTasks(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch 
 	}
 	if _, err := tx.Exec(ctx, `UPDATE coordination.workflows w SET state='running',updated_at=clock_timestamp()
 		WHERE w.state='queued' AND EXISTS(SELECT 1 FROM coordination.tasks t WHERE t.workflow_id=w.workflow_id
-		AND t.task_kind='worker' AND t.state='queued' AND t.available_at<=clock_timestamp() AND NOT EXISTS(
+		AND t.task_kind='operation' AND t.state='queued' AND t.available_at<=clock_timestamp() AND NOT EXISTS(
 			SELECT 1 FROM coordination.dependencies d JOIN coordination.tasks prerequisite
 			ON prerequisite.workflow_id=d.workflow_id AND prerequisite.task_id=d.depends_on
 			WHERE d.workflow_id=t.workflow_id AND d.task_id=t.task_id AND prerequisite.state<>'succeeded'))`); err != nil {
@@ -369,20 +379,20 @@ func ClaimTasks(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, epoch 
 	}
 	rows, err := tx.Query(ctx, `WITH candidates AS (
 		SELECT t.task_id FROM coordination.tasks t JOIN coordination.workflows w USING(workflow_id)
-		WHERE t.task_kind='worker' AND t.state='queued' AND t.available_at<=clock_timestamp() AND t.attempts<t.max_attempts
+		WHERE t.task_kind='operation' AND t.task_class_id=ANY($4::text[]) AND t.state='queued' AND t.available_at<=clock_timestamp() AND t.attempts<t.max_attempts
 			AND w.state='running' AND w.config_epoch=$3
 		AND NOT EXISTS(SELECT 1 FROM coordination.dependencies d JOIN coordination.tasks prerequisite
 			ON prerequisite.workflow_id=d.workflow_id AND prerequisite.task_id=d.depends_on
 			WHERE d.workflow_id=t.workflow_id AND d.task_id=t.task_id AND prerequisite.state<>'succeeded')
-		ORDER BY t.available_at,t.created_at,t.task_id LIMIT $4 FOR UPDATE OF t SKIP LOCKED
+		ORDER BY t.available_at,t.created_at,t.task_id LIMIT $5 FOR UPDATE OF t SKIP LOCKED
 	), claimed AS (
 		UPDATE coordination.tasks t SET state='running',attempts=t.attempts+1,lease_owner=$1,
 		lease_until=clock_timestamp()+($2::bigint*interval '1 microsecond'),fencing_token=t.fencing_token+1,
 		config_epoch=$3,updated_at=clock_timestamp() FROM candidates c WHERE t.task_id=c.task_id
 		RETURNING t.*
-	) SELECT c.task_id,c.workflow_id,c.task_kind,c.component_id,c.operation_id,c.contract_version,COALESCE(c.emission_key,''),
+	) SELECT c.task_id,c.workflow_id,c.task_kind,c.task_class_id,c.operation_id,c.contract_version,COALESCE(c.emission_key,''),
 		w.idempotency_key,c.payload,c.state,c.attempts,c.max_attempts,c.available_at,c.lease_owner,c.lease_until,c.fencing_token,c.config_epoch,
-		c.result,COALESCE(c.error_code,''),c.created_at,c.updated_at FROM claimed c JOIN coordination.workflows w USING(workflow_id)`, owner, lease.Microseconds(), epoch, limit)
+		c.result,COALESCE(c.error_code,''),c.created_at,c.updated_at FROM claimed c JOIN coordination.workflows w USING(workflow_id)`, owner, lease.Microseconds(), epoch, taskClasses, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -484,13 +494,13 @@ func insertCoordinatorChildren(ctx context.Context, tx pgx.Tx, workflowID, paren
 			return ErrCoordinatorInvalid
 		}
 		switch child.Kind {
-		case coordination.TaskKindWorker:
-			if child.Worker == nil || !coordinatorComponentID.MatchString(child.Worker.ComponentID) || !coordinatorOperationID.MatchString(child.Worker.OperationID) ||
-				child.Worker.ContractVersion < 1 || child.Worker.ContractVersion > 1<<16 || child.MaxAttempts < 1 || child.MaxAttempts > 100 {
+		case coordination.TaskKindOperation:
+			if child.Operation == nil || !coordinatorTaskClassID.MatchString(child.Operation.ClassID) || !coordinatorOperationID.MatchString(child.Operation.ID) ||
+				child.Operation.Version < 1 || child.Operation.Version > 1<<16 || child.MaxAttempts < 1 || child.MaxAttempts > 100 {
 				return ErrCoordinatorInvalid
 			}
 		case coordination.TaskKindJoin:
-			if child.Worker != nil || child.MaxAttempts != 0 || len(child.DependsOn)+len(child.DependsOnEmissions) == 0 {
+			if child.Operation != nil || child.MaxAttempts != 0 || len(child.DependsOn)+len(child.DependsOnEmissions) == 0 {
 				return ErrCoordinatorInvalid
 			}
 		default:
@@ -510,20 +520,20 @@ func insertCoordinatorChildren(ctx context.Context, tx pgx.Tx, workflowID, paren
 	}
 	for i, child := range children {
 		var availableAt any
-		if child.Kind == coordination.TaskKindWorker && !child.AvailableAt.IsZero() {
+		if child.Kind == coordination.TaskKindOperation && !child.AvailableAt.IsZero() {
 			availableAt = child.AvailableAt.UTC()
 		}
-		var componentID, operationID any
+		var taskClass, operationID any
 		var version, maxAttempts int
-		if child.Kind == coordination.TaskKindWorker {
-			componentID, operationID, version, maxAttempts = child.Worker.ComponentID, child.Worker.OperationID, child.Worker.ContractVersion, child.MaxAttempts
+		if child.Kind == coordination.TaskKindOperation {
+			taskClass, operationID, version, maxAttempts = child.Operation.ClassID, child.Operation.ID, child.Operation.Version, child.MaxAttempts
 		} else {
 			maxAttempts = 1
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO coordination.tasks(task_id,workflow_id,task_kind,component_id,operation_id,contract_version,
+		_, err := tx.Exec(ctx, `INSERT INTO coordination.tasks(task_id,workflow_id,task_kind,task_class_id,operation_id,contract_version,
 			parent_task_id,emission_key,payload,state,max_attempts,available_at,config_epoch)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,'queued',$10,COALESCE($11::timestamptz,clock_timestamp()),$12)`, ids[i], workflowID,
-			child.Kind, componentID, operationID, nullableVersion(version), parentID, child.EmissionKey, []byte(child.Payload), maxAttempts, availableAt, epoch)
+			child.Kind, taskClass, operationID, nullableVersion(version), parentID, child.EmissionKey, []byte(child.Payload), maxAttempts, availableAt, epoch)
 		if err != nil {
 			return err
 		}
@@ -538,7 +548,7 @@ func insertCoordinatorChildren(ctx context.Context, tx pgx.Tx, workflowID, paren
 			}
 			dependencies = append(dependencies, dependencyID)
 		}
-		if len(dependencies) == 0 && child.Kind == coordination.TaskKindWorker {
+		if len(dependencies) == 0 && child.Kind == coordination.TaskKindOperation {
 			dependencies = []uuid.UUID{parentID}
 		}
 		if len(dependencies) == 0 || len(dependencies) > 256 {
@@ -711,7 +721,7 @@ func RetryTask(ctx context.Context, pool *pgxpool.Pool, owner, targetWorkflowID,
 	var workflowID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT workflow.workflow_id FROM coordination.workflows AS workflow
 		JOIN coordination.tasks AS task ON task.workflow_id=workflow.workflow_id
-		WHERE workflow.workflow_id=$1 AND task.task_id=$2 AND task.task_kind='worker' AND task.state='failed'
+		WHERE workflow.workflow_id=$1 AND task.task_id=$2 AND task.task_kind='operation' AND task.state='failed'
 		AND workflow.state='failed' FOR UPDATE OF workflow`, targetWorkflowID, taskID).Scan(&workflowID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrTaskMissing
@@ -721,7 +731,7 @@ func RetryTask(ctx context.Context, pool *pgxpool.Pool, owner, targetWorkflowID,
 	}
 	err = tx.QueryRow(ctx, `UPDATE coordination.tasks AS task SET state='queued',attempts=0,available_at=clock_timestamp(),
 		lease_owner=NULL,lease_until=NULL,error_code=NULL,result=NULL,config_epoch=$3,updated_at=clock_timestamp()
-		WHERE task.task_id=$1 AND task.workflow_id=$2 AND task.task_kind='worker' AND task.state='failed' RETURNING task.workflow_id`, taskID, workflowID, epoch).Scan(&workflowID)
+		WHERE task.task_id=$1 AND task.workflow_id=$2 AND task.task_kind='operation' AND task.state='failed' RETURNING task.workflow_id`, taskID, workflowID, epoch).Scan(&workflowID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrTaskMissing
 	}
@@ -745,13 +755,13 @@ type rowScanner interface{ Scan(...any) error }
 func scanTask(row rowScanner) (Task, error) {
 	var task Task
 	var kind string
-	var componentID, operationID pgtype.Text
+	var taskClass, operationID pgtype.Text
 	var contractVersion pgtype.Int4
 	var leaseOwner pgtype.UUID
 	var leaseUntil pgtype.Timestamptz
 	var errorCode pgtype.Text
 	var payload, result []byte
-	err := row.Scan(&task.ID, &task.WorkflowID, &kind, &componentID, &operationID, &contractVersion,
+	err := row.Scan(&task.ID, &task.WorkflowID, &kind, &taskClass, &operationID, &contractVersion,
 		&task.EmissionKey, &task.IdempotencyKey, &payload, &task.State, &task.Attempts, &task.MaxAttempts, &task.AvailableAt, &leaseOwner,
 		&leaseUntil, &task.FencingToken, &task.ConfigEpoch, &result, &errorCode, &task.CreatedAt, &task.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -761,12 +771,12 @@ func scanTask(row rowScanner) (Task, error) {
 		return Task{}, err
 	}
 	task.Kind = coordination.TaskKind(kind)
-	if task.Kind == coordination.TaskKindWorker {
-		if !componentID.Valid || !operationID.Valid || !contractVersion.Valid {
+	if task.Kind == coordination.TaskKindOperation {
+		if !taskClass.Valid || !operationID.Valid || !contractVersion.Valid {
 			return Task{}, ErrCoordinatorInvalid
 		}
-		task.Worker = &coordination.WorkerRef{ComponentID: componentID.String, OperationID: operationID.String,
-			ContractVersion: int(contractVersion.Int32)}
+		task.Operation = &coordination.OperationRef{ClassID: taskClass.String, ID: operationID.String,
+			Version: int(contractVersion.Int32)}
 	}
 	task.Payload = append(json.RawMessage(nil), payload...)
 	task.Result = append(json.RawMessage(nil), result...)

@@ -30,9 +30,17 @@ type TaskStore = corecoord.TaskRepository
 // Task is the durable work unit passed to one statically registered Worker.
 type Task = corecoord.Task
 
-// WorkerHandler must return when ctx is cancelled. TaskExecutor cannot forcibly
-// stop an in-process goroutine; non-cooperative work requires process isolation.
-type WorkerHandler func(context.Context, Task) (corecoord.TaskOutcome, error)
+// OperationExecutor routes a durable operation through the composition-owned
+// runtime boundary. Core owns scheduling and persistence, not operation code.
+type OperationExecutor interface {
+	Execute(context.Context, Task) (corecoord.TaskOutcome, error)
+}
+
+type OperationExecutorFunc func(context.Context, Task) (corecoord.TaskOutcome, error)
+
+func (executor OperationExecutorFunc) Execute(ctx context.Context, task Task) (corecoord.TaskOutcome, error) {
+	return executor(ctx, task)
+}
 
 type TaskFailure struct {
 	Code      string
@@ -56,6 +64,7 @@ func NewTaskFailure(code string, retryable bool) *TaskFailure {
 type TaskExecutorConfig struct {
 	Owner              uuid.UUID
 	ConfigEpoch        int64
+	TaskClasses        []string
 	Concurrency        int
 	LeaseDuration      time.Duration
 	TaskTimeout        time.Duration
@@ -70,7 +79,7 @@ type TaskExecutorConfig struct {
 type TaskExecutor struct {
 	store    TaskStore
 	cfg      TaskExecutorConfig
-	handlers map[string]WorkerHandler
+	executor OperationExecutor
 
 	mu      sync.Mutex
 	started bool
@@ -87,22 +96,16 @@ var (
 	ErrTaskExecutorStore          = errors.New("task executor could not persist task state")
 )
 
-func NewTaskExecutor(store TaskStore, cfg TaskExecutorConfig, handlers map[string]WorkerHandler) (*TaskExecutor, error) {
-	if isNilInterface(store) || cfg.Owner == uuid.Nil || cfg.ConfigEpoch <= 0 || cfg.Concurrency < 1 || cfg.Concurrency > 256 ||
+func NewTaskExecutor(store TaskStore, cfg TaskExecutorConfig, executor OperationExecutor) (*TaskExecutor, error) {
+	if isNilInterface(store) || cfg.Owner == uuid.Nil || cfg.ConfigEpoch <= 0 || len(cfg.TaskClasses) == 0 || cfg.Concurrency < 1 || cfg.Concurrency > 256 ||
 		cfg.LeaseDuration < 3*time.Second || cfg.LeaseDuration > time.Hour || cfg.TaskTimeout <= 0 || cfg.TaskTimeout > 24*time.Hour || cfg.PollInterval <= 0 || cfg.PollInterval >= cfg.LeaseDuration ||
 		cfg.RetryBase <= 0 || cfg.RetryMaximum < cfg.RetryBase || cfg.RetryMaximum > 24*time.Hour ||
 		cfg.MaxWorkflowTasks < 1 || cfg.MaxWorkflowTasks > 100000 || cfg.MaxChildrenPerTask < 0 || cfg.MaxChildrenPerTask > 256 ||
-		cfg.WorkflowRetention <= 0 || cfg.WorkflowRetention > 365*24*time.Hour || len(handlers) == 0 {
+		cfg.WorkflowRetention <= 0 || cfg.WorkflowRetention > 365*24*time.Hour || isNilInterface(executor) {
 		return nil, ErrInvalid
 	}
-	copyHandlers := make(map[string]WorkerHandler, len(handlers))
-	for dispatchKey, handler := range handlers {
-		if !validWorkerHandlerKey(dispatchKey) || handler == nil {
-			return nil, ErrInvalid
-		}
-		copyHandlers[dispatchKey] = handler
-	}
-	return &TaskExecutor{store: store, cfg: cfg, handlers: copyHandlers, done: make(chan struct{}), errors: make(chan error, 1)}, nil
+	cfg.TaskClasses = append([]string(nil), cfg.TaskClasses...)
+	return &TaskExecutor{store: store, cfg: cfg, executor: executor, done: make(chan struct{}), errors: make(chan error, 1)}, nil
 }
 
 func (p *TaskExecutor) Start(ctx context.Context) error {
@@ -179,7 +182,7 @@ func (p *TaskExecutor) Close(ctx context.Context) error {
 
 func (p *TaskExecutor) run(ctx context.Context) {
 	for ctx.Err() == nil {
-		tasks, err := p.store.Claim(ctx, p.cfg.Owner, p.cfg.ConfigEpoch, 1, p.cfg.LeaseDuration, p.cfg.WorkflowRetention)
+		tasks, err := p.store.Claim(ctx, p.cfg.Owner, p.cfg.ConfigEpoch, p.cfg.TaskClasses, 1, p.cfg.LeaseDuration, p.cfg.WorkflowRetention)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -202,20 +205,15 @@ func (p *TaskExecutor) run(ctx context.Context) {
 }
 
 func (p *TaskExecutor) execute(ctx context.Context, task Task) {
-	if task.Kind != corecoord.TaskKindWorker || task.Worker == nil {
+	if task.Kind != corecoord.TaskKindOperation || task.Operation == nil {
 		p.fail(ctx, task, NewTaskFailure("invalid_task_kind", false))
-		return
-	}
-	handler := p.handlers[workerHandlerKey(task.Worker.ComponentID, task.Worker.OperationID, task.Worker.ContractVersion)]
-	if handler == nil {
-		p.fail(ctx, task, NewTaskFailure("handler_unavailable", false))
 		return
 	}
 	taskCtx, cancelTask := context.WithTimeout(ctx, p.cfg.TaskTimeout)
 	heartbeatDone := make(chan struct{})
 	heartbeatFailure := make(chan error, 1)
 	go p.renewTaskLease(taskCtx, cancelTask, task, heartbeatDone, heartbeatFailure)
-	result, handlerErr := invokeWorkerHandler(taskCtx, handler, task)
+	result, handlerErr := invokeOperationExecutor(taskCtx, p.executor, task)
 	taskErr := taskCtx.Err()
 	cancelTask()
 	<-heartbeatDone
@@ -254,15 +252,6 @@ func (p *TaskExecutor) execute(ctx context.Context, task Task) {
 		p.fail(ctx, task, NewTaskFailure("invalid_task_result", false))
 		return
 	}
-	for _, child := range result.Children {
-		if child.Kind == corecoord.TaskKindJoin {
-			continue
-		}
-		if child.Worker == nil || p.handlers[workerHandlerKey(child.Worker.ComponentID, child.Worker.OperationID, child.Worker.ContractVersion)] == nil {
-			p.fail(ctx, task, NewTaskFailure("handler_unavailable", false))
-			return
-		}
-	}
 	ackCtx, cancel := context.WithTimeout(ctx, min(p.cfg.LeaseDuration/4, 5*time.Second))
 	err := p.store.Complete(ackCtx, task.ID, task.LeaseOwner, task.ConfigEpoch, task.FencingToken,
 		p.cfg.MaxWorkflowTasks, p.cfg.MaxChildrenPerTask, p.cfg.WorkflowRetention, result)
@@ -276,14 +265,14 @@ func (p *TaskExecutor) execute(ctx context.Context, task Task) {
 	}
 }
 
-func invokeWorkerHandler(ctx context.Context, handler WorkerHandler, task Task) (result corecoord.TaskOutcome, err error) {
+func invokeOperationExecutor(ctx context.Context, executor OperationExecutor, task Task) (result corecoord.TaskOutcome, err error) {
 	defer func() {
 		if recover() != nil {
 			result = corecoord.TaskOutcome{}
-			err = NewTaskFailure("worker_panic", true)
+			err = NewTaskFailure("operation_panic", true)
 		}
 	}()
-	return handler(ctx, task)
+	return executor.Execute(ctx, task)
 }
 
 func (p *TaskExecutor) renewTaskLease(ctx context.Context, cancel context.CancelFunc, task Task, done chan<- struct{}, failures chan<- error) {
@@ -370,14 +359,14 @@ func validTaskOutcome(outcome corecoord.TaskOutcome, maxChildren int) bool {
 			return false
 		}
 		switch child.Kind {
-		case corecoord.TaskKindWorker:
-			if child.Worker == nil || !taskComponentPattern.MatchString(child.Worker.ComponentID) || !taskTypePattern.MatchString(child.Worker.OperationID) ||
-				child.Worker.ContractVersion < 1 || child.Worker.ContractVersion > 1<<16 || !validTaskPayload(child.Payload) ||
+		case corecoord.TaskKindOperation:
+			if child.Operation == nil || !taskComponentPattern.MatchString(child.Operation.ClassID) || !taskTypePattern.MatchString(child.Operation.ID) ||
+				child.Operation.Version < 1 || child.Operation.Version > 1<<16 || !validTaskPayload(child.Payload) ||
 				child.MaxAttempts < 1 || child.MaxAttempts > 100 {
 				return false
 			}
 		case corecoord.TaskKindJoin:
-			if child.Worker != nil || len(child.DependsOn)+len(child.DependsOnEmissions) == 0 || child.MaxAttempts != 0 ||
+			if child.Operation != nil || len(child.DependsOn)+len(child.DependsOnEmissions) == 0 || child.MaxAttempts != 0 ||
 				!validTaskPayload(child.Payload) {
 				return false
 			}

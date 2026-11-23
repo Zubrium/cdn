@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
@@ -101,6 +102,44 @@ func TestCallWithStreamsPassesRegisteredBodyToHandler(t *testing.T) {
 	}
 	if _, err := streams.OpenRead(context.Background(), ref); !errors.Is(err, ErrStreamClosed) {
 		t.Fatalf("streams were not closed by CallWithStreams: %v", err)
+	}
+}
+
+func TestDispatcherWaitsForProvidedScopedStreamsToClose(t *testing.T) {
+	operation := contracts.Operation[streamProbeRequest, streamProbeResponse]{Key: contracts.Key{ID: "bus.streams.lifetime", Version: 1}}
+	dispatcher, err := NewAllowlisted(operation.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.EnableScopedStreams(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(dispatcher, operation, func(context.Context, streamProbeRequest) (streamProbeResponse, error) {
+		return streamProbeResponse{Payload: "ready"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	streams := NewScopedStreams()
+	_, err = streams.AddWriter(nopWriteCloser{Writer: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contracts.Call(contracts.WithStreamCapability(context.Background(), streams), dispatcher, operation, streamProbeRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := dispatcher.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close before stream close = %v, want deadline", err)
+	}
+	if err := streams.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Close(context.Background()); err != nil {
+		t.Fatalf("Close after stream close = %v", err)
 	}
 }
 

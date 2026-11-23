@@ -8,10 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"strings"
 	"time"
-
-	platform "github.com/Zubrium/cdn/core/presentation"
 )
 
 var (
@@ -25,7 +24,6 @@ var (
 )
 
 type Contract interface {
-	platform.Module
 	API
 }
 
@@ -451,27 +449,6 @@ type MediaSandboxState struct {
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.website", Kind: "engine", Version: 1, AccessGroups: []string{"features"}}
+func (Descriptor) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: "engine.website", Kind: "engine", Version: 1, AccessGroups: []string{"features"}}
 }
-
-func (Descriptor) Operations() []platform.Operation {
-	return []platform.Operation{
-		{Name: "feature-import.create", Action: platform.AccessActionWrite, ResourceType: "feature-import"},
-		{Name: "feature-import.read", Action: platform.AccessActionRead, ResourceType: "feature-import"},
-		{Name: "feature-version.read", Action: platform.AccessActionRead, ResourceType: "feature-version"},
-		{Name: "snapshot.read", Action: platform.AccessActionRead, ResourceType: "snapshot"},
-		{Name: "snapshot.list", Action: platform.AccessActionRead, ResourceType: "snapshot"},
-		{Name: "snapshot.write", Action: platform.AccessActionWrite, ResourceType: "snapshot"},
-		{Name: "snapshot.delete", Action: platform.AccessActionDelete, ResourceType: "snapshot"},
-		{Name: "content-model.read", Action: platform.AccessActionRead, ResourceType: "content-model"},
-		{Name: "content-model.write", Action: platform.AccessActionWrite, ResourceType: "content-model"},
-		{Name: "page-placement-projection.read", Action: platform.AccessActionRead, ResourceType: "page-placement-projection"},
-		{Name: "build.create", Action: platform.AccessActionWrite, ResourceType: "build"},
-		{Name: "build.read", Action: platform.AccessActionRead, ResourceType: "build"},
-		{Name: "media-derivative.create", Action: platform.AccessActionWrite, ResourceType: "media-derivative"},
-		{Name: "media-job.read", Action: platform.AccessActionRead, ResourceType: "media-job"},
-	}
-}
-
-var _ platform.Module = Descriptor{}

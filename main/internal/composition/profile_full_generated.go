@@ -28,7 +28,7 @@ import (
 	prerender "github.com/Zubrium/cdn/workers/prerender"
 )
 
-func RegisterGeneratedEngines(registry *platform.Registry) error {
+func RegisterGeneratedEngines(registry *ProfileRegistry) error {
 	if registry == nil {
 		return platform.ErrInvalid
 	}

@@ -260,7 +260,7 @@ func GenerateBuildProfileGoWithTag(plan BuildPlan, packageName, buildTag string)
 		}
 		lastPath = item.path
 	}
-	source.WriteString(")\n\nfunc RegisterGeneratedEngines(registry *platform.Registry) error {\nif registry == nil { return platform.ErrInvalid }\n")
+	source.WriteString(")\n\nfunc RegisterGeneratedEngines(registry *ProfileRegistry) error {\nif registry == nil { return platform.ErrInvalid }\n")
 	if len(registrations) == 0 {
 		source.WriteString("return nil\n")
 	} else {

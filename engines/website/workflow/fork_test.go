@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type fakeForkCopier struct {
@@ -43,9 +44,9 @@ func (f *fakeForkFinalizer) MarkSnapshotReady(_ context.Context, snapshotID stri
 	return websiteapi.Snapshot{ID: snapshotID, State: "ready", Revision: expectedRevision + 1}, nil
 }
 
-func forkTask(payload websiteapi.SnapshotForkWorkflowPayload) core.Task {
+func forkTask(payload websiteapi.SnapshotForkWorkflowPayload) contracts.OperationTask {
 	raw, _ := json.Marshal(payload)
-	return core.Task{Kind: core.TaskKindWorker, Worker: &core.WorkerRef{ComponentID: ComponentID, OperationID: ForkOperationID, ContractVersion: ForkContractVersion}, Payload: raw}
+	return contracts.OperationTask{TaskID: "task-1", Payload: raw}
 }
 
 func validForkPayload() websiteapi.SnapshotForkWorkflowPayload {
@@ -110,7 +111,42 @@ func TestForkHandlerPropagatesCopyError(t *testing.T) {
 	if !errors.Is(err, want) {
 		t.Fatalf("err=%v want %v", err, want)
 	}
+	if !strings.Contains(err.Error(), "copy snapshot content") {
+		t.Fatalf("copy failure lacks workflow stage context: %v", err)
+	}
 	if finalizer.calls != 0 {
 		t.Fatalf("finalizer should not run on copy failure, calls=%d", finalizer.calls)
+	}
+}
+
+func TestForkHandlerPropagatesFinalizeErrorAfterCopy(t *testing.T) {
+	want := errors.New("finalize failed")
+	copier := &fakeForkCopier{}
+	finalizer := &fakeForkFinalizer{err: want}
+	handler, err := NewForkHandler(copier, finalizer, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = handler.WorkerHandler(context.Background(), forkTask(validForkPayload()))
+	if !errors.Is(err, want) {
+		t.Fatalf("err=%v want %v", err, want)
+	}
+	if !strings.Contains(err.Error(), "finalize snapshot") {
+		t.Fatalf("finalization failure lacks workflow stage context: %v", err)
+	}
+	if copier.calls != 1 || finalizer.calls != 1 {
+		t.Fatalf("calls copier=%d finalizer=%d", copier.calls, finalizer.calls)
+	}
+}
+
+func TestForkHandlerRejectsMissingTaskID(t *testing.T) {
+	handler, err := NewForkHandler(&fakeForkCopier{}, &fakeForkFinalizer{}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := forkTask(validForkPayload())
+	task.TaskID = ""
+	if _, err := handler.WorkerHandler(context.Background(), task); !errors.Is(err, errInvalidForkTask) {
+		t.Fatalf("err=%v want invalid fork task", err)
 	}
 }

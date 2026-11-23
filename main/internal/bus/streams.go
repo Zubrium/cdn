@@ -19,9 +19,11 @@ var (
 )
 
 type ScopedStreams struct {
-	mu      sync.Mutex
-	entries map[contracts.StreamRef]*streamEntry
-	closed  bool
+	mu         sync.Mutex
+	entries    map[contracts.StreamRef]*streamEntry
+	closeHooks []func()
+	retained   int
+	closed     bool
 }
 
 type streamEntry struct {
@@ -135,12 +137,64 @@ func (streams *ScopedStreams) Close() error {
 	for _, entry := range streams.entries {
 		entries = append(entries, entry)
 	}
+	hooks := streams.takeCloseHooksLocked()
 	streams.mu.Unlock()
 	var result error
 	for _, entry := range entries {
 		result = errors.Join(result, entry.closeResource())
 	}
+	for _, hook := range hooks {
+		hook()
+	}
 	return result
+}
+
+func (streams *ScopedStreams) onClose(hook func()) {
+	if streams == nil || hook == nil {
+		return
+	}
+	streams.mu.Lock()
+	if streams.closed && streams.retained == 0 {
+		streams.mu.Unlock()
+		hook()
+		return
+	}
+	streams.closeHooks = append(streams.closeHooks, hook)
+	streams.mu.Unlock()
+}
+
+func (streams *ScopedStreams) Retain() (func(), error) {
+	if streams == nil {
+		return nil, ErrStreamClosed
+	}
+	streams.mu.Lock()
+	if streams.closed {
+		streams.mu.Unlock()
+		return nil, ErrStreamClosed
+	}
+	streams.retained++
+	streams.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			streams.mu.Lock()
+			streams.retained--
+			hooks := streams.takeCloseHooksLocked()
+			streams.mu.Unlock()
+			for _, hook := range hooks {
+				hook()
+			}
+		})
+	}, nil
+}
+
+func (streams *ScopedStreams) takeCloseHooksLocked() []func() {
+	if !streams.closed || streams.retained != 0 || len(streams.closeHooks) == 0 {
+		return nil
+	}
+	hooks := append([]func(){}, streams.closeHooks...)
+	streams.closeHooks = nil
+	return hooks
 }
 
 func (entry *streamEntry) closeResource() error {
@@ -156,12 +210,26 @@ func (entry *streamEntry) closeResource() error {
 
 type scopedReadCloser struct{ entry *streamEntry }
 
-func (stream *scopedReadCloser) Read(buffer []byte) (int, error) { return stream.entry.reader.Read(buffer) }
-func (stream *scopedReadCloser) Close() error                   { return stream.entry.closeResource() }
+func (stream *scopedReadCloser) Read(buffer []byte) (int, error) {
+	return stream.entry.reader.Read(buffer)
+}
+func (stream *scopedReadCloser) Close() error { return stream.entry.closeResource() }
 
 type scopedWriteCloser struct{ entry *streamEntry }
 
-func (stream *scopedWriteCloser) Write(buffer []byte) (int, error) { return stream.entry.writer.Write(buffer) }
-func (stream *scopedWriteCloser) Close() error                     { return stream.entry.closeResource() }
+func (stream *scopedWriteCloser) Write(buffer []byte) (int, error) {
+	return stream.entry.writer.Write(buffer)
+}
+func (stream *scopedWriteCloser) Close() error { return stream.entry.closeResource() }
+func (stream *scopedWriteCloser) CloseWithError(err error) error {
+	stream.entry.close.Do(func() {
+		if closer, ok := stream.entry.writer.(interface{ CloseWithError(error) error }); ok {
+			stream.entry.closeErr = closer.CloseWithError(err)
+		} else {
+			stream.entry.closeErr = stream.entry.writer.Close()
+		}
+	})
+	return stream.entry.closeErr
+}
 
 var _ contracts.ScopedStreamCapability = (*ScopedStreams)(nil)

@@ -6,7 +6,9 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	formsengine "github.com/Zubrium/cdn/engines/forms"
+	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type formsEngineComponent struct {
@@ -28,7 +30,12 @@ func (component *formsEngineComponent) Start(ctx context.Context) error {
 	if settings.FileServiceCredential == "" || settings.VisitorSessionTTL <= 0 || settings.VisitorSessionCleanupEvery <= 0 {
 		return errors.New("Forms session and file service settings are required")
 	}
-	identity := component.core.runtime.EngineIdentity()
+	moduleDispatcher := bus.NewModuleDispatcher(component.core.dispatcher, "engine.forms")
+	access, err := contracts.NewCoreAccessClient(moduleDispatcher)
+	if err != nil {
+		return errors.New("Forms access DataBus client could not be initialized")
+	}
+	identity := moduleCoreIdentity{access: access}
 	fileSession, principal, err := identity.Authenticate(ctx, settings.FileServiceCredential)
 	if err != nil {
 		return errors.New("Forms file service credential could not be authenticated")
@@ -36,13 +43,22 @@ func (component *formsEngineComponent) Start(ctx context.Context) error {
 	if principal.ID == "" || !principal.Active {
 		return errors.New("Forms file service identity is inactive")
 	}
-	data, err := component.core.runtime.RegisterDataModule(formsengine.ModuleDataDescriptor())
+	coreSession, _, err := component.core.runtime.Identity().Authenticate(ctx, settings.FileServiceCredential)
+	if err != nil {
+		return errors.New("Forms file service capability could not be established")
+	}
+	component.core.setCoreFiles("engine.forms", coreSessionFileAdapter{files: component.core.runtime.Files(), session: coreSession})
+	files, err := contracts.NewCoreFilesClient(moduleDispatcher, func() contracts.StreamRegistrar { return bus.NewScopedStreams() })
+	if err != nil {
+		return errors.New("Forms file DataBus client could not be initialized")
+	}
+	data, err := component.core.registerModuleData(formsengine.RecordDescriptor())
 	if err != nil {
 		return err
 	}
 	engine, err := formsengine.New(formsengine.Dependencies{
-		Identity: identity, Sessions: component.core.runtime.Sessions(),
-		Authorization: component.core.runtime.GroupAuthorization(), Files: component.core.runtime.EngineFiles(),
+		Identity: identity, Sessions: moduleCoreSessions{access: access},
+		Authorization: moduleCoreAuthorization{access: access}, Files: formFileOperations{files: files},
 		Data: data, FileSession: fileSession, VisitorSessionTTL: settings.VisitorSessionTTL,
 	})
 	if err != nil {

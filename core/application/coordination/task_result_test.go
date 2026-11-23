@@ -12,11 +12,11 @@ import (
 )
 
 type taskResultCall struct {
-	ownerEngineID string
-	owner         uuid.UUID
-	configEpoch   int64
-	workflowID    uuid.UUID
-	taskID        uuid.UUID
+	ownerClassID string
+	owner        uuid.UUID
+	configEpoch  int64
+	workflowID   uuid.UUID
+	taskID       uuid.UUID
 }
 
 // taskResultStore is an in-memory stand-in for the narrow owner-scoped result
@@ -44,16 +44,16 @@ func (s *taskResultStore) CancelWorkflow(context.Context, string, uuid.UUID, int
 	panic("unexpected CancelWorkflow call")
 }
 
-func (s *taskResultStore) GetTaskResult(ctx context.Context, ownerEngineID string, owner uuid.UUID, epoch int64, workflowID, taskID uuid.UUID) (corecoord.TaskResult, error) {
+func (s *taskResultStore) GetTaskResult(ctx context.Context, ownerClassID string, owner uuid.UUID, epoch int64, workflowID, taskID uuid.UUID) (corecoord.TaskResult, error) {
 	if err := ctx.Err(); err != nil {
 		return corecoord.TaskResult{}, err
 	}
 	if s.getErr != nil {
 		return corecoord.TaskResult{}, s.getErr
 	}
-	s.calls = append(s.calls, taskResultCall{ownerEngineID: ownerEngineID, owner: owner,
+	s.calls = append(s.calls, taskResultCall{ownerClassID: ownerClassID, owner: owner,
 		configEpoch: epoch, workflowID: workflowID, taskID: taskID})
-	if ownerEngineID != s.engineID || owner != s.owner || epoch != s.epoch {
+	if ownerClassID != s.engineID || owner != s.owner || epoch != s.epoch {
 		return corecoord.TaskResult{}, corecoord.ErrTaskMissing
 	}
 	tasks := s.results[workflowID]
@@ -69,15 +69,7 @@ func (s *taskResultStore) GetTaskResult(ctx context.Context, ownerEngineID strin
 
 func taskResultClient(t *testing.T, store *taskResultStore, engineID string, owner uuid.UUID, epoch int64) *WorkflowClient {
 	t.Helper()
-	catalog, err := BuildWorkerCatalog(BuildPlan{Components: []string{"core", engineID}}, []ComponentWorkerSet{{
-		ComponentID: engineID, Handlers: map[string]WorkerHandler{"process/v1": func(context.Context, Task) (corecoord.TaskOutcome, error) {
-			return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
-		}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := NewWorkflowClient(WorkflowClientConfig{Store: store, Workers: catalog, OwnerEngineID: engineID,
+	client, err := NewWorkflowClient(WorkflowClientConfig{Store: store, TaskClass: engineID, TaskClasses: []string{engineID},
 		InstanceID: owner, ConfigEpoch: epoch, MaxAttempts: 3, Retention: time.Hour})
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +79,8 @@ func taskResultClient(t *testing.T, store *taskResultStore, engineID string, own
 
 func taskResultFixture(engineID string, owner uuid.UUID, epoch int64, workflowID, taskID uuid.UUID) *taskResultStore {
 	expected := corecoord.TaskResult{TaskID: taskID, WorkflowID: workflowID,
-		Worker: &corecoord.WorkerRef{ComponentID: "worker.prerender", OperationID: "render", ContractVersion: 1},
-		State:  "succeeded", Result: json.RawMessage(`{"artifact":"sha256:abc"}`)}
+		Operation: &corecoord.OperationRef{ClassID: "worker.prerender", ID: "render", Version: 1},
+		State:     "succeeded", Result: json.RawMessage(`{"artifact":"sha256:abc"}`)}
 	return &taskResultStore{engineID: engineID, owner: owner, epoch: epoch,
 		results: map[uuid.UUID]map[uuid.UUID]corecoord.TaskResult{
 			workflowID: {taskID: expected},
@@ -105,11 +97,11 @@ func TestWorkflowClientGetTaskResultReturnsChildResultToOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.TaskID != taskID || result.WorkflowID != workflowID || result.State != "succeeded" ||
-		string(result.Result) != `{"artifact":"sha256:abc"}` || result.Worker == nil ||
-		result.Worker.ComponentID != "worker.prerender" || result.Worker.OperationID != "render" {
+		string(result.Result) != `{"artifact":"sha256:abc"}` || result.Operation == nil ||
+		result.Operation.ClassID != "worker.prerender" || result.Operation.ID != "render" {
 		t.Fatalf("child result was not returned to the workflow owner: %+v", result)
 	}
-	if len(store.calls) != 1 || store.calls[0] != (taskResultCall{ownerEngineID: "engine.website", owner: owner,
+	if len(store.calls) != 1 || store.calls[0] != (taskResultCall{ownerClassID: "engine.website", owner: owner,
 		configEpoch: 7, workflowID: workflowID, taskID: taskID}) {
 		t.Fatalf("store did not receive strictly client-scoped identity: %+v", store.calls)
 	}

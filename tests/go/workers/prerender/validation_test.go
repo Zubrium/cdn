@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/google/uuid"
 )
@@ -202,13 +202,10 @@ func TestWorkerHandlerUsesRegisteredIdentityAndFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := core.Task{ID: uuid.New(), Kind: core.TaskKindWorker, Worker: &core.WorkerRef{
-		ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1,
-	}, IdempotencyKey: "stable-1", Payload: payload}
+	task := contracts.OperationTask{TaskID: uuid.NewString(), IdempotencyKey: "stable-1", Payload: payload}
 	worker := FailClosedWorker{Limits: testLimits()}
-	if _, err := worker.WorkerHandler(context.Background(), core.Task{Kind: core.TaskKindWorker,
-		Worker: &core.WorkerRef{ComponentID: "other"}}); !errors.Is(err, ErrInvalidPlan) {
-		t.Fatal("unregistered operation accepted")
+	if _, err := worker.WorkerHandler(context.Background(), contracts.OperationTask{}); !errors.Is(err, ErrInvalidPlan) {
+		t.Fatal("task without an identity was accepted")
 	}
 	if outcome, err := worker.WorkerHandler(context.Background(), task); !errors.Is(err, ErrRenderUnavailable) || len(outcome.Result) != 0 {
 		t.Fatalf("task returned success without supervised renderer: outcome=%+v err=%v", outcome, err)

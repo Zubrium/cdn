@@ -10,7 +10,7 @@ import (
 	"io"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 )
 
@@ -30,15 +30,7 @@ type ProcessRunner interface {
 	Process(context.Context, mediaprofile.WorkRequest, mediaprofile.Profile, io.Reader) (ProcessedOutput, error)
 }
 
-// V2FileCapability is the Core file surface required by the v2 worker. In
-// addition to immutable file operations it needs read-only FileSet indexing so
-// derivatives can inherit exactly the source file's memberships.
-type V2FileCapability interface {
-	FileCapability
-	ListManagedFileSets(context.Context, core.Session, string, string, string, int) ([]core.FileSet, string, error)
-	ListFileSet(context.Context, core.Session, string, string, int) ([]core.File, string, error)
-	AddFileToManagedSet(context.Context, core.Session, string, string, int64) (core.FileSet, error)
-}
+type V2FileCapability interface{ recorddata.CoreFiles }
 
 // V2Handler processes one canonical Website media derivative task. It never
 // accepts a profile, preset, processor version, command or resource limit from
@@ -46,7 +38,6 @@ type V2FileCapability interface {
 // derived from the manifest-pinned profile.
 type V2Handler struct {
 	files       V2FileCapability
-	session     core.Session
 	data        DataCapability
 	runner      ProcessRunner
 	semaphore   chan struct{}
@@ -56,43 +47,40 @@ type V2Handler struct {
 
 // NewV2Handler refuses to use any runner without a verified OS isolation
 // boundary. There is no non-isolated fallback and no trusted-config bypass.
-func NewV2Handler(files V2FileCapability, session core.Session, data DataCapability, runner ProcessRunner, maxConcurrency int, maxStagedBytes int64) (*V2Handler, error) {
+func NewV2Handler(files V2FileCapability, data DataCapability, runner ProcessRunner, maxConcurrency int, maxStagedBytes int64) (*V2Handler, error) {
 	if files == nil || data == nil || runner == nil || !runner.Isolated() || maxConcurrency < 1 || maxStagedBytes < 1 {
 		return nil, ErrNotReady
 	}
-	return &V2Handler{files: files, session: session, data: data, runner: runner,
+	return &V2Handler{files: files, data: data, runner: runner,
 		semaphore: make(chan struct{}, maxConcurrency), maxStaged: maxStagedBytes, setPageSize: 100}, nil
 }
 
 // WorkerHandler strictly validates the versioned contract before any durable
 // state or Core file operation. Task identity is authoritative; the request
 // cannot supply it.
-func (h *V2Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if h == nil || ctx == nil || task.Kind != core.TaskKindWorker || task.Worker == nil ||
-		task.Worker.ComponentID != DataModuleID || task.Worker.OperationID != OperationID ||
-		task.Worker.ContractVersion != mediaprofile.WorkContractVersion ||
-		len(task.Payload) == 0 || len(task.Payload) > 1<<20 {
-		return core.TaskOutcome{}, ErrInvalidRequest
+func (h *V2Handler) WorkerHandler(ctx context.Context, task recorddata.OperationTask) (recorddata.OperationOutcome, error) {
+	if h == nil || ctx == nil || task.TaskID == "" || len(task.Payload) == 0 || len(task.Payload) > 1<<20 {
+		return recorddata.OperationOutcome{}, ErrInvalidRequest
 	}
 	request, err := mediaprofile.ValidateWorkRequest(task.Payload)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return recorddata.OperationOutcome{}, err
 	}
-	// Core carries the workflow idempotency key on Task.IdempotencyKey; the
+	// The scheduler carries the workflow idempotency key on IdempotencyKey; the
 	// per-rendition identity is the child task's emission key. Comparing against
 	// the workflow key would reject every one of the Website job's children.
 	if task.EmissionKey == "" || task.EmissionKey != request.IdempotencyKey {
-		return core.TaskOutcome{}, ErrInvalidRequest
+		return recorddata.OperationOutcome{}, ErrInvalidRequest
 	}
-	result, err := h.Handle(ctx, task.ID.String(), request)
+	result, err := h.Handle(ctx, task.TaskID, request)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return recorddata.OperationOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.TaskOutcome{}, ErrOutputInvalid
+		return recorddata.OperationOutcome{}, ErrOutputInvalid
 	}
-	return core.TaskOutcome{Result: encoded}, nil
+	return recorddata.OperationOutcome{Result: encoded}, nil
 }
 
 // Handle executes or reconciles one derivative. Every Core write is keyed by
@@ -115,10 +103,10 @@ func (h *V2Handler) Handle(ctx context.Context, taskID string, request mediaprof
 
 	key := v2RunKey(taskID)
 	record, err := h.data.Get(ctx, key)
-	if err != nil && !errors.Is(err, core.ErrModuleDataNotFound) {
+	if err != nil && !errors.Is(err, recorddata.ErrRecordNotFound) {
 		return mediaprofile.WorkResult{}, err
 	}
-	if errors.Is(err, core.ErrModuleDataNotFound) {
+	if errors.Is(err, recorddata.ErrRecordNotFound) {
 		err = nil
 	}
 	identity, err := v2RequestIdentity(request)
@@ -138,7 +126,7 @@ func (h *V2Handler) Handle(ctx context.Context, taskID string, request mediaprof
 		}
 	}
 
-	source, err := h.files.StatFile(ctx, h.session, request.SourceFileID)
+	source, err := h.files.StatFile(ctx, request.SourceFileID)
 	if err != nil {
 		return mediaprofile.WorkResult{}, err
 	}
@@ -161,7 +149,7 @@ func (h *V2Handler) Handle(ctx context.Context, taskID string, request mediaprof
 	if err != nil {
 		return mediaprofile.WorkResult{}, err
 	}
-	body, actual, err := h.files.ReadFile(ctx, h.session, request.SourceFileID)
+	body, actual, err := h.files.ReadFile(ctx, request.SourceFileID)
 	if err != nil {
 		return mediaprofile.WorkResult{}, err
 	}
@@ -204,7 +192,7 @@ func (h *V2Handler) Handle(ctx context.Context, taskID string, request mediaprof
 		"output_name": request.OutputName,
 	}
 	requestKey := v2OutputRequestKey(taskID, request)
-	outputID, err := h.files.CreateFileVerified(ctx, h.session, requestKey, groups, metadata,
+	outputID, err := h.files.CreateFileVerified(ctx, requestKey, groups, metadata,
 		output.ContentType, output.Size, output.SHA256, output.Body)
 	if err != nil {
 		return mediaprofile.WorkResult{}, ErrOutputUncertain
@@ -237,17 +225,17 @@ type v2RunRecord struct {
 	UpdatedAt   time.Time                `json:"updated_at"`
 }
 
-func (h *V2Handler) putState(ctx context.Context, key core.ModuleDataKey, state v2RunRecord, revision int64) (core.ModuleDataRecord, error) {
+func (h *V2Handler) putState(ctx context.Context, key recorddata.RecordKey, state v2RunRecord, revision int64) (recorddata.Record, error) {
 	payload, err := json.Marshal(state)
 	if err != nil || len(payload) > 1<<16 {
-		return core.ModuleDataRecord{}, ErrOutputInvalid
+		return recorddata.Record{}, ErrOutputInvalid
 	}
-	return h.data.Put(ctx, key, core.ModuleDataValue{Payload: payload, PayloadVersion: V2RunPayloadVersion,
+	return h.data.Put(ctx, key, recorddata.RecordValue{Payload: payload, PayloadVersion: V2RunPayloadVersion,
 		IndexData: json.RawMessage(`{}`)}, revision)
 }
 
 func (h *V2Handler) verifyOutput(ctx context.Context, expected mediaprofile.WorkResult) error {
-	file, err := h.files.StatFile(ctx, h.session, expected.FileID)
+	file, err := h.files.StatFile(ctx, expected.FileID)
 	if err != nil || file.ID != expected.FileID || file.SHA256 != expected.Checksum ||
 		file.ContentType != expected.ContentType || file.Size != expected.Size {
 		return ErrOutputUncertain
@@ -260,14 +248,14 @@ func (h *V2Handler) verifyOutput(ctx context.Context, expected mediaprofile.Work
 func (h *V2Handler) inheritFileSets(ctx context.Context, sourceID, outputID string) error {
 	cursor := ""
 	for {
-		sets, next, err := h.files.ListManagedFileSets(ctx, h.session, "", "", cursor, h.setPageSize)
+		sets, next, err := h.files.ListManagedFileSets(ctx, "", "", cursor, h.setPageSize)
 		if err != nil {
 			return err
 		}
 		for _, set := range sets {
 			memberCursor := ""
 			for {
-				files, memberNext, err := h.files.ListFileSet(ctx, h.session, set.ID, memberCursor, h.setPageSize)
+				files, memberNext, err := h.files.ListFileSet(ctx, set.ID, memberCursor, h.setPageSize)
 				if err != nil {
 					return err
 				}
@@ -279,7 +267,7 @@ func (h *V2Handler) inheritFileSets(ctx context.Context, sourceID, outputID stri
 					}
 				}
 				if found {
-					if _, err := h.files.AddFileToManagedSet(ctx, h.session, set.ID, outputID, set.Revision); err != nil {
+					if _, err := h.files.AddFileToManagedSet(ctx, set.ID, outputID, set.Revision); err != nil {
 						return err
 					}
 				}
@@ -296,8 +284,8 @@ func (h *V2Handler) inheritFileSets(ctx context.Context, sourceID, outputID stri
 	}
 }
 
-func v2RunKey(taskID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: taskID, RecordKey: "v2"}
+func v2RunKey(taskID string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: taskID, RecordKey: "v2"}
 }
 
 func v2RequestIdentity(request mediaprofile.WorkRequest) (string, error) {

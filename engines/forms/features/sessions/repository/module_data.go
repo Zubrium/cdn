@@ -1,13 +1,13 @@
 package repository
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/forms/features/sessions/model"
 	sessionpkg "github.com/Zubrium/cdn/engines/forms/features/sessions/pkg"
 )
@@ -19,11 +19,11 @@ const (
 )
 
 type Store interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Delete(context.Context, core.ModuleDataKey, int64) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
-	ListExpired(context.Context, string, string, string, string, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Delete(context.Context, recorddata.RecordKey, int64) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
+	ListExpired(context.Context, string, string, string, string, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 }
 
@@ -31,7 +31,7 @@ type Repository struct{ store Store }
 
 func New(store Store) (*Repository, error) {
 	if store == nil || store.MaxPageSize() < 1 {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	return &Repository{store: store}, nil
 }
@@ -62,7 +62,7 @@ func (repo *Repository) Create(ctx context.Context, tokenHash string, session mo
 
 func (repo *Repository) Update(ctx context.Context, stored model.Stored) (model.Stored, error) {
 	if stored.Revision < 1 || stored.RecordKey == "" {
-		return model.Stored{}, core.ErrModuleDataInvalid
+		return model.Stored{}, recorddata.ErrRecordInvalid
 	}
 	value, err := encode(stored.Session)
 	if err != nil {
@@ -80,8 +80,8 @@ func (repo *Repository) Delete(ctx context.Context, stored model.Stored) error {
 }
 
 func (repo *Repository) ListByForm(ctx context.Context, formID, after string, limit int) ([]model.Stored, string, error) {
-	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, []core.ModuleDataSelector{{
-		Field: "form_id", Operator: core.SelectorEqual, Values: []any{formID},
+	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, []recorddata.RecordSelector{{
+		Field: "form_id", Operator: recorddata.RecordSelectorEqual, Values: []any{formID},
 	}}, limit)
 	if err != nil {
 		return nil, "", err
@@ -108,9 +108,9 @@ func (repo *Repository) ListExpired(ctx context.Context, after string, limit int
 	return items, next, err
 }
 
-func decodePage(keys []core.ModuleDataKey, records []core.ModuleDataRecord) ([]model.Stored, error) {
+func decodePage(keys []recorddata.RecordKey, records []recorddata.Record) ([]model.Stored, error) {
 	if len(keys) != len(records) {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	items := make([]model.Stored, 0, len(records))
 	for i := range records {
@@ -123,13 +123,13 @@ func decodePage(keys []core.ModuleDataKey, records []core.ModuleDataRecord) ([]m
 	return items, nil
 }
 
-func dataKey(recordKey string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
+func dataKey(recordKey string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
 }
 
-func encode(session model.Session) (core.ModuleDataValue, error) {
+func encode(session model.Session) (recorddata.RecordValue, error) {
 	if session.ID == "" || session.FormID == "" || session.SchemaVersion < 1 || session.ExpiresAt.IsZero() || len(session.Uploads) > model.MaxUploadsPerSession {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
 	uploads := make([]sessionpkg.Upload, len(session.Uploads))
 	for i, upload := range session.Uploads {
@@ -149,41 +149,41 @@ func encode(session model.Session) (core.ModuleDataValue, error) {
 		SubmissionCreatedAt: session.SubmissionCreatedAt.UTC(),
 	})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
 	index, err := json.Marshal(map[string]any{"form_id": session.FormID, "schema_version": session.SchemaVersion,
 		"state": session.State})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
 	// Keep the record durable after visitor expiry so cleanup can always find
 	// exact Core files and finish interrupted submission/deletion workflows.
-	return core.ModuleDataValue{Payload: payload, PayloadVersion: sessionpkg.PayloadVersion, IndexData: index}, nil
+	return recorddata.RecordValue{Payload: payload, PayloadVersion: sessionpkg.PayloadVersion, IndexData: index}, nil
 }
 
-func decode(recordKey string, record core.ModuleDataRecord) (model.Stored, error) {
+func decode(recordKey string, record recorddata.Record) (model.Stored, error) {
 	if record.PayloadVersion != sessionpkg.PayloadVersion || recordKey == "" {
-		return model.Stored{}, core.ErrModuleDataUnavailable
+		return model.Stored{}, recorddata.ErrRecordUnavailable
 	}
 	var payload sessionpkg.PayloadV2
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
 	if err := decoder.Decode(&payload); err != nil || payload.ID == "" || payload.FormID == "" || payload.SchemaVersion < 1 ||
 		(payload.State != model.StateActive && payload.State != model.StateSubmitting && payload.State != model.StateSubmitted && payload.State != model.StateCancelled) ||
 		payload.ExpiresAt.IsZero() || payload.CreatedAt.IsZero() {
-		return model.Stored{}, core.ErrModuleDataUnavailable
+		return model.Stored{}, recorddata.ErrRecordUnavailable
 	}
 	uploads := make([]model.Upload, len(payload.Uploads))
 	seen := make(map[string]struct{}, len(payload.Uploads))
 	for i, upload := range payload.Uploads {
 		if upload.ID == "" || upload.FieldID == "" || upload.IdempotencyHash == "" || upload.ContentType == "" || upload.MaxBytes < 1 || upload.AccessGroup == "" || upload.DeclaredSize < -1 ||
 			(upload.Completed && (upload.FileID == "" || upload.Size < 0 || !validSHA256(upload.SHA256))) || (!upload.Completed && (upload.FileID != "" || upload.SHA256 != "")) {
-			return model.Stored{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, recorddata.ErrRecordUnavailable
 		}
 		if upload.Deleting && !upload.Completed {
-			return model.Stored{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, recorddata.ErrRecordUnavailable
 		}
 		if _, exists := seen[upload.ID]; exists {
-			return model.Stored{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, recorddata.ErrRecordUnavailable
 		}
 		seen[upload.ID] = struct{}{}
 		uploads[i] = model.Upload{
@@ -195,26 +195,26 @@ func decode(recordKey string, record core.ModuleDataRecord) (model.Stored, error
 	}
 	for _, id := range payload.UsedUploadIDs {
 		if _, exists := seen[id]; !exists {
-			return model.Stored{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, recorddata.ErrRecordUnavailable
 		}
 	}
 	if (payload.State == model.StateSubmitting || payload.State == model.StateSubmitted) &&
 		(payload.SubmissionID == "" || payload.SubmissionKeyHash == "" || payload.SubmissionFingerprint == "" ||
 			payload.SubmissionValues == nil || payload.SubmissionCreatedAt.IsZero()) {
-		return model.Stored{}, core.ErrModuleDataUnavailable
+		return model.Stored{}, recorddata.ErrRecordUnavailable
 	}
 	if payload.State == model.StateSubmitting || payload.State == model.StateSubmitted {
 		if len(payload.SubmissionAttachments) != len(payload.UsedUploadIDs) {
-			return model.Stored{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, recorddata.ErrRecordUnavailable
 		}
 		for index, id := range payload.UsedUploadIDs {
 			if id == "" || payload.SubmissionAttachments[index] == "" {
-				return model.Stored{}, core.ErrModuleDataUnavailable
+				return model.Stored{}, recorddata.ErrRecordUnavailable
 			}
 		}
 	} else if payload.SubmissionID != "" || payload.SubmissionKeyHash != "" || payload.SubmissionFingerprint != "" ||
 		payload.SubmissionValues != nil || len(payload.SubmissionAttachments) != 0 || !payload.SubmissionCreatedAt.IsZero() || len(payload.UsedUploadIDs) != 0 {
-		return model.Stored{}, core.ErrModuleDataUnavailable
+		return model.Stored{}, recorddata.ErrRecordUnavailable
 	}
 	return model.Stored{Session: model.Session{
 		ID: payload.ID, FormID: payload.FormID, SchemaVersion: payload.SchemaVersion, State: payload.State,
@@ -226,7 +226,7 @@ func decode(recordKey string, record core.ModuleDataRecord) (model.Stored, error
 	}, Revision: record.Revision, RecordKey: recordKey}, nil
 }
 
-func IsNotFound(err error) bool { return errors.Is(err, core.ErrModuleDataNotFound) }
+func IsNotFound(err error) bool { return errors.Is(err, recorddata.ErrRecordNotFound) }
 
 func validSHA256(value string) bool {
 	if len(value) != 64 {

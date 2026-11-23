@@ -1,5 +1,7 @@
 package archive
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"archive/zip"
 	"bytes"
@@ -18,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 var (
@@ -38,25 +40,18 @@ func validFeatureOrigin(value string) bool {
 	return host != "localhost" && !ipLiteralPattern.MatchString(host)
 }
 
-// CoreFiles is the smallest Core file capability needed by Archive. FileSet
-// operations are indexes, never ACLs.
-type CoreFiles interface {
-	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	CreateFileVerified(context.Context, core.Session, string, []string, map[string]string, string, int64, string, io.Reader) (string, error)
-	DeleteFile(context.Context, core.Session, string, int64) error
-}
+type CoreFiles interface{ contracts.CoreFiles }
 
 type CoreIndex interface {
-	GetManagedFileSet(context.Context, core.Session, string) (core.FileSet, error)
-	ListFileSet(context.Context, core.Session, string, string, int) ([]core.File, string, error)
-	AddFileToManagedSet(context.Context, core.Session, string, string, int64) (core.FileSet, error)
-	RemoveFileFromManagedSet(context.Context, core.Session, string, string, int64) (core.FileSet, error)
+	GetManagedFileSet(context.Context, string) (contracts.FileSet, error)
+	ListFileSet(context.Context, string, string, int) ([]contracts.File, string, error)
+	AddFileToManagedSet(context.Context, string, string, int64) (contracts.FileSet, error)
+	RemoveFileFromManagedSet(context.Context, string, string, int64) (contracts.FileSet, error)
 }
 
 type ProgressStore interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
 }
 
 type Config struct {
@@ -72,14 +67,13 @@ type Handler struct {
 	files           CoreFiles
 	index           CoreIndex
 	progress        ProgressStore
-	session         core.Session
 	limits          Limits
 	stagingDir      string
 	targetFileSetID string
 	outputGroups    []string
 }
 
-func NewHandler(files CoreFiles, session core.Session, config Config) (*Handler, error) {
+func NewHandler(files CoreFiles, config Config) (*Handler, error) {
 	if files == nil || config.Limits.MaxArchiveBytes <= 0 || config.Limits.MaxArchiveBytes == int64(^uint64(0)>>1) ||
 		config.Limits.MaxEntries <= 0 || config.Limits.MaxEntryBytes <= 0 || config.Limits.MaxEntryBytes == int64(^uint64(0)>>1) || config.Limits.MaxExpandedBytes <= 0 || config.Limits.MaxCompressionRatio == 0 ||
 		strings.TrimSpace(config.TargetFileSetID) == "" || config.Progress == nil || config.Index == nil || len(config.OutputGroups) == 0 || !filepath.IsAbs(config.StagingDir) {
@@ -93,36 +87,35 @@ func NewHandler(files CoreFiles, session core.Session, config Config) (*Handler,
 		return nil, errors.New("archive staging directory must be a real directory with mode 0700")
 	}
 	groups := append([]string(nil), config.OutputGroups...)
-	return &Handler{files: files, index: config.Index, progress: config.Progress, session: session, limits: config.Limits, stagingDir: config.StagingDir,
+	return &Handler{files: files, index: config.Index, progress: config.Progress, limits: config.Limits, stagingDir: config.StagingDir,
 		targetFileSetID: config.TargetFileSetID, outputGroups: groups}, nil
 }
 
 // WorkerHandler adapts one registered Coordinator task to the Archive operation.
-func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if h == nil || task.Kind != core.TaskKindWorker || task.Worker == nil || task.Worker.ComponentID != DataModuleID ||
-		task.Worker.OperationID != OperationID || task.Worker.ContractVersion != 1 || len(task.Payload) == 0 || len(task.Payload) > 16<<10 {
-		return core.TaskOutcome{}, errors.New("invalid archive task")
+func (h *Handler) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	if h == nil || task.TaskID == "" || len(task.Payload) == 0 || len(task.Payload) > 16<<10 {
+		return contracts.OperationOutcome{}, errors.New("invalid archive task")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(task.Payload))
 	decoder.DisallowUnknownFields()
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return core.TaskOutcome{}, errors.New("invalid archive task")
+		return contracts.OperationOutcome{}, errors.New("invalid archive task")
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || (request.TaskID != "" && request.TaskID != task.ID.String()) {
-		return core.TaskOutcome{}, errors.New("invalid archive task")
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || (request.TaskID != "" && request.TaskID != task.TaskID) {
+		return contracts.OperationOutcome{}, errors.New("invalid archive task")
 	}
-	request.TaskID = task.ID.String()
+	request.TaskID = task.TaskID
 	result, err := h.Import(ctx, request)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.TaskOutcome{}, errors.New("archive result exceeds limit")
+		return contracts.OperationOutcome{}, errors.New("archive result exceeds limit")
 	}
-	return core.TaskOutcome{Result: encoded}, nil
+	return contracts.OperationOutcome{Result: encoded}, nil
 }
 
 // Import spools the source with a strict byte bound, fully verifies all entries
@@ -144,7 +137,7 @@ func (h *Handler) Import(ctx context.Context, request Request) (Result, error) {
 	if state.OutputsVerified {
 		return h.finishSourceCleanup(ctx, request, state, revision)
 	}
-	body, source, err := h.files.ReadFile(ctx, h.session, request.SourceFileID)
+	body, source, err := h.files.ReadFile(ctx, request.SourceFileID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -207,14 +200,14 @@ type importProgress struct {
 	Ready           bool              `json:"ready"`
 }
 
-func (h *Handler) progressKey(request Request) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: request.TaskID, RecordKey: "archive"}
+func (h *Handler) progressKey(request Request) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: request.TaskID, RecordKey: "archive"}
 }
 
 func (h *Handler) loadProgress(ctx context.Context, request Request) (importProgress, int64, error) {
 	key := h.progressKey(request)
 	record, err := h.progress.Get(ctx, key)
-	if errors.Is(err, core.ErrModuleDataNotFound) {
+	if errors.Is(err, recorddata.ErrRecordNotFound) {
 		return importProgress{SourceFileID: request.SourceFileID, EntryIDs: map[string]string{}, EntryFiles: map[string]File{}}, 0, nil
 	}
 	if err != nil {
@@ -232,7 +225,7 @@ func (h *Handler) saveProgress(ctx context.Context, request Request, state impor
 	if err != nil {
 		return revision, err
 	}
-	record, err := h.progress.Put(ctx, h.progressKey(request), core.ModuleDataValue{
+	record, err := h.progress.Put(ctx, h.progressKey(request), recorddata.RecordValue{
 		Payload: payload, PayloadVersion: DataPayloadVersion, IndexData: json.RawMessage(`{}`),
 	}, revision)
 	if err != nil {
@@ -241,8 +234,8 @@ func (h *Handler) saveProgress(ctx context.Context, request Request, state impor
 	return record.Revision, nil
 }
 
-func (h *Handler) importEntries(ctx context.Context, request Request, source core.File, spool *os.File, size int64, entries []File, state importProgress, revision int64) (Result, error) {
-	if _, err := h.index.GetManagedFileSet(ctx, h.session, h.targetFileSetID); err != nil {
+func (h *Handler) importEntries(ctx context.Context, request Request, source contracts.File, spool *os.File, size int64, entries []File, state importProgress, revision int64) (Result, error) {
+	if _, err := h.index.GetManagedFileSet(ctx, h.targetFileSetID); err != nil {
 		return Result{}, fmt.Errorf("resolve configured archive target set: %w", err)
 	}
 	verifiedPaths := make(map[string]File, len(entries))
@@ -290,7 +283,7 @@ func (h *Handler) importEntries(ctx context.Context, request Request, source cor
 				return Result{}, errors.New("open verified output entry")
 			}
 			requestKey, _ := FileRequestKey(request.TaskID, request.SourceFileID, item.Path)
-			id, writeErr := h.files.CreateFileVerified(ctx, h.session, requestKey, source.Groups,
+			id, writeErr := h.files.CreateFileVerified(ctx, requestKey, source.Groups,
 				map[string]string{"archive_job_id": request.TaskID, "archive_source_id": request.SourceFileID, "archive_path": item.Path},
 				"application/octet-stream", item.Size, item.SHA256,
 				&contextReader{ctx: ctx, reader: reader})
@@ -336,7 +329,7 @@ func (h *Handler) verifyOutputs(ctx context.Context, request Request, entryIDs m
 		if !ok {
 			return nil, errors.New("archive progress references an unverified output")
 		}
-		file, err := h.files.StatFile(ctx, h.session, entryIDs[archivePath])
+		file, err := h.files.StatFile(ctx, entryIDs[archivePath])
 		if err != nil || file.ID != entryIDs[archivePath] || file.Size != want.Size || !strings.EqualFold(file.SHA256, want.SHA256) ||
 			file.Metadata["archive_job_id"] != request.TaskID || file.Metadata["archive_source_id"] != request.SourceFileID || file.Metadata["archive_path"] != archivePath {
 			return nil, errors.New("archive output verification failed")
@@ -363,7 +356,7 @@ func (h *Handler) finishSourceCleanup(ctx context.Context, request Request, stat
 	if err := h.removeMembership(ctx, request.SourceFileID); err != nil {
 		return Result{}, fmt.Errorf("remove source archive from target set: %w", err)
 	}
-	if err := h.files.DeleteFile(ctx, h.session, request.SourceFileID, state.SourceRevision); err != nil && !errors.Is(err, core.ErrFileNotFound) {
+	if err := h.files.DeleteFile(ctx, request.SourceFileID, state.SourceRevision); err != nil && !errors.Is(err, contracts.ErrFileNotFound) {
 		return Result{}, fmt.Errorf("delete source archive after durable output verification: %w", err)
 	}
 	state.Ready = true
@@ -385,7 +378,7 @@ func (h *Handler) reconcileSavedOutputs(ctx context.Context, request Request, en
 		if !ok {
 			return nil, errors.New("saved archive output digest is missing")
 		}
-		file, err := h.files.StatFile(ctx, h.session, entryIDs[p])
+		file, err := h.files.StatFile(ctx, entryIDs[p])
 		if err != nil || file.ID != entryIDs[p] || file.Size != want.Size || !strings.EqualFold(file.SHA256, want.SHA256) ||
 			file.Metadata["archive_job_id"] != request.TaskID || file.Metadata["archive_source_id"] != request.SourceFileID || file.Metadata["archive_path"] != p {
 			return nil, errors.New("saved archive output is no longer verifiable")
@@ -415,13 +408,13 @@ func (h *Handler) ensureMembership(ctx context.Context, fileID string) error {
 		return err
 	}
 	for attempt := 0; attempt < 5; attempt++ {
-		set, err := h.index.GetManagedFileSet(ctx, h.session, h.targetFileSetID)
+		set, err := h.index.GetManagedFileSet(ctx, h.targetFileSetID)
 		if err != nil {
 			return err
 		}
-		if _, err = h.index.AddFileToManagedSet(ctx, h.session, h.targetFileSetID, fileID, set.Revision); err == nil {
+		if _, err = h.index.AddFileToManagedSet(ctx, h.targetFileSetID, fileID, set.Revision); err == nil {
 			return nil
-		} else if !errors.Is(err, core.ErrRevisionConflict) {
+		} else if !errors.Is(err, contracts.ErrFileRevisionConflict) {
 			return err
 		}
 	}
@@ -434,13 +427,13 @@ func (h *Handler) removeMembership(ctx context.Context, fileID string) error {
 		if err != nil || !present {
 			return err
 		}
-		set, err := h.index.GetManagedFileSet(ctx, h.session, h.targetFileSetID)
+		set, err := h.index.GetManagedFileSet(ctx, h.targetFileSetID)
 		if err != nil {
 			return err
 		}
-		if _, err = h.index.RemoveFileFromManagedSet(ctx, h.session, h.targetFileSetID, fileID, set.Revision); err == nil {
+		if _, err = h.index.RemoveFileFromManagedSet(ctx, h.targetFileSetID, fileID, set.Revision); err == nil {
 			continue
-		} else if !errors.Is(err, core.ErrRevisionConflict) {
+		} else if !errors.Is(err, contracts.ErrFileRevisionConflict) {
 			return err
 		}
 	}
@@ -457,7 +450,7 @@ func (h *Handler) removeMembership(ctx context.Context, fileID string) error {
 func (h *Handler) hasMembership(ctx context.Context, fileID string) (bool, error) {
 	cursor := ""
 	for {
-		files, next, err := h.index.ListFileSet(ctx, h.session, h.targetFileSetID, cursor, 100)
+		files, next, err := h.index.ListFileSet(ctx, h.targetFileSetID, cursor, 100)
 		if err != nil {
 			return false, err
 		}

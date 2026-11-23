@@ -66,35 +66,34 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			}
 		})
 
-		module := websitePersistenceModule{}
 		for _, moduleID := range []string{
-			websiteengine.ModuleDataDescriptor().ModuleID,
-			routerengine.ModuleDataDescriptor().ModuleID,
-			contentengine.ModuleDataDescriptor().ModuleID,
-			formsengine.ModuleDataDescriptor().ModuleID,
-			retirement.ModuleDataDescriptor().ModuleID,
+			websiteengine.RecordDescriptor().OwnerID,
+			routerengine.RecordDescriptor().OwnerID,
+			contentengine.RecordDescriptor().OwnerID,
+			formsengine.RecordDescriptor().OwnerID,
+			retirement.ModuleDataDescriptor().OwnerID,
 		} {
-			if err := runtime.Registry.Register(moduleID, module); err != nil {
+			if err := runtime.Registry.Register(moduleID); err != nil {
 				t.Fatalf("register %s data module: %v", moduleID, err)
 			}
 		}
-		websiteData, err := runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+		websiteData, err := websiteAcceptanceRecordStore(t, runtime, websiteengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Website module data: %v", err)
 		}
-		routerData, err := runtime.RegisterDataModule(routerengine.ModuleDataDescriptor())
+		routerData, err := websiteAcceptanceRecordStore(t, runtime, routerengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Router module data: %v", err)
 		}
-		contentData, err := runtime.RegisterDataModule(contentengine.ModuleDataDescriptor())
+		contentData, err := websiteAcceptanceRecordStore(t, runtime, contentengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Content module data: %v", err)
 		}
-		formsData, err := runtime.RegisterDataModule(formsengine.ModuleDataDescriptor())
+		formsData, err := websiteAcceptanceRecordStore(t, runtime, formsengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Forms module data: %v", err)
 		}
-		retirementData, err := runtime.RegisterDataModule(retirement.ModuleDataDescriptor())
+		retirementData, err := websiteAcceptanceRecordStore(t, runtime, retirement.ModuleDataDescriptor())
 		if err != nil {
 			t.Fatalf("register retirement module data: %v", err)
 		}
@@ -111,13 +110,13 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			retirementOwned.deleteAll(t)
 		})
 
-		identity := runtime.EngineIdentity()
-		files := runtime.EngineFiles()
+		identity := runtime.Identity()
+		files := runtime.Files()
 		serviceSession, _, err := identity.Authenticate(ctx, credential)
 		if err != nil {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
-		trackedFiles := &web021TrackedFiles{EngineFilesCapability: files}
+		trackedFiles := &web021TrackedFiles{FilesCapability: files}
 		// File cleanup is deliberately separate from record cleanup and is
 		// checked for each file this run created.
 		t.Cleanup(func() { trackedFiles.cleanup(t, serviceSession) })
@@ -139,7 +138,7 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 				t.Fatalf("seed scoped content model: %v", err)
 			}
 		}
-		owned.add(core.ModuleDataKey{Namespace: "website/content-models", ScopeType: "global", ScopeID: "global", RecordKey: "model"})
+		owned.add(contracts.RecordKey{Namespace: "website/content-models", ScopeType: "global", ScopeID: "global", RecordKey: "model"})
 
 		page, err := service.CreatePage(websiteCtx, websiteapi.CreatePageRequest{
 			Name: "WEB-022 retirement", IdempotencyKey: scenarioID + "-page",
@@ -149,7 +148,7 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		}
 		owned.add(websiterepo.PageKey(page.ID))
 		owned.add(websiterepo.PageCreateReceiptKey(scenarioID + "-page"))
-		owned.add(core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global", RecordKey: "registry/" + page.ID})
+		owned.add(contracts.RecordKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global", RecordKey: "registry/" + page.ID})
 		owned.add(websiteSnapshotKey(page.ID, page.LatestSnapshotID))
 
 		root, err := service.GetSnapshot(websiteCtx, page.LatestSnapshotID)
@@ -177,15 +176,15 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			t.Fatalf("create snapshot history: %+v, %v", child, err)
 		}
 		owned.add(websiteSnapshotKey(page.ID, child.ID))
-		owned.add(core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global",
+		owned.add(contracts.RecordKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global",
 			RecordKey: "idempotency/" + page.ID + "/" + web019SHA(scenarioID+"-snapshot")})
 
 		// Content history, Forms resources and raw Core files predate the
 		// retirement. None of them may be touched by route withdrawal.
-		contentKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: child.ID, RecordKey: "workspace"}
+		contentKey := contracts.RecordKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: child.ID, RecordKey: "workspace"}
 		contentOwned.add(contentKey)
 		contentPayload := web020JSON(map[string]any{"record_type": "content_workspace", "page_id": page.ID, "snapshot_id": child.ID, "revision": 3})
-		if _, err := contentData.Put(ctx, contentKey, core.ModuleDataValue{
+		if _, err := contentData.Put(ctx, contentKey, contracts.RecordValue{
 			Payload: contentPayload, PayloadVersion: 1,
 			IndexData: web020JSON(map[string]any{"record_type": "content_workspace", "content_revision": 3}),
 		}, 0); err != nil {
@@ -193,21 +192,21 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		}
 		// Forms namespaces use global/global scope; unique record keys keep this
 		// acceptance run isolated without inventing unsupported scope types.
-		formsKey := core.ModuleDataKey{Namespace: "forms/schemas", ScopeType: "global", ScopeID: "global", RecordKey: "schema-id:retirement/" + scenarioID}
-		submissionKey := core.ModuleDataKey{Namespace: "forms/submissions", ScopeType: "global", ScopeID: "global", RecordKey: "retirement/" + scenarioID + "/submission/1"}
+		formsKey := contracts.RecordKey{Namespace: "forms/schemas", ScopeType: "global", ScopeID: "global", RecordKey: "schema-id:retirement/" + scenarioID}
+		submissionKey := contracts.RecordKey{Namespace: "forms/submissions", ScopeType: "global", ScopeID: "global", RecordKey: "retirement/" + scenarioID + "/submission/1"}
 		formsOwned.add(formsKey, submissionKey)
-		if _, err := formsData.Put(ctx, formsKey, core.ModuleDataValue{Payload: web020JSON(map[string]any{
+		if _, err := formsData.Put(ctx, formsKey, contracts.RecordValue{Payload: web020JSON(map[string]any{
 			"record_type": "form_schema", "form_key": "contact", "revision": 2,
 		}), PayloadVersion: 1, IndexData: web020JSON(map[string]any{"record_type": "form_schema", "form_id": "contact", "revision": 2})}, 0); err != nil {
 			t.Fatalf("seed Forms schema: %v", err)
 		}
-		if _, err := formsData.Put(ctx, submissionKey, core.ModuleDataValue{Payload: web020JSON(map[string]any{
+		if _, err := formsData.Put(ctx, submissionKey, contracts.RecordValue{Payload: web020JSON(map[string]any{
 			"record_type": "form_submission", "state": "new",
 		}), PayloadVersion: 1, IndexData: web020JSON(map[string]any{"form_id": "contact", "schema_version": 1, "state": "new"})}, 0); err != nil {
 			t.Fatalf("seed Forms submission: %v", err)
 		}
-		preservedRevisions := make(map[core.ModuleDataKey]int64)
-		for _, key := range []core.ModuleDataKey{contentKey, formsKey, submissionKey} {
+		preservedRevisions := make(map[contracts.RecordKey]int64)
+		for _, key := range []contracts.RecordKey{contentKey, formsKey, submissionKey} {
 			store := contentData
 			if key.Namespace == "forms/schemas" || key.Namespace == "forms/submissions" {
 				store = formsData
@@ -233,7 +232,7 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Router repository: %v", err)
 		}
-		targetValidator, err := routerpresent.NewCoreTargetValidator(identity, trackedFiles, credential, nil)
+		targetValidator, err := routerpresent.NewCoreTargetValidator(testCoreFilesAdapter{files: trackedFiles, session: serviceSession}, nil)
 		if err != nil {
 			t.Fatalf("construct Router target validator: %v", err)
 		}
@@ -376,13 +375,13 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		}
 		owned.add(websiterepo.PageKey(reuseAttempt.ID))
 		owned.add(websiterepo.PageCreateReceiptKey(scenarioID + "-reuse-page"))
-		owned.add(core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global", RecordKey: "registry/" + reuseAttempt.ID})
+		owned.add(contracts.RecordKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global", RecordKey: "registry/" + reuseAttempt.ID})
 		owned.add(websiteSnapshotKey(reuseAttempt.ID, reuseAttempt.LatestSnapshotID))
 		if after, err := service.GetPage(websiteCtx, page.ID); err != nil || after.LifecycleState != "retired" {
 			t.Fatalf("retired identity was changed by reuse attempt: %+v, %v", after, err)
 		}
 
-		for _, key := range []core.ModuleDataKey{contentKey, formsKey, submissionKey} {
+		for _, key := range []contracts.RecordKey{contentKey, formsKey, submissionKey} {
 			store := websiteData
 			switch key.Namespace {
 			case "content/workspaces":

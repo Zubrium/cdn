@@ -8,6 +8,7 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -31,7 +32,7 @@ func TestMergeProfileAccessGroupsUnionsSourcesAndPreservesYAMLLevel(t *testing.T
 	groups, err := mergeProfileAccessGroups(map[string]platform.AccessLevel{
 		"router_routes": platform.AccessLevelNone,
 		"integration":   platform.AccessLevelRead,
-	}, []platform.ComponentDescriptor{
+	}, []contracts.ComponentDescriptor{
 		{ID: "engine.router", AccessGroups: []string{"router_routes"}},
 		{ID: "engine.forms", AccessGroups: []string{"forms_schemas", "forms_submissions"}},
 		{ID: "engine.content", AccessGroups: []string{"content"}},
@@ -57,7 +58,7 @@ func TestMergeProfileAccessGroupsUnionsSourcesAndPreservesYAMLLevel(t *testing.T
 }
 
 func TestMergeProfileAccessGroupsRejectsInvalidEngineDeclaration(t *testing.T) {
-	if _, err := mergeProfileAccessGroups(nil, []platform.ComponentDescriptor{{ID: "engine.example", AccessGroups: []string{"invalid group"}}}); err == nil {
+	if _, err := mergeProfileAccessGroups(nil, []contracts.ComponentDescriptor{{ID: "engine.example", AccessGroups: []string{"invalid group"}}}); err == nil {
 		t.Fatal("invalid engine group declaration was accepted")
 	}
 }

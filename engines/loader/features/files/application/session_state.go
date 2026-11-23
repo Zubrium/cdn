@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"bytes"
 	"context"
@@ -23,31 +25,31 @@ func (s *Service) request(ctx context.Context) (authenticated, error) {
 	return request, nil
 }
 
-func (s *Service) loadUpload(ctx context.Context, request authenticated, id string) (storedUpload, core.ModuleDataRecord, error) {
+func (s *Service) loadUpload(ctx context.Context, request authenticated, id string) (storedUpload, recorddata.Record, error) {
 	if _, err := uuid.Parse(id); err != nil {
-		return storedUpload{}, core.ModuleDataRecord{}, api.ErrNotFound
+		return storedUpload{}, recorddata.Record{}, api.ErrNotFound
 	}
 	record, err := s.data.Get(ctx, sessionDataKey(id))
 	if err != nil {
-		return storedUpload{}, core.ModuleDataRecord{}, mapDataError(err)
+		return storedUpload{}, recorddata.Record{}, mapDataError(err)
 	}
 	if record.PayloadVersion != 1 {
-		return storedUpload{}, core.ModuleDataRecord{}, api.ErrUnavailable
+		return storedUpload{}, recorddata.Record{}, api.ErrUnavailable
 	}
 	if cached, ok := s.cache.get(id, request.principalID, record.Revision, s.now()); ok {
 		if !s.now().Before(cached.ExpiresAt) {
 			s.cache.remove(id)
-			return storedUpload{}, core.ModuleDataRecord{}, api.ErrNotFound
+			return storedUpload{}, recorddata.Record{}, api.ErrNotFound
 		}
 		return cached, record, nil
 	}
 	var upload storedUpload
 	if json.Unmarshal(record.Payload, &upload) != nil || !s.validUpload(upload, id, request.principalID) {
-		return storedUpload{}, core.ModuleDataRecord{}, api.ErrNotFound
+		return storedUpload{}, recorddata.Record{}, api.ErrNotFound
 	}
 	if !s.now().Before(upload.ExpiresAt) {
 		s.cache.remove(id)
-		return storedUpload{}, core.ModuleDataRecord{}, api.ErrNotFound
+		return storedUpload{}, recorddata.Record{}, api.ErrNotFound
 	}
 	s.cache.put(id, request.principalID, upload, record.Revision, int64(len(record.Payload)), s.now())
 	return upload, record, nil
@@ -126,36 +128,36 @@ func exposeFile(file core.File) api.File {
 		Revision: file.Revision, Groups: append([]string(nil), file.Groups...), Attributes: attributes}
 }
 
-func moduleKey(record string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: "loader", ScopeType: "global", ScopeID: "global", RecordKey: record}
+func moduleKey(record string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: "loader", ScopeType: "global", ScopeID: "global", RecordKey: record}
 }
 
-func sessionDataKey(id string) core.ModuleDataKey { return moduleKey("session:" + id) }
-func cleanupDataKey(id string) core.ModuleDataKey { return moduleKey("cleanup:" + id) }
-func partDataKey(id string, number int) core.ModuleDataKey {
+func sessionDataKey(id string) recorddata.RecordKey { return moduleKey("session:" + id) }
+func cleanupDataKey(id string) recorddata.RecordKey { return moduleKey("cleanup:" + id) }
+func partDataKey(id string, number int) recorddata.RecordKey {
 	return moduleKey(fmt.Sprintf("part:%s:%06d", id, number))
 }
-func idempotencyDataKey(principalID, key string) core.ModuleDataKey {
+func idempotencyDataKey(principalID, key string) recorddata.RecordKey {
 	return idempotencyDataKeyHash(principalID, sha256Hex(key))
 }
 
-func idempotencyDataKeyHash(principalID, keyHash string) core.ModuleDataKey {
+func idempotencyDataKeyHash(principalID, keyHash string) recorddata.RecordKey {
 	return moduleKey("idempotency:" + sha256Hex(principalID) + ":" + keyHash)
 }
 
-func dataValue(value, index any, ttl time.Duration) (core.ModuleDataValue, error) {
+func dataValue(value, index any, ttl time.Duration) (recorddata.RecordValue, error) {
 	if ttl < 0 {
-		return core.ModuleDataValue{}, errors.New("negative module data TTL")
+		return recorddata.RecordValue{}, errors.New("negative module data TTL")
 	}
 	payload, err := json.Marshal(value)
 	if err != nil {
-		return core.ModuleDataValue{}, err
+		return recorddata.RecordValue{}, err
 	}
 	indexData, err := json.Marshal(index)
 	if err != nil {
-		return core.ModuleDataValue{}, err
+		return recorddata.RecordValue{}, err
 	}
-	return core.ModuleDataValue{Payload: payload, PayloadVersion: 1, IndexData: indexData, TTL: ttl}, nil
+	return recorddata.RecordValue{Payload: payload, PayloadVersion: 1, IndexData: indexData, TTL: ttl}, nil
 }
 
 func sessionIndex(upload storedUpload) map[string]string {

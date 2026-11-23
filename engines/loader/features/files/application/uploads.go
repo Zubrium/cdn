@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -59,7 +61,7 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 			return api.UploadSession{}, api.ErrConflict
 		}
 		return s.uploadStatus(ctx, request, stored.SessionID)
-	} else if !errors.Is(err, core.ErrModuleDataNotFound) {
+	} else if !errors.Is(err, recorddata.ErrRecordNotFound) {
 		return api.UploadSession{}, mapDataError(err)
 	}
 	mode := s.chooseMode(input.Size)
@@ -85,12 +87,12 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 	if err != nil {
 		return api.UploadSession{}, api.ErrInvalid
 	}
-	if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: 0, Value: &sessionValue},
 		{Key: key, ExpectedRevision: 0, Value: &idemValue},
 		{Key: cleanupDataKey(upload.ID), ExpectedRevision: 0, Value: &cleanupValue},
 	}); err != nil {
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			if old, readErr := s.data.Get(ctx, key); readErr == nil {
 				var saved idempotencyRecord
 				if json.Unmarshal(old.Payload, &saved) == nil && saved.InputHash == digest {
@@ -156,7 +158,7 @@ func (s *Service) PutUploadPart(ctx context.Context, id string, number int, size
 		if part.State != "staging" {
 			return api.UploadSession{}, api.ErrConflict
 		}
-	} else if !errors.Is(partErr, core.ErrModuleDataNotFound) {
+	} else if !errors.Is(partErr, recorddata.ErrRecordNotFound) {
 		return api.UploadSession{}, partErr
 	} else {
 		part = storedPart{Number: number, Size: size, SHA256: strings.ToLower(checksum), Stage: stageID(upload.ID, number), State: "staging"}
@@ -172,11 +174,11 @@ func (s *Service) PutUploadPart(ctx context.Context, id string, number int, size
 		if valueErr != nil {
 			return api.UploadSession{}, api.ErrConflict
 		}
-		if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+		if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 			{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &uploadRecord},
 			{Key: partKey, ExpectedRevision: 0, Value: &partValue},
 		}); err != nil {
-			if errors.Is(err, core.ErrModuleDataConflict) {
+			if errors.Is(err, recorddata.ErrRecordConflict) {
 				latest, latestRecord, loadErr := s.loadUpload(ctx, request, id)
 				if loadErr == nil {
 					part, _, partErr = s.getPart(ctx, latest.ID, number)
@@ -262,11 +264,11 @@ func (s *Service) markPartReady(ctx context.Context, request authenticated, uplo
 	if err != nil {
 		return storedUpload{}, api.ErrUnavailable
 	}
-	if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 		{Key: sessionDataKey(uploadID), ExpectedRevision: sessionRecord.Revision, Value: &sessionValue},
 		{Key: partDataKey(uploadID, number), ExpectedRevision: partRecord.Revision, Value: &partValue},
 	}); err != nil {
-		if !errors.Is(err, core.ErrModuleDataConflict) {
+		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return storedUpload{}, mapDataError(err)
 		}
 		latestUpload, _, uploadErr := s.loadUpload(ctx, request, uploadID)
@@ -342,7 +344,7 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 		if valueErr != nil {
 			return api.File{}, valueErr
 		}
-		if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+		if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 			{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &sessionValue},
 			{Key: cleanupDataKey(upload.ID), ExpectedRevision: jobRecord.Revision, Value: &jobValue},
 			idempotencyMutation,
@@ -405,12 +407,12 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 	if err != nil {
 		return api.File{}, err
 	}
-	if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &sessionValue},
 		{Key: cleanupDataKey(upload.ID), ExpectedRevision: jobRecord.Revision, Value: &jobValue},
 		idempotencyMutation,
 	}); err != nil {
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			latest, _, readErr := s.loadUpload(ctx, request, id)
 			if readErr == nil && latest.State == "committed" && latest.FileID == fileID {
 				return exposeFile(file), nil
@@ -482,11 +484,11 @@ func (s *Service) AbortUpload(ctx context.Context, id string) error {
 	if err != nil {
 		return api.ErrConflict
 	}
-	if err := s.data.Batch(ctx, []core.ModuleDataMutation{
+	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &sessionValue},
 		{Key: cleanupDataKey(upload.ID), ExpectedRevision: jobRecord.Revision, Value: &jobValue},
 	}); err != nil {
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			latest, _, loadErr := s.loadUpload(ctx, request, id)
 			if loadErr == nil && latest.State == "aborted" {
 				return nil

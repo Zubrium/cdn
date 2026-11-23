@@ -5,12 +5,13 @@ package application
 import (
 	"context"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"reflect"
 	"regexp"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/google/uuid"
 )
@@ -22,9 +23,9 @@ var snapshotIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0
 var featureVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$`)
 
 type RecordStore interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
-	Batch(context.Context, []core.ModuleDataMutation) error
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
+	Batch(context.Context, []recorddata.RecordMutation) error
 	MaxPageSize() int
 	MaxBatchSize() int
 	MaxPayloadBytes() int
@@ -33,16 +34,16 @@ type RecordStore interface {
 // BuildFilesCapability is the Core-only artifact reader used by build
 // verification. It never grants SQL, S3, or arbitrary storage access.
 type BuildFilesCapability interface {
-	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
+	ReadFile(context.Context, platform.Session, string) (io.ReadCloser, platform.File, error)
 }
 
 // BuildWorkflowClient is the owner-scoped Coordinator capability used by
 // durable Website builds. It is supplied by composition; no request can choose
 // an operation, owner or task identity.
 type BuildWorkflowClient interface {
-	Start(context.Context, core.WorkflowStartRequest) (core.WorkflowReceipt, error)
-	Get(context.Context, uuid.UUID) (core.Workflow, error)
-	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
+	Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
+	Get(context.Context, uuid.UUID) (platform.Workflow, error)
+	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (platform.TaskResult, error)
 	ResolveTaskID(context.Context, uuid.UUID, string) (uuid.UUID, error)
 }
 
@@ -56,25 +57,25 @@ type LocaleCatalogResolver interface {
 // used by durable feature imports. Composition supplies it with a service
 // identity; an import request cannot choose Core files or access groups.
 type ImportFilesCapability interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
+	StatFile(context.Context, platform.Session, string) (platform.File, error)
+	ReadFile(context.Context, platform.Session, string) (io.ReadCloser, platform.File, error)
 }
 
 // ImportWorkflowClient is owner-scoped by composition. A request can only
 // carry an opaque source file ID, never an operation, owner or task identity.
 type ImportWorkflowClient interface {
-	Start(context.Context, core.WorkflowStartRequest) (core.WorkflowReceipt, error)
-	Get(context.Context, uuid.UUID) (core.Workflow, error)
-	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
+	Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
+	Get(context.Context, uuid.UUID) (platform.Workflow, error)
+	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (platform.TaskResult, error)
 }
 
 // MediaWorkflowClient is the owner-scoped Coordinator capability used by the
 // durable Website media derivative workflow. Resolution of child tasks is
 // required because Core assigns their IDs only when the root result commits.
 type MediaWorkflowClient interface {
-	Start(context.Context, core.WorkflowStartRequest) (core.WorkflowReceipt, error)
-	Get(context.Context, uuid.UUID) (core.Workflow, error)
-	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (core.TaskResult, error)
+	Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
+	Get(context.Context, uuid.UUID) (platform.Workflow, error)
+	GetTaskResult(context.Context, uuid.UUID, uuid.UUID) (platform.TaskResult, error)
 	ResolveTaskID(context.Context, uuid.UUID, string) (uuid.UUID, error)
 }
 
@@ -82,11 +83,11 @@ type MediaWorkflowClient interface {
 // FileSet membership is enumerated through existing Core capabilities; Website
 // never receives SQL, S3 or arbitrary storage paths.
 type MediaFilesCapability interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
-	CreateFileVerified(context.Context, core.Session, string, []string, map[string]string, string, int64, string, io.Reader) (string, error)
-	ListManagedFileSets(context.Context, core.Session, string, string, string, int) ([]core.FileSet, string, error)
-	ListFileSet(context.Context, core.Session, string, string, int) ([]core.File, string, error)
+	StatFile(context.Context, platform.Session, string) (platform.File, error)
+	ReadFile(context.Context, platform.Session, string) (io.ReadCloser, platform.File, error)
+	CreateFileVerified(context.Context, platform.Session, string, []string, map[string]string, string, int64, string, io.Reader) (string, error)
+	ListManagedFileSets(context.Context, platform.Session, string, string, string, int) ([]platform.FileSet, string, error)
+	ListFileSet(context.Context, platform.Session, string, string, int) ([]platform.File, string, error)
 }
 
 // MediaSandboxProbe exposes the already verified OS isolation state of the
@@ -107,7 +108,7 @@ type Config struct {
 	BuildContractVersion         int
 	Files                        ImportFilesCapability
 	Workflow                     ImportWorkflowClient
-	Sessions                     core.SessionCapability
+	Sessions                     platform.SessionCapability
 	FeatureImportOperationID     string
 	FeatureImportContractVersion int
 	FeatureImportFileSetID       string
@@ -122,19 +123,19 @@ type Config struct {
 type Service struct {
 	config    Config
 	store     RecordStore
-	authority core.GroupAuthorizationCapability
-	sessions  core.SessionCapability
+	authority platform.GroupAuthorizationCapability
+	sessions  platform.SessionCapability
 }
 
 type actor struct {
-	session core.Session
+	session platform.Session
 }
 
 type actorContextKey struct{}
 
-func NewService(config Config, store RecordStore, authority core.GroupAuthorizationCapability, sessions core.SessionCapability) (*Service, error) {
+func NewService(config Config, store RecordStore, authority platform.GroupAuthorizationCapability, sessions platform.SessionCapability) (*Service, error) {
 	if !validInterface(store) || !validInterface(authority) || !validInterface(sessions) ||
-		!core.ValidAccessGroupKey(config.AccessGroup) || !core.ValidAccessGroupKey(config.CoordinatorAccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 {
+		!platform.ValidAccessGroupKey(config.AccessGroup) || !platform.ValidAccessGroupKey(config.CoordinatorAccessGroup) || store.MaxPageSize() < 1 || store.MaxBatchSize() < 1 || store.MaxPayloadBytes() < 1 {
 		return nil, errConfigInvalid
 	}
 	if strings.TrimSpace(config.FeatureImportOperationID) == "" {
@@ -186,7 +187,7 @@ func (s *Service) AuthenticateSession(ctx context.Context, token string) (contex
 	return context.WithValue(ctx, actorContextKey{}, actor{session: session}), nil
 }
 
-func (s *Service) requireLevel(ctx context.Context, minimum core.AccessLevel) error {
+func (s *Service) requireLevel(ctx context.Context, minimum platform.AccessLevel) error {
 	if s == nil || ctx == nil {
 		return websiteapi.ErrUnauthorized
 	}
@@ -208,7 +209,7 @@ func (s *Service) requireCoordinatorWrite(ctx context.Context) error {
 	if !ok {
 		return websiteapi.ErrUnauthorized
 	}
-	if err := s.authority.RequireGroupLevel(ctx, current.session, []string{s.config.CoordinatorAccessGroup}, core.AccessLevelWrite); err != nil {
+	if err := s.authority.RequireGroupLevel(ctx, current.session, []string{s.config.CoordinatorAccessGroup}, platform.AccessLevelWrite); err != nil {
 		return mapCoreError(err)
 	}
 	return nil
@@ -218,17 +219,17 @@ func mapCoreError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrUnauthorized):
+	case errors.Is(err, platform.ErrUnauthorized):
 		return websiteapi.ErrUnauthorized
-	case errors.Is(err, core.ErrForbidden):
+	case errors.Is(err, platform.ErrForbidden):
 		return websiteapi.ErrForbidden
-	case errors.Is(err, core.ErrModuleDataNotFound), errors.Is(err, core.ErrFileNotFound):
+	case errors.Is(err, recorddata.ErrRecordNotFound), errors.Is(err, platform.ErrFileNotFound):
 		return websiteapi.ErrNotFound
-	case errors.Is(err, core.ErrModuleDataConflict), errors.Is(err, core.ErrRevisionConflict), errors.Is(err, core.ErrFileSetConflict):
+	case errors.Is(err, recorddata.ErrRecordConflict), errors.Is(err, platform.ErrRevisionConflict), errors.Is(err, platform.ErrFileSetConflict):
 		return websiteapi.ErrConflict
-	case errors.Is(err, core.ErrModuleDataInvalid):
+	case errors.Is(err, recorddata.ErrRecordInvalid):
 		return websiteapi.ErrInvalid
-	case errors.Is(err, core.ErrModuleDataLimitExceeded):
+	case errors.Is(err, recorddata.ErrRecordLimit):
 		return websiteapi.ErrTooLarge
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

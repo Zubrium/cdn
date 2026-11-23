@@ -7,14 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
+	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"html"
 	"sort"
 	"strings"
-
-	core "github.com/Zubrium/cdn/core/presentation"
-	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
-	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
-	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
 // ContentBuildProjection is the narrow, trusted Content snapshot used to pin a
@@ -81,7 +80,7 @@ func (r *ModuleBuildInputResolver) ResolveBuildInput(ctx context.Context, snapsh
 	if err != nil || model.Digest == "" {
 		return prerendercontract.TrustedInput{}, websiteapi.ErrUnavailable
 	}
-	projection, err := r.content.ResolveContentBuildProjection(ctx, snapshot.PageID, locale)
+	projection, err := r.content.ResolveContentBuildProjection(ctx, snapshot.ID, locale)
 	if err != nil || projection.PublicationRevision < 0 || !sha256HexPattern.MatchString(projection.SelectionDigest) {
 		return prerendercontract.TrustedInput{}, websiteapi.ErrUnavailable
 	}
@@ -207,4 +206,4 @@ func describeBuildInputError(err error) error {
 	return fmt.Errorf("%w: %v", errBuildInputUnavailable, err)
 }
 
-var _ = core.ErrModuleDataNotFound
+var _ = recorddata.ErrRecordNotFound

@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"crypto/rand"
@@ -12,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
@@ -37,7 +39,7 @@ type snapshotCreateReceipt struct {
 }
 
 func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateSnapshotRequest) (websiteapi.Snapshot, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.Snapshot{}, err
 	}
 	if !identifierPattern.MatchString(request.PageID) {
@@ -130,6 +132,10 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		snapshot.ParentName = parent.Name
 		snapshot.ParentSequence = parent.Sequence
 	}
+	snapshot.Digest, err = snapshotContentDigest(snapshot)
+	if err != nil {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
 	snapshotPayload, err := json.Marshal(snapshot)
 	if err != nil {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
@@ -138,7 +144,7 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		return websiteapi.Snapshot{}, websiteapi.ErrTooLarge
 	}
 	snapshotIndex, err := json.Marshal(map[string]any{
-		"record_type": "snapshot", "snapshot_id": snapshot.ID, "page_id": snapshot.PageID, "state": state, "revision": int64(1), "parent_id": request.ParentID,
+		"record_type": "snapshot", "snapshot_id": snapshot.ID, "page_id": snapshot.PageID, "state": state, "revision": int64(1), "parent_id": request.ParentID, "digest": snapshot.Digest,
 	})
 	if err != nil {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
@@ -167,9 +173,9 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 	}
 	snapshotRecordKey := snapshotKey(request.PageID, snapshot.ID)
 	receiptKey := snapshotCreateReceiptKey(request.PageID, request.IdempotencyKey)
-	mutations := []core.ModuleDataMutation{
-		{Key: snapshotRecordKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: snapshotPayload, PayloadVersion: 1, IndexData: snapshotIndex}},
-		{Key: receiptKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
+	mutations := []recorddata.RecordMutation{
+		{Key: snapshotRecordKey, ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: snapshotPayload, PayloadVersion: 1, IndexData: snapshotIndex}},
+		{Key: receiptKey, ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
 		registryMutation,
 		{Key: websiterepo.PageKey(request.PageID), ExpectedRevision: pageRecord.Revision, Value: pageValue},
 	}
@@ -184,14 +190,18 @@ func (s *Service) CreateSnapshot(ctx context.Context, request websiteapi.CreateS
 		}
 		return websiteapi.Snapshot{}, mapped
 	}
-	return snapshot, nil
+	created, _, err := s.snapshotInPage(ctx, request.PageID, snapshot.ID)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	return created, nil
 }
 
 func (s *Service) readSnapshotCreateReceipt(ctx context.Context, pageID, idempotencyKey, fingerprint string) (websiteapi.Snapshot, bool, error) {
 	key := snapshotCreateReceiptKey(pageID, idempotencyKey)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return websiteapi.Snapshot{}, false, nil
 		}
 		return websiteapi.Snapshot{}, false, mapCoreError(err)
@@ -222,9 +232,9 @@ func (s *Service) readSnapshotCreateReceipt(ctx context.Context, pageID, idempot
 }
 
 func (s *Service) maxSnapshotSequence(ctx context.Context, pageID string) (int64, error) {
-	selectors := []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
-		{Field: "page_id", Operator: core.SelectorEqual, Values: []any{pageID}},
+	selectors := []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"snapshot"}},
+		{Field: "page_id", Operator: recorddata.RecordSelectorEqual, Values: []any{pageID}},
 	}
 	after := ""
 	var maximum int64
@@ -291,6 +301,47 @@ func canonicalJSONObject(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(value)
 }
 
+func snapshotContentDigest(snapshot websiteapi.Snapshot) (string, error) {
+	if snapshot.Payload == nil {
+		return "", websiteapi.ErrInvalid
+	}
+	config, err := canonicalJSONObject(snapshot.Payload.Config)
+	if err != nil {
+		return "", err
+	}
+	metadata, err := canonicalJSONObject(snapshot.Payload.Metadata)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(struct {
+		ID             string            `json:"id"`
+		PageID         string            `json:"page_id"`
+		ParentID       string            `json:"parent_id,omitempty"`
+		ParentName     string            `json:"parent_name,omitempty"`
+		ParentSequence int64             `json:"parent_sequence,omitempty"`
+		Name           string            `json:"name"`
+		Sequence       int64             `json:"sequence"`
+		FeaturePins    map[string]string `json:"feature_pins"`
+		Payload        struct {
+			Config   json.RawMessage `json:"config"`
+			Metadata json.RawMessage `json:"metadata"`
+		} `json:"payload"`
+	}{
+		ID: snapshot.ID, PageID: snapshot.PageID, ParentID: snapshot.ParentID,
+		ParentName: snapshot.ParentName, ParentSequence: snapshot.ParentSequence,
+		Name: snapshot.Name, Sequence: snapshot.Sequence, FeaturePins: snapshot.FeaturePins,
+		Payload: struct {
+			Config   json.RawMessage `json:"config"`
+			Metadata json.RawMessage `json:"metadata"`
+		}{Config: config, Metadata: metadata},
+	})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 func validJSONObjectWithin(raw json.RawMessage, maximum int) bool {
 	return len(raw) <= maximum && validJSONObject(raw)
 }
@@ -301,9 +352,9 @@ func cloneSnapshotPayload(payload websiteapi.SnapshotPayload) *websiteapi.Snapsh
 	}
 }
 
-func snapshotCreateReceiptKey(pageID, idempotencyKey string) core.ModuleDataKey {
+func snapshotCreateReceiptKey(pageID, idempotencyKey string) recorddata.RecordKey {
 	digest := sha256.Sum256([]byte(idempotencyKey))
-	return core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "global", ScopeID: "global",
+	return recorddata.RecordKey{Namespace: snapshotsNamespace, ScopeType: "global", ScopeID: "global",
 		RecordKey: "idempotency/" + pageID + "/" + hex.EncodeToString(digest[:])}
 }
 

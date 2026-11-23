@@ -256,7 +256,7 @@ func TestModuleDataSelectorsShareOneAggregateSizeBudget(t *testing.T) {
 	}
 }
 
-func TestModuleDataBatchMustStayWithinOneNamespaceAndScope(t *testing.T) {
+func TestModuleDataBatchMaySpanScopesWithinOneNamespace(t *testing.T) {
 	base := ModuleDataKey{Namespace: "engine.example", ScopeType: "global", ScopeID: "global", RecordKey: "session:a"}
 	valid := []ModuleDataMutation{
 		{Key: base, ExpectedRevision: 1},
@@ -265,10 +265,15 @@ func TestModuleDataBatchMustStayWithinOneNamespaceAndScope(t *testing.T) {
 	if err := validateModuleDataBatch(valid); err != nil {
 		t.Fatalf("same-scope batch rejected: %v", err)
 	}
+	multiScope := []ModuleDataMutation{
+		{Key: base, ExpectedRevision: 0, Value: &ModuleDataValue{}},
+		{Key: ModuleDataKey{Namespace: "engine.example", ScopeType: "page_snapshot", ScopeID: "snapshot-1", RecordKey: "page-selections/en-US"}, ExpectedRevision: 0, Value: &ModuleDataValue{}},
+	}
+	if err := validateModuleDataBatch(multiScope); err != nil {
+		t.Fatalf("same-namespace multi-scope batch rejected: %v", err)
+	}
 	invalid := [][]ModuleDataMutation{
 		{valid[0], {Key: ModuleDataKey{Namespace: "other", ScopeType: "global", ScopeID: "global", RecordKey: "x"}, ExpectedRevision: 0}},
-		{valid[0], {Key: ModuleDataKey{Namespace: "engine.example", ScopeType: "global", ScopeID: "other", RecordKey: "x"}, ExpectedRevision: 0}},
-		{valid[0], {Key: ModuleDataKey{Namespace: "engine.example", ScopeType: "principal", ScopeID: "global", RecordKey: "x"}, ExpectedRevision: 0}},
 		{valid[0], valid[0]},
 		{{Key: base, ExpectedRevision: 0}},
 	}

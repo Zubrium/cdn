@@ -1,16 +1,16 @@
 package repository
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"math"
-
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 	schemapkg "github.com/Zubrium/cdn/engines/forms/features/schemas/pkg"
+	"math"
 )
 
 const (
@@ -20,10 +20,10 @@ const (
 )
 
 type Store interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Batch(context.Context, []core.ModuleDataMutation) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Batch(context.Context, []recorddata.RecordMutation) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 	MaxBatchSize() int
 	MaxPayloadBytes() int
@@ -36,7 +36,7 @@ type Repository struct{ store Store }
 func New(store Store) (*Repository, error) {
 	if store == nil || store.MaxPageSize() < 1 || store.MaxPayloadBytes() < 1 || store.MaxIndexBytes() < 1 ||
 		store.MaxBatchSize() < 2 || store.MaxBatchBytes() < 1 {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	return &Repository{store: store}, nil
 }
@@ -60,13 +60,13 @@ func (repo *Repository) GetByKey(ctx context.Context, formKey string) (model.Sto
 	}
 	stored, err := repo.GetByID(ctx, index.ID)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
-			return model.StoredSchema{}, core.ErrModuleDataUnavailable
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
+			return model.StoredSchema{}, recorddata.ErrRecordUnavailable
 		}
 		return model.StoredSchema{}, err
 	}
 	if stored.Schema.Key != formKey {
-		return model.StoredSchema{}, core.ErrModuleDataUnavailable
+		return model.StoredSchema{}, recorddata.ErrRecordUnavailable
 	}
 	return stored, nil
 }
@@ -82,7 +82,7 @@ func (repo *Repository) GetByID(ctx context.Context, id string) (model.StoredSch
 		return model.StoredSchema{}, err
 	}
 	if schema.ID != id {
-		return model.StoredSchema{}, core.ErrModuleDataUnavailable
+		return model.StoredSchema{}, recorddata.ErrRecordUnavailable
 	}
 	return model.StoredSchema{Schema: schema, Revision: record.Revision, RecordKey: key.RecordKey}, nil
 }
@@ -97,9 +97,9 @@ func (repo *Repository) Create(ctx context.Context, schema model.Schema) (int64,
 		return 0, err
 	}
 	if repo.store.MaxBatchSize() < 2 || batchPayloadBytes(value, keyIndex) > repo.store.MaxBatchBytes() {
-		return 0, core.ErrModuleDataLimitExceeded
+		return 0, recorddata.ErrRecordLimit
 	}
-	if err := repo.store.Batch(ctx, []core.ModuleDataMutation{
+	if err := repo.store.Batch(ctx, []recorddata.RecordMutation{
 		{Key: dataKey(KeyForSchemaID(schema.ID)), ExpectedRevision: 0, Value: &value},
 		{Key: dataKey(KeyForFormKey(schema.Key)), ExpectedRevision: 0, Value: &keyIndex},
 	}); err != nil {
@@ -110,7 +110,7 @@ func (repo *Repository) Create(ctx context.Context, schema model.Schema) (int64,
 
 func (repo *Repository) Update(ctx context.Context, oldRecordKey string, schema model.Schema, expectedRevision int64) (int64, error) {
 	if expectedRevision < 1 || expectedRevision == math.MaxInt64 || oldRecordKey != KeyForSchemaID(schema.ID) {
-		return 0, core.ErrModuleDataInvalid
+		return 0, recorddata.ErrRecordInvalid
 	}
 	value, err := encode(schema)
 	if err != nil {
@@ -126,19 +126,19 @@ func (repo *Repository) Update(ctx context.Context, oldRecordKey string, schema 
 		return 0, err
 	}
 	if currentSchema.ID != schema.ID || currentSchema.Key == "" {
-		return 0, core.ErrModuleDataUnavailable
+		return 0, recorddata.ErrRecordUnavailable
 	}
 	oldIndexKey := dataKey(KeyForFormKey(currentSchema.Key))
 	oldIndex, err := repo.store.Get(ctx, oldIndexKey)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
-			return 0, core.ErrModuleDataUnavailable
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
+			return 0, recorddata.ErrRecordUnavailable
 		}
 		return 0, err
 	}
 	oldIndexValue, err := decodeKeyIndex(oldIndex)
 	if err != nil || oldIndexValue.ID != schema.ID {
-		return 0, core.ErrModuleDataUnavailable
+		return 0, recorddata.ErrRecordUnavailable
 	}
 	if currentSchema.Key == schema.Key {
 		updated, err := repo.store.Put(ctx, schemaKey, value, expectedRevision)
@@ -153,9 +153,9 @@ func (repo *Repository) Update(ctx context.Context, oldRecordKey string, schema 
 	}
 	newIndexKey := dataKey(KeyForFormKey(schema.Key))
 	if repo.store.MaxBatchSize() < 3 || batchPayloadBytes(value, keyIndex) > repo.store.MaxBatchBytes() {
-		return 0, core.ErrModuleDataLimitExceeded
+		return 0, recorddata.ErrRecordLimit
 	}
-	mutations := []core.ModuleDataMutation{
+	mutations := []recorddata.RecordMutation{
 		{Key: oldIndexKey, ExpectedRevision: 1},
 		{Key: newIndexKey, ExpectedRevision: 0, Value: &keyIndex},
 		{Key: schemaKey, ExpectedRevision: expectedRevision, Value: &value},
@@ -167,14 +167,14 @@ func (repo *Repository) Update(ctx context.Context, oldRecordKey string, schema 
 }
 
 func (repo *Repository) List(ctx context.Context, after string, limit int) ([]model.StoredSchema, string, error) {
-	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, []core.ModuleDataSelector{{
-		Field: "record_type", Operator: core.SelectorEqual, Values: []any{"schema"},
+	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, []recorddata.RecordSelector{{
+		Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"schema"},
 	}}, limit)
 	if err != nil {
 		return nil, "", err
 	}
 	if len(keys) != len(records) {
-		return nil, "", core.ErrModuleDataUnavailable
+		return nil, "", recorddata.ErrRecordUnavailable
 	}
 	items := make([]model.StoredSchema, 0, len(records))
 	for index, record := range records {
@@ -187,47 +187,47 @@ func (repo *Repository) List(ctx context.Context, after string, limit int) ([]mo
 	return items, next, nil
 }
 
-func dataKey(recordKey string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
+func dataKey(recordKey string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
 }
 
-func encode(schema model.Schema) (core.ModuleDataValue, error) {
+func encode(schema model.Schema) (recorddata.RecordValue, error) {
 	payload, err := json.Marshal(schemapkg.PayloadV2{ID: schema.ID, Key: schema.Key, Version: schema.Version, Fields: schema.Fields})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
 	index, err := json.Marshal(map[string]any{"record_type": "schema", "form_id": schema.ID, "form_key": schema.Key, "revision": schema.Version})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
-	return core.ModuleDataValue{Payload: payload, PayloadVersion: schemapkg.PayloadVersion, IndexData: index}, nil
+	return recorddata.RecordValue{Payload: payload, PayloadVersion: schemapkg.PayloadVersion, IndexData: index}, nil
 }
 
-func encodeKeyIndex(schema model.Schema) (core.ModuleDataValue, error) {
+func encodeKeyIndex(schema model.Schema) (recorddata.RecordValue, error) {
 	payload, err := json.Marshal(schemapkg.KeyIndexV2{ID: schema.ID})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
 	index, err := json.Marshal(map[string]any{"record_type": "schema_key", "form_id": schema.ID, "form_key": schema.Key})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
-	return core.ModuleDataValue{Payload: payload, PayloadVersion: schemapkg.PayloadVersion, IndexData: index}, nil
+	return recorddata.RecordValue{Payload: payload, PayloadVersion: schemapkg.PayloadVersion, IndexData: index}, nil
 }
 
-func decodeKeyIndex(record core.ModuleDataRecord) (schemapkg.KeyIndexV2, error) {
+func decodeKeyIndex(record recorddata.Record) (schemapkg.KeyIndexV2, error) {
 	var index schemapkg.KeyIndexV2
 	if record.PayloadVersion != schemapkg.PayloadVersion {
-		return index, core.ErrModuleDataUnavailable
+		return index, recorddata.ErrRecordUnavailable
 	}
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
 	if err := decoder.Decode(&index); err != nil || index.ID == "" {
-		return schemapkg.KeyIndexV2{}, core.ErrModuleDataUnavailable
+		return schemapkg.KeyIndexV2{}, recorddata.ErrRecordUnavailable
 	}
 	return index, nil
 }
 
-func batchPayloadBytes(values ...core.ModuleDataValue) int {
+func batchPayloadBytes(values ...recorddata.RecordValue) int {
 	total := 0
 	for _, value := range values {
 		total += len(value.Payload) + len(value.IndexData)
@@ -235,15 +235,15 @@ func batchPayloadBytes(values ...core.ModuleDataValue) int {
 	return total
 }
 
-func decode(record core.ModuleDataRecord) (model.Schema, error) {
+func decode(record recorddata.Record) (model.Schema, error) {
 	if record.PayloadVersion != schemapkg.PayloadVersion {
-		return model.Schema{}, core.ErrModuleDataUnavailable
+		return model.Schema{}, recorddata.ErrRecordUnavailable
 	}
 	var payload schemapkg.PayloadV2
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil || payload.ID == "" || payload.Key == "" || payload.Version < 1 || payload.Fields == nil {
-		return model.Schema{}, core.ErrModuleDataUnavailable
+		return model.Schema{}, recorddata.ErrRecordUnavailable
 	}
 	return model.Schema{ID: payload.ID, Key: payload.Key, Version: payload.Version, Fields: payload.Fields}, nil
 }

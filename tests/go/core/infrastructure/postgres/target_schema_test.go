@@ -26,6 +26,24 @@ func TestAtlasMigrationDirectoryHasValidChecksum(t *testing.T) {
 	}
 }
 
+func TestGenericOperationMigrationPreservesExistingDurableTasks(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/20261123000000_generic_operation_tasks.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migration := strings.ToLower(string(contents))
+	for _, required := range []string{
+		"alter table coordination.workflows rename column owner_engine_id to owner_class_id",
+		"alter table coordination.tasks rename column component_id to task_class_id",
+		"update coordination.tasks set task_kind = 'operation' where task_kind = 'worker'",
+		"check (task_kind in ('operation', 'join'))",
+	} {
+		if !strings.Contains(migration, required) {
+			t.Errorf("generic operation migration is missing %q", required)
+		}
+	}
+}
+
 func TestAtlasVersionMustMatchPinnedVersion(t *testing.T) {
 	for _, output := range []string{"atlas version v1.3.0", "atlas community version v1.3.0\nhttps://example.invalid"} {
 		if !isPinnedAtlasVersion(output) {

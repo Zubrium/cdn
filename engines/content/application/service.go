@@ -14,13 +14,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/content/domain"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type Files interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
+	StatFile(context.Context, contracts.AuthorizationSubject, string) (contracts.File, error)
 }
 
 type Repository interface {
@@ -77,7 +77,7 @@ func (service *Service) ReplaceLocaleConfig(ctx context.Context, request domain.
 	return service.repository.ReplaceLocaleConfig(ctx, request, keyHash, fingerprint)
 }
 
-func (service *Service) GetWorkspace(ctx context.Context, session core.Session, schema domain.Schema, snapshotID string) (domain.WorkspaceView, error) {
+func (service *Service) GetWorkspace(ctx context.Context, session contracts.AuthorizationSubject, schema domain.Schema, snapshotID string) (domain.WorkspaceView, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -98,7 +98,7 @@ func (service *Service) GetWorkspace(ctx context.Context, session core.Session, 
 	return view(stored, schema, nil), nil
 }
 
-func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Session, schema domain.Schema, request contentapi.SaveWorkspaceDraftRequest) (domain.WorkspaceView, error) {
+func (service *Service) SaveWorkspaceDraft(ctx context.Context, session contracts.AuthorizationSubject, schema domain.Schema, request contentapi.SaveWorkspaceDraftRequest) (domain.WorkspaceView, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -169,7 +169,7 @@ func (service *Service) SaveWorkspaceDraft(ctx context.Context, session core.Ses
 	return view(committed, schema, clientRecordIDs), nil
 }
 
-func (service *Service) PublishWorkspace(ctx context.Context, session core.Session, schema domain.Schema, request contentapi.PublishWorkspaceRequest) (domain.WorkspaceView, error) {
+func (service *Service) PublishWorkspace(ctx context.Context, session contracts.AuthorizationSubject, schema domain.Schema, request contentapi.PublishWorkspaceRequest) (domain.WorkspaceView, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -270,7 +270,7 @@ func (service *Service) ListHistory(ctx context.Context, schema domain.Schema, s
 	return page, nil
 }
 
-func (service *Service) RestoreHistory(ctx context.Context, session core.Session, schema domain.Schema, request contentapi.RestoreHistoryRequest) (domain.WorkspaceView, error) {
+func (service *Service) RestoreHistory(ctx context.Context, session contracts.AuthorizationSubject, schema domain.Schema, request contentapi.RestoreHistoryRequest) (domain.WorkspaceView, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.WorkspaceView{}, err
 	}
@@ -363,7 +363,7 @@ func (service *Service) ReadPublishedContent(ctx context.Context, schema domain.
 	}, nil
 }
 
-func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session, sourceSchema, targetSchema domain.Schema, request contentapi.CopySnapshotContentRequest) (domain.CopyReceipt, error) {
+func (service *Service) CopySnapshotContent(ctx context.Context, _ contracts.AuthorizationSubject, sourceSchema, targetSchema domain.Schema, request contentapi.CopySnapshotContentRequest) (domain.CopyReceipt, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.CopyReceipt{}, err
 	}
@@ -400,7 +400,9 @@ func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session,
 		return domain.CopyReceipt{TargetSnapshotID: request.TargetSnapshotID, SourceRevision: request.ExpectedSourceRevision}, nil
 	}
 	if source.Aggregate.Revision != request.ExpectedSourceRevision || pageSelectionRevision(source, request.SourceSnapshotID) != request.ExpectedSourceSelectionRevision {
-		return domain.CopyReceipt{}, domain.ErrConflict
+		return domain.CopyReceipt{}, fmt.Errorf("%w: source revision mismatch: expected content=%d selection=%d, actual content=%d selection=%d",
+			domain.ErrConflict, request.ExpectedSourceRevision, request.ExpectedSourceSelectionRevision,
+			source.Aggregate.Revision, pageSelectionRevision(source, request.SourceSnapshotID))
 	}
 	targetRevision := pageSelectionRevision(source, request.TargetSnapshotID)
 	receipt := &domain.MutationReceipt{Operation: "copy", KeyHash: keyHash, Fingerprint: fingerprint}
@@ -420,6 +422,9 @@ func (service *Service) CopySnapshotContent(ctx context.Context, _ core.Session,
 		}
 	}
 	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			return domain.CopyReceipt{}, fmt.Errorf("%w: target selection commit conflict at expected revision %d", err, targetRevision)
+		}
 		return domain.CopyReceipt{}, err
 	}
 	_ = copied
@@ -717,7 +722,7 @@ func isNonCollectionSelection(placements []domain.PlacementView, placementID, in
 	return false
 }
 
-func (service *Service) validateMediaReferences(ctx context.Context, session core.Session, model domain.DataModel, records []domain.Record) error {
+func (service *Service) validateMediaReferences(ctx context.Context, session contracts.AuthorizationSubject, model domain.DataModel, records []domain.Record) error {
 	entities := make(map[string]domain.Entity, len(model.Entities))
 	for _, entity := range model.Entities {
 		entities[entity.ID] = entity
@@ -748,7 +753,7 @@ func (service *Service) validateMediaReferences(ctx context.Context, session cor
 				return err
 			}
 			if _, err := service.files.StatFile(ctx, session, fileID); err != nil {
-				if errors.Is(err, core.ErrFileNotFound) {
+				if errors.Is(err, contracts.ErrFileNotFound) {
 					return domain.ErrInvalid
 				}
 				return err
@@ -759,7 +764,7 @@ func (service *Service) validateMediaReferences(ctx context.Context, session cor
 	return nil
 }
 
-func (service *Service) replay(ctx context.Context, session core.Session, stored domain.StoredWorkspace, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, bool, error) {
+func (service *Service) replay(ctx context.Context, session contracts.AuthorizationSubject, stored domain.StoredWorkspace, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, bool, error) {
 	receipt := pageState(stored, schema.PageSnapshotID).LastMutation
 	if receipt == nil || receipt.KeyHash != keyHash {
 		receipt = stored.Aggregate.LastMutation
@@ -776,7 +781,7 @@ func (service *Service) replay(ctx context.Context, session core.Session, stored
 	return view(stored, schema, receipt.ClientRecordIDs), true, nil
 }
 
-func (service *Service) replayAfterConflict(ctx context.Context, session core.Session, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, error) {
+func (service *Service) replayAfterConflict(ctx context.Context, session contracts.AuthorizationSubject, schema domain.Schema, operation, keyHash, fingerprint string) (domain.WorkspaceView, error) {
 	current, err := service.repository.Get(ctx, schema.Locale)
 	if err != nil {
 		return domain.WorkspaceView{}, domain.ErrConflict

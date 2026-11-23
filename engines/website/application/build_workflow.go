@@ -6,11 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
@@ -59,7 +60,7 @@ type buildRecord struct {
 
 type buildState struct {
 	record   buildRecord
-	key      core.ModuleDataKey
+	key      recorddata.RecordKey
 	revision int64
 }
 
@@ -113,7 +114,7 @@ type buildManifestFile struct {
 // batch with CAS create/update; no HTTP request can select an operation, owner,
 // route, branch, record value or storage path.
 func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.BuildJob{}, err
 	}
 	snapshot, err := s.GetSnapshot(ctx, request.SnapshotID)
@@ -187,8 +188,8 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	if err != nil {
 		return websiteapi.BuildJob{}, err
 	}
-	mutations := []core.ModuleDataMutation{
-		{Key: buildKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: buildPayloadVersion, IndexData: index}},
+	mutations := []recorddata.RecordMutation{
+		{Key: buildKey, ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: buildPayloadVersion, IndexData: index}},
 		{Key: combinedKey, ExpectedRevision: 0, Value: combinedReceipt},
 		{Key: callerKey, ExpectedRevision: 0, Value: callerReceipt},
 	}
@@ -219,7 +220,7 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	if err != nil || len(startPayload) > s.store.MaxPayloadBytes() {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 	}
-	receipt, err := s.config.BuildWorkflow.Start(ctx, core.WorkflowStartRequest{
+	receipt, err := s.config.BuildWorkflow.Start(ctx, platform.WorkflowStartRequest{
 		OperationID: s.config.BuildOperationID, ContractVersion: s.config.BuildContractVersion,
 		IdempotencyKey: "build/" + buildID, Payload: startPayload,
 	})
@@ -246,7 +247,7 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 // active jobs advance one recorded transition at a time. A child task result is
 // activated only after its neutral envelope and pinned input are verified.
 func (s *Service) GetBuild(ctx context.Context, buildID string) (websiteapi.BuildJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.BuildJob{}, err
 	}
 	if !validInterface(s.config.BuildWorkflow) {
@@ -304,7 +305,7 @@ func (s *Service) GetBuild(ctx context.Context, buildID string) (websiteapi.Buil
 		}
 		prerenderTaskID, err := s.resolvePrerenderTask(ctx, workflowID, selector)
 		if err != nil {
-			if errors.Is(err, core.ErrTaskMissing) && workflow.State != "succeeded" {
+			if errors.Is(err, platform.ErrTaskMissing) && workflow.State != "succeeded" {
 				return buildJobFromRecord(current.record), nil
 			}
 			return s.failBuild(ctx, current, buildTaskErrorCode(err))
@@ -330,7 +331,7 @@ func (s *Service) GetBuild(ctx context.Context, buildID string) (websiteapi.Buil
 	}
 	taskResult, err := s.config.BuildWorkflow.GetTaskResult(ctx, workflowID, prerenderTaskID)
 	if err != nil {
-		if errors.Is(err, core.ErrTaskMissing) && workflow.State != "succeeded" {
+		if errors.Is(err, platform.ErrTaskMissing) && workflow.State != "succeeded" {
 			return buildJobFromRecord(current.record), nil
 		}
 		return s.failBuild(ctx, current, buildTaskErrorCode(err))
@@ -338,8 +339,8 @@ func (s *Service) GetBuild(ctx context.Context, buildID string) (websiteapi.Buil
 	if taskResult.WorkflowID != uuid.Nil && taskResult.WorkflowID != workflowID ||
 		taskResult.TaskID != uuid.Nil && taskResult.TaskID != prerenderTaskID ||
 		taskResult.State != "" && taskResult.State != "succeeded" ||
-		taskResult.Worker != nil && (taskResult.Worker.ComponentID != buildPrerenderWorker ||
-			taskResult.Worker.OperationID != buildPrerenderOp || taskResult.Worker.ContractVersion != 1) {
+		taskResult.Operation != nil && (taskResult.Operation.ClassID != buildPrerenderWorker ||
+			taskResult.Operation.ID != buildPrerenderOp || taskResult.Operation.Version != 1) {
 		return s.failBuild(ctx, current, "invalid_task_result")
 	}
 	manifestFileID, err := s.parseBuildTaskResult(ctx, taskResult.Result, current.record)
@@ -382,12 +383,12 @@ func (s *Service) resolvePrerenderTask(ctx context.Context, workflowID uuid.UUID
 		return taskID, nil
 	}
 	if s == nil || !validInterface(s.config.BuildWorkflow) {
-		return uuid.Nil, core.ErrUnavailable
+		return uuid.Nil, platform.ErrUnavailable
 	}
 	taskID, err := s.config.BuildWorkflow.ResolveTaskID(ctx, workflowID, selector)
 	if err != nil || taskID == uuid.Nil {
 		if err == nil {
-			err = core.ErrTaskMissing
+			err = platform.ErrTaskMissing
 		}
 		return uuid.Nil, err
 	}
@@ -406,7 +407,7 @@ func buildModuleDataValue(record buildRecord, revision int64) ([]byte, []byte, e
 	return payload, index, nil
 }
 
-func buildReceiptValue(inputDigest, buildID, snapshotID string) (*core.ModuleDataValue, error) {
+func buildReceiptValue(inputDigest, buildID, snapshotID string) (*recorddata.RecordValue, error) {
 	receipt := buildReceipt{RecordType: "build_idempotency", BuildID: buildID, InputDigest: inputDigest, State: "created"}
 	payload, err := json.Marshal(receipt)
 	if err != nil {
@@ -416,13 +417,13 @@ func buildReceiptValue(inputDigest, buildID, snapshotID string) (*core.ModuleDat
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
 	}
-	return &core.ModuleDataValue{Payload: payload, PayloadVersion: buildPayloadVersion, IndexData: index}, nil
+	return &recorddata.RecordValue{Payload: payload, PayloadVersion: buildPayloadVersion, IndexData: index}, nil
 }
 
-func (s *Service) readBuildReceipt(ctx context.Context, key core.ModuleDataKey, inputDigest string) (string, bool, error) {
+func (s *Service) readBuildReceipt(ctx context.Context, key recorddata.RecordKey, inputDigest string) (string, bool, error) {
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return "", false, nil
 		}
 		return "", false, mapCoreError(err)
@@ -444,7 +445,7 @@ func (s *Service) readBuildReceipt(ctx context.Context, key core.ModuleDataKey, 
 	return receipt.BuildID, true, nil
 }
 
-func (s *Service) putBuildRecord(ctx context.Context, key core.ModuleDataKey, expectedRevision int64, record buildRecord) error {
+func (s *Service) putBuildRecord(ctx context.Context, key recorddata.RecordKey, expectedRevision int64, record buildRecord) error {
 	payload, index, err := buildModuleDataValue(record, expectedRevision+1)
 	if err != nil {
 		return err
@@ -452,9 +453,9 @@ func (s *Service) putBuildRecord(ctx context.Context, key core.ModuleDataKey, ex
 	if len(payload) > s.store.MaxPayloadBytes() {
 		return websiteapi.ErrTooLarge
 	}
-	return mapCoreError(s.store.Batch(ctx, []core.ModuleDataMutation{{
+	return mapCoreError(s.store.Batch(ctx, []recorddata.RecordMutation{{
 		Key: key, ExpectedRevision: expectedRevision,
-		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: buildPayloadVersion, IndexData: index},
+		Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: buildPayloadVersion, IndexData: index},
 	}}))
 }
 
@@ -462,7 +463,7 @@ func (s *Service) loadBuildState(ctx context.Context, buildID string) (buildStat
 	key := websiterepo.BuildKey(buildID)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return buildState{}, websiteapi.ErrNotFound
 		}
 		return buildState{}, mapCoreError(err)
@@ -646,9 +647,9 @@ func (s *Service) parseBuildTaskResult(ctx context.Context, raw json.RawMessage,
 	return strings.ToLower(result.Manifest.FileID), nil
 }
 
-func buildActorSession(ctx context.Context) (core.Session, bool) {
+func buildActorSession(ctx context.Context) (platform.Session, bool) {
 	if ctx == nil {
-		return core.Session{}, false
+		return platform.Session{}, false
 	}
 	actor, ok := ctx.Value(actorContextKey{}).(actor)
 	return actor.session, ok
@@ -669,9 +670,9 @@ func decodeStrictBuildJSON(raw json.RawMessage, target any) error {
 
 func buildWorkflowErrorCode(err error) string {
 	switch {
-	case errors.Is(err, core.ErrTaskMissing), errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, platform.ErrTaskMissing), errors.Is(err, recorddata.ErrRecordNotFound):
 		return "workflow_not_found"
-	case errors.Is(err, core.ErrUnauthorized), errors.Is(err, core.ErrForbidden), errors.Is(err, core.ErrTaskNotOwned):
+	case errors.Is(err, platform.ErrUnauthorized), errors.Is(err, platform.ErrForbidden), errors.Is(err, platform.ErrTaskNotOwned):
 		return "workflow_access_denied"
 	default:
 		return "workflow_unavailable"
@@ -680,9 +681,9 @@ func buildWorkflowErrorCode(err error) string {
 
 func buildTaskErrorCode(err error) string {
 	switch {
-	case errors.Is(err, core.ErrTaskMissing), errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, platform.ErrTaskMissing), errors.Is(err, recorddata.ErrRecordNotFound):
 		return "task_result_missing"
-	case errors.Is(err, core.ErrUnauthorized), errors.Is(err, core.ErrForbidden), errors.Is(err, core.ErrTaskNotOwned):
+	case errors.Is(err, platform.ErrUnauthorized), errors.Is(err, platform.ErrForbidden), errors.Is(err, platform.ErrTaskNotOwned):
 		return "task_result_access_denied"
 	default:
 		return "task_result_unavailable"

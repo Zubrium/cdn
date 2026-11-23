@@ -28,6 +28,8 @@ import (
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/main/internal/composition"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	"github.com/Zubrium/cdn/workers/media"
@@ -74,32 +76,32 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 			}
 		})
 
-		if err := runtime.Registry.Register("coordinator", core.CoordinatorDescriptor{}); err != nil {
+		if err := runtime.Registry.Register("coordinator"); err != nil {
 			t.Fatalf("register disposable Coordinator: %v", err)
 		}
-		if err := runtime.Registry.Register(websiteengine.ModuleDataDescriptor().ModuleID, websitePersistenceModule{}); err != nil {
+		if err := runtime.Registry.Register(websiteengine.RecordDescriptor().OwnerID); err != nil {
 			t.Fatalf("register Website module: %v", err)
 		}
-		if err := runtime.Registry.Register(media.DataModuleID, web019MediaModule{}); err != nil {
+		if err := runtime.Registry.Register(media.DataModuleID); err != nil {
 			t.Fatalf("register media worker module: %v", err)
 		}
-		websiteData, err := runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+		websiteData, err := websiteAcceptanceRecordStore(t, runtime, websiteengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Website module data: %v", err)
 		}
-		mediaData, err := runtime.RegisterDataModule(media.DataDescriptor())
+		mediaData, err := websiteAcceptanceRecordStore(t, runtime, media.DataDescriptor())
 		if err != nil {
 			t.Fatalf("register media module data: %v", err)
 		}
 		owned := &websiteOwnedKeys{store: websiteData}
 		t.Cleanup(func() { owned.deleteAll(t) })
 
-		identity := runtime.EngineIdentity()
+		identity := runtime.Identity()
 		serviceSession, _, err := identity.Authenticate(ctx, credential)
 		if err != nil {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
-		files := runtime.EngineFiles()
+		files := runtime.Files()
 
 		// The DTO and the canonical worker contract must refuse client-supplied
 		// processing choices before any durable state is touched.
@@ -157,7 +159,7 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 
 		runner := &web019Runner{inner: sandbox, blockUntilNano: atomic.Int64{}}
 		runner.blockUntilNano.Store(time.Now().Add(2 * time.Second).UnixNano())
-		mediaHandler, err := media.NewV2Handler(files, serviceSession, mediaData, runner, 2, maxInputBytes+maxOutputBytes)
+		mediaHandler, err := media.NewV2Handler(testCoreFilesAdapter{files: files, session: serviceSession}, mediaData, runner, 2, maxInputBytes+maxOutputBytes)
 		if err != nil {
 			t.Fatalf("construct v2 media worker: %v", err)
 		}
@@ -165,19 +167,13 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Website media workflow handler: %v", err)
 		}
-		catalog, err := core.BuildWorkerCatalog(core.BuildPlan{Components: []string{
-			websiteworkflow.ComponentID, media.DataModuleID,
-		}}, []core.ComponentWorkerSet{
-			{ComponentID: websiteworkflow.ComponentID, Handlers: map[string]core.WorkerHandler{
-				websiteworkflow.MediaOperationID + "/v1": workflowHandler.MediaWorkerHandler,
-			}},
-			{ComponentID: media.DataModuleID, Handlers: map[string]core.WorkerHandler{
-				media.OperationID + "/v2": mediaHandler.WorkerHandler,
-			}},
-		})
-		if err != nil || catalog == nil {
-			t.Fatalf("build disposable worker catalog: %v", err)
+		workflowKey := contracts.Key{ID: websiteworkflow.MediaOperationID, Version: 1}
+		mediaKey := contracts.Key{ID: media.OperationID, Version: 2}
+		bindings := map[contracts.Key]composition.TaskOperationBinding{
+			workflowKey: {TaskClass: websiteworkflow.ComponentID, Handler: workflowHandler.MediaWorkerHandler},
+			mediaKey:    {TaskClass: media.DataModuleID, Handler: mediaHandler.WorkerHandler},
 		}
+		dispatcher := websiteAcceptanceExecutor(t, bindings)
 		fingerprint := sha256.Sum256([]byte("web019-" + scenarioID))
 		if err := runtime.StartCoordinator(ctx, core.CoordinatorRuntimeConfig{
 			Fingerprint: hex.EncodeToString(fingerprint[:]), InstanceLease: 30 * time.Second,
@@ -185,7 +181,9 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 			TaskTimeout: 90 * time.Second, PollInterval: 25 * time.Millisecond,
 			RetryBase: 50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
 			MaxAttempts: 3, MaxWorkflowTasks: 32, MaxChildrenPerTask: 8,
-			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second, WorkerCatalog: catalog,
+			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second,
+			TaskClasses:       []string{websiteworkflow.ComponentID, media.DataModuleID},
+			OperationExecutor: composition.NewDataBusTaskExecutor(dispatcher, bindings),
 		}); err != nil {
 			t.Fatalf("start disposable Coordinator: %v", err)
 		}
@@ -249,7 +247,7 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal feature fixture: %v", err)
 		}
-		if _, err := websiteData.Put(ctx, featureKey, core.ModuleDataValue{
+		if _, err := websiteData.Put(ctx, featureKey, contracts.RecordValue{
 			Payload: payload, PayloadVersion: 1,
 			IndexData: web019JSON(map[string]any{"record_type": "feature_version", "feature_id": web019FeatureID,
 				"version": web019FeatureVersion, "state": "ready"}),
@@ -488,13 +486,6 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 	})
 }
 
-type web019MediaModule struct{}
-
-func (web019MediaModule) Operations() []core.Operation { return nil }
-func (web019MediaModule) ComponentDescriptor() core.ComponentDescriptor {
-	return media.ComponentDescriptor()
-}
-
 type web019SandboxProbe struct{ state websiteapi.MediaSandboxState }
 
 func (p web019SandboxProbe) MediaSandboxState() websiteapi.MediaSandboxState { return p.state }
@@ -529,7 +520,7 @@ func (c *web019WorkflowClient) ResolveTaskID(ctx context.Context, workflowID uui
 			return uuid.Nil, err
 		}
 		if detail.Workflow.ID != uuid.Nil && detail.Workflow.ID != workflowID ||
-			detail.Workflow.OwnerEngineID != "" && detail.Workflow.OwnerEngineID != websiteworkflow.ComponentID {
+			detail.Workflow.OwnerClassID != "" && detail.Workflow.OwnerClassID != websiteworkflow.ComponentID {
 			return uuid.Nil, core.ErrTaskMissing
 		}
 		for _, task := range detail.TaskPage.Items {
@@ -587,16 +578,16 @@ func (web019NonIsolatedRunner) Process(context.Context, mediaprofile.WorkRequest
 }
 
 type web019V2Files struct {
-	core.EngineFilesCapability
+	testCoreFilesAdapter
 	size        *int64
 	checksum    string
 	contentType string
 }
 
-func (f *web019V2Files) StatFile(ctx context.Context, session core.Session, id string) (core.File, error) {
-	file, err := f.EngineFilesCapability.StatFile(ctx, session, id)
+func (f *web019V2Files) StatFile(ctx context.Context, id string) (contracts.File, error) {
+	file, err := f.testCoreFilesAdapter.StatFile(ctx, id)
 	if err != nil {
-		return core.File{}, err
+		return contracts.File{}, err
 	}
 	if f.size != nil {
 		file.Size = *f.size
@@ -658,9 +649,9 @@ func web019AssertWorkerContractTamperingRejected(t *testing.T, profile mediaprof
 	}
 }
 
-func web019AssertNoRunnerFallback(t *testing.T, files core.EngineFilesCapability, session core.Session, data media.DataCapability) {
+func web019AssertNoRunnerFallback(t *testing.T, files core.FilesCapability, session core.Session, data media.DataCapability) {
 	t.Helper()
-	if _, err := media.NewV2Handler(files, session, data, web019NonIsolatedRunner{}, 1, 1); !errors.Is(err, media.ErrNotReady) {
+	if _, err := media.NewV2Handler(testCoreFilesAdapter{files: files, session: session}, data, web019NonIsolatedRunner{}, 1, 1); !errors.Is(err, media.ErrNotReady) {
 		t.Fatalf("v2 worker accepted a non-isolated runner: %v", err)
 	}
 }
@@ -728,8 +719,8 @@ func web019AwaitReady(t *testing.T, ctx context.Context, service *websiteapp.Ser
 	}
 }
 
-func web019AssertPinnedValueUnchanged(t *testing.T, ctx context.Context, store *core.ModuleDataStore, key core.ModuleDataKey,
-	before []byte, files core.EngineFilesCapability, session core.Session, sourceID string, source core.File) {
+func web019AssertPinnedValueUnchanged(t *testing.T, ctx context.Context, store contracts.RecordDataStore, key contracts.RecordKey,
+	before []byte, files core.FilesCapability, session core.Session, sourceID string, source core.File) {
 	t.Helper()
 	current, err := store.Get(ctx, key)
 	if err != nil || !bytes.Equal(current.Payload, before) {
@@ -742,7 +733,7 @@ func web019AssertPinnedValueUnchanged(t *testing.T, ctx context.Context, store *
 }
 
 func web019AssertImmutableDerivative(t *testing.T, ctx context.Context, handler *media.V2Handler,
-	files core.EngineFilesCapability, session core.Session, sourceID, snapshotID string,
+	files core.FilesCapability, session core.Session, sourceID, snapshotID string,
 	profile mediaprofile.Profile, profileDigest string) {
 	t.Helper()
 	sourceFile, err := files.StatFile(ctx, session, sourceID)
@@ -782,7 +773,7 @@ func web019AssertImmutableDerivative(t *testing.T, ctx context.Context, handler 
 }
 
 func web019AssertWorkerRejectsBadMetadata(t *testing.T, ctx context.Context, handler *media.V2Handler,
-	files core.EngineFilesCapability, session core.Session, sourceID, snapshotID string,
+	files core.FilesCapability, session core.Session, sourceID, snapshotID string,
 	profile mediaprofile.Profile, profileDigest string, maxStaged int64) {
 	t.Helper()
 	sourceFile, err := files.StatFile(ctx, session, sourceID)
@@ -799,17 +790,17 @@ func web019AssertWorkerRejectsBadMetadata(t *testing.T, ctx context.Context, han
 	}{
 		{"oversize source", func() *web019V2Files {
 			size := maxStaged + 1
-			return &web019V2Files{EngineFilesCapability: files, size: &size}
+			return &web019V2Files{testCoreFilesAdapter: testCoreFilesAdapter{files: files, session: session}, size: &size}
 		}, media.ErrTaskConflict},
 		{"checksum mismatch", func() *web019V2Files {
-			return &web019V2Files{EngineFilesCapability: files, checksum: strings.Repeat("0", 64)}
+			return &web019V2Files{testCoreFilesAdapter: testCoreFilesAdapter{files: files, session: session}, checksum: strings.Repeat("0", 64)}
 		}, media.ErrTaskConflict},
 		{"MIME mismatch", func() *web019V2Files {
-			return &web019V2Files{EngineFilesCapability: files, contentType: "application/octet-stream"}
+			return &web019V2Files{testCoreFilesAdapter: testCoreFilesAdapter{files: files, session: session}, contentType: "application/octet-stream"}
 		}, media.ErrInvalidRequest},
 	}
 	for _, test := range tests {
-		rejecting, err := media.NewV2Handler(test.wrap(), session, web019HandlerData(handler), web019IsolatedProbeRunner{}, 1, maxStaged)
+		rejecting, err := media.NewV2Handler(test.wrap(), web019HandlerData(handler), web019IsolatedProbeRunner{}, 1, maxStaged)
 		if err != nil {
 			t.Fatalf("construct reject-case worker for %s: %v", test.name, err)
 		}
@@ -836,11 +827,11 @@ func web019HandlerData(*media.V2Handler) media.DataCapability { return web019Rej
 
 type web019RejectData struct{}
 
-func (web019RejectData) Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error) {
-	return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+func (web019RejectData) Get(context.Context, contracts.RecordKey) (contracts.Record, error) {
+	return contracts.Record{}, core.ErrModuleDataNotFound
 }
-func (web019RejectData) Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error) {
-	return core.ModuleDataRecord{}, core.ErrModuleDataInvalid
+func (web019RejectData) Put(context.Context, contracts.RecordKey, contracts.RecordValue, int64) (contracts.Record, error) {
+	return contracts.Record{}, core.ErrModuleDataInvalid
 }
 
 func web019WorkRequest(jobID, snapshotID, sourceID, sourceSHA, inputDigest, processorVersion, outputName string, profile mediaprofile.Profile) mediaprofile.WorkRequest {
@@ -890,7 +881,7 @@ func web019Manifest(t *testing.T) ([]byte, mediaprofile.Profile, []byte) {
 	return manifest, profile, raw
 }
 
-func web019CreateFile(t *testing.T, ctx context.Context, files core.EngineFilesCapability, session core.Session, name string, body []byte, contentType string) string {
+func web019CreateFile(t *testing.T, ctx context.Context, files core.FilesCapability, session core.Session, name string, body []byte, contentType string) string {
 	t.Helper()
 	id, err := files.CreateFile(ctx, session, uuid.NewString(), []string{"features"},
 		map[string]string{"web019_file": name}, contentType, int64(len(body)), bytes.NewReader(body))
@@ -901,7 +892,7 @@ func web019CreateFile(t *testing.T, ctx context.Context, files core.EngineFilesC
 	return id
 }
 
-func web019TrackFile(t *testing.T, files core.EngineFilesCapability, session core.Session, id string) {
+func web019TrackFile(t *testing.T, files core.FilesCapability, session core.Session, id string) {
 	t.Helper()
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -953,8 +944,8 @@ func web019SHA(value string) string {
 
 func web019Digest(value []byte) string { return web019SHA(string(value)) }
 
-func web019PreflightMediaInputs(t *testing.T, ctx, writeCtx context.Context, service *websiteapp.Service, store *core.ModuleDataStore,
-	files core.EngineFilesCapability, session core.Session, snapshotID, featureID, version, fieldPath, sourceID, processorVersion, idempotencyKey string) {
+func web019PreflightMediaInputs(t *testing.T, ctx, writeCtx context.Context, service *websiteapp.Service, store contracts.RecordDataStore,
+	files core.FilesCapability, session core.Session, snapshotID, featureID, version, fieldPath, sourceID, processorVersion, idempotencyKey string) {
 	t.Helper()
 	snapshot, err := service.GetSnapshot(writeCtx, snapshotID)
 	if err != nil || snapshot.State != "ready" || snapshot.Payload == nil {
@@ -1024,7 +1015,7 @@ func web019PreflightMediaInputs(t *testing.T, ctx, writeCtx context.Context, ser
 	}
 }
 
-func web019JobWorkflowID(ctx context.Context, store *core.ModuleDataStore, jobID string) (uuid.UUID, error) {
+func web019JobWorkflowID(ctx context.Context, store contracts.RecordDataStore, jobID string) (uuid.UUID, error) {
 	record, err := store.Get(ctx, websiterepo.MediaJobKey(jobID))
 	if err != nil {
 		return uuid.Nil, err

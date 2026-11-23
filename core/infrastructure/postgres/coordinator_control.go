@@ -31,7 +31,7 @@ func ListCoordinatorWorkflows(ctx context.Context, pool *pgxpool.Pool, request c
 		}
 		beforeAt, beforeID = request.Before.CreatedAt, request.Before.ID
 	}
-	rows, err := tx.Query(ctx, `SELECT workflow.workflow_id,workflow.owner_engine_id,workflow.state,count(task.task_id),
+	rows, err := tx.Query(ctx, `SELECT workflow.workflow_id,workflow.owner_class_id,workflow.state,count(task.task_id),
 		workflow.created_at,workflow.updated_at FROM coordination.workflows workflow
 		LEFT JOIN coordination.tasks task USING(workflow_id)
 		WHERE ($1='' OR workflow.state=$1) AND ($2::timestamptz IS NULL OR (workflow.created_at,workflow.workflow_id)<($2,$3::uuid))
@@ -43,7 +43,7 @@ func ListCoordinatorWorkflows(ctx context.Context, pool *pgxpool.Pool, request c
 	page := coordination.WorkflowPage{Items: make([]coordination.WorkflowSummary, 0, request.Limit)}
 	for rows.Next() {
 		var item coordination.WorkflowSummary
-		if err := rows.Scan(&item.ID, &item.OwnerEngineID, &item.State, &item.TaskCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OwnerClassID, &item.State, &item.TaskCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			rows.Close()
 			return coordination.WorkflowPage{}, err
 		}
@@ -81,8 +81,8 @@ func GetCoordinatorWorkflowDetail(ctx context.Context, pool *pgxpool.Pool, owner
 	}
 	var workflow coordination.Workflow
 	var result []byte
-	err = tx.QueryRow(ctx, `SELECT workflow_id,owner_engine_id,state,root_task_id,result,created_at,updated_at
-		FROM coordination.workflows WHERE workflow_id=$1`, workflowID).Scan(&workflow.ID, &workflow.OwnerEngineID, &workflow.State,
+	err = tx.QueryRow(ctx, `SELECT workflow_id,owner_class_id,state,root_task_id,result,created_at,updated_at
+		FROM coordination.workflows WHERE workflow_id=$1`, workflowID).Scan(&workflow.ID, &workflow.OwnerClassID, &workflow.State,
 		&workflow.RootTaskID, &result, &workflow.CreatedAt, &workflow.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return coordination.WorkflowDetail{}, ErrTaskMissing
@@ -95,7 +95,7 @@ func GetCoordinatorWorkflowDetail(ctx context.Context, pool *pgxpool.Pool, owner
 	if before != nil {
 		beforeAt, beforeID = before.CreatedAt, before.ID
 	}
-	rows, err := tx.Query(ctx, `SELECT task.task_id,task.workflow_id,task.task_kind,task.component_id,task.operation_id,task.contract_version,
+	rows, err := tx.Query(ctx, `SELECT task.task_id,task.workflow_id,task.task_kind,task.task_class_id,task.operation_id,task.contract_version,
 		task.parent_task_id,COALESCE(task.emission_key,''),
 		ARRAY(SELECT dependency.depends_on FROM coordination.dependencies dependency
 			WHERE dependency.workflow_id=task.workflow_id AND dependency.task_id=task.task_id ORDER BY dependency.depends_on),
@@ -110,24 +110,24 @@ func GetCoordinatorWorkflowDetail(ctx context.Context, pool *pgxpool.Pool, owner
 	for rows.Next() {
 		var item coordination.TaskSummary
 		var kind string
-		var componentID, operationID, errorCode pgtype.Text
+		var taskClass, operationID, errorCode pgtype.Text
 		var contractVersion pgtype.Int4
 		var parentTaskID pgtype.UUID
 		var leaseUntil pgtype.Timestamptz
-		if err := rows.Scan(&item.ID, &item.WorkflowID, &kind, &componentID, &operationID, &contractVersion,
+		if err := rows.Scan(&item.ID, &item.WorkflowID, &kind, &taskClass, &operationID, &contractVersion,
 			&parentTaskID, &item.EmissionKey, &item.DependsOn, &item.State, &item.Attempts, &item.MaxAttempts,
 			&item.AvailableAt, &leaseUntil, &errorCode, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			rows.Close()
 			return coordination.WorkflowDetail{}, err
 		}
 		item.Kind = coordination.TaskKind(kind)
-		if item.Kind == coordination.TaskKindWorker {
-			if !componentID.Valid || !operationID.Valid || !contractVersion.Valid {
+		if item.Kind == coordination.TaskKindOperation {
+			if !taskClass.Valid || !operationID.Valid || !contractVersion.Valid {
 				rows.Close()
 				return coordination.WorkflowDetail{}, ErrCoordinatorInvalid
 			}
-			item.Worker = &coordination.WorkerRef{ComponentID: componentID.String, OperationID: operationID.String,
-				ContractVersion: int(contractVersion.Int32)}
+			item.Operation = &coordination.OperationRef{ClassID: taskClass.String, ID: operationID.String,
+				Version: int(contractVersion.Int32)}
 		}
 		if parentTaskID.Valid {
 			item.ParentTaskID = uuid.UUID(parentTaskID.Bytes)

@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"encoding/base64"
@@ -9,7 +11,7 @@ import (
 	"math"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
@@ -23,7 +25,7 @@ type snapshotPageCursor struct {
 }
 
 func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limit int) (websiteapi.SnapshotPage, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.SnapshotPage{}, err
 	}
 	if limit < 1 || limit > s.store.MaxPageSize() {
@@ -55,11 +57,11 @@ func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limi
 	if parsedCursor != nil {
 		state = *parsedCursor
 	}
-	selectors := []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
+	selectors := []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"snapshot"}},
 	}
 	if pageID != "" {
-		selectors = append(selectors, core.ModuleDataSelector{Field: "page_id", Operator: core.SelectorEqual, Values: []any{pageID}})
+		selectors = append(selectors, recorddata.RecordSelector{Field: "page_id", Operator: recorddata.RecordSelectorEqual, Values: []any{pageID}})
 	}
 	keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "global", "global", state.After, selectors, limit)
 	if err != nil {
@@ -83,7 +85,7 @@ func (s *Service) ListSnapshots(ctx context.Context, pageID, cursor string, limi
 }
 
 func (s *Service) GetSnapshot(ctx context.Context, snapshotID string) (websiteapi.Snapshot, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.Snapshot{}, err
 	}
 	snapshot, _, _, err := s.findSnapshot(ctx, snapshotID)
@@ -94,7 +96,7 @@ func (s *Service) GetSnapshot(ctx context.Context, snapshotID string) (websiteap
 // fork workflow has confirmed content copy. It is idempotent for an already-ready
 // snapshot and refuses stale or non-provisioning transitions.
 func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expectedRevision int64) (websiteapi.Snapshot, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.Snapshot{}, err
 	}
 	if expectedRevision < 1 {
@@ -126,14 +128,14 @@ func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expe
 	}
 	index, err := json.Marshal(map[string]any{
 		"record_type": "snapshot", "snapshot_id": updated.ID, "page_id": updated.PageID, "state": updated.State,
-		"revision": updated.Revision, "parent_id": updated.ParentID,
+		"revision": updated.Revision, "parent_id": updated.ParentID, "digest": updated.Digest,
 	})
 	if err != nil {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 	}
-	mutations := []core.ModuleDataMutation{{
+	mutations := []recorddata.RecordMutation{{
 		Key: key, ExpectedRevision: record.Revision,
-		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: 1, IndexData: index},
+		Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: 1, IndexData: index},
 	}}
 	pageRecord, pageData, err := s.loadPage(ctx, updated.PageID)
 	if err == nil && pageRecord.LatestSnapshotID == updated.ID && pageRecord.LatestSnapshotState != "ready" {
@@ -142,7 +144,7 @@ func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expe
 		if err != nil {
 			return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 		}
-		mutations = append(mutations, core.ModuleDataMutation{Key: websiterepo.PageKey(updated.PageID), ExpectedRevision: pageData.Revision, Value: pageValue})
+		mutations = append(mutations, recorddata.RecordMutation{Key: websiterepo.PageKey(updated.PageID), ExpectedRevision: pageData.Revision, Value: pageValue})
 	} else if err != nil && !errors.Is(err, websiteapi.ErrNotFound) {
 		return websiteapi.Snapshot{}, err
 	}
@@ -159,66 +161,70 @@ func (s *Service) MarkSnapshotReady(ctx context.Context, snapshotID string, expe
 		}
 		return websiteapi.Snapshot{}, mapped
 	}
-	return updated, nil
+	ready, _, err := s.snapshotInPage(ctx, updated.PageID, updated.ID)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	return ready, nil
 }
 
-func (s *Service) findSnapshot(ctx context.Context, snapshotID string) (websiteapi.Snapshot, core.ModuleDataKey, core.ModuleDataRecord, error) {
+func (s *Service) findSnapshot(ctx context.Context, snapshotID string) (websiteapi.Snapshot, recorddata.RecordKey, recorddata.Record, error) {
 	if !snapshotIDPattern.MatchString(snapshotID) {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, websiteapi.ErrNotFound
 	}
-	selectors := []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
-		{Field: "snapshot_id", Operator: core.SelectorEqual, Values: []any{strings.ToLower(snapshotID)}},
+	selectors := []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"snapshot"}},
+		{Field: "snapshot_id", Operator: recorddata.RecordSelectorEqual, Values: []any{strings.ToLower(snapshotID)}},
 	}
 	lookupLimit := 2
 	if s.store.MaxPageSize() < lookupLimit {
 		lookupLimit = s.store.MaxPageSize()
 	}
 	if err := ctx.Err(); err != nil {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, err
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, err
 	}
 	keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "global", "global", "", selectors, lookupLimit)
 	if err != nil {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, mapCoreError(err)
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, mapCoreError(err)
 	}
 	if len(keys) != len(records) || next != "" {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, websiteapi.ErrUnavailable
 	}
 	if len(keys) == 0 {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, websiteapi.ErrNotFound
 	}
 	if len(keys) > 1 {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, websiteapi.ErrUnavailable
 	}
 	snapshot, err := decodeSnapshotRecord(keys[0], records[0])
 	if err != nil || snapshot.ID != strings.ToLower(snapshotID) {
-		return websiteapi.Snapshot{}, core.ModuleDataKey{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
+		return websiteapi.Snapshot{}, recorddata.RecordKey{}, recorddata.Record{}, websiteapi.ErrUnavailable
 	}
 	return snapshot, keys[0], records[0], nil
 }
 
-func (s *Service) snapshotInPage(ctx context.Context, pageID, snapshotID string) (websiteapi.Snapshot, core.ModuleDataRecord, error) {
+func (s *Service) snapshotInPage(ctx context.Context, pageID, snapshotID string) (websiteapi.Snapshot, recorddata.Record, error) {
 	if !identifierPattern.MatchString(pageID) || !snapshotIDPattern.MatchString(snapshotID) {
-		return websiteapi.Snapshot{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
+		return websiteapi.Snapshot{}, recorddata.Record{}, websiteapi.ErrNotFound
 	}
 	key := snapshotKey(pageID, snapshotID)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		return websiteapi.Snapshot{}, core.ModuleDataRecord{}, mapCoreError(err)
+		return websiteapi.Snapshot{}, recorddata.Record{}, mapCoreError(err)
 	}
 	snapshot, err := decodeSnapshotRecord(key, record)
 	if err != nil || snapshot.PageID != pageID {
-		return websiteapi.Snapshot{}, core.ModuleDataRecord{}, websiteapi.ErrNotFound
+		return websiteapi.Snapshot{}, recorddata.Record{}, websiteapi.ErrNotFound
 	}
 	return snapshot, record, nil
 }
 
-func snapshotKey(pageID, snapshotID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: snapshotsNamespace, ScopeType: "global", ScopeID: "global",
+func snapshotKey(pageID, snapshotID string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: snapshotsNamespace, ScopeType: "global", ScopeID: "global",
 		RecordKey: "snapshot/" + strings.ToLower(pageID) + "/" + strings.ToLower(snapshotID)}
 }
 
-func decodeSnapshotRecord(key core.ModuleDataKey, record core.ModuleDataRecord) (websiteapi.Snapshot, error) {
+func decodeSnapshotRecord(key recorddata.RecordKey, record recorddata.Record) (websiteapi.Snapshot, error) {
 	var index struct {
 		RecordType string `json:"record_type"`
 		SnapshotID string `json:"snapshot_id"`
@@ -226,6 +232,7 @@ func decodeSnapshotRecord(key core.ModuleDataKey, record core.ModuleDataRecord) 
 		State      string `json:"state"`
 		Revision   int64  `json:"revision"`
 		ParentID   string `json:"parent_id"`
+		Digest     string `json:"digest"`
 	}
 	if json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != "snapshot" || key.Namespace != snapshotsNamespace || key.ScopeType != "global" || key.ScopeID != "global" || record.PayloadVersion != 1 || record.Revision < 1 {
 		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
@@ -258,6 +265,21 @@ func decodeSnapshotRecord(key core.ModuleDataKey, record core.ModuleDataRecord) 
 			return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
 		}
 	}
+	digest, err := snapshotContentDigest(snapshot)
+	if err != nil {
+		return websiteapi.Snapshot{}, err
+	}
+	if snapshot.Digest == digest && (index.Digest == "" || index.Digest == digest) {
+		snapshot.Digest = digest
+	} else if snapshot.Digest == "" && index.Digest == "" {
+		snapshot.Digest = digest
+	} else if index.Digest == "" && snapshot.Digest != digest {
+		// Legacy fixture/store payload may carry stale digest when index omitted.
+		snapshot.Digest = digest
+	} else {
+		return websiteapi.Snapshot{}, websiteapi.ErrUnavailable
+	}
+	snapshot.Digest = digest
 	snapshot.Revision = record.Revision
 	if snapshot.CreatedAt.IsZero() {
 		snapshot.CreatedAt = record.CreatedAt

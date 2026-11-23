@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"bytes"
 	"context"
@@ -7,12 +9,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 	"math"
 	"strings"
 	"unicode/utf8"
-
-	core "github.com/Zubrium/cdn/core/presentation"
-	"github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 )
 
 type Repository interface {
@@ -35,14 +35,14 @@ type Service struct {
 
 func New(repository Repository, maxPage int) (*Service, error) {
 	if repository == nil || maxPage < 1 {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	return &Service{repository: repository, maxPage: maxPage}, nil
 }
 
 func (service *Service) Get(ctx context.Context, schemaID string) (model.Schema, int64, error) {
 	if !validIdentifier(schemaID) {
-		return model.Schema{}, 0, core.ErrModuleDataInvalid
+		return model.Schema{}, 0, recorddata.ErrRecordInvalid
 	}
 	schema, err := service.repository.GetByID(ctx, schemaID)
 	return schema.Schema, schema.Revision, err
@@ -51,10 +51,10 @@ func (service *Service) Get(ctx context.Context, schemaID string) (model.Schema,
 func (service *Service) Save(ctx context.Context, schemaID, key string, fields map[string]any, expectedRevision int64) (model.Schema, int64, error) {
 	if !validText(key, 128) || fields == nil || expectedRevision < 0 ||
 		(schemaID == "" && expectedRevision != 0) || (schemaID != "" && (expectedRevision == 0 || !validIdentifier(schemaID))) {
-		return model.Schema{}, 0, core.ErrModuleDataInvalid
+		return model.Schema{}, 0, recorddata.ErrRecordInvalid
 	}
 	if _, err := model.ParseFieldDefinitions(fields); err != nil {
-		return model.Schema{}, 0, core.ErrModuleDataInvalid
+		return model.Schema{}, 0, recorddata.ErrRecordInvalid
 	}
 
 	if schemaID == "" {
@@ -62,17 +62,17 @@ func (service *Service) Save(ctx context.Context, schemaID, key string, fields m
 			if equalJSON(existing.Schema.Fields, fields) {
 				return existing.Schema, existing.Revision, nil
 			}
-			return model.Schema{}, 0, core.ErrModuleDataConflict
-		} else if !errors.Is(err, core.ErrModuleDataNotFound) {
+			return model.Schema{}, 0, recorddata.ErrRecordConflict
+		} else if !errors.Is(err, recorddata.ErrRecordNotFound) {
 			return model.Schema{}, 0, err
 		}
 		id, err := newID()
 		if err != nil {
-			return model.Schema{}, 0, core.ErrModuleDataUnavailable
+			return model.Schema{}, 0, recorddata.ErrRecordUnavailable
 		}
 		schema := model.Schema{ID: id, Key: key, Version: 1, Fields: fields}
 		revision, err := service.repository.Create(ctx, schema)
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			if existing, readErr := service.repository.GetByKey(ctx, key); readErr == nil && equalJSON(existing.Schema.Fields, fields) {
 				return existing.Schema, existing.Revision, nil
 			}
@@ -85,15 +85,15 @@ func (service *Service) Save(ctx context.Context, schemaID, key string, fields m
 		return model.Schema{}, 0, err
 	}
 	if current.Revision != expectedRevision {
-		return model.Schema{}, 0, core.ErrModuleDataConflict
+		return model.Schema{}, 0, recorddata.ErrRecordConflict
 	}
 	if current.Schema.Version == math.MaxInt64 {
-		return model.Schema{}, 0, core.ErrModuleDataConflict
+		return model.Schema{}, 0, recorddata.ErrRecordConflict
 	}
 	if key != current.Schema.Key {
 		if _, err := service.repository.GetByKey(ctx, key); err == nil {
-			return model.Schema{}, 0, core.ErrModuleDataConflict
-		} else if !errors.Is(err, core.ErrModuleDataNotFound) {
+			return model.Schema{}, 0, recorddata.ErrRecordConflict
+		} else if !errors.Is(err, recorddata.ErrRecordNotFound) {
 			return model.Schema{}, 0, err
 		}
 	} else if equalJSON(current.Schema.Fields, fields) {
@@ -115,7 +115,7 @@ func equalJSON(left, right any) bool {
 
 func (service *Service) List(ctx context.Context, after string, limit int) ([]Versioned, string, error) {
 	if limit < 1 || limit > service.maxPage {
-		return nil, "", core.ErrModuleDataInvalid
+		return nil, "", recorddata.ErrRecordInvalid
 	}
 	entries, next, err := service.repository.List(ctx, after, limit)
 	if err != nil {

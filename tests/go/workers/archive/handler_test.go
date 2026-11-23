@@ -8,12 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -23,7 +24,7 @@ type fakeCoreFiles struct {
 	reads          int
 	creates        int
 	outputs        map[string]string
-	files          map[string]core.File
+	files          map[string]contracts.File
 	sourceDeleted  bool
 	deleteTargets  []string
 	deleteFailures int
@@ -31,21 +32,21 @@ type fakeCoreFiles struct {
 	index          *fakeCoreIndex
 }
 
-func (f *fakeCoreFiles) ReadFile(_ context.Context, _ core.Session, id string) (io.ReadCloser, core.File, error) {
+func (f *fakeCoreFiles) ReadFile(_ context.Context, id string) (io.ReadCloser, contracts.File, error) {
 	f.reads++
 	f.sourceID = id
 	digest := sha256.Sum256(f.archive)
-	return io.NopCloser(bytes.NewReader(f.archive)), core.File{ID: id, Groups: []string{"assets"}, Revision: 1, Size: int64(len(f.archive)), SHA256: hex.EncodeToString(digest[:])}, nil
+	return io.NopCloser(bytes.NewReader(f.archive)), contracts.File{ID: id, Groups: []string{"assets"}, Revision: 1, Size: int64(len(f.archive)), SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
-func (f *fakeCoreFiles) StatFile(_ context.Context, _ core.Session, id string) (core.File, error) {
+func (f *fakeCoreFiles) StatFile(_ context.Context, id string) (contracts.File, error) {
 	if file, ok := f.files[id]; ok {
 		return file, nil
 	}
-	return core.File{}, core.ErrFileNotFound
+	return contracts.File{}, contracts.ErrFileNotFound
 }
 
-func (f *fakeCoreFiles) DeleteFile(_ context.Context, _ core.Session, id string, expected int64) error {
+func (f *fakeCoreFiles) DeleteFile(_ context.Context, id string, expected int64) error {
 	f.deleteTargets = append(f.deleteTargets, id)
 	if id == "" || id != f.sourceID || expected != 1 {
 		return fmt.Errorf("unexpected file deletion target")
@@ -68,13 +69,13 @@ func (f *fakeCoreFiles) DeleteFile(_ context.Context, _ core.Session, id string,
 		return fmt.Errorf("temporary delete failure")
 	}
 	if f.sourceDeleted {
-		return core.ErrFileNotFound
+		return contracts.ErrFileNotFound
 	}
 	f.sourceDeleted = true
 	return nil
 }
 
-func (f *fakeCoreFiles) CreateFileVerified(_ context.Context, _ core.Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
+func (f *fakeCoreFiles) CreateFileVerified(_ context.Context, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
 	if f.outputs == nil {
 		f.outputs = make(map[string]string)
 	}
@@ -93,28 +94,44 @@ func (f *fakeCoreFiles) CreateFileVerified(_ context.Context, _ core.Session, re
 	id := fmt.Sprintf("file-%d", f.creates)
 	f.outputs[requestKey] = id
 	if f.files == nil {
-		f.files = make(map[string]core.File)
+		f.files = make(map[string]contracts.File)
 	}
-	f.files[id] = core.File{ID: id, Groups: append([]string(nil), groups...), Metadata: metadata, ContentType: contentType, SHA256: hex.EncodeToString(digest[:]), Size: size, Revision: 1}
+	f.files[id] = contracts.File{ID: id, Groups: append([]string(nil), groups...), Metadata: metadata, ContentType: contentType, SHA256: hex.EncodeToString(digest[:]), Size: size, Revision: 1}
 	return id, nil
 }
 
+func (*fakeCoreFiles) GetManagedFileSet(context.Context, string) (contracts.FileSet, error) {
+	return contracts.FileSet{}, nil
+}
+func (*fakeCoreFiles) ListManagedFileSets(context.Context, string, string, string, int) ([]contracts.FileSet, string, error) {
+	return nil, "", nil
+}
+func (*fakeCoreFiles) ListFileSet(context.Context, string, string, int) ([]contracts.File, string, error) {
+	return nil, "", nil
+}
+func (*fakeCoreFiles) AddFileToManagedSet(context.Context, string, string, int64) (contracts.FileSet, error) {
+	return contracts.FileSet{}, nil
+}
+func (*fakeCoreFiles) RemoveFileFromManagedSet(context.Context, string, string, int64) (contracts.FileSet, error) {
+	return contracts.FileSet{}, nil
+}
+
 type fakeProgress struct {
-	record core.ModuleDataRecord
+	record recorddata.Record
 	exists bool
 }
 
-func (f *fakeProgress) Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (f *fakeProgress) Get(context.Context, recorddata.RecordKey) (recorddata.Record, error) {
 	if !f.exists {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return f.record, nil
 }
-func (f *fakeProgress) Put(_ context.Context, _ core.ModuleDataKey, value core.ModuleDataValue, expected int64) (core.ModuleDataRecord, error) {
+func (f *fakeProgress) Put(_ context.Context, _ recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
 	if (f.exists && expected != f.record.Revision) || (!f.exists && expected != 0) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataConflict
+		return recorddata.Record{}, recorddata.ErrRecordConflict
 	}
-	f.record = core.ModuleDataRecord{Payload: append([]byte(nil), value.Payload...), PayloadVersion: value.PayloadVersion, Revision: expected + 1}
+	f.record = recorddata.Record{Payload: append([]byte(nil), value.Payload...), PayloadVersion: value.PayloadVersion, Revision: expected + 1}
 	f.exists = true
 	return f.record, nil
 }
@@ -124,41 +141,41 @@ type fakeCoreIndex struct {
 	revision int64
 }
 
-func (f *fakeCoreIndex) GetManagedFileSet(context.Context, core.Session, string) (core.FileSet, error) {
+func (f *fakeCoreIndex) GetManagedFileSet(context.Context, string) (contracts.FileSet, error) {
 	if f.members == nil {
 		f.members = make(map[string]bool)
 	}
-	return core.FileSet{Revision: f.revision}, nil
+	return contracts.FileSet{Revision: f.revision}, nil
 }
-func (f *fakeCoreIndex) ListFileSet(_ context.Context, _ core.Session, _ string, cursor string, _ int) ([]core.File, string, error) {
-	result := make([]core.File, 0, len(f.members))
+func (f *fakeCoreIndex) ListFileSet(_ context.Context, _ string, cursor string, _ int) ([]contracts.File, string, error) {
+	result := make([]contracts.File, 0, len(f.members))
 	for id := range f.members {
-		result = append(result, core.File{ID: id})
+		result = append(result, contracts.File{ID: id})
 	}
 	return result, "", nil
 }
-func (f *fakeCoreIndex) AddFileToManagedSet(_ context.Context, _ core.Session, _, id string, expected int64) (core.FileSet, error) {
+func (f *fakeCoreIndex) AddFileToManagedSet(_ context.Context, _, id string, expected int64) (contracts.FileSet, error) {
 	if f.members == nil {
 		f.members = make(map[string]bool)
 	}
 	if expected != f.revision {
-		return core.FileSet{}, core.ErrRevisionConflict
+		return contracts.FileSet{}, contracts.ErrFileRevisionConflict
 	}
 	if !f.members[id] {
 		f.members[id] = true
 		f.revision++
 	}
-	return core.FileSet{Revision: f.revision}, nil
+	return contracts.FileSet{Revision: f.revision}, nil
 }
-func (f *fakeCoreIndex) RemoveFileFromManagedSet(_ context.Context, _ core.Session, _, id string, expected int64) (core.FileSet, error) {
+func (f *fakeCoreIndex) RemoveFileFromManagedSet(_ context.Context, _, id string, expected int64) (contracts.FileSet, error) {
 	if expected != f.revision {
-		return core.FileSet{}, core.ErrRevisionConflict
+		return contracts.FileSet{}, contracts.ErrFileRevisionConflict
 	}
 	if f.members[id] {
 		delete(f.members, id)
 		f.revision++
 	}
-	return core.FileSet{Revision: f.revision}, nil
+	return contracts.FileSet{Revision: f.revision}, nil
 }
 
 func testHandler(t *testing.T, files CoreFiles, archiveBytes []byte) *Handler {
@@ -174,7 +191,7 @@ func testHandler(t *testing.T, files CoreFiles, archiveBytes []byte) *Handler {
 	fake := files.(*fakeCoreFiles)
 	fake.progress = &fakeProgress{}
 	fake.index = &fakeCoreIndex{}
-	handler, err := NewHandler(files, core.Session{}, Config{
+	handler, err := NewHandler(files, Config{
 		Limits:     Limits{MaxArchiveBytes: 4096, MaxEntries: 10, MaxEntryBytes: 1024, MaxExpandedBytes: 2048, MaxCompressionRatio: 1000},
 		StagingDir: staging, TargetFileSetID: "trusted-set-1", OutputGroups: []string{"assets"}, Progress: fake.progress, Index: fake.index,
 	})
@@ -278,10 +295,7 @@ func TestWorkerHandlerDispatchesOnlyRegisteredArchiveOperation(t *testing.T) {
 	manifest := `{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":{},"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js","styles":[]}}`
 	files := &fakeCoreFiles{}
 	handler := testHandler(t, files, manifestZIPFixture(t, manifest))
-	task := core.Task{ID: uuid.New(), Kind: core.TaskKindWorker, Worker: &core.WorkerRef{
-		ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1,
-	}}
-	task.Payload, _ = json.Marshal(Request{SourceFileID: "source-1"})
+	task := contracts.OperationTask{TaskID: uuid.New().String(), Payload: json.RawMessage(`{"source_file_id":"source-1"}`)}
 	outcome, err := handler.WorkerHandler(context.Background(), task)
 	if err != nil {
 		t.Fatal(err)
@@ -291,12 +305,7 @@ func TestWorkerHandlerDispatchesOnlyRegisteredArchiveOperation(t *testing.T) {
 		t.Fatalf("result=%+v decode error=%v", result, err)
 	}
 
-	task.Worker.OperationID = "other-operation"
-	if _, err := handler.WorkerHandler(context.Background(), task); err == nil {
-		t.Fatal("accepted an unregistered archive operation")
-	}
-	task.Worker.OperationID = OperationID
-	task.Payload, _ = json.Marshal(Request{TaskID: "another-task", SourceFileID: "source-1"})
+	task.Payload = json.RawMessage(`{"job_id":"another-task","source_file_id":"source-1"}`)
 	if _, err := handler.WorkerHandler(context.Background(), task); err == nil {
 		t.Fatal("accepted a payload bound to another task")
 	}
@@ -354,7 +363,7 @@ func TestHandlerRequiresPrivateAbsoluteStagingDirectory(t *testing.T) {
 	if err := os.Chmod(staging, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := NewHandler(&fakeCoreFiles{}, core.Session{}, Config{
+	_, err := NewHandler(&fakeCoreFiles{}, Config{
 		Limits:     Limits{MaxArchiveBytes: 4096, MaxEntries: 10, MaxEntryBytes: 1024, MaxExpandedBytes: 2048, MaxCompressionRatio: 100},
 		StagingDir: staging, TargetFileSetID: "trusted-set-1", OutputGroups: []string{"assets"}, Progress: &fakeProgress{}, Index: &fakeCoreIndex{},
 	})

@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 	"github.com/google/uuid"
 )
@@ -19,8 +19,7 @@ const (
 	MediaContractVersion = 1
 	MediaRootFormat      = "website.media-root/v1"
 
-	mediaWorkerComponentID = "worker.media"
-	mediaWorkerOperation   = "derivative"
+	mediaWorkerOperation = "derivative"
 )
 
 var (
@@ -61,42 +60,40 @@ type MediaRootResult struct {
 // MediaWorkerHandler emits one bounded derivative child for every rendition
 // declared by the manifest-pinned profile. It never processes bytes or writes
 // files; the registered worker.media operation performs those effects.
-func (h *Handler) MediaWorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if h == nil || ctx == nil {
-		return core.TaskOutcome{}, errInvalidMediaTask
+func (h *Handler) MediaWorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	if h == nil || ctx == nil || task.TaskID == "" {
+		return contracts.OperationOutcome{}, errInvalidMediaTask
 	}
 	if err := ctx.Err(); err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
-	if task.Kind != core.TaskKindWorker || task.Worker == nil ||
-		task.Worker.ComponentID != ComponentID || task.Worker.OperationID != MediaOperationID ||
-		task.Worker.ContractVersion != MediaContractVersion || len(task.Payload) == 0 || len(task.Payload) > maxPayloadBytes {
-		return core.TaskOutcome{}, errInvalidMediaTask
+	if len(task.Payload) == 0 || len(task.Payload) > maxPayloadBytes {
+		return contracts.OperationOutcome{}, errInvalidMediaTask
 	}
 	request, err := decodeMediaRequest(task.Payload)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
 	profile, err := mediaprofile.ValidateProfile(request.Profile)
 	if err != nil {
-		return core.TaskOutcome{}, errInvalidMediaTask
+		return contracts.OperationOutcome{}, errInvalidMediaTask
 	}
 	outputs := mediaprofile.Outputs(profile)
 	if len(outputs) != len(request.Outputs) || len(outputs) > mediaprofile.MaxRenditions+1 {
-		return core.TaskOutcome{}, errInvalidMediaTask
+		return contracts.OperationOutcome{}, errInvalidMediaTask
 	}
 	for i, name := range outputs {
 		if name != request.Outputs[i] {
-			return core.TaskOutcome{}, errInvalidMediaTask
+			return contracts.OperationOutcome{}, errInvalidMediaTask
 		}
 	}
 	emissionKeys := make(map[string]string, len(outputs))
-	children := make([]core.TaskChild, 0, len(outputs))
+	children := make([]contracts.OperationTaskChild, 0, len(outputs))
 	for _, name := range outputs {
 		emissionKey := "media:" + request.JobID.String() + ":" + name
 		idempotencyKey := emissionKey
 		if !emissionPattern.MatchString(emissionKey) || !emissionPattern.MatchString(idempotencyKey) {
-			return core.TaskOutcome{}, errInvalidMediaTask
+			return contracts.OperationOutcome{}, errInvalidMediaTask
 		}
 		payload, err := json.Marshal(mediaprofile.WorkRequest{
 			Version: mediaprofile.WorkContractVersion, JobID: request.JobID.String(),
@@ -107,13 +104,11 @@ func (h *Handler) MediaWorkerHandler(ctx context.Context, task core.Task) (core.
 			IdempotencyKey: idempotencyKey, InputDigest: request.InputDigest, Profile: profile,
 		})
 		if err != nil || len(payload) == 0 || len(payload) > maxPayloadBytes {
-			return core.TaskOutcome{}, errInvalidMediaTask
+			return contracts.OperationOutcome{}, errInvalidMediaTask
 		}
 		emissionKeys[name] = emissionKey
-		children = append(children, core.TaskChild{
-			Kind: core.TaskKindWorker,
-			Worker: &core.WorkerRef{ComponentID: mediaWorkerComponentID,
-				OperationID: mediaWorkerOperation, ContractVersion: mediaprofile.WorkContractVersion},
+		children = append(children, contracts.OperationTaskChild{
+			OperationID: mediaWorkerOperation, Version: mediaprofile.WorkContractVersion,
 			EmissionKey: emissionKey, Payload: payload, MaxAttempts: h.config.MaxAttempts,
 		})
 	}
@@ -123,9 +118,9 @@ func (h *Handler) MediaWorkerHandler(ctx context.Context, task core.Task) (core.
 		OutputNames: outputs, EmissionKeys: emissionKeys,
 	})
 	if err != nil || len(root) > maxPayloadBytes {
-		return core.TaskOutcome{}, errInvalidMediaTask
+		return contracts.OperationOutcome{}, errInvalidMediaTask
 	}
-	return core.TaskOutcome{Result: root, Children: children}, nil
+	return contracts.OperationOutcome{Result: root, Children: children}, nil
 }
 
 func decodeMediaRequest(raw json.RawMessage) (MediaRequest, error) {

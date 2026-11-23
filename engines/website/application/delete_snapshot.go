@@ -1,18 +1,20 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"encoding/json"
 	"strconv"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 )
 
 // DeleteSnapshot removes a snapshot and reparents its children in one Core
 // module-data CAS batch. It never deletes referenced Core files.
 func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteSnapshotRequest) error {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return err
 	}
 	if !snapshotIDPattern.MatchString(request.SnapshotID) || request.ExpectedRevision < 1 {
@@ -58,15 +60,15 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 		if err != nil {
 			// A missing parent indicates corrupt tree state; deleting would make
 			// the remaining children impossible to place consistently.
-			return websiteapi.ErrUnavailable
+			return err
 		}
 		newParent = &parent
 	}
 
-	selectors := []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}},
-		{Field: "page_id", Operator: core.SelectorEqual, Values: []any{target.PageID}},
-		{Field: "parent_id", Operator: core.SelectorEqual, Values: []any{target.ID}},
+	selectors := []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"snapshot"}},
+		{Field: "page_id", Operator: recorddata.RecordSelectorEqual, Values: []any{target.PageID}},
+		{Field: "parent_id", Operator: recorddata.RecordSelectorEqual, Values: []any{target.ID}},
 	}
 	childrenKeys, childrenRecords, err := s.listSnapshotChildren(ctx, selectors)
 	if err != nil {
@@ -76,7 +78,7 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 		return websiteapi.ErrTooLarge
 	}
 
-	mutations := make([]core.ModuleDataMutation, 0, len(childrenKeys)+2)
+	mutations := make([]recorddata.RecordMutation, 0, len(childrenKeys)+2)
 	for i, childRecord := range childrenRecords {
 		childKey := childrenKeys[i]
 		child, err := decodeSnapshotRecord(childKey, childRecord)
@@ -116,12 +118,12 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 		if err != nil {
 			return websiteapi.ErrUnavailable
 		}
-		mutations = append(mutations, core.ModuleDataMutation{
+		mutations = append(mutations, recorddata.RecordMutation{
 			Key: childKey, ExpectedRevision: childRecord.Revision,
-			Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: childRecord.PayloadVersion, IndexData: indexPayload},
+			Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: childRecord.PayloadVersion, IndexData: indexPayload},
 		})
 	}
-	mutations = append(mutations, core.ModuleDataMutation{Key: targetKey, ExpectedRevision: targetRecord.Revision})
+	mutations = append(mutations, recorddata.RecordMutation{Key: targetKey, ExpectedRevision: targetRecord.Revision})
 	registryMutation, err := pageTreeRegistryMutation(target.PageID, registryRecord, registryState.LastSequence)
 	if err != nil {
 		return err
@@ -133,13 +135,13 @@ func (s *Service) DeleteSnapshot(ctx context.Context, request websiteapi.DeleteS
 	return nil
 }
 
-func (s *Service) listSnapshotChildren(ctx context.Context, selectors []core.ModuleDataSelector) ([]core.ModuleDataKey, []core.ModuleDataRecord, error) {
+func (s *Service) listSnapshotChildren(ctx context.Context, selectors []recorddata.RecordSelector) ([]recorddata.RecordKey, []recorddata.Record, error) {
 	pageLimit := s.store.MaxPageSize()
 	if batchLimit := s.store.MaxBatchSize(); pageLimit > batchLimit {
 		pageLimit = batchLimit
 	}
-	keys := make([]core.ModuleDataKey, 0)
-	records := make([]core.ModuleDataRecord, 0)
+	keys := make([]recorddata.RecordKey, 0)
+	records := make([]recorddata.Record, 0)
 	after := ""
 	for {
 		if err := ctx.Err(); err != nil {

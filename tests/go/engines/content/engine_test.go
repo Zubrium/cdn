@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"sort"
+	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	content "github.com/Zubrium/cdn/engines/content"
 	"github.com/Zubrium/cdn/engines/content/domain"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
@@ -17,7 +18,7 @@ import (
 const engineSnapshotID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testing.T) {
-	access := &testAuthorization{level: core.AccessLevelRead}
+	access := &testAuthorization{level: recorddata.AccessLevelRead}
 	store := newEngineStore()
 	engine := newTestEngine(t, access, store)
 	ctx, err := engine.Authenticate(context.Background(), "credential")
@@ -29,7 +30,7 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 	if err != nil || workspace.Revision != 0 || string(workspace.DataModel) != `{"formatVersion":1,"entities":[]}` {
 		t.Fatalf("GetWorkspace() = %#v, err %v", workspace, err)
 	}
-	if access.required != core.AccessLevelRead || len(access.groups) != 1 || access.groups[0] != "content" {
+	if access.required != recorddata.AccessLevelRead || len(access.groups) != 1 || access.groups[0] != "content" {
 		t.Fatalf("read authorization = level %v groups %v", access.required, access.groups)
 	}
 	putsBeforeDeniedWrite := store.putCount
@@ -41,19 +42,19 @@ func TestEngineEnforcesContentGroupLevelsAndNormalizesEmptyWebsiteModel(t *testi
 	if !errors.Is(err, contentapi.ErrForbidden) || store.putCount != putsBeforeDeniedWrite {
 		t.Fatalf("read-only principal write error = %v, Put count %d", err, store.putCount)
 	}
-	access.level = core.AccessLevelWrite
+	access.level = recorddata.AccessLevelWrite
 	saved, err := engine.SaveWorkspaceDraft(ctx, projection, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: engineSnapshotID, IdempotencyKey: "save-key", ExpectedRevision: 0,
 		ExpectedSelectionRevision: workspace.SelectionRevision,
 		Records:                   []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
 	})
-	if err != nil || saved.SelectionRevision != workspace.SelectionRevision+1 || access.required != core.AccessLevelWrite {
+	if err != nil || saved.SelectionRevision != workspace.SelectionRevision+1 || access.required != recorddata.AccessLevelWrite {
 		t.Fatalf("write authorized SaveWorkspaceDraft() = %#v, err %v", saved, err)
 	}
 }
 
 func TestEngineRejectsMalformedSelectionPolicyBeforeAuthorizationOrMutation(t *testing.T) {
-	access := &testAuthorization{level: core.AccessLevelWrite}
+	access := &testAuthorization{level: recorddata.AccessLevelWrite}
 	store := newEngineStore()
 	engine := newTestEngine(t, access, store)
 	_, err := engine.CopySnapshotContent(context.Background(), contentapi.CopySnapshotContentRequest{SelectionPolicy: "merge"})
@@ -66,7 +67,7 @@ func TestEngineRejectsMalformedSelectionPolicyBeforeAuthorizationOrMutation(t *t
 }
 
 func TestEngineRejectsUnreadySnapshotAndForeignAuthenticationContext(t *testing.T) {
-	access := &testAuthorization{level: core.AccessLevelRead}
+	access := &testAuthorization{level: recorddata.AccessLevelRead}
 	store := newEngineStore()
 	first := newTestEngine(t, access, store)
 	ctx, err := first.Authenticate(context.Background(), "credential")
@@ -87,7 +88,7 @@ func TestEngineRejectsUnreadySnapshotAndForeignAuthenticationContext(t *testing.
 
 func newTestEngine(t *testing.T, authorization *testAuthorization, store *testDataStore) *content.Engine {
 	t.Helper()
-	principal := core.Principal{ID: "user-1", Name: "User", Active: true}
+	principal := recorddata.Principal{ID: "user-1", Name: "User", Active: true}
 	identity := testIdentity{principal: principal}
 	sessions := testSessions{principal: principal}
 	engine, err := content.New(content.Dependencies{
@@ -100,44 +101,40 @@ func newTestEngine(t *testing.T, authorization *testAuthorization, store *testDa
 	return engine
 }
 
-type testIdentity struct{ principal core.Principal }
+type testIdentity struct{ principal recorddata.Principal }
 
-func (identity testIdentity) Authenticate(context.Context, string) (core.Session, core.Principal, error) {
-	return core.Session{}, identity.principal, nil
+func (identity testIdentity) Authenticate(context.Context, string) (recorddata.AuthorizationSubject, recorddata.Principal, error) {
+	return recorddata.AuthorizationSubject{}, identity.principal, nil
 }
 
-type testSessions struct{ principal core.Principal }
+type testSessions struct{ principal recorddata.Principal }
 
-func (sessions testSessions) CreateSession(context.Context, string) (core.CreatedSession, error) {
-	return core.CreatedSession{}, errors.New("unexpected CreateSession call")
+func (sessions testSessions) AuthenticateSession(context.Context, string) (recorddata.AuthorizationSubject, recorddata.Principal, error) {
+	return recorddata.AuthorizationSubject{}, sessions.principal, nil
 }
-func (sessions testSessions) AuthenticateSession(context.Context, string) (core.Session, core.Principal, error) {
-	return core.Session{}, sessions.principal, nil
-}
-func (testSessions) RevokeSession(context.Context, string) error { return nil }
 
 type testAuthorization struct {
-	level    core.AccessLevel
-	required core.AccessLevel
+	level    recorddata.AccessLevel
+	required recorddata.AccessLevel
 	groups   []string
 }
 
-func (authorization *testAuthorization) Authenticate(ctx context.Context, credential string) (core.Session, core.Principal, error) {
-	return testIdentity{principal: core.Principal{ID: "user-1", Name: "User", Active: true}}.Authenticate(ctx, credential)
+func (authorization *testAuthorization) Authenticate(ctx context.Context, credential string) (recorddata.AuthorizationSubject, recorddata.Principal, error) {
+	return testIdentity{principal: recorddata.Principal{ID: "user-1", Name: "User", Active: true}}.Authenticate(ctx, credential)
 }
-func (authorization *testAuthorization) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, required core.AccessLevel) error {
+func (authorization *testAuthorization) RequireGroupLevel(_ context.Context, _ recorddata.AuthorizationSubject, groups []string, required recorddata.AccessLevel) error {
 	authorization.required = required
 	authorization.groups = append([]string(nil), groups...)
 	if authorization.level < required {
-		return core.ErrForbidden
+		return recorddata.ErrAccessForbidden
 	}
 	return nil
 }
 
 type testFiles struct{}
 
-func (testFiles) StatFile(context.Context, core.Session, string) (core.File, error) {
-	return core.File{}, core.ErrFileNotFound
+func (testFiles) StatFile(context.Context, recorddata.AuthorizationSubject, string) (recorddata.File, error) {
+	return recorddata.File{}, recorddata.ErrFileNotFound
 }
 
 type testProjectionsProvider struct{}
@@ -158,7 +155,7 @@ func schemaSnapshot(state string) contentapi.Projections {
 }
 
 func TestEngineRejectsInvalidSchemaSnapshotVersionDigestStateAndBinding(t *testing.T) {
-	access := &testAuthorization{level: core.AccessLevelWrite}
+	access := &testAuthorization{level: recorddata.AccessLevelWrite}
 	store := newEngineStore()
 	engine := newTestEngine(t, access, store)
 	ctx, err := engine.Authenticate(context.Background(), "credential")
@@ -169,7 +166,7 @@ func TestEngineRejectsInvalidSchemaSnapshotVersionDigestStateAndBinding(t *testi
 	unsupported := schemaSnapshot("ready")
 	unsupported.ContentModel.Version++
 	unsupported.ContentModel.Digest, _ = unsupported.ContentModel.ComputeDigest()
-	if _, err := engine.GetWorkspace(ctx, unsupported); !errors.Is(err, contentapi.ErrInvalid) {
+	if _, err := engine.GetWorkspace(ctx, unsupported); !errors.Is(err, contentapi.ErrInvalid) || !strings.HasPrefix(err.Error(), "resolve content workspace projection:") {
 		t.Errorf("unsupported version with valid digest error = %v", err)
 	}
 
@@ -198,12 +195,12 @@ func TestEngineRejectsInvalidSchemaSnapshotVersionDigestStateAndBinding(t *testi
 }
 
 type testDataStore struct {
-	rows     map[core.ModuleDataKey]core.ModuleDataRecord
+	rows     map[recorddata.RecordKey]recorddata.Record
 	putCount int
 }
 
 func newEngineStore() *testDataStore {
-	store := &testDataStore{rows: map[core.ModuleDataKey]core.ModuleDataRecord{}}
+	store := &testDataStore{rows: map[recorddata.RecordKey]recorddata.Record{}}
 	repo, err := repository.New(store)
 	if err != nil {
 		panic(err)
@@ -216,28 +213,28 @@ func newEngineStore() *testDataStore {
 	store.putCount = 0
 	return store
 }
-func (store *testDataStore) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (store *testDataStore) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	row, exists := store.rows[key]
 	if !exists {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return cloneEngineRecord(row), nil
 }
-func (store *testDataStore) Put(_ context.Context, key core.ModuleDataKey, value core.ModuleDataValue, expected int64) (core.ModuleDataRecord, error) {
+func (store *testDataStore) Put(_ context.Context, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
 	current, exists := store.rows[key]
 	if (!exists && expected != 0) || (exists && current.Revision != expected) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataConflict
+		return recorddata.Record{}, recorddata.ErrRecordConflict
 	}
-	row := core.ModuleDataRecord{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion, IndexData: append(json.RawMessage(nil), value.IndexData...), Revision: expected + 1}
+	row := recorddata.Record{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion, IndexData: append(json.RawMessage(nil), value.IndexData...), Revision: expected + 1}
 	store.rows[key] = row
 	store.putCount++
 	return cloneEngineRecord(row), nil
 }
-func (store *testDataStore) Batch(_ context.Context, mutations []core.ModuleDataMutation) error {
+func (store *testDataStore) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
 	for _, mutation := range mutations {
 		current, exists := store.rows[mutation.Key]
 		if (!exists && mutation.ExpectedRevision != 0) || (exists && current.Revision != mutation.ExpectedRevision) {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 	}
 	for _, mutation := range mutations {
@@ -245,15 +242,15 @@ func (store *testDataStore) Batch(_ context.Context, mutations []core.ModuleData
 			delete(store.rows, mutation.Key)
 			continue
 		}
-		store.rows[mutation.Key] = core.ModuleDataRecord{
+		store.rows[mutation.Key] = recorddata.Record{
 			Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion,
 			IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: mutation.ExpectedRevision + 1,
 		}
 	}
 	return nil
 }
-func (store *testDataStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
-	keys := make([]core.ModuleDataKey, 0)
+func (store *testDataStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []recorddata.RecordSelector, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
+	keys := make([]recorddata.RecordKey, 0)
 	for key, record := range store.rows {
 		if key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matchesSelectors(record, selectors) {
 			continue
@@ -265,7 +262,7 @@ func (store *testDataStore) List(_ context.Context, namespace, scopeType, scopeI
 	if more {
 		keys = keys[:limit]
 	}
-	records := make([]core.ModuleDataRecord, len(keys))
+	records := make([]recorddata.Record, len(keys))
 	for index, key := range keys {
 		records[index] = cloneEngineRecord(store.rows[key])
 	}
@@ -280,9 +277,9 @@ func (*testDataStore) MaxPayloadBytes() int { return 1 << 20 }
 func (*testDataStore) MaxIndexBytes() int   { return 1 << 16 }
 func (*testDataStore) MaxBatchBytes() int   { return 2 << 20 }
 
-func matchesSelectors(record core.ModuleDataRecord, selectors []core.ModuleDataSelector) bool {
+func matchesSelectors(record recorddata.Record, selectors []recorddata.RecordSelector) bool {
 	for _, selector := range selectors {
-		if selector.Operator != core.SelectorEqual {
+		if selector.Operator != recorddata.RecordSelectorEqual {
 			return false
 		}
 		var index map[string]any
@@ -307,7 +304,7 @@ func matchesSelectors(record core.ModuleDataRecord, selectors []core.ModuleDataS
 	return true
 }
 
-func cloneEngineRecord(record core.ModuleDataRecord) core.ModuleDataRecord {
+func cloneEngineRecord(record recorddata.Record) recorddata.Record {
 	record.Payload = append(json.RawMessage(nil), record.Payload...)
 	record.IndexData = append(json.RawMessage(nil), record.IndexData...)
 	return record

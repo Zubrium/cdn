@@ -187,6 +187,14 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 	}
 	withStreams := dispatcher.streams
 	dispatcher.active.Add(1)
+	if withStreams {
+		if capability, provided := contracts.StreamCapabilityFromContext(ctx); provided {
+			if scoped, ok := capability.(*ScopedStreams); ok {
+				dispatcher.active.Add(1)
+				scoped.onClose(dispatcher.active.Done)
+			}
+		}
+	}
 	dispatcher.mu.RUnlock()
 	defer dispatcher.active.Done()
 	if err := ctx.Err(); err != nil {

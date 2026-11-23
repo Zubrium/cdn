@@ -7,7 +7,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Zubrium/cdn/core/domain/access"
 	"github.com/google/uuid"
 )
 
@@ -32,38 +31,6 @@ var (
 	ErrCoordinatorInvalid    = ErrInvalid
 )
 
-// ComponentOperation is a public, engine-neutral operation registration.
-type ComponentOperation struct {
-	ID              string
-	ContractVersion int
-}
-
-// ComponentDescriptor contains only generic registration metadata. Engine
-// implementations keep their concrete contracts outside Core.
-type ComponentDescriptor struct {
-	ID           string
-	Kind         string
-	Version      int
-	Dependencies []string
-	Operations   []ComponentOperation
-	AccessGroups []string
-}
-
-// ComponentDescriptorProvider lets an outer module describe itself to the
-// generic Core workflow registry without importing another component's model.
-type ComponentDescriptorProvider interface {
-	ComponentDescriptor() ComponentDescriptor
-}
-
-// Operation is used by the Core registry for capability metadata.
-type Operation struct {
-	Name         string
-	Action       access.Action
-	ResourceType string
-}
-
-type Module interface{ Operations() []Operation }
-
 // Repository ports are part of the coordination domain. Application services
 // compose these narrow interfaces; infrastructure implements them without
 // becoming visible to engines or other Core packages.
@@ -74,7 +41,7 @@ type InstanceRepository interface {
 }
 
 type TaskRepository interface {
-	Claim(context.Context, uuid.UUID, int64, int, time.Duration, time.Duration) ([]Task, error)
+	Claim(context.Context, uuid.UUID, int64, []string, int, time.Duration, time.Duration) ([]Task, error)
 	Extend(context.Context, uuid.UUID, uuid.UUID, int64, int64, time.Duration) error
 	Complete(context.Context, uuid.UUID, uuid.UUID, int64, int64, int, int, time.Duration, TaskOutcome) error
 	Fail(context.Context, uuid.UUID, uuid.UUID, int64, int64, string, bool, time.Duration, time.Duration) error
@@ -97,7 +64,7 @@ type WorkflowRepository interface {
 type TaskResult struct {
 	TaskID     uuid.UUID
 	WorkflowID uuid.UUID
-	Worker     *WorkerRef
+	Operation  *OperationRef
 	State      string
 	Result     json.RawMessage
 	ErrorCode  string
@@ -113,25 +80,25 @@ type TaskResultRepository interface {
 type TaskKind string
 
 const (
-	TaskKindWorker TaskKind = "worker"
-	TaskKindJoin   TaskKind = "join"
+	TaskKindOperation TaskKind = "operation"
+	TaskKindJoin      TaskKind = "join"
 )
 
-// WorkerRef points at a statically registered operation handler. Workers are
-// definitions in the runtime catalog, never durable execution records.
-type WorkerRef struct {
-	ComponentID     string
-	OperationID     string
-	ContractVersion int
+// OperationRef is a generic, profile-bound operation identity. ClassID is an
+// opaque scheduler scope and is never interpreted as a product module kind.
+type OperationRef struct {
+	ClassID string
+	ID      string
+	Version int
 }
 
-// Task is the durable unit in a workflow. A worker task invokes its registered
-// WorkerRef; a join task is completed by Core after all dependencies succeed.
+// Task is the durable unit in a workflow. An operation task is dispatched by
+// the outer composition; a join task is completed by Core after dependencies succeed.
 type Task struct {
 	ID             uuid.UUID
 	WorkflowID     uuid.UUID
 	Kind           TaskKind
-	Worker         *WorkerRef
+	Operation      *OperationRef
 	ParentTaskID   uuid.UUID
 	EmissionKey    string
 	IdempotencyKey string
@@ -156,7 +123,7 @@ type TaskRequest struct {
 	ID                 uuid.UUID
 	WorkflowID         uuid.UUID
 	Kind               TaskKind
-	Worker             *WorkerRef
+	Operation          *OperationRef
 	ParentTaskID       uuid.UUID
 	EmissionKey        string
 	Payload            json.RawMessage
@@ -169,7 +136,7 @@ type TaskRequest struct {
 type WorkflowRequest struct {
 	ID             uuid.UUID
 	Owner          uuid.UUID
-	OwnerEngineID  string
+	OwnerClassID   string
 	IdempotencyKey string
 	InputHash      []byte
 	ConfigEpoch    int64
@@ -191,12 +158,12 @@ type WorkflowListRequest struct {
 }
 
 type WorkflowSummary struct {
-	ID            uuid.UUID
-	OwnerEngineID string
-	State         string
-	TaskCount     int
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID           uuid.UUID
+	OwnerClassID string
+	State        string
+	TaskCount    int
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type WorkflowPage struct {
@@ -210,13 +177,13 @@ type WorkflowDetail struct {
 }
 
 type Workflow struct {
-	ID            uuid.UUID
-	OwnerEngineID string
-	State         string
-	RootTaskID    uuid.UUID
-	Result        json.RawMessage
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID           uuid.UUID
+	OwnerClassID string
+	State        string
+	RootTaskID   uuid.UUID
+	Result       json.RawMessage
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type TaskCursor struct {
@@ -228,7 +195,7 @@ type TaskSummary struct {
 	ID           uuid.UUID
 	WorkflowID   uuid.UUID
 	Kind         TaskKind
-	Worker       *WorkerRef
+	Operation    *OperationRef
 	ParentTaskID uuid.UUID
 	DependsOn    []uuid.UUID
 	EmissionKey  string
@@ -249,7 +216,7 @@ type TaskPage struct {
 
 type TaskChild struct {
 	Kind               TaskKind
-	Worker             *WorkerRef
+	Operation          *OperationRef
 	EmissionKey        string
 	Payload            json.RawMessage
 	MaxAttempts        int

@@ -4,10 +4,10 @@
 package repository_test
 
 import (
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/website/repository"
 )
 
@@ -23,7 +23,7 @@ func TestWebsiteAcceptancePersistenceKeys(t *testing.T) {
 	if page.Namespace != repository.SnapshotNamespace || page.ScopeType != "global" || page.ScopeID != "global" || page.RecordKey != "page/abcdef12-3456-4abc-8def-1234567890ab" {
 		t.Fatalf("page key = %#v", page)
 	}
-	for _, key := range []core.ModuleDataKey{receipt, templateReceipt} {
+	for _, key := range []recorddata.RecordKey{receipt, templateReceipt} {
 		if key.ScopeType != "global" || key.ScopeID != "global" || strings.Contains(key.RecordKey, idempotencyKey) || len(key.RecordKey) != len(strings.Split(key.RecordKey, "/")[0])+1+64 {
 			t.Fatalf("idempotency receipt must be globally scoped and opaque: %#v", key)
 		}

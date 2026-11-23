@@ -33,7 +33,8 @@ type ServiceConfig struct {
 	MaxWorkflowTasks    int
 	MaxChildrenPerTask  int
 	WorkflowRetention   time.Duration
-	Workers             *WorkerCatalog
+	TaskClasses         []string
+	Executor            OperationExecutor
 }
 
 // Service owns the live Coordinator instance, scoped workflow clients, safe
@@ -67,9 +68,10 @@ func NewService(config ServiceConfig) (*Service, error) {
 		config.MaxChildrenPerTask < 0 || config.MaxChildrenPerTask > 256 || config.WorkflowRetention <= 0 || config.WorkflowRetention > 365*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	if config.Workers != nil && len(config.Workers.workers) == 0 {
+	if len(config.TaskClasses) > 0 && isNilInterface(config.Executor) {
 		return nil, ErrInvalid
 	}
+	config.TaskClasses = append([]string(nil), config.TaskClasses...)
 	return &Service{cfg: config, closeDone: make(chan struct{}), errors: make(chan error, 1)}, nil
 }
 
@@ -97,15 +99,16 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 	var executor *TaskExecutor
-	if s.cfg.Workers != nil {
+	if len(s.cfg.TaskClasses) > 0 {
 		executor, err = NewTaskExecutor(s.cfg.Store, TaskExecutorConfig{
 			Owner: instance.ID(), ConfigEpoch: instance.Epoch(),
+			TaskClasses: s.cfg.TaskClasses,
 			Concurrency: s.cfg.ExecutorConcurrency, LeaseDuration: s.cfg.TaskLease,
 			TaskTimeout: s.cfg.TaskTimeout, PollInterval: s.cfg.PollInterval,
 			RetryBase: s.cfg.RetryBase, RetryMaximum: s.cfg.RetryMaximum,
 			MaxWorkflowTasks: s.cfg.MaxWorkflowTasks, MaxChildrenPerTask: s.cfg.MaxChildrenPerTask,
 			WorkflowRetention: s.cfg.WorkflowRetention,
-		}, s.cfg.Workers.handlers())
+		}, s.cfg.Executor)
 		if err != nil {
 			s.abortStart()
 			return errors.Join(err, closeInstanceAfterStartFailure(instance, s.cfg.InstanceLease))
@@ -261,9 +264,9 @@ func (s *Service) Errors() <-chan error {
 	return s.errors
 }
 
-func (s *Service) NewWorkflowClient(componentID string) (*WorkflowClient, error) {
-	if s == nil || s.cfg.Workers == nil {
-		return nil, ErrInstanceNotReady
+func (s *Service) NewWorkflowClient(taskClass string) (*WorkflowClient, error) {
+	if s == nil || !containsTaskClass(s.cfg.TaskClasses, taskClass) {
+		return nil, ErrTaskClassUnavailable
 	}
 	// Engines construct their scoped workflow clients during composition,
 	// before the shared executor is activated. The instance lease already
@@ -275,9 +278,18 @@ func (s *Service) NewWorkflowClient(componentID string) (*WorkflowClient, error)
 	if instance == nil || closing || failed || !instance.Ready() {
 		return nil, ErrInstanceNotReady
 	}
-	return NewWorkflowClient(WorkflowClientConfig{Store: s.cfg.Store, Workers: s.cfg.Workers,
-		OwnerEngineID: componentID, InstanceID: instance.ID(), ConfigEpoch: instance.Epoch(), MaxAttempts: s.cfg.MaxAttempts,
+	return NewWorkflowClient(WorkflowClientConfig{Store: s.cfg.Store, TaskClass: taskClass, TaskClasses: s.cfg.TaskClasses,
+		InstanceID: instance.ID(), ConfigEpoch: instance.Epoch(), MaxAttempts: s.cfg.MaxAttempts,
 		Retention: s.cfg.WorkflowRetention})
+}
+
+func containsTaskClass(classes []string, candidate string) bool {
+	for _, class := range classes {
+		if class == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // NewWorkflowControl is safe only behind an authenticated, separately

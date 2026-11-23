@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
@@ -18,20 +19,39 @@ const contentTestSnapshotID = "11111111-1111-4111-8111-111111111111"
 type contentTestContextKey struct{}
 
 type fakeContentProjectionWebsite struct {
-	snapshot websiteapi.Snapshot
-	model    websiteapi.ContentModel
-	page     websiteapi.PagePlacementProjection
-	features map[string]websiteapi.FeatureVersion
+	snapshot    websiteapi.Snapshot
+	snapshotErr error
+	model       websiteapi.ContentModel
+	page        websiteapi.PagePlacementProjection
+	features    map[string]websiteapi.FeatureVersion
 }
 
 func (fake *fakeContentProjectionWebsite) GetSnapshot(ctx context.Context, id string) (websiteapi.Snapshot, error) {
 	if err := contentTestTrustedContext(ctx); err != nil {
 		return websiteapi.Snapshot{}, err
 	}
+	if fake.snapshotErr != nil {
+		return websiteapi.Snapshot{}, fake.snapshotErr
+	}
 	if id != contentTestSnapshotID {
 		return websiteapi.Snapshot{}, errors.New("unexpected snapshot")
 	}
 	return fake.snapshot, nil
+}
+
+func TestContentProjectionProviderNamesSnapshotLookupFailureStage(t *testing.T) {
+	serviceCtx := context.WithValue(context.Background(), contentTestContextKey{}, "trusted")
+	want := websiteapi.ErrNotFound
+	fake := contentTestFixture()
+	fake.snapshotErr = want
+	provider, err := newContentProjectionProvider(fake, serviceCtx, "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.GetContentProjections(context.Background(), contentTestSnapshotID)
+	if !errors.Is(err, want) || err == nil || !strings.Contains(err.Error(), "load snapshot") {
+		t.Fatalf("projection error = %v, want load snapshot context and original cause", err)
+	}
 }
 
 func (fake *fakeContentProjectionWebsite) GetContentModel(ctx context.Context) (websiteapi.ContentModel, error) {

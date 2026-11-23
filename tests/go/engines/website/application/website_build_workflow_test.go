@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"reflect"
 	"sort"
 	"strings"
@@ -111,6 +112,65 @@ type buildCatalogFake struct {
 	locales  []string
 }
 
+type buildContentProjectionResolverFake struct {
+	wantSnapshotID string
+	gotSnapshotID  string
+	projection     websiteapp.ContentBuildProjection
+}
+
+func (f *buildContentProjectionResolverFake) ResolveContentBuildProjection(_ context.Context, pageSnapshotID, _ string) (websiteapp.ContentBuildProjection, error) {
+	f.gotSnapshotID = pageSnapshotID
+	if pageSnapshotID != f.wantSnapshotID {
+		return websiteapp.ContentBuildProjection{}, errors.New("unexpected page snapshot ID")
+	}
+	return f.projection, nil
+}
+
+func TestModuleBuildInputResolverUsesPageSnapshotIDForContentProjection(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := service.SaveContentModel(ctx, websiteapi.SaveContentModelRequest{
+		ExpectedRevision: 0, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	featurePayload, err := json.Marshal(map[string]any{
+		"record_type": "feature_version", "manifest": json.RawMessage(`{}`), "files": map[string]string{"index.html": strings.Repeat("a", 64)},
+		"digest": strings.Repeat("b", 64), "state": "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.records[websiterepo.FeatureVersionKey("feature", "1.0.0")] = recorddata.Record{Payload: featurePayload, PayloadVersion: 1}
+	projection := &buildContentProjectionResolverFake{
+		wantSnapshotID: snapshotA,
+		projection:     websiteapp.ContentBuildProjection{PublicationRevision: 1, SelectionDigest: strings.Repeat("c", 64)},
+	}
+	resolver, err := websiteapp.NewModuleBuildInputResolver(store, projection, "sha256:"+strings.Repeat("d", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := websiteapi.Snapshot{
+		ID: snapshotA, PageID: pageA, Revision: 1, Digest: buildSnapshotDigest, State: "ready",
+		FeaturePins: map[string]string{"feature": "1.0.0"},
+		Payload:     &websiteapi.SnapshotPayload{Config: json.RawMessage(`{"formatVersion":1}`), Metadata: json.RawMessage(`{}`)},
+	}
+	if _, err := resolver.ResolveBuildInput(ctx, snapshot, buildLocale, 1); err != nil {
+		t.Fatalf("ResolveBuildInput(): %v", err)
+	}
+	if projection.gotSnapshotID != snapshot.ID || projection.gotSnapshotID == snapshot.PageID {
+		t.Fatalf("Content projection snapshot ID = %q, want page snapshot %q (page ID %q)", projection.gotSnapshotID, snapshot.ID, snapshot.PageID)
+	}
+	if !model.VerifyDigest() {
+		t.Fatal("test fixture content model digest is invalid")
+	}
+}
+
 func (f *buildCatalogFake) LocaleCatalogRevision(_ context.Context, locale string) (int64, error) {
 	f.locales = append(f.locales, locale)
 	if f.err != nil {
@@ -163,12 +223,12 @@ func buildTaskEnvelope(inputDigest string) json.RawMessage {
 func buildValidTaskResult(inputDigest string) core.TaskResult {
 	return core.TaskResult{
 		TaskID: uuid.MustParse(buildPrerenderText), WorkflowID: uuid.MustParse(buildWorkflowIDText),
-		Worker: &core.WorkerRef{ComponentID: "worker.prerender", OperationID: "render-page", ContractVersion: 1},
-		State:  "succeeded", Result: buildTaskEnvelope(inputDigest),
+		Operation: &core.OperationRef{ClassID: "worker.prerender", ID: "render-page", Version: 1},
+		State:     "succeeded", Result: buildTaskEnvelope(inputDigest),
 	}
 }
 
-func buildRecordForJob(t *testing.T, store *memoryStore, jobID string) (core.ModuleDataRecord, map[string]json.RawMessage) {
+func buildRecordForJob(t *testing.T, store *memoryStore, jobID string) (recorddata.Record, map[string]json.RawMessage) {
 	t.Helper()
 	record, err := store.Get(context.Background(), websiterepo.BuildKey(jobID))
 	if err != nil {
@@ -201,7 +261,7 @@ var buildRecordFieldsExpected = map[string]bool{
 	"created_at": true, "updated_at": true,
 }
 
-func buildIndex(t *testing.T, record core.ModuleDataRecord) map[string]any {
+func buildIndex(t *testing.T, record recorddata.Record) map[string]any {
 	t.Helper()
 	var index map[string]any
 	if err := json.Unmarshal(record.IndexData, &index); err != nil {
@@ -239,7 +299,7 @@ type buildStateRecordingStore struct {
 	states []string
 }
 
-func (s *buildStateRecordingStore) Batch(ctx context.Context, mutations []core.ModuleDataMutation) error {
+func (s *buildStateRecordingStore) Batch(ctx context.Context, mutations []recorddata.RecordMutation) error {
 	for _, mutation := range mutations {
 		if mutation.Key.Namespace != "website/builds" || mutation.Value == nil || !strings.HasPrefix(mutation.Key.RecordKey, "build/") {
 			continue

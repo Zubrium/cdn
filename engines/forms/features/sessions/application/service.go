@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"crypto/rand"
@@ -18,7 +20,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	schemamodel "github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 	"github.com/Zubrium/cdn/engines/forms/features/sessions/model"
 	"github.com/Zubrium/cdn/engines/forms/features/sessions/repository"
@@ -41,8 +42,8 @@ type Submissions interface {
 }
 
 type Files interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	DeleteFile(context.Context, core.Session, string, int64) error
+	StatFile(context.Context, recorddata.AuthorizationSubject, string) (recorddata.File, error)
+	DeleteFile(context.Context, recorddata.AuthorizationSubject, string, int64) error
 }
 
 type Service struct {
@@ -50,14 +51,14 @@ type Service struct {
 	schemas     Schemas
 	submissions Submissions
 	files       Files
-	fileSession core.Session
+	fileSession recorddata.AuthorizationSubject
 	ttl         time.Duration
 	pageSize    int
 }
 
-func New(repo *repository.Repository, schemas Schemas, submissions Submissions, files Files, fileSession core.Session, ttl time.Duration, pageSize int) (*Service, error) {
+func New(repo *repository.Repository, schemas Schemas, submissions Submissions, files Files, fileSession recorddata.AuthorizationSubject, ttl time.Duration, pageSize int) (*Service, error) {
 	if repo == nil || schemas == nil || submissions == nil || files == nil || ttl < time.Minute || ttl > 24*time.Hour || pageSize < 1 || pageSize > 1000 {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	return &Service{repository: repo, schemas: schemas, submissions: submissions, files: files, fileSession: fileSession, ttl: ttl, pageSize: pageSize}, nil
 }
@@ -141,22 +142,22 @@ type Receipt struct {
 
 func (service *Service) Create(ctx context.Context, binding Binding) (Credential, error) {
 	if service == nil || ctx == nil || !validBinding(binding) {
-		return Credential{}, core.ErrModuleDataInvalid
+		return Credential{}, recorddata.ErrRecordInvalid
 	}
 	schema, _, err := service.currentSchema(ctx, binding)
 	if err != nil {
 		return Credential{}, err
 	}
 	if _, err := schemamodel.ParseFieldDefinitions(schema.Fields); err != nil {
-		return Credential{}, core.ErrModuleDataUnavailable
+		return Credential{}, recorddata.ErrRecordUnavailable
 	}
 	token, tokenHash, err := newToken()
 	if err != nil {
-		return Credential{}, core.ErrModuleDataUnavailable
+		return Credential{}, recorddata.ErrRecordUnavailable
 	}
 	id, err := newUUID()
 	if err != nil {
-		return Credential{}, core.ErrModuleDataUnavailable
+		return Credential{}, recorddata.ErrRecordUnavailable
 	}
 	now := time.Now().UTC()
 	entry := model.Session{ID: id, FormID: binding.FormID, SchemaVersion: binding.SchemaVersion,
@@ -180,7 +181,7 @@ func (service *Service) Get(ctx context.Context, binding Binding, token string) 
 		return view(stored.Session, nil), nil
 	}
 	if _, err := schemamodel.ParseFieldDefinitions(schema.Fields); err != nil {
-		return SessionView{}, core.ErrModuleDataUnavailable
+		return SessionView{}, recorddata.ErrRecordUnavailable
 	}
 	return view(stored.Session, schema.Fields), nil
 }
@@ -188,14 +189,14 @@ func (service *Service) Get(ctx context.Context, binding Binding, token string) 
 func (service *Service) BeginUpload(ctx context.Context, input BeginUploadInput) (UploadReservation, error) {
 	if service == nil || ctx == nil || !validBinding(input.Binding) || !validToken(input.Token) || !validIdentifier(input.FieldID) ||
 		!validIdempotencyKey(input.IdempotencyKey) || input.DeclaredSize < -1 || input.RouteMaxBytes < 1 || !validGroup(input.AccessGroup) {
-		return UploadReservation{}, core.ErrModuleDataInvalid
+		return UploadReservation{}, recorddata.ErrRecordInvalid
 	}
 	mediaType, err := normalizedMediaType(input.ContentType)
 	if err != nil {
-		return UploadReservation{}, core.ErrModuleDataInvalid
+		return UploadReservation{}, recorddata.ErrRecordInvalid
 	}
 	if !containsMediaType(input.RouteContentTypes, mediaType) {
-		return UploadReservation{}, core.ErrModuleDataInvalid
+		return UploadReservation{}, recorddata.ErrRecordInvalid
 	}
 	tokenHash := digest(input.Token)
 	keyHash := digest(input.IdempotencyKey)
@@ -205,25 +206,25 @@ func (service *Service) BeginUpload(ctx context.Context, input BeginUploadInput)
 			return UploadReservation{}, err
 		}
 		if stored.Session.State != model.StateActive {
-			return UploadReservation{}, core.ErrModuleDataConflict
+			return UploadReservation{}, recorddata.ErrRecordConflict
 		}
 		definitions, err := schemamodel.ParseFieldDefinitions(schema.Fields)
 		if err != nil {
-			return UploadReservation{}, core.ErrModuleDataUnavailable
+			return UploadReservation{}, recorddata.ErrRecordUnavailable
 		}
 		field, exists := definitions[input.FieldID]
 		if !exists || field.Type != "file" || !containsMediaType(field.AllowedContentTypes, mediaType) {
-			return UploadReservation{}, core.ErrModuleDataInvalid
+			return UploadReservation{}, recorddata.ErrRecordInvalid
 		}
 		maxBytes := min(field.MaxFileBytes, input.RouteMaxBytes)
 		if input.DeclaredSize > maxBytes {
-			return UploadReservation{}, core.ErrModuleDataLimitExceeded
+			return UploadReservation{}, recorddata.ErrRecordLimit
 		}
 		for _, upload := range stored.Session.Uploads {
 			if upload.IdempotencyHash == keyHash {
 				declaredSizeConflict := upload.DeclaredSize >= 0 && input.DeclaredSize >= 0 && upload.DeclaredSize != input.DeclaredSize
 				if upload.Deleting || upload.FieldID != input.FieldID || upload.ContentType != mediaType || declaredSizeConflict || upload.MaxBytes != maxBytes || upload.AccessGroup != input.AccessGroup {
-					return UploadReservation{}, core.ErrModuleDataConflict
+					return UploadReservation{}, recorddata.ErrRecordConflict
 				}
 				return reservation(upload), nil
 			}
@@ -235,17 +236,17 @@ func (service *Service) BeginUpload(ctx context.Context, input BeginUploadInput)
 			}
 		}
 		if count >= field.MaxFiles || len(stored.Session.Uploads) >= model.MaxUploadsPerSession {
-			return UploadReservation{}, core.ErrModuleDataLimitExceeded
+			return UploadReservation{}, recorddata.ErrRecordLimit
 		}
 		id, err := newUUID()
 		if err != nil {
-			return UploadReservation{}, core.ErrModuleDataUnavailable
+			return UploadReservation{}, recorddata.ErrRecordUnavailable
 		}
 		upload := model.Upload{ID: id, FieldID: input.FieldID, IdempotencyHash: keyHash, ContentType: mediaType,
 			DeclaredSize: input.DeclaredSize, MaxBytes: maxBytes, AccessGroup: input.AccessGroup}
 		stored.Session.Uploads = append(stored.Session.Uploads, upload)
 		updated, err := service.repository.Update(ctx, stored)
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			continue
 		}
 		if err != nil {
@@ -253,13 +254,13 @@ func (service *Service) BeginUpload(ctx context.Context, input BeginUploadInput)
 		}
 		return reservation(updated.Session.Uploads[len(updated.Session.Uploads)-1]), nil
 	}
-	return UploadReservation{}, core.ErrModuleDataConflict
+	return UploadReservation{}, recorddata.ErrRecordConflict
 }
 
 func (service *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput) (CompletedUpload, error) {
 	if service == nil || ctx == nil || !validBinding(input.Binding) || !validToken(input.Token) || !validIdentifier(input.ReservationID) ||
 		!validIdentifier(input.FileID) || !validSHA256(input.SHA256) || input.Size < 0 || !validGroup(input.AccessGroup) {
-		return CompletedUpload{}, core.ErrModuleDataInvalid
+		return CompletedUpload{}, recorddata.ErrRecordInvalid
 	}
 	tokenHash := digest(input.Token)
 	for attempt := 0; attempt < 5; attempt++ {
@@ -269,18 +270,18 @@ func (service *Service) CompleteUpload(ctx context.Context, input CompleteUpload
 		}
 		index := findUpload(stored.Session.Uploads, input.ReservationID)
 		if index < 0 {
-			return CompletedUpload{}, core.ErrModuleDataNotFound
+			return CompletedUpload{}, recorddata.ErrRecordNotFound
 		}
 		upload := stored.Session.Uploads[index]
 		if upload.Deleting {
-			return CompletedUpload{}, core.ErrModuleDataConflict
+			return CompletedUpload{}, recorddata.ErrRecordConflict
 		}
 		if upload.AccessGroup != input.AccessGroup || upload.ContentType != strings.ToLower(input.ContentType) || upload.Size != 0 && upload.Size != input.Size {
-			return CompletedUpload{}, core.ErrModuleDataConflict
+			return CompletedUpload{}, recorddata.ErrRecordConflict
 		}
 		if upload.Completed {
 			if upload.FileID != input.FileID || upload.Size != input.Size || upload.SHA256 != input.SHA256 {
-				return CompletedUpload{}, core.ErrModuleDataConflict
+				return CompletedUpload{}, recorddata.ErrRecordConflict
 			}
 			return CompletedUpload{AttachmentID: upload.ID, FieldID: upload.FieldID}, nil
 		}
@@ -291,33 +292,33 @@ func (service *Service) CompleteUpload(ctx context.Context, input CompleteUpload
 			return CompletedUpload{}, ErrExpired
 		}
 		if upload.DeclaredSize >= 0 && upload.DeclaredSize != input.Size || input.Size > upload.MaxBytes {
-			return CompletedUpload{}, core.ErrModuleDataLimitExceeded
+			return CompletedUpload{}, recorddata.ErrRecordLimit
 		}
 		definitions, err := schemamodel.ParseFieldDefinitions(schema.Fields)
 		if err != nil {
-			return CompletedUpload{}, core.ErrModuleDataUnavailable
+			return CompletedUpload{}, recorddata.ErrRecordUnavailable
 		}
 		field, exists := definitions[upload.FieldID]
 		if !exists || field.Type != "file" || input.Size > field.MaxFileBytes || !containsMediaType(field.AllowedContentTypes, upload.ContentType) {
-			return CompletedUpload{}, core.ErrModuleDataConflict
+			return CompletedUpload{}, recorddata.ErrRecordConflict
 		}
 		file, err := service.files.StatFile(ctx, service.fileSession, input.FileID)
 		if err != nil || file.ID != input.FileID || file.Size != input.Size || file.SHA256 != input.SHA256 || strings.ToLower(file.ContentType) != upload.ContentType ||
 			file.Revision < 1 || !hasGroup(file.Groups, upload.AccessGroup) {
-			if errors.Is(err, core.ErrFileNotFound) {
-				return CompletedUpload{}, core.ErrModuleDataNotFound
+			if errors.Is(err, recorddata.ErrFileNotFound) {
+				return CompletedUpload{}, recorddata.ErrRecordNotFound
 			}
 			if err != nil {
 				return CompletedUpload{}, mapStoreError(err)
 			}
-			return CompletedUpload{}, core.ErrModuleDataInvalid
+			return CompletedUpload{}, recorddata.ErrRecordInvalid
 		}
 		stored.Session.Uploads[index].FileID = input.FileID
 		stored.Session.Uploads[index].SHA256 = input.SHA256
 		stored.Session.Uploads[index].Size = input.Size
 		stored.Session.Uploads[index].Completed = true
 		_, err = service.repository.Update(ctx, stored)
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			continue
 		}
 		if err != nil {
@@ -325,12 +326,12 @@ func (service *Service) CompleteUpload(ctx context.Context, input CompleteUpload
 		}
 		return CompletedUpload{AttachmentID: upload.ID, FieldID: upload.FieldID}, nil
 	}
-	return CompletedUpload{}, core.ErrModuleDataConflict
+	return CompletedUpload{}, recorddata.ErrRecordConflict
 }
 
 func (service *Service) AbortUpload(ctx context.Context, input AbortUploadInput) error {
 	if service == nil || ctx == nil || !validBinding(input.Binding) || !validToken(input.Token) || !validIdentifier(input.ReservationID) {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	tokenHash := digest(input.Token)
 	for attempt := 0; attempt < 8; attempt++ {
@@ -339,7 +340,7 @@ func (service *Service) AbortUpload(ctx context.Context, input AbortUploadInput)
 			return err
 		}
 		if stored.Session.State != model.StateActive {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 		index := findUpload(stored.Session.Uploads, input.ReservationID)
 		if index < 0 {
@@ -348,7 +349,7 @@ func (service *Service) AbortUpload(ctx context.Context, input AbortUploadInput)
 		upload := stored.Session.Uploads[index]
 		if upload.Completed && !upload.Deleting {
 			stored.Session.Uploads[index].Deleting = true
-			if _, err := service.repository.Update(ctx, stored); errors.Is(err, core.ErrModuleDataConflict) {
+			if _, err := service.repository.Update(ctx, stored); errors.Is(err, recorddata.ErrRecordConflict) {
 				continue
 			} else if err != nil {
 				return mapStoreError(err)
@@ -362,22 +363,22 @@ func (service *Service) AbortUpload(ctx context.Context, input AbortUploadInput)
 		}
 		stored.Session.Uploads = append(stored.Session.Uploads[:index], stored.Session.Uploads[index+1:]...)
 		_, err = service.repository.Update(ctx, stored)
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			continue
 		}
 		return mapStoreError(err)
 	}
-	return core.ErrModuleDataConflict
+	return recorddata.ErrRecordConflict
 }
 
 func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt, error) {
 	if service == nil || ctx == nil || !validBinding(input.Binding) || !validToken(input.Token) || !validIdempotencyKey(input.IdempotencyKey) || input.Values == nil {
-		return Receipt{}, core.ErrModuleDataInvalid
+		return Receipt{}, recorddata.ErrRecordInvalid
 	}
 	tokenHash, keyHash := digest(input.Token), digest(input.IdempotencyKey)
 	fingerprint, fingerprintErr := fingerprintValues(input.Values)
 	if fingerprintErr != nil {
-		return Receipt{}, core.ErrModuleDataInvalid
+		return Receipt{}, recorddata.ErrRecordInvalid
 	}
 	for attempt := 0; attempt < 8; attempt++ {
 		stored, _, err := service.loadByHash(ctx, input.Binding, tokenHash, true)
@@ -386,7 +387,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt,
 		}
 		if stored.Session.State == model.StateSubmitted || stored.Session.State == model.StateSubmitting {
 			if stored.Session.SubmissionKeyHash != keyHash || stored.Session.SubmissionFingerprint != fingerprint {
-				return Receipt{}, core.ErrModuleDataConflict
+				return Receipt{}, recorddata.ErrRecordConflict
 			}
 			if stored.Session.State == model.StateSubmitting {
 				stored, err = service.finishSubmission(ctx, tokenHash, stored)
@@ -416,7 +417,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt,
 		stored.Session.SubmissionCreatedAt = time.Now().UTC()
 		stored.Session.UsedUploadIDs = append([]string(nil), usedUploads...)
 		reserved, err := service.repository.Update(ctx, stored)
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			continue
 		}
 		if err != nil {
@@ -432,7 +433,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (Receipt,
 		}
 		return Receipt{ID: submission.ID, CreatedAt: submission.CreatedAt}, nil
 	}
-	return Receipt{}, core.ErrModuleDataConflict
+	return Receipt{}, recorddata.ErrRecordConflict
 }
 
 // finishSubmission idempotently materializes the answer reserved in the
@@ -444,7 +445,7 @@ func (service *Service) finishSubmission(ctx context.Context, tokenHash string, 
 			return stored, nil
 		}
 		if stored.Session.State != model.StateSubmitting {
-			return model.Stored{}, core.ErrModuleDataConflict
+			return model.Stored{}, recorddata.ErrRecordConflict
 		}
 		schema, _, err := service.schemas.Get(ctx, stored.Session.FormID)
 		if err != nil {
@@ -460,14 +461,14 @@ func (service *Service) finishSubmission(ctx context.Context, tokenHash string, 
 			return model.Stored{}, mapStoreError(err)
 		}
 		if submission.ID != stored.Session.SubmissionID || submission.FormID != stored.Session.FormID || submission.SchemaVersion != stored.Session.SchemaVersion {
-			return model.Stored{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, recorddata.ErrRecordUnavailable
 		}
 		stored.Session.State = model.StateSubmitted
 		updated, err := service.repository.Update(ctx, stored)
 		if err == nil {
 			return updated, nil
 		}
-		if !errors.Is(err, core.ErrModuleDataConflict) {
+		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return model.Stored{}, mapStoreError(err)
 		}
 		stored, err = service.repository.Get(ctx, tokenHash)
@@ -475,12 +476,12 @@ func (service *Service) finishSubmission(ctx context.Context, tokenHash string, 
 			return model.Stored{}, mapStoreError(err)
 		}
 	}
-	return model.Stored{}, core.ErrModuleDataConflict
+	return model.Stored{}, recorddata.ErrRecordConflict
 }
 
 func (service *Service) Cancel(ctx context.Context, binding Binding, token string) error {
 	if service == nil || ctx == nil || !validBinding(binding) || !validToken(token) {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	for attempt := 0; attempt < 5; attempt++ {
 		stored, _, err := service.loadByHash(ctx, binding, digest(token), false)
@@ -488,14 +489,14 @@ func (service *Service) Cancel(ctx context.Context, binding Binding, token strin
 			return err
 		}
 		if stored.Session.State == model.StateSubmitted || stored.Session.State == model.StateSubmitting {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 		if stored.Session.State == model.StateCancelled {
 			return service.cleanupSession(ctx, stored)
 		}
 		stored.Session.State = model.StateCancelled
 		updated, err := service.repository.Update(ctx, stored)
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
 			continue
 		}
 		if err != nil {
@@ -503,12 +504,12 @@ func (service *Service) Cancel(ctx context.Context, binding Binding, token strin
 		}
 		return service.cleanupSession(ctx, updated)
 	}
-	return core.ErrModuleDataConflict
+	return recorddata.ErrRecordConflict
 }
 
 func (service *Service) CancelFormSessions(ctx context.Context, formID string, currentVersion int64) error {
 	if service == nil || ctx == nil || !validIdentifier(formID) || currentVersion < 1 {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	after := ""
 	for {
@@ -522,7 +523,7 @@ func (service *Service) CancelFormSessions(ctx context.Context, formID string, c
 			}
 			item.Session.State = model.StateCancelled
 			updated, err := service.repository.Update(ctx, item)
-			if errors.Is(err, core.ErrModuleDataConflict) {
+			if errors.Is(err, recorddata.ErrRecordConflict) {
 				continue
 			}
 			if err != nil {
@@ -543,7 +544,7 @@ func (service *Service) CancelFormSessions(ctx context.Context, formID string, c
 // keeps only the files referenced by its immutable submission.
 func (service *Service) Cleanup(ctx context.Context) error {
 	if service == nil || ctx == nil {
-		return core.ErrModuleDataUnavailable
+		return recorddata.ErrRecordUnavailable
 	}
 	after := ""
 	for {
@@ -575,7 +576,7 @@ func (service *Service) Cleanup(ctx context.Context) error {
 					return err
 				}
 				item, err = service.repository.Get(ctx, tokenHashFromRecord(item))
-				if errors.Is(err, core.ErrModuleDataNotFound) {
+				if errors.Is(err, recorddata.ErrRecordNotFound) {
 					continue
 				}
 				if err != nil {
@@ -585,7 +586,7 @@ func (service *Service) Cleanup(ctx context.Context) error {
 					continue
 				}
 				schema, _, err := service.schemas.Get(ctx, item.Session.FormID)
-				if errors.Is(err, core.ErrModuleDataNotFound) || (err == nil && schema.Version != item.Session.SchemaVersion) {
+				if errors.Is(err, recorddata.ErrRecordNotFound) || (err == nil && schema.Version != item.Session.SchemaVersion) {
 					if err := service.cancelActiveSession(ctx, item); err != nil {
 						return err
 					}
@@ -617,7 +618,7 @@ func (service *Service) cancelActiveSession(ctx context.Context, stored model.St
 				}
 				return nil
 			default:
-				return core.ErrModuleDataUnavailable
+				return recorddata.ErrRecordUnavailable
 			}
 		}
 		stored.Session.State = model.StateCancelled
@@ -625,18 +626,18 @@ func (service *Service) cancelActiveSession(ctx context.Context, stored model.St
 		if err == nil {
 			return service.cleanupSession(ctx, updated)
 		}
-		if !errors.Is(err, core.ErrModuleDataConflict) {
+		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return mapStoreError(err)
 		}
 		stored, err = service.repository.Get(ctx, tokenHash)
 		if err != nil {
-			if errors.Is(err, core.ErrModuleDataNotFound) {
+			if errors.Is(err, recorddata.ErrRecordNotFound) {
 				return nil
 			}
 			return mapStoreError(err)
 		}
 	}
-	return core.ErrModuleDataConflict
+	return recorddata.ErrRecordConflict
 }
 
 func (service *Service) expireActiveSession(ctx context.Context, stored model.Stored) error {
@@ -656,7 +657,7 @@ func (service *Service) cleanupDeletingUploads(ctx context.Context, tokenHash st
 		}
 		for attempt := 0; attempt < 8; attempt++ {
 			current, err := service.repository.Get(ctx, tokenHash)
-			if errors.Is(err, core.ErrModuleDataNotFound) {
+			if errors.Is(err, recorddata.ErrRecordNotFound) {
 				return nil
 			}
 			if err != nil {
@@ -674,7 +675,7 @@ func (service *Service) cleanupDeletingUploads(ctx context.Context, tokenHash st
 			if err == nil {
 				break
 			}
-			if !errors.Is(err, core.ErrModuleDataConflict) {
+			if !errors.Is(err, recorddata.ErrRecordConflict) {
 				return mapStoreError(err)
 			}
 		}
@@ -696,18 +697,18 @@ func (service *Service) fingerprintAndValidate(ctx context.Context, input Submit
 		return "", nil, nil, nil, err
 	}
 	if stored.Session.State != model.StateActive {
-		return "", nil, nil, nil, core.ErrModuleDataConflict
+		return "", nil, nil, nil, recorddata.ErrRecordConflict
 	}
 	definitions, err := schemamodel.ParseFieldDefinitions(schema.Fields)
 	if err != nil {
-		return "", nil, nil, nil, core.ErrModuleDataUnavailable
+		return "", nil, nil, nil, recorddata.ErrRecordUnavailable
 	}
 	if len(input.Values) > len(definitions) {
-		return "", nil, nil, nil, core.ErrModuleDataInvalid
+		return "", nil, nil, nil, recorddata.ErrRecordInvalid
 	}
 	for name := range input.Values {
 		if _, exists := definitions[name]; !exists {
-			return "", nil, nil, nil, core.ErrModuleDataInvalid
+			return "", nil, nil, nil, recorddata.ErrRecordInvalid
 		}
 	}
 	normalized := make(map[string]any, len(input.Values))
@@ -724,7 +725,7 @@ func (service *Service) fingerprintAndValidate(ctx context.Context, input Submit
 		value, exists := input.Values[name]
 		if !exists || value == nil {
 			if field.Required {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			continue
 		}
@@ -732,63 +733,63 @@ func (service *Service) fingerprintAndValidate(ctx context.Context, input Submit
 		case "text", "email":
 			text, ok := value.(string)
 			if !ok || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') || (field.MinLength != nil && len([]rune(text)) < *field.MinLength) || (field.MaxLength != nil && len([]rune(text)) > *field.MaxLength) {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			if field.Type == "email" {
 				address, err := mail.ParseAddress(text)
 				if err != nil || address.Address != text {
-					return "", nil, nil, nil, core.ErrModuleDataInvalid
+					return "", nil, nil, nil, recorddata.ErrRecordInvalid
 				}
 			}
 			if field.Pattern != "" && !regexp.MustCompile(field.Pattern).MatchString(text) {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			normalized[name] = text
 		case "number":
 			number, ok := numericValue(value)
 			if !ok || (field.Minimum != nil && number < *field.Minimum) || (field.Maximum != nil && number > *field.Maximum) {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			normalized[name] = number
 		case "boolean":
 			if _, ok := value.(bool); !ok {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			normalized[name] = value
 		case "select":
 			selection, ok := value.(string)
 			if !ok || !containsString(field.Options, selection) {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			normalized[name] = selection
 		case "file":
 			ids, ok := attachmentIDs(value)
 			if !ok || (field.Required && len(ids) == 0) || len(ids) > field.MaxFiles {
-				return "", nil, nil, nil, core.ErrModuleDataInvalid
+				return "", nil, nil, nil, recorddata.ErrRecordInvalid
 			}
 			storedIDs := make([]string, 0, len(ids))
 			for _, id := range ids {
 				if _, duplicate := used[id]; duplicate {
-					return "", nil, nil, nil, core.ErrModuleDataInvalid
+					return "", nil, nil, nil, recorddata.ErrRecordInvalid
 				}
 				used[id] = struct{}{}
 				index := findUpload(stored.Session.Uploads, id)
 				if index < 0 {
-					return "", nil, nil, nil, core.ErrModuleDataInvalid
+					return "", nil, nil, nil, recorddata.ErrRecordInvalid
 				}
 				upload := stored.Session.Uploads[index]
 				if !upload.Completed || upload.Deleting || upload.FieldID != name || upload.Size > field.MaxFileBytes || !containsMediaType(field.AllowedContentTypes, upload.ContentType) {
-					return "", nil, nil, nil, core.ErrModuleDataInvalid
+					return "", nil, nil, nil, recorddata.ErrRecordInvalid
 				}
 				file, err := service.files.StatFile(ctx, service.fileSession, upload.FileID)
 				if err != nil || file.ID != upload.FileID || file.Size != upload.Size || file.SHA256 != upload.SHA256 || !hasGroup(file.Groups, upload.AccessGroup) {
-					if errors.Is(err, core.ErrFileNotFound) {
-						return "", nil, nil, nil, core.ErrModuleDataNotFound
+					if errors.Is(err, recorddata.ErrFileNotFound) {
+						return "", nil, nil, nil, recorddata.ErrRecordNotFound
 					}
 					if err != nil {
 						return "", nil, nil, nil, mapStoreError(err)
 					}
-					return "", nil, nil, nil, core.ErrModuleDataInvalid
+					return "", nil, nil, nil, recorddata.ErrRecordInvalid
 				}
 				storedIDs = append(storedIDs, upload.FileID)
 				fileIDs = append(fileIDs, upload.FileID)
@@ -796,12 +797,12 @@ func (service *Service) fingerprintAndValidate(ctx context.Context, input Submit
 			}
 			normalized[name] = storedIDs
 		default:
-			return "", nil, nil, nil, core.ErrModuleDataInvalid
+			return "", nil, nil, nil, recorddata.ErrRecordInvalid
 		}
 	}
 	fingerprint, err := fingerprintValues(input.Values)
 	if err != nil {
-		return "", nil, nil, nil, core.ErrModuleDataInvalid
+		return "", nil, nil, nil, recorddata.ErrRecordInvalid
 	}
 	return fingerprint, normalized, usedUploads, fileIDs, nil
 }
@@ -816,7 +817,7 @@ func fingerprintValues(values map[string]any) (string, error) {
 
 func (service *Service) load(ctx context.Context, binding Binding, token string, requireActive bool) (model.Stored, schemamodel.Schema, error) {
 	if !validBinding(binding) || !validToken(token) {
-		return model.Stored{}, schemamodel.Schema{}, core.ErrModuleDataInvalid
+		return model.Stored{}, schemamodel.Schema{}, recorddata.ErrRecordInvalid
 	}
 	return service.loadByHash(ctx, binding, digest(token), requireActive)
 }
@@ -824,7 +825,7 @@ func (service *Service) load(ctx context.Context, binding Binding, token string,
 func (service *Service) loadByHash(ctx context.Context, binding Binding, tokenHash string, requireActive bool) (model.Stored, schemamodel.Schema, error) {
 	for attempt := 0; attempt < 8; attempt++ {
 		stored, err := service.repository.Get(ctx, tokenHash)
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return model.Stored{}, schemamodel.Schema{}, ErrExpired
 		}
 		if err != nil {
@@ -865,13 +866,13 @@ func (service *Service) loadByHash(ctx context.Context, binding Binding, tokenHa
 			return stored, schemamodel.Schema{}, nil
 		}
 		if stored.Session.State != model.StateActive {
-			return model.Stored{}, schemamodel.Schema{}, core.ErrModuleDataUnavailable
+			return model.Stored{}, schemamodel.Schema{}, recorddata.ErrRecordUnavailable
 		}
 		schema, _, err := service.currentSchema(ctx, binding)
 		if err == nil {
 			return stored, schema, nil
 		}
-		if !errors.Is(err, core.ErrModuleDataNotFound) && !errors.Is(err, ErrMismatch) {
+		if !errors.Is(err, recorddata.ErrRecordNotFound) && !errors.Is(err, ErrMismatch) {
 			return model.Stored{}, schemamodel.Schema{}, mapStoreError(err)
 		}
 		if cancelErr := service.cancelActiveSession(ctx, stored); cancelErr != nil {
@@ -879,7 +880,7 @@ func (service *Service) loadByHash(ctx context.Context, binding Binding, tokenHa
 		}
 		return model.Stored{}, schemamodel.Schema{}, ErrExpired
 	}
-	return model.Stored{}, schemamodel.Schema{}, core.ErrModuleDataConflict
+	return model.Stored{}, schemamodel.Schema{}, recorddata.ErrRecordConflict
 }
 
 func (service *Service) currentSchema(ctx context.Context, binding Binding) (schemamodel.Schema, int64, error) {
@@ -896,7 +897,7 @@ func (service *Service) currentSchema(ctx context.Context, binding Binding) (sch
 func (service *Service) cleanupSession(ctx context.Context, stored model.Stored) error {
 	if stored.Session.State == model.StateActive {
 		if stored.Session.ExpiresAt.After(time.Now().UTC()) {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 		return service.cancelActiveSession(ctx, stored)
 	}
@@ -910,7 +911,7 @@ func (service *Service) cleanupSession(ctx context.Context, stored model.Stored)
 		}
 	}
 	if stored.Session.State != model.StateCancelled && stored.Session.State != model.StateSubmitted {
-		return core.ErrModuleDataConflict
+		return recorddata.ErrRecordConflict
 	}
 	used := make(map[string]struct{}, len(stored.Session.UsedUploadIDs))
 	for _, id := range stored.Session.UsedUploadIDs {
@@ -929,7 +930,7 @@ func (service *Service) cleanupSession(ctx context.Context, stored model.Stored)
 			return err
 		}
 	}
-	if err := service.repository.Delete(ctx, stored); err != nil && !errors.Is(err, core.ErrModuleDataNotFound) {
+	if err := service.repository.Delete(ctx, stored); err != nil && !errors.Is(err, recorddata.ErrRecordNotFound) {
 		return mapStoreError(err)
 	}
 	return nil
@@ -938,21 +939,21 @@ func (service *Service) cleanupSession(ctx context.Context, stored model.Stored)
 func (service *Service) deleteFile(ctx context.Context, id string) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		file, err := service.files.StatFile(ctx, service.fileSession, id)
-		if errors.Is(err, core.ErrFileNotFound) {
+		if errors.Is(err, recorddata.ErrFileNotFound) {
 			return nil
 		}
 		if err != nil {
 			return mapStoreError(err)
 		}
 		err = service.files.DeleteFile(ctx, service.fileSession, id, file.Revision)
-		if err == nil || errors.Is(err, core.ErrFileNotFound) {
+		if err == nil || errors.Is(err, recorddata.ErrFileNotFound) {
 			return nil
 		}
-		if !errors.Is(err, core.ErrRevisionConflict) {
+		if !errors.Is(err, recorddata.ErrFileRevisionConflict) {
 			return mapStoreError(err)
 		}
 	}
-	return core.ErrModuleDataConflict
+	return recorddata.ErrRecordConflict
 }
 
 func validBinding(binding Binding) bool {
@@ -1052,11 +1053,11 @@ func validGroup(value string) bool {
 
 func normalizedMediaType(value string) (string, error) {
 	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n") {
-		return "", core.ErrModuleDataInvalid
+		return "", recorddata.ErrRecordInvalid
 	}
 	mediaType, params, err := mime.ParseMediaType(value)
 	if err != nil || len(params) != 0 || strings.Contains(mediaType, "*") || schemamodel.IsActiveMediaType(mediaType) {
-		return "", core.ErrModuleDataInvalid
+		return "", recorddata.ErrRecordInvalid
 	}
 	return strings.ToLower(mediaType), nil
 }
@@ -1176,17 +1177,17 @@ func mapStoreError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrModuleDataNotFound):
-		return core.ErrModuleDataNotFound
-	case errors.Is(err, core.ErrModuleDataConflict):
-		return core.ErrModuleDataConflict
-	case errors.Is(err, core.ErrModuleDataInvalid):
-		return core.ErrModuleDataInvalid
-	case errors.Is(err, core.ErrModuleDataLimitExceeded):
-		return core.ErrModuleDataLimitExceeded
+	case errors.Is(err, recorddata.ErrRecordNotFound):
+		return recorddata.ErrRecordNotFound
+	case errors.Is(err, recorddata.ErrRecordConflict):
+		return recorddata.ErrRecordConflict
+	case errors.Is(err, recorddata.ErrRecordInvalid):
+		return recorddata.ErrRecordInvalid
+	case errors.Is(err, recorddata.ErrRecordLimit):
+		return recorddata.ErrRecordLimit
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	default:
-		return core.ErrModuleDataUnavailable
+		return recorddata.ErrRecordUnavailable
 	}
 }

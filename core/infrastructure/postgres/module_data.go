@@ -188,23 +188,8 @@ func BatchModuleData(ctx context.Context, pool *pgxpool.Pool, moduleID string, m
 	if len(mutations) > maxBatch {
 		return ErrModuleDataLimit
 	}
-	first := mutations[0].Key
-	seen := make(map[string]struct{}, len(mutations))
-	for _, mutation := range mutations {
-		if !validModuleDataKey(moduleID, mutation.Key) || mutation.ExpectedRevision < 0 ||
-			mutation.Key.Namespace != first.Namespace || mutation.Key.ScopeType != first.ScopeType || mutation.Key.ScopeID != first.ScopeID {
-			return errors.New("module data batch must use one valid scope")
-		}
-		if _, exists := seen[mutation.Key.RecordKey]; exists {
-			return errors.New("module data batch contains duplicate keys")
-		}
-		seen[mutation.Key.RecordKey] = struct{}{}
-		if mutation.Value == nil {
-			if mutation.ExpectedRevision <= 0 {
-				return errors.New("module data delete requires an expected revision")
-			}
-			continue
-		}
+	if err := validateModuleDataBatchKeys(moduleID, mutations); err != nil {
+		return err
 	}
 	if err := validateModuleDataBatchSize(mutations, maxBatch, maxBatchBytes, maxPayloadBytes, maxIndexBytes); err != nil {
 		return err
@@ -235,6 +220,28 @@ func BatchModuleData(ctx context.Context, pool *pgxpool.Pool, moduleID string, m
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func validateModuleDataBatchKeys(moduleID string, mutations []ModuleDataMutation) error {
+	if len(mutations) == 0 {
+		return errors.New("invalid module data batch")
+	}
+	first := mutations[0].Key
+	seen := make(map[ModuleDataKey]struct{}, len(mutations))
+	for _, mutation := range mutations {
+		key := mutation.Key
+		if !validModuleDataKey(moduleID, key) || mutation.ExpectedRevision < 0 || key.Namespace != first.Namespace {
+			return errors.New("module data batch must use one valid namespace")
+		}
+		if _, exists := seen[key]; exists {
+			return errors.New("module data batch contains duplicate scoped keys")
+		}
+		seen[key] = struct{}{}
+		if mutation.Value == nil && mutation.ExpectedRevision <= 0 {
+			return errors.New("module data delete requires an expected revision")
+		}
+	}
+	return nil
 }
 
 func validateModuleDataBatchSize(mutations []ModuleDataMutation, maxBatch, maxBatchBytes, maxPayloadBytes, maxIndexBytes int) error {

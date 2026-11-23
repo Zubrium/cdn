@@ -16,17 +16,17 @@ type UploadPart struct {
 }
 
 type Upload struct {
-	ID                 string           `json:"id"`
-	PrincipalID        string           `json:"principalId"`
+	ID                 string               `json:"id"`
+	PrincipalID        string               `json:"principalId"`
 	Input              pkg.BeginUploadInput `json:"input"`
-	InputHash          string           `json:"inputHash"`
-	IdempotencyKeyHash string           `json:"idempotencyKeyHash"`
-	Mode               string           `json:"mode"`
-	State              string           `json:"state"`
-	ExpectedParts      int              `json:"expectedParts"`
-	FileID             string           `json:"fileId,omitempty"`
-	CreatedAt          time.Time        `json:"createdAt"`
-	ExpiresAt          time.Time        `json:"expiresAt"`
+	InputHash          string               `json:"inputHash"`
+	IdempotencyKeyHash string               `json:"idempotencyKeyHash"`
+	Mode               string               `json:"mode"`
+	State              string               `json:"state"`
+	ExpectedParts      int                  `json:"expectedParts"`
+	FileID             string               `json:"fileId,omitempty"`
+	CreatedAt          time.Time            `json:"createdAt"`
+	ExpiresAt          time.Time            `json:"expiresAt"`
 }
 
 type IdempotencyRecord struct {

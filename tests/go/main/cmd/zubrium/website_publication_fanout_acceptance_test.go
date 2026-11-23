@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"strings"
 	"sync"
@@ -71,24 +72,24 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			}
 		})
 
-		if err := runtime.Registry.Register(websiteengine.ModuleDataDescriptor().ModuleID, websitePersistenceModule{}); err != nil {
+		if err := runtime.Registry.Register(websiteengine.RecordDescriptor().OwnerID); err != nil {
 			t.Fatalf("register Website module: %v", err)
 		}
-		if err := runtime.Registry.Register(routerengine.ModuleDataDescriptor().ModuleID, web021RouterModule{}); err != nil {
+		if err := runtime.Registry.Register(routerengine.RecordDescriptor().OwnerID); err != nil {
 			t.Fatalf("register Router module: %v", err)
 		}
-		if err := runtime.Registry.Register(publication.ModuleDataDescriptor().ModuleID, publication.Module{}); err != nil {
+		if err := runtime.Registry.Register(publication.ModuleDataDescriptor().OwnerID); err != nil {
 			t.Fatalf("register publication module: %v", err)
 		}
-		websiteData, err := runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+		websiteData, err := websiteAcceptanceRecordStore(t, runtime, websiteengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Website module data: %v", err)
 		}
-		routerData, err := runtime.RegisterDataModule(routerengine.ModuleDataDescriptor())
+		routerData, err := websiteAcceptanceRecordStore(t, runtime, routerengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Router module data: %v", err)
 		}
-		publicationData, err := runtime.RegisterDataModule(publication.ModuleDataDescriptor())
+		publicationData, err := websiteAcceptanceRecordStore(t, runtime, publication.ModuleDataDescriptor())
 		if err != nil {
 			t.Fatalf("register publication module data: %v", err)
 		}
@@ -101,13 +102,13 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			publicationOwned.deleteAll(t)
 		})
 
-		identity := runtime.EngineIdentity()
-		files := runtime.EngineFiles()
+		identity := runtime.Identity()
+		files := runtime.Files()
 		serviceSession, _, err := identity.Authenticate(ctx, credential)
 		if err != nil {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
-		trackedFiles := &web021TrackedFiles{EngineFilesCapability: files}
+		trackedFiles := &web021TrackedFiles{FilesCapability: files}
 		t.Cleanup(func() { trackedFiles.cleanup(t, serviceSession) })
 
 		base, err := websiteapp.NewService(websiteapp.Config{
@@ -128,7 +129,7 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			}
 		}
 		// This scenario owns the shared global model record for this disposable run.
-		owned.add(core.ModuleDataKey{Namespace: "website/content-models", ScopeType: "global", ScopeID: "global", RecordKey: "model"})
+		owned.add(contracts.RecordKey{Namespace: "website/content-models", ScopeType: "global", ScopeID: "global", RecordKey: "model"})
 
 		featureManifest := web020JSON(map[string]any{
 			"formatVersion": 2, "key": "web021page", "name": "WEB-021 Page",
@@ -144,7 +145,7 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			"digest": prerendercontract.HexDigest(featureManifest), "artifact_size": len(featureManifest),
 			"state": "ready", "created_at": time.Now().UTC(),
 		})
-		if _, err := websiteData.Put(ctx, featureKey, core.ModuleDataValue{
+		if _, err := websiteData.Put(ctx, featureKey, contracts.RecordValue{
 			Payload: featurePayload, PayloadVersion: 1,
 			IndexData: web020JSON(map[string]any{"record_type": "feature_version", "feature_id": "web021page", "version": "1.0.0", "state": "ready"}),
 		}, 0); err != nil {
@@ -227,7 +228,7 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Router repository: %v", err)
 		}
-		targetValidator, err := routerpresent.NewCoreTargetValidator(identity, trackedFiles, credential, nil)
+		targetValidator, err := routerpresent.NewCoreTargetValidator(testCoreFilesAdapter{files: trackedFiles, session: serviceSession}, nil)
 		if err != nil {
 			t.Fatalf("construct Router target validator: %v", err)
 		}
@@ -365,10 +366,6 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 	})
 }
 
-type web021RouterModule struct{}
-
-func (web021RouterModule) Operations() []core.Operation { return nil }
-
 type web021LocaleCatalog struct{ revision atomic.Int64 }
 
 func (c *web021LocaleCatalog) LocaleCatalogRevision(context.Context, string) (int64, error) {
@@ -504,8 +501,8 @@ func (w *web021Workflow) GetTaskResult(_ context.Context, workflowID, taskID uui
 		return core.TaskResult{}, errors.New("injected build failure")
 	}
 	return core.TaskResult{TaskID: taskID, WorkflowID: workflowID, State: "succeeded",
-		Worker: &core.WorkerRef{ComponentID: "worker.prerender", OperationID: "render-page", ContractVersion: 1},
-		Result: w.results[taskID]}, nil
+		Operation: &core.OperationRef{ClassID: "worker.prerender", ID: "render-page", Version: 1},
+		Result:    w.results[taskID]}, nil
 }
 
 func (w *web021Workflow) ResolveTaskID(_ context.Context, _ uuid.UUID, _ string) (uuid.UUID, error) {
@@ -571,7 +568,7 @@ func (r *web021Router) ReplaceLocaleTarget(ctx context.Context, request routerap
 	return r.SettingsAPI.ReplaceLocaleTarget(ctx, request)
 }
 
-type web021RouterIdentity struct{ identity core.EngineIdentityCapability }
+type web021RouterIdentity struct{ identity core.IdentityCapability }
 
 func (a web021RouterIdentity) Authenticate(ctx context.Context, credential string) (core.Session, error) {
 	session, _, err := a.identity.Authenticate(ctx, credential)
@@ -591,19 +588,19 @@ func web021OperationCatalog(t *testing.T) *routerpresent.PublicOperationRegistry
 	return catalog
 }
 
-func web021RouteKey(branchID, host, path string) core.ModuleDataKey {
+func web021RouteKey(branchID, host, path string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(host + "\x00" + path))
-	return core.ModuleDataKey{Namespace: "router/routes", ScopeType: "branch", ScopeID: branchID, RecordKey: "route:" + hex.EncodeToString(digest[:])}
+	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "branch", ScopeID: branchID, RecordKey: "route:" + hex.EncodeToString(digest[:])}
 }
 
-func web021IdempotencyKey(branchID, value string) core.ModuleDataKey {
+func web021IdempotencyKey(branchID, value string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(value))
-	return core.ModuleDataKey{Namespace: "router/routes", ScopeType: "branch", ScopeID: branchID, RecordKey: "idem:" + hex.EncodeToString(digest[:])}
+	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "branch", ScopeID: branchID, RecordKey: "idem:" + hex.EncodeToString(digest[:])}
 }
 
-func collectBranchModuleKeys(t *testing.T, ctx context.Context, store *core.ModuleDataStore, namespace, branchID string) []core.ModuleDataKey {
+func collectBranchModuleKeys(t *testing.T, ctx context.Context, store contracts.RecordDataStore, namespace, branchID string) []contracts.RecordKey {
 	t.Helper()
-	keys := make([]core.ModuleDataKey, 0)
+	keys := make([]contracts.RecordKey, 0)
 	after := ""
 	for {
 		page, _, cursor, err := store.List(ctx, namespace, "branch", branchID, after, nil, 100)
@@ -629,21 +626,21 @@ func web021RouteCleanup(t *testing.T, ctx context.Context, api routerapi.Setting
 }
 
 type web021TrackedFiles struct {
-	core.EngineFilesCapability
+	core.FilesCapability
 	mu  sync.Mutex
 	ids []string
 }
 
 func (t *web021TrackedFiles) CreateFile(ctx context.Context, session core.Session, key string, groups []string,
 	metadata map[string]string, contentType string, size int64, body io.Reader) (string, error) {
-	id, err := t.EngineFilesCapability.CreateFile(ctx, session, key, groups, metadata, contentType, size, body)
+	id, err := t.FilesCapability.CreateFile(ctx, session, key, groups, metadata, contentType, size, body)
 	t.track(id)
 	return id, err
 }
 
 func (t *web021TrackedFiles) CreateFileVerified(ctx context.Context, session core.Session, key string, groups []string,
 	metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
-	id, err := t.EngineFilesCapability.CreateFileVerified(ctx, session, key, groups, metadata, contentType, size, checksum, body)
+	id, err := t.FilesCapability.CreateFileVerified(ctx, session, key, groups, metadata, contentType, size, checksum, body)
 	t.track(id)
 	return id, err
 }
@@ -664,15 +661,15 @@ func (tracker *web021TrackedFiles) cleanup(t *testing.T, session core.Session) {
 	tracker.mu.Unlock()
 	for _, id := range ids {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		current, err := tracker.EngineFilesCapability.StatFile(cleanupCtx, session, id)
+		current, err := tracker.FilesCapability.StatFile(cleanupCtx, session, id)
 		if err == nil {
-			_ = tracker.EngineFilesCapability.DeleteFile(cleanupCtx, session, id, current.Revision)
+			_ = tracker.FilesCapability.DeleteFile(cleanupCtx, session, id, current.Revision)
 		}
 		cancel()
 	}
 }
 
-func web021StaticManifest(t *testing.T, ctx context.Context, files core.EngineFilesCapability,
+func web021StaticManifest(t *testing.T, ctx context.Context, files core.FilesCapability,
 	session core.Session, key string) string {
 	t.Helper()
 	document := []byte(`<!doctype html><html lang="en-US"><body>web021</body></html>`)

@@ -1,7 +1,6 @@
 package presentation_test
 
 import (
-	"context"
 	"go/parser"
 	"go/token"
 	"os"
@@ -13,14 +12,7 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 )
 
-type contractDescriptor struct{}
-
-func (contractDescriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.example", Kind: "engine", Version: 1}
-}
-
-func TestPublicCoreFacadeProvidesEngineAndCoordinatorContracts(t *testing.T) {
-	var _ platform.ComponentDescriptorProvider = contractDescriptor{}
+func TestPublicCoreFacadeProvidesAccessAndGenericCoordinatorContracts(t *testing.T) {
 	var _ interface {
 		GroupAuthorization() platform.GroupAuthorizationCapability
 		StagedFiles() platform.StagedFilesCapability
@@ -29,17 +21,9 @@ func TestPublicCoreFacadeProvidesEngineAndCoordinatorContracts(t *testing.T) {
 	if registry == nil {
 		t.Fatal("runtime registry is nil")
 	}
-	plan := platform.BuildPlan{Components: []string{"engine.example"}}
-	catalog, err := platform.BuildWorkerCatalog(plan, []platform.ComponentWorkerSet{{
-		ComponentID: "engine.example",
-		Handlers: map[string]platform.WorkerHandler{
-			"work.execute/v1": func(context.Context, platform.Task) (platform.TaskOutcome, error) {
-				return platform.TaskOutcome{}, nil
-			},
-		},
-	}})
-	if err != nil || catalog == nil {
-		t.Fatalf("BuildWorkerCatalog() = (%v, %v), want a public catalog", catalog, err)
+	var operation platform.OperationRef = platform.OperationRef{ClassID: "media-pool", ID: "derivative", Version: 1}
+	if operation.ClassID != "media-pool" || platform.TaskKindOperation != "operation" {
+		t.Fatal("generic operation task contract is unavailable through the Core facade")
 	}
 	if !platform.ValidAccessGroupKey("editorial") || platform.AccessLevelWrite != 2 || platform.AccessActionWrite == "" {
 		t.Fatal("Core access contracts are not available through its public facade")

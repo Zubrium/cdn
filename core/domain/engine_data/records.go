@@ -1,5 +1,5 @@
-// Package engine_data defines the opaque record storage contract shared by
-// registered engines. Core never interprets an engine's payload fields.
+// Package engine_data defines opaque JSON record storage for registered owners.
+// Core never interprets fields in an owner's payload.
 package engine_data
 
 import (

@@ -17,7 +17,7 @@ func TestCoreProfileDoesNotEnableEngines(t *testing.T) {
 	if !selected["admin.identity"] || !selected["admin.files"] {
 		t.Fatalf("Admin identity API must share the File API listener in the minimal profile: %v", plan.Components)
 	}
-	r := platform.NewRegistry()
+	r := NewProfileRegistry(platform.NewRegistry())
 	if err := RegisterProfile(r); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestCoreProfileDoesNotEnableEngines(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"router", "website", "content", "forms"} {
-		if _, err := r.Lookup(name); !errors.Is(err, platform.ErrUnavailable) {
+		if err := r.core.Lookup(name); !errors.Is(err, platform.ErrUnavailable) {
 			t.Fatalf("%s unexpectedly available: %v", name, err)
 		}
 	}

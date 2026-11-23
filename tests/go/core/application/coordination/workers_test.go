@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 type fakeTaskStore struct {
 	task          Task
+	claimedScope  []string
 	claimOnce     bool
 	claimErr      error
 	completeCh    chan corecoord.TaskOutcome
@@ -22,7 +24,46 @@ type fakeTaskStore struct {
 	extendErr     error
 }
 
-func (s *fakeTaskStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64, limit int, lease, retention time.Duration) ([]Task, error) {
+type TestTaskHandler func(context.Context, Task) (corecoord.TaskOutcome, error)
+
+type testOperationExecutor map[string]TestTaskHandler
+
+func operationHandlerKey(classID, operationID string, version int) string {
+	return classID + "\x00" + operationID + "\x00" + strconv.Itoa(version)
+}
+
+func taskHandlerForTest(context.Context, Task) (corecoord.TaskOutcome, error) {
+	return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
+}
+
+func (executor testOperationExecutor) Execute(ctx context.Context, task Task) (corecoord.TaskOutcome, error) {
+	if task.Operation == nil {
+		return corecoord.TaskOutcome{}, NewTaskFailure("handler_unavailable", false)
+	}
+	handler := executor[operationHandlerKey(task.Operation.ClassID, task.Operation.ID, task.Operation.Version)]
+	if handler == nil {
+		return corecoord.TaskOutcome{}, NewTaskFailure("handler_unavailable", false)
+	}
+	outcome, err := handler(ctx, task)
+	if err != nil {
+		return corecoord.TaskOutcome{}, err
+	}
+	for _, child := range outcome.Children {
+		if child.Kind != corecoord.TaskKindOperation {
+			continue
+		}
+		if child.Operation == nil || executor[operationHandlerKey(child.Operation.ClassID, child.Operation.ID, child.Operation.Version)] == nil {
+			return corecoord.TaskOutcome{}, NewTaskFailure("handler_unavailable", false)
+		}
+	}
+	return outcome, nil
+}
+
+func testExecutorFor(handlers map[string]TestTaskHandler) OperationExecutor {
+	return testOperationExecutor(handlers)
+}
+
+func (s *fakeTaskStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64, componentIDs []string, limit int, lease, retention time.Duration) ([]Task, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -32,6 +73,7 @@ func (s *fakeTaskStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64,
 	if owner != s.task.LeaseOwner || epoch != s.task.ConfigEpoch || limit != 1 || lease <= 0 || retention <= 0 {
 		return nil, ErrInvalid
 	}
+	s.claimedScope = append([]string(nil), componentIDs...)
 	if s.claimOnce {
 		return nil, nil
 	}
@@ -64,29 +106,29 @@ func (s *fakeTaskStore) Fail(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int6
 }
 
 func workerTestConfig(owner uuid.UUID) TaskExecutorConfig {
-	return TaskExecutorConfig{Owner: owner, ConfigEpoch: 3, Concurrency: 1, LeaseDuration: 3 * time.Second,
+	return TaskExecutorConfig{Owner: owner, ConfigEpoch: 3, TaskClasses: []string{"media-pool"}, Concurrency: 1, LeaseDuration: 3 * time.Second,
 		TaskTimeout: time.Minute, PollInterval: 10 * time.Millisecond, RetryBase: 20 * time.Millisecond,
 		RetryMaximum: time.Second, MaxWorkflowTasks: 100, MaxChildrenPerTask: 8, WorkflowRetention: time.Hour}
 }
 
 func workerTestTask(owner uuid.UUID) Task {
-	return Task{ID: uuid.New(), WorkflowID: uuid.New(), Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "inspect", ContractVersion: 1}, State: "running", Attempts: 1, MaxAttempts: 3,
+	return Task{ID: uuid.New(), WorkflowID: uuid.New(), Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "inspect", Version: 1}, State: "running", Attempts: 1, MaxAttempts: 3,
 		LeaseOwner: owner, FencingToken: 1, ConfigEpoch: 3}
 }
 
 func TestTaskExecutorAtomicallyPersistsDynamicTaskOutcome(t *testing.T) {
 	owner := uuid.New()
 	store := &fakeTaskStore{task: workerTestTask(owner), completeCh: make(chan corecoord.TaskOutcome, 1)}
-	handlers := map[string]WorkerHandler{
-		workerHandlerKey("worker.example", "inspect", 1): func(context.Context, Task) (corecoord.TaskOutcome, error) {
+	handlers := map[string]TestTaskHandler{
+		operationHandlerKey("worker.example", "inspect", 1): func(context.Context, Task) (corecoord.TaskOutcome, error) {
 			return corecoord.TaskOutcome{Result: json.RawMessage(`{"count":1}`), Children: []corecoord.TaskChild{{
-				Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "engine.secondary", OperationID: "index", ContractVersion: 2}, EmissionKey: "index:1",
+				Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "engine.secondary", ID: "index", Version: 2}, EmissionKey: "index:1",
 				Payload: json.RawMessage(`{"artifact":"opaque"}`), MaxAttempts: 2,
 			}}}, nil
 		},
-		workerHandlerKey("engine.secondary", "index", 2): taskHandlerForTest,
+		operationHandlerKey("engine.secondary", "index", 2): taskHandlerForTest,
 	}
-	pool, err := NewTaskExecutor(store, workerTestConfig(owner), handlers)
+	pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(handlers))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +137,7 @@ func TestTaskExecutorAtomicallyPersistsDynamicTaskOutcome(t *testing.T) {
 	}
 	select {
 	case outcome := <-store.completeCh:
-		if string(outcome.Result) != `{"count":1}` || len(outcome.Children) != 1 || outcome.Children[0].Worker == nil || outcome.Children[0].Worker.ComponentID != "engine.secondary" {
+		if string(outcome.Result) != `{"count":1}` || len(outcome.Children) != 1 || outcome.Children[0].Operation == nil || outcome.Children[0].Operation.ClassID != "engine.secondary" {
 			t.Fatalf("worker lost dynamic child outcome: %+v", outcome)
 		}
 	case <-time.After(time.Second):
@@ -108,16 +150,45 @@ func TestTaskExecutorAtomicallyPersistsDynamicTaskOutcome(t *testing.T) {
 	}
 }
 
+func TestTaskExecutorCopiesClaimScopeAtConstruction(t *testing.T) {
+	owner := uuid.New()
+	store := &fakeTaskStore{task: workerTestTask(owner), completeCh: make(chan corecoord.TaskOutcome, 1)}
+	config := workerTestConfig(owner)
+	pool, err := NewTaskExecutor(store, config, testExecutorFor(map[string]TestTaskHandler{
+		operationHandlerKey("worker.example", "inspect", 1): taskHandlerForTest,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.TaskClasses[0] = "untrusted-pool"
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-store.completeCh:
+	case <-time.After(time.Second):
+		t.Fatal("task executor did not complete its claimed task")
+	}
+	if len(store.claimedScope) != 1 || store.claimedScope[0] != "media-pool" {
+		t.Fatalf("task executor claim scope changed after construction: %v", store.claimedScope)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pool.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTaskExecutorRejectsUnregisteredDynamicChildBeforePersistence(t *testing.T) {
 	owner := uuid.New()
 	store := &fakeTaskStore{task: workerTestTask(owner), failCh: make(chan TaskFailure, 1)}
-	handlers := map[string]WorkerHandler{workerHandlerKey("worker.example", "inspect", 1): func(context.Context, Task) (corecoord.TaskOutcome, error) {
+	handlers := map[string]TestTaskHandler{operationHandlerKey("worker.example", "inspect", 1): func(context.Context, Task) (corecoord.TaskOutcome, error) {
 		return corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{{
-			Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.missing", OperationID: "run", ContractVersion: 1}, EmissionKey: "missing",
+			Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.missing", ID: "run", Version: 1}, EmissionKey: "missing",
 			Payload: json.RawMessage(`{}`), MaxAttempts: 1,
 		}}}, nil
 	}}
-	pool, err := NewTaskExecutor(store, workerTestConfig(owner), handlers)
+	pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(handlers))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +216,7 @@ func TestTaskExecutorRejectsUnregisteredDynamicChildBeforePersistence(t *testing
 func TestTaskExecutorMapsHandlerFailuresAndPanicsToSafeCodes(t *testing.T) {
 	for _, test := range []struct {
 		name    string
-		handler WorkerHandler
+		handler TestTaskHandler
 		code    string
 		retry   bool
 	}{
@@ -154,14 +225,14 @@ func TestTaskExecutorMapsHandlerFailuresAndPanicsToSafeCodes(t *testing.T) {
 		}, code: "remote_unavailable", retry: true},
 		{name: "panic", handler: func(context.Context, Task) (corecoord.TaskOutcome, error) {
 			panic("secret details must not escape")
-		}, code: "worker_panic", retry: true},
+		}, code: "operation_panic", retry: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			owner := uuid.New()
 			store := &fakeTaskStore{task: workerTestTask(owner), failCh: make(chan TaskFailure, 1)}
-			pool, err := NewTaskExecutor(store, workerTestConfig(owner), map[string]WorkerHandler{
-				workerHandlerKey("worker.example", "inspect", 1): test.handler,
-			})
+			pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(map[string]TestTaskHandler{
+				operationHandlerKey("worker.example", "inspect", 1): test.handler,
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -195,7 +266,7 @@ func TestTaskExecutorRejectsInvalidOutcomeAndInvalidHandlerRegistration(t *testi
 		{Result: json.RawMessage(`[]`)},
 		{Result: json.RawMessage(oversizedResult)},
 		{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{{
-			Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "scan", ContractVersion: 0}, EmissionKey: "bad",
+			Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "scan", Version: 0}, EmissionKey: "bad",
 			Payload: json.RawMessage(`{}`), MaxAttempts: 1,
 		}}},
 	} {
@@ -205,14 +276,8 @@ func TestTaskExecutorRejectsInvalidOutcomeAndInvalidHandlerRegistration(t *testi
 	}
 	owner := uuid.New()
 	store := &fakeTaskStore{task: workerTestTask(owner)}
-	for _, handlers := range []map[string]WorkerHandler{
-		nil,
-		{"not-a-dispatch-key": taskHandlerForTest},
-		{workerHandlerKey("worker.example", "inspect", 1): nil},
-	} {
-		if _, err := NewTaskExecutor(store, workerTestConfig(owner), handlers); !errors.Is(err, ErrInvalid) {
-			t.Errorf("invalid worker handlers were accepted: %v", err)
-		}
+	if _, err := NewTaskExecutor(store, workerTestConfig(owner), nil); !errors.Is(err, ErrInvalid) {
+		t.Errorf("missing composition executor was accepted: %v", err)
 	}
 }
 
@@ -241,7 +306,7 @@ func TestTaskExecutorLifecycleRejectsRepeatedStartAndHonorsCancellation(t *testi
 		<-ctx.Done()
 		return corecoord.TaskOutcome{}, ctx.Err()
 	}
-	pool, err := NewTaskExecutor(store, workerTestConfig(owner), map[string]WorkerHandler{workerHandlerKey("worker.example", "inspect", 1): handler})
+	pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(map[string]TestTaskHandler{operationHandlerKey("worker.example", "inspect", 1): handler}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,9 +339,9 @@ func TestTaskExecutorFailsClosedWhenDurableStoreIsUnavailable(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			owner := uuid.New()
 			store := &fakeTaskStore{task: workerTestTask(owner), claimErr: test.claimErr, completeErr: test.finishErr}
-			pool, err := NewTaskExecutor(store, workerTestConfig(owner), map[string]WorkerHandler{
-				workerHandlerKey("worker.example", "inspect", 1): taskHandlerForTest,
-			})
+			pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(map[string]TestTaskHandler{
+				operationHandlerKey("worker.example", "inspect", 1): taskHandlerForTest,
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -312,9 +377,9 @@ func TestTaskExecutorTimesOutHandlerAndSchedulesRetry(t *testing.T) {
 	}
 	config := workerTestConfig(owner)
 	config.TaskTimeout = 20 * time.Millisecond
-	pool, err := NewTaskExecutor(store, config, map[string]WorkerHandler{
-		workerHandlerKey("worker.example", "inspect", 1): handler,
-	})
+	pool, err := NewTaskExecutor(store, config, testExecutorFor(map[string]TestTaskHandler{
+		operationHandlerKey("worker.example", "inspect", 1): handler,
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

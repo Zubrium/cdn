@@ -7,11 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	featureruntime "github.com/Zubrium/cdn/engines/website/features/runtime"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
@@ -71,7 +72,7 @@ type mediaJobRecord struct {
 
 type mediaState struct {
 	record   mediaJobRecord
-	key      core.ModuleDataKey
+	key      recorddata.RecordKey
 	revision int64
 }
 
@@ -135,7 +136,7 @@ type mediaWorkerResult struct {
 // feature manifest version bound to a ready snapshot. Client input contains no
 // profile, preset, processor version or processing argument.
 func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.CreateDerivativeRequest) (websiteapi.MediaJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.MediaJob{}, err
 	}
 	if err := s.requireCoordinatorWrite(ctx); err != nil {
@@ -268,8 +269,8 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	if err != nil {
 		return websiteapi.MediaJob{}, err
 	}
-	mutations := []core.ModuleDataMutation{
-		{Key: jobKey, ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: mediaPayloadVersion, IndexData: index}},
+	mutations := []recorddata.RecordMutation{
+		{Key: jobKey, ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: mediaPayloadVersion, IndexData: index}},
 		{Key: fingerprintKey, ExpectedRevision: 0, Value: fingerprintReceipt},
 		{Key: callerKey, ExpectedRevision: 0, Value: callerReceipt},
 	}
@@ -301,7 +302,7 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 		job, _ := s.failMedia(ctx, mediaState{record: record, key: jobKey, revision: revision}, "invalid_workflow_payload")
 		return job, websiteapi.ErrUnavailable
 	}
-	receipt, err := s.config.MediaWorkflow.Start(ctx, core.WorkflowStartRequest{
+	receipt, err := s.config.MediaWorkflow.Start(ctx, platform.WorkflowStartRequest{
 		OperationID: s.config.MediaOperationID, ContractVersion: s.config.MediaContractVersion,
 		IdempotencyKey: "media/" + jobID, Payload: startPayload,
 	})
@@ -331,7 +332,7 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 // every child task has been verified; transient coordinator reads never mutate
 // the job or its previous field value.
 func (s *Service) GetMediaJob(ctx context.Context, jobID string) (websiteapi.MediaJob, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.MediaJob{}, err
 	}
 	if !validInterface(s.config.MediaWorkflow) || !validInterface(s.config.MediaFiles) {
@@ -394,7 +395,7 @@ func (s *Service) GetMediaJob(ctx context.Context, jobID string) (websiteapi.Med
 			}
 			taskID, err := s.config.MediaWorkflow.ResolveTaskID(ctx, workflowID, emissionKey)
 			if err != nil {
-				if errors.Is(err, core.ErrTaskMissing) && workflow.State != "succeeded" {
+				if errors.Is(err, platform.ErrTaskMissing) && workflow.State != "succeeded" {
 					return mediaJobFromRecord(state.record), nil
 				}
 				return s.failMedia(ctx, state, "media_task_missing")
@@ -435,7 +436,7 @@ func (s *Service) GetMediaJob(ctx context.Context, jobID string) (websiteapi.Med
 		}
 		result, err := s.config.MediaWorkflow.GetTaskResult(ctx, workflowID, taskID)
 		if err != nil {
-			if errors.Is(err, core.ErrTaskMissing) && workflow.State != "succeeded" {
+			if errors.Is(err, platform.ErrTaskMissing) && workflow.State != "succeeded" {
 				return mediaJobFromRecord(state.record), nil
 			}
 			return s.failMedia(ctx, state, "media_result_missing")
@@ -529,12 +530,12 @@ func parseMediaRootResult(raw []byte, record mediaJobRecord, limit int) (mediaRo
 	return result, nil
 }
 
-func parseMediaWorkerResult(result core.TaskResult, record mediaJobRecord, outputName string, workflowID, taskID uuid.UUID, limit int) (mediaWorkerResult, error) {
+func parseMediaWorkerResult(result platform.TaskResult, record mediaJobRecord, outputName string, workflowID, taskID uuid.UUID, limit int) (mediaWorkerResult, error) {
 	if result.WorkflowID != uuid.Nil && result.WorkflowID != workflowID ||
 		result.TaskID != uuid.Nil && result.TaskID != taskID ||
 		result.State != "" && result.State != "succeeded" ||
-		result.Worker != nil && (result.Worker.ComponentID != mediaWorkerComponent ||
-			result.Worker.OperationID != mediaWorkerOperation || result.Worker.ContractVersion != mediaprofile.WorkContractVersion) ||
+		result.Operation != nil && (result.Operation.ClassID != mediaWorkerComponent ||
+			result.Operation.ID != mediaWorkerOperation || result.Operation.Version != mediaprofile.WorkContractVersion) ||
 		len(result.Result) == 0 || len(result.Result) > limit {
 		return mediaWorkerResult{}, errMediaInvalidResult
 	}
@@ -559,7 +560,7 @@ func parseMediaWorkerResult(result core.TaskResult, record mediaJobRecord, outpu
 
 func mediaErrorCode(err error) string {
 	switch {
-	case errors.Is(err, core.ErrTaskMissing):
+	case errors.Is(err, platform.ErrTaskMissing):
 		return "media_task_missing"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return "media_timeout"
@@ -583,10 +584,10 @@ func (s *Service) failMedia(ctx context.Context, state mediaState, code string) 
 	return mediaJobFromRecord(updated), nil
 }
 
-func (s *Service) readMediaReceipt(ctx context.Context, key core.ModuleDataKey, fingerprint, profileDigest, processorVersion string) (string, bool, error) {
+func (s *Service) readMediaReceipt(ctx context.Context, key recorddata.RecordKey, fingerprint, profileDigest, processorVersion string) (string, bool, error) {
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return "", false, nil
 		}
 		return "", false, mapCoreError(err)
@@ -617,7 +618,7 @@ func (s *Service) loadMediaState(ctx context.Context, jobID string) (mediaState,
 	key := websiterepo.MediaJobKey(id)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return mediaState{}, websiteapi.ErrNotFound
 		}
 		return mediaState{}, mapCoreError(err)
@@ -677,24 +678,24 @@ func mediaModuleDataValue(record mediaJobRecord, revision int64) ([]byte, []byte
 	return payload, index, nil
 }
 
-func mediaReceiptValue(fingerprint, jobID, profileDigest, processorVersion string) (*core.ModuleDataValue, error) {
+func mediaReceiptValue(fingerprint, jobID, profileDigest, processorVersion string) (*recorddata.RecordValue, error) {
 	payload, err := json.Marshal(mediaReceipt{RecordType: "media_job_idempotency", JobID: jobID,
 		Fingerprint: fingerprint, ProfileDigest: profileDigest, ProcessorVersion: processorVersion, State: "accepted"})
 	if err != nil {
 		return nil, err
 	}
-	return &core.ModuleDataValue{Payload: payload, PayloadVersion: mediaPayloadVersion,
+	return &recorddata.RecordValue{Payload: payload, PayloadVersion: mediaPayloadVersion,
 		IndexData: json.RawMessage(`{}`)}, nil
 }
 
-func (s *Service) putMediaRecord(ctx context.Context, key core.ModuleDataKey, expected int64, record mediaJobRecord) error {
+func (s *Service) putMediaRecord(ctx context.Context, key recorddata.RecordKey, expected int64, record mediaJobRecord) error {
 	payload, index, err := mediaModuleDataValue(record, record.Revision)
 	if err != nil {
 		return err
 	}
-	return s.store.Batch(ctx, []core.ModuleDataMutation{{
+	return s.store.Batch(ctx, []recorddata.RecordMutation{{
 		Key:              key,
 		ExpectedRevision: expected,
-		Value:            &core.ModuleDataValue{Payload: payload, PayloadVersion: mediaPayloadVersion, IndexData: index},
+		Value:            &recorddata.RecordValue{Payload: payload, PayloadVersion: mediaPayloadVersion, IndexData: index},
 	}})
 }

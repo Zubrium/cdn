@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
@@ -123,37 +123,35 @@ func (w *DockerWorker) Render(ctx context.Context, request Request) (Result, err
 // WorkerHandler exposes only the statically registered render-page/v1 identity.
 // Task.ID and the Core-issued idempotency key are authoritative; client fields
 // cannot select an artifact, operation, route, or storage location.
-func (w *DockerWorker) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if w == nil || ctx == nil || task.Kind != core.TaskKindWorker || task.Worker == nil ||
-		task.Worker.ComponentID != DataModuleID || task.Worker.OperationID != OperationID ||
-		task.Worker.ContractVersion != 1 || len(task.Payload) == 0 || len(task.Payload) > 16<<20 {
-		return core.TaskOutcome{}, ErrInvalidPlan
+func (w *DockerWorker) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	if w == nil || ctx == nil || task.TaskID == "" || len(task.Payload) == 0 || len(task.Payload) > 16<<20 {
+		return contracts.OperationOutcome{}, ErrInvalidPlan
 	}
 	decoder := json.NewDecoder(bytes.NewReader(task.Payload))
 	decoder.DisallowUnknownFields()
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return core.TaskOutcome{}, ErrInvalidPlan
+		return contracts.OperationOutcome{}, ErrInvalidPlan
 	}
 	var trailing any
 	// Core puts the workflow idempotency key on Task.IdempotencyKey, while the
 	// per-render identity is the child task's emission key. Binding to the
 	// emission key keeps retries stable and rejects payload substitution.
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) ||
-		(request.TaskID != "" && request.TaskID != task.ID.String()) ||
+		(request.TaskID != "" && request.TaskID != task.TaskID) ||
 		task.EmissionKey == "" || task.EmissionKey != request.IdempotencyKey {
-		return core.TaskOutcome{}, ErrInvalidPlan
+		return contracts.OperationOutcome{}, ErrInvalidPlan
 	}
-	request.TaskID = task.ID.String()
+	request.TaskID = task.TaskID
 	result, err := w.Render(ctx, request)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.TaskOutcome{}, ErrInvalidResult
+		return contracts.OperationOutcome{}, ErrInvalidResult
 	}
-	return core.TaskOutcome{Result: encoded}, nil
+	return contracts.OperationOutcome{Result: encoded}, nil
 }
 
 func validInterface(value any) bool {

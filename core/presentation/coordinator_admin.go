@@ -32,7 +32,7 @@ func (c *coordinatorAuthorizationCapability) runtimeOrError() (*Runtime, error) 
 	if runtime.Registry == nil {
 		return nil, ErrCoordinatorInvalid
 	}
-	if _, err := runtime.Registry.Lookup("coordinator"); err != nil {
+	if err := runtime.Registry.Lookup("coordinator"); err != nil {
 		return nil, ErrCoordinatorInvalid
 	}
 	return runtime, nil

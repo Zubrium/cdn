@@ -31,7 +31,7 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 		component.website.service == nil || component.router == nil || component.router.api == nil || component.dispatcher == nil {
 		return errors.New("Retirement dependencies are not initialized")
 	}
-	data, err := component.core.runtime.RegisterDataModule(retirement.ModuleDataDescriptor())
+	data, err := component.core.registerModuleData(retirement.ModuleDataDescriptor())
 	if err != nil {
 		return err
 	}
@@ -45,12 +45,6 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 		RouterCredential:  component.config.Retirement.RouterCredential,
 	})
 	if err != nil {
-		return err
-	}
-	if err := bus.Register(component.dispatcher, contracts.RetirePageOperation(), service.RetirePage); err != nil {
-		return err
-	}
-	if err := bus.Register(component.dispatcher, contracts.GetPageRetirementOperation(), service.GetPageRetirement); err != nil {
 		return err
 	}
 	component.service = service
@@ -81,6 +75,20 @@ func (component *retirementComponent) IsReady() bool {
 }
 
 func (component *retirementComponent) Errors() <-chan error { return idleFailureStream() }
+
+func (component *retirementComponent) retirePage(ctx context.Context, request contracts.RetirePageRequest) (contracts.PageRetirement, error) {
+	if component == nil || component.service == nil {
+		return contracts.PageRetirement{}, errors.New("Retirement workflow is unavailable")
+	}
+	return component.service.RetirePage(ctx, request)
+}
+
+func (component *retirementComponent) getPageRetirement(ctx context.Context, request contracts.PageRetirementQuery) (contracts.PageRetirement, error) {
+	if component == nil || component.service == nil {
+		return contracts.PageRetirement{}, errors.New("Retirement workflow is unavailable")
+	}
+	return component.service.GetPageRetirement(ctx, request)
+}
 
 type retirementClient struct {
 	dispatcher contracts.Dispatcher

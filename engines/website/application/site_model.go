@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -9,7 +11,7 @@ import (
 	"math"
 	"regexp"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
@@ -25,14 +27,14 @@ type contentModelRecord struct {
 }
 
 func (s *Service) GetContentModel(ctx context.Context) (websiteapi.ContentModel, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.ContentModel{}, err
 	}
 	return s.readContentModel(ctx)
 }
 
 func (s *Service) SaveContentModel(ctx context.Context, request websiteapi.SaveContentModelRequest) (websiteapi.ContentModel, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.ContentModel{}, err
 	}
 	if request.ExpectedRevision < 0 {
@@ -49,7 +51,7 @@ func (s *Service) SaveContentModel(ctx context.Context, request websiteapi.SaveC
 		return websiteapi.ContentModel{}, websiteapi.ErrTooLarge
 	}
 	current, readErr := s.store.Get(ctx, contentModelKey())
-	if readErr != nil && !errors.Is(readErr, core.ErrModuleDataNotFound) {
+	if readErr != nil && !errors.Is(readErr, recorddata.ErrRecordNotFound) {
 		return websiteapi.ContentModel{}, mapCoreError(readErr)
 	}
 	currentRevision := int64(0)
@@ -84,9 +86,9 @@ func (s *Service) SaveContentModel(ctx context.Context, request websiteapi.SaveC
 	if err != nil {
 		return websiteapi.ContentModel{}, websiteapi.ErrUnavailable
 	}
-	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{{
 		Key: contentModelKey(), ExpectedRevision: currentRevision,
-		Value: &core.ModuleDataValue{Payload: payload, PayloadVersion: 1, IndexData: index},
+		Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: 1, IndexData: index},
 	}}); err != nil {
 		return websiteapi.ContentModel{}, mapCoreError(err)
 	}
@@ -105,7 +107,7 @@ func (s *Service) readContentModel(ctx context.Context) (websiteapi.ContentModel
 	return value, nil
 }
 
-func decodeContentModelRecord(record core.ModuleDataRecord) (websiteapi.ContentModel, error) {
+func decodeContentModelRecord(record recorddata.Record) (websiteapi.ContentModel, error) {
 	var stored contentModelRecord
 	var index struct {
 		RecordType string `json:"record_type"`
@@ -131,8 +133,8 @@ func decodeContentModelRecord(record core.ModuleDataRecord) (websiteapi.ContentM
 	return schema, nil
 }
 
-func contentModelKey() core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: contentModelsNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "model"}
+func contentModelKey() recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: contentModelsNamespace, ScopeType: "global", ScopeID: "global", RecordKey: "model"}
 }
 
 func contentModelDigest(schema websiteapi.ContentModel) (string, error) {
@@ -149,7 +151,7 @@ func contentModelDigest(schema websiteapi.ContentModel) (string, error) {
 }
 
 func (s *Service) GetPagePlacementProjection(ctx context.Context, pageID, snapshotID string) (websiteapi.PagePlacementProjection, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.PagePlacementProjection{}, err
 	}
 	if !snapshotIDPattern.MatchString(pageID) || !snapshotIDPattern.MatchString(snapshotID) {
@@ -300,7 +302,7 @@ func (s *Service) validateModelBindings(ctx context.Context, raw json.RawMessage
 	if err != nil {
 		return websiteapi.ErrInvalid
 	}
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"snapshot"}}}
+	selectors := []recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"snapshot"}}}
 	after := ""
 	for {
 		if err := ctx.Err(); err != nil {

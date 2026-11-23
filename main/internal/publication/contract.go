@@ -15,6 +15,7 @@ import (
 	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const (
@@ -61,17 +62,17 @@ type Trigger struct {
 	IdempotencyKey             string `json:"-"`
 }
 
-func ModuleDataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{
-		ModuleID: moduleID,
-		Namespaces: []core.ModuleDataNamespace{{
+func ModuleDataDescriptor() contracts.RecordDescriptor {
+	return contracts.RecordDescriptor{
+		OwnerID: moduleID,
+		Namespaces: []contracts.RecordNamespace{{
 			Name:       namespace,
 			ScopeTypes: []string{scopeType},
-			Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString},
-				"run_id":      {Type: core.SelectorString},
-				"state":       {Type: core.SelectorString},
-				"locale":      {Type: core.SelectorString},
+			Fields: map[string]contracts.RecordSelectorField{
+				"record_type": {Type: contracts.RecordSelectorString},
+				"run_id":      {Type: contracts.RecordSelectorString},
+				"state":       {Type: contracts.RecordSelectorString},
+				"locale":      {Type: contracts.RecordSelectorString},
 			},
 		}},
 	}
@@ -81,10 +82,8 @@ func ModuleDataDescriptor() core.ModuleDataDescriptor {
 // engine-specific operation to other modules.
 type Module struct{}
 
-func (Module) Operations() []core.Operation { return nil }
-
-func (Module) ComponentDescriptor() core.ComponentDescriptor {
-	return core.ComponentDescriptor{ID: moduleID, Kind: "composition", Version: 1}
+func (Module) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: moduleID, Kind: "composition", Version: 1}
 }
 
 // LocaleCatalog supplies the authoritative locale-catalog revision used by the
@@ -114,14 +113,14 @@ type Router interface {
 // Every field must be supplied by the static composition root.
 type Config struct {
 	BranchID          string
-	Store             *core.ModuleDataStore
+	Store             contracts.RecordDataStore
 	Targets           []Target
 	Website           Website
 	WebsiteCredential string
 	Router            Router
 	RouterCredential  string
-	FileIdentity      core.EngineIdentityCapability
-	Files             core.EngineFilesCapability
+	FileIdentity      core.IdentityCapability
+	Files             core.FilesCapability
 	FileCredential    string
 	LocaleCatalog     LocaleCatalog
 	InputResolver     websiteapp.BuildInputResolver

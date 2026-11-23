@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 )
 
 type contractObject struct {
-	file core.File
+	file contracts.File
 	body string
 }
 
@@ -30,25 +30,25 @@ type contractFiles struct {
 	objects map[string]contractObject
 }
 
-func (files *contractFiles) StatFile(_ context.Context, _ core.Session, id string) (core.File, error) {
+func (files *contractFiles) StatFile(_ context.Context, id string) (contracts.File, error) {
 	object, ok := files.objects[id]
 	if !ok {
-		return core.File{}, core.ErrFileNotFound
+		return contracts.File{}, contracts.ErrFileNotFound
 	}
 	return object.file, nil
 }
 
-func (files *contractFiles) ReadFile(_ context.Context, _ core.Session, id string) (io.ReadCloser, core.File, error) {
+func (files *contractFiles) ReadFile(_ context.Context, id string) (io.ReadCloser, contracts.File, error) {
 	object, ok := files.objects[id]
 	if !ok {
-		return nil, core.File{}, core.ErrFileNotFound
+		return nil, contracts.File{}, contracts.ErrFileNotFound
 	}
 	return io.NopCloser(strings.NewReader(object.body)), object.file, nil
 }
 
-func contractCoreFile(id, body, contentType string) core.File {
+func contractCoreFile(id, body, contentType string) contracts.File {
 	sum := sha256.Sum256([]byte(body))
-	return core.File{ID: id, ContentType: contentType, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(body)), Revision: 1}
+	return contracts.File{ID: id, ContentType: contentType, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(body)), Revision: 1}
 }
 
 // contractArtifact builds a manifest whose digest is the canonical SHA-256 of
@@ -153,7 +153,7 @@ func TestRouterAcceptsSharedSafeCacheClasses(t *testing.T) {
 	} {
 		t.Run(class, func(t *testing.T) {
 			_, files := contractArtifact(t, class, nil, nil)
-			manifest, _, err := readArtifactManifest(context.Background(), files, core.Session{}, contractManifestID)
+			manifest, _, err := readArtifactManifest(context.Background(), files, contractManifestID)
 			if err != nil {
 				t.Fatalf("safe cache class %q rejected: %v", class, err)
 			}
@@ -169,14 +169,14 @@ func TestRouterRejectsDigestAndCacheClassSubstitution(t *testing.T) {
 		_, files := contractArtifact(t, "immutable", nil, func(manifest map[string]any) {
 			manifest["digest"] = "sha256:" + strings.Repeat("0", 64)
 		})
-		if _, _, err := readArtifactManifest(context.Background(), files, core.Session{}, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
+		if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
 			t.Fatalf("tampered digest returned %v, want ErrInvalidTarget", err)
 		}
 	})
 	for _, class := range []string{"document", "forever"} {
 		t.Run("cache class "+class, func(t *testing.T) {
 			_, files := contractArtifact(t, class, nil, nil)
-			if _, _, err := readArtifactManifest(context.Background(), files, core.Session{}, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
+			if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
 				t.Fatalf("cache class %q returned %v, want ErrInvalidTarget", class, err)
 			}
 		})
@@ -185,7 +185,7 @@ func TestRouterRejectsDigestAndCacheClassSubstitution(t *testing.T) {
 		_, files := contractArtifact(t, "", func(payload map[string]any) {
 			payload["document"].(map[string]any)["cache_class"] = ""
 		}, nil)
-		if _, _, err := readArtifactManifest(context.Background(), files, core.Session{}, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
+		if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
 			t.Fatalf("document cache class returned %v, want ErrInvalidTarget", err)
 		}
 	})

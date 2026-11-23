@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/content/application"
 	"github.com/Zubrium/cdn/engines/content/domain"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 func TestSaveReplaysGeneratedIDsAndRejectsSameKeyWithDifferentPayload(t *testing.T) {
@@ -22,7 +23,7 @@ func TestSaveReplaysGeneratedIDsAndRejectsSameKeyWithDifferentPayload(t *testing
 	}
 	schema := readySchema(false)
 	ctx := context.Background()
-	initial, err := service.GetWorkspace(ctx, core.Session{}, schema, snapshotID)
+	initial, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schema, snapshotID)
 	if err != nil || initial.Revision != 0 {
 		t.Fatalf("GetWorkspace() = revision %d, err %v", initial.Revision, err)
 	}
@@ -31,7 +32,7 @@ func TestSaveReplaysGeneratedIDsAndRejectsSameKeyWithDifferentPayload(t *testing
 		Records:    []contentapi.RecordInput{{ClientKey: "row-new", EntityID: entityID, SortOrder: 0, Values: map[string]any{"title": "One"}}},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{"row-new"}}},
 	}
-	first, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, request)
+	first, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, request)
 	if err != nil || first.Revision != 1 || len(first.ClientRecordIDs) != 1 {
 		t.Fatalf("SaveWorkspaceDraft() = %#v, err %v", first, err)
 	}
@@ -39,23 +40,23 @@ func TestSaveReplaysGeneratedIDsAndRejectsSameKeyWithDifferentPayload(t *testing
 	if firstID == "" || first.Records[0].ID != firstID || first.Selections[0].RecordIDs[0] != firstID {
 		t.Fatalf("save did not resolve the request-local client key: %#v", first)
 	}
-	replayed, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, request)
+	replayed, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, request)
 	if err != nil || replayed.Revision != first.Revision || replayed.ClientRecordIDs["row-new"] != firstID {
 		t.Fatalf("idempotent replay = %#v, err %v", replayed, err)
 	}
 	request.Records[0].Values["title"] = "Different"
-	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, request); !errors.Is(err, domain.ErrConflict) {
+	if _, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, request); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("same key with different payload error = %v, want conflict", err)
 	}
 	request.Records[0].Values["title"] = "One"
-	second, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, contentapi.SaveWorkspaceDraftRequest{
+	second, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "save-key-2", ExpectedRevision: first.Revision,
 		ExpectedSelectionRevision: first.SelectionRevision, Records: request.Records, Selections: request.Selections,
 	})
 	if err != nil || second.Revision != 2 {
 		t.Fatalf("later SaveWorkspaceDraft() = %#v, err %v", second, err)
 	}
-	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, request); !errors.Is(err, domain.ErrConflict) {
+	if _, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, request); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("old idempotency key after a later mutation error = %v, want conflict", err)
 	}
 }
@@ -71,11 +72,11 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 	schemaB := schemaA
 	schemaB.PageSnapshotID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
-	initialA, err := service.GetWorkspace(ctx, core.Session{}, schemaA, schemaA.PageSnapshotID)
+	initialA, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schemaA, schemaA.PageSnapshotID)
 	if err != nil {
 		t.Fatalf("initialize page A: %v", err)
 	}
-	initialB, err := service.GetWorkspace(ctx, core.Session{}, schemaB, schemaB.PageSnapshotID)
+	initialB, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schemaB, schemaB.PageSnapshotID)
 	if err != nil {
 		t.Fatalf("initialize page B: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 		ExpectedSelectionRevision: initialA.SelectionRevision, Records: []contentapi.RecordInput{},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "all"}},
 	}
-	firstA, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, requestA)
+	firstA, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schemaA, requestA)
 	if err != nil {
 		t.Fatalf("save page A selection: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 		ExpectedSelectionRevision: initialB.SelectionRevision, Records: []contentapi.RecordInput{},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{}}},
 	}
-	firstB, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaB, requestB)
+	firstB, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schemaB, requestB)
 	if err != nil {
 		t.Fatalf("page-scope B selection save conflicted: %v", err)
 	}
@@ -108,26 +109,26 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 		t.Fatalf("page revisions did not advance independently: A=%d B=%d", firstA.SelectionRevision, firstB.SelectionRevision)
 	}
 
-	replayedA, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, requestA)
+	replayedA, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schemaA, requestA)
 	if err != nil || replayedA.SelectionRevision != firstA.SelectionRevision || len(replayedA.Selections) != 1 || replayedA.Selections[0].Mode != "all" {
 		t.Fatalf("page A idempotent replay after page B write = %#v, err %v", replayedA, err)
 	}
 	changedA := requestA
 	changedA.Selections = []contentapi.Selection{}
-	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, changedA); !errors.Is(err, domain.ErrConflict) {
+	if _, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schemaA, changedA); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("page A reused idempotency key with changed payload: %v, want conflict", err)
 	}
 	staleA := requestA
 	staleA.IdempotencyKey = "page-a-stale-selection"
-	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schemaA, staleA); !errors.Is(err, domain.ErrConflict) {
+	if _, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schemaA, staleA); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale same-page selection write: %v, want conflict", err)
 	}
 
-	latestA, err := service.GetWorkspace(ctx, core.Session{}, schemaA, schemaA.PageSnapshotID)
+	latestA, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schemaA, schemaA.PageSnapshotID)
 	if err != nil {
 		t.Fatalf("read page A after writes: %v", err)
 	}
-	latestB, err := service.GetWorkspace(ctx, core.Session{}, schemaB, schemaB.PageSnapshotID)
+	latestB, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schemaB, schemaB.PageSnapshotID)
 	if err != nil {
 		t.Fatalf("read page B after writes: %v", err)
 	}
@@ -144,11 +145,11 @@ func TestPublishCreatesImmutableHistoryAndRestoreOnlyChangesDraft(t *testing.T) 
 	}
 	ctx := context.Background()
 	schema := readySchema(false)
-	initial, err := service.GetWorkspace(ctx, core.Session{}, schema, snapshotID)
+	initial, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schema, snapshotID)
 	if err != nil {
 		t.Fatalf("GetWorkspace() error = %v", err)
 	}
-	savedA, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, contentapi.SaveWorkspaceDraftRequest{
+	savedA, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "save-a", ExpectedRevision: 0, ExpectedSelectionRevision: initial.SelectionRevision,
 		Records:    []contentapi.RecordInput{{ClientKey: "a", EntityID: entityID, Values: map[string]any{"title": "A"}}},
 		Selections: []contentapi.Selection{},
@@ -156,15 +157,15 @@ func TestPublishCreatesImmutableHistoryAndRestoreOnlyChangesDraft(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Save A: %v", err)
 	}
-	publishedA, err := service.PublishWorkspace(ctx, core.Session{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-a", ExpectedRevision: savedA.Revision, ExpectedSelectionRevision: savedA.SelectionRevision})
+	publishedA, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-a", ExpectedRevision: savedA.Revision, ExpectedSelectionRevision: savedA.SelectionRevision})
 	if err != nil || publishedA.Revision != 2 || publishedA.PublishedRevision != 1 {
 		t.Fatalf("Publish A = %#v, err %v", publishedA, err)
 	}
-	replayedPublish, err := service.PublishWorkspace(ctx, core.Session{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-a", ExpectedRevision: savedA.Revision, ExpectedSelectionRevision: savedA.SelectionRevision})
+	replayedPublish, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-a", ExpectedRevision: savedA.Revision, ExpectedSelectionRevision: savedA.SelectionRevision})
 	if err != nil || replayedPublish.Revision != publishedA.Revision {
 		t.Fatalf("idempotent Publish A = %#v, err %v", replayedPublish, err)
 	}
-	savedB, err := service.SaveWorkspaceDraft(ctx, core.Session{}, schema, contentapi.SaveWorkspaceDraftRequest{
+	savedB, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, schema, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "save-b", ExpectedRevision: publishedA.Revision,
 		ExpectedSelectionRevision: publishedA.SelectionRevision, Records: []contentapi.RecordInput{{ID: savedA.Records[0].ID, EntityID: entityID, Values: map[string]any{"title": "B"}}},
 		Selections: []contentapi.Selection{},
@@ -172,7 +173,7 @@ func TestPublishCreatesImmutableHistoryAndRestoreOnlyChangesDraft(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Save B: %v", err)
 	}
-	publishedB, err := service.PublishWorkspace(ctx, core.Session{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-b", ExpectedRevision: savedB.Revision, ExpectedSelectionRevision: savedB.SelectionRevision})
+	publishedB, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-b", ExpectedRevision: savedB.Revision, ExpectedSelectionRevision: savedB.SelectionRevision})
 	if err != nil || publishedB.PublishedRevision != 2 {
 		t.Fatalf("Publish B = %#v, err %v", publishedB, err)
 	}
@@ -186,14 +187,14 @@ func TestPublishCreatesImmutableHistoryAndRestoreOnlyChangesDraft(t *testing.T) 
 			firstPublication = item
 		}
 	}
-	restored, err := service.RestoreHistory(ctx, core.Session{}, schema, contentapi.RestoreHistoryRequest{
+	restored, err := service.RestoreHistory(ctx, contracts.AuthorizationSubject{}, schema, contentapi.RestoreHistoryRequest{
 		SnapshotID: snapshotID, HistoryID: firstPublication.ID, IdempotencyKey: "restore-a", ExpectedRevision: publishedB.Revision,
 		ExpectedSelectionRevision: publishedB.SelectionRevision,
 	})
 	if err != nil || restored.Revision != 5 || restored.PublishedRevision != 2 || restored.Records[0].Values["title"] != "A" {
 		t.Fatalf("RestoreHistory() = %#v, err %v", restored, err)
 	}
-	replayedRestore, err := service.RestoreHistory(ctx, core.Session{}, schema, contentapi.RestoreHistoryRequest{
+	replayedRestore, err := service.RestoreHistory(ctx, contracts.AuthorizationSubject{}, schema, contentapi.RestoreHistoryRequest{
 		SnapshotID: snapshotID, HistoryID: firstPublication.ID, IdempotencyKey: "restore-a", ExpectedRevision: publishedB.Revision,
 		ExpectedSelectionRevision: publishedB.SelectionRevision,
 	})
@@ -214,11 +215,11 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 	}
 	ctx := context.Background()
 	sourceSchema := readySchema(false)
-	initial, err := service.GetWorkspace(ctx, core.Session{}, sourceSchema, snapshotID)
+	initial, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, sourceSchema, snapshotID)
 	if err != nil {
 		t.Fatalf("initialize source: %v", err)
 	}
-	draft, err := service.SaveWorkspaceDraft(ctx, core.Session{}, sourceSchema, contentapi.SaveWorkspaceDraftRequest{
+	draft, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, sourceSchema, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "copy-source-save-1", ExpectedRevision: initial.Revision,
 		ExpectedSelectionRevision: initial.SelectionRevision, Records: []contentapi.RecordInput{{ClientKey: "article", EntityID: entityID, SortOrder: 0, Values: map[string]any{"title": "Published"}}},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{"article"}}},
@@ -226,14 +227,14 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 	if err != nil {
 		t.Fatalf("save source draft: %v", err)
 	}
-	published, err := service.PublishWorkspace(ctx, core.Session{}, sourceSchema, contentapi.PublishWorkspaceRequest{
+	published, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, sourceSchema, contentapi.PublishWorkspaceRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "copy-source-publish", ExpectedRevision: draft.Revision,
 		ExpectedSelectionRevision: draft.SelectionRevision,
 	})
 	if err != nil {
 		t.Fatalf("publish source: %v", err)
 	}
-	currentDraft, err := service.SaveWorkspaceDraft(ctx, core.Session{}, sourceSchema, contentapi.SaveWorkspaceDraftRequest{
+	currentDraft, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, sourceSchema, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "copy-source-save-2", ExpectedRevision: published.Revision,
 		ExpectedSelectionRevision: published.SelectionRevision, Records: []contentapi.RecordInput{{ID: published.Records[0].ID, EntityID: entityID, SortOrder: 0, Values: map[string]any{"title": "Draft only"}}},
 		Selections: []contentapi.Selection{{PlacementID: "placement-one", InputKey: "articles", Mode: "ids", RecordIDs: []string{published.Records[0].ID}}},
@@ -250,12 +251,12 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: currentDraft.Revision,
 		ExpectedSourceSelectionRevision: currentDraft.SelectionRevision, IdempotencyKey: "copy-target-key", SelectionPolicy: contentapi.SelectionPolicyCopy,
 	}
-	first, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, request)
+	first, err := service.CopySnapshotContent(ctx, contracts.AuthorizationSubject{}, sourceSchema, targetSchema, request)
 	if err != nil || first.TargetSnapshotID != targetID || first.SourceRevision != currentDraft.Revision || first.CopiedRecords != 0 || first.CopiedHistory != 0 {
 		t.Fatalf("CopySnapshotContent() = %#v, err %v", first, err)
 	}
 	targetSchema.State = "ready"
-	target, err := service.GetWorkspace(ctx, core.Session{}, targetSchema, targetID)
+	target, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, targetSchema, targetID)
 	if err != nil || target.Records[0].Values["title"] != "Draft only" || target.Selections[0].RecordIDs[0] != target.Records[0].ID {
 		t.Fatalf("copied draft = %#v, err %v", target, err)
 	}
@@ -263,22 +264,22 @@ func TestCopySnapshotContentCopiesDraftAndHistoryAndReplaysReceipt(t *testing.T)
 	if err != nil || public.ContentRevision != 1 || public.Records[0].Values["title"] != "Published" {
 		t.Fatalf("copied publication = %#v, err %v", public, err)
 	}
-	replayed, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, request)
+	replayed, err := service.CopySnapshotContent(ctx, contracts.AuthorizationSubject{}, sourceSchema, targetSchema, request)
 	if err != nil || replayed != first {
 		t.Fatalf("idempotent copy = %#v, err %v", replayed, err)
 	}
 	resetWithSameKey := request
 	resetWithSameKey.SelectionPolicy = contentapi.SelectionPolicyReset
-	if _, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, resetWithSameKey); !errors.Is(err, domain.ErrConflict) {
+	if _, err := service.CopySnapshotContent(ctx, contracts.AuthorizationSubject{}, sourceSchema, targetSchema, resetWithSameKey); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("same idempotency key with different policy error = %v, want conflict", err)
 	}
 	reset := request
 	reset.IdempotencyKey = "reset-target-key"
 	reset.SelectionPolicy = contentapi.SelectionPolicyReset
-	if _, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, reset); err != nil {
+	if _, err := service.CopySnapshotContent(ctx, contracts.AuthorizationSubject{}, sourceSchema, targetSchema, reset); err != nil {
 		t.Fatalf("reset selections: %v", err)
 	}
-	resetWorkspace, err := service.GetWorkspace(ctx, core.Session{}, targetSchema, targetID)
+	resetWorkspace, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, targetSchema, targetID)
 	if err != nil || resetWorkspace.Records[0].Values["title"] != "Draft only" || len(resetWorkspace.Selections) != 0 {
 		t.Fatalf("reset target draft/workspace = %#v, err %v", resetWorkspace, err)
 	}
@@ -303,7 +304,7 @@ func TestCopySnapshotContentRejectsMalformedSelectionPolicyBeforeMutation(t *tes
 	targetSchema := readySchema(false)
 	targetSchema.State = "provisioning"
 	targetSchema.PageSnapshotID = targetID
-	_, err = service.CopySnapshotContent(context.Background(), core.Session{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
+	_, err = service.CopySnapshotContent(context.Background(), contracts.AuthorizationSubject{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
 		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, IdempotencyKey: "invalid-policy-key", SelectionPolicy: "merge",
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -322,11 +323,11 @@ func TestCopySnapshotContentRejectsStaleSourceBeforePublishingTargetWorkspace(t 
 	}
 	ctx := context.Background()
 	sourceSchema := readySchema(false)
-	initial, err := service.GetWorkspace(ctx, core.Session{}, sourceSchema, snapshotID)
+	initial, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, sourceSchema, snapshotID)
 	if err != nil {
 		t.Fatalf("initialize source: %v", err)
 	}
-	if _, err := service.SaveWorkspaceDraft(ctx, core.Session{}, sourceSchema, contentapi.SaveWorkspaceDraftRequest{
+	if _, err := service.SaveWorkspaceDraft(ctx, contracts.AuthorizationSubject{}, sourceSchema, contentapi.SaveWorkspaceDraftRequest{
 		SnapshotID: snapshotID, IdempotencyKey: "stale-source-save", ExpectedRevision: initial.Revision,
 		ExpectedSelectionRevision: initial.SelectionRevision, Records: []contentapi.RecordInput{}, Selections: []contentapi.Selection{},
 	}); err != nil {
@@ -336,11 +337,11 @@ func TestCopySnapshotContentRejectsStaleSourceBeforePublishingTargetWorkspace(t 
 	targetSchema := readySchema(false)
 	targetSchema.State = "provisioning"
 	targetSchema.PageSnapshotID = targetID
-	_, err = service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
+	_, err = service.CopySnapshotContent(ctx, contracts.AuthorizationSubject{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
 		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: initial.Revision,
 		ExpectedSourceSelectionRevision: initial.SelectionRevision, IdempotencyKey: "stale-copy-key", SelectionPolicy: contentapi.SelectionPolicyCopy,
 	})
-	if !errors.Is(err, domain.ErrConflict) {
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "source revision mismatch") {
 		t.Fatalf("stale source copy error = %v, want conflict", err)
 	}
 	latest, err := repo.Get(ctx, sourceSchema.Locale)
@@ -360,7 +361,7 @@ func TestCopySnapshotContentSupportsUntouchedSourceRevisionZero(t *testing.T) {
 	}
 	ctx := context.Background()
 	sourceSchema := readySchema(false)
-	source, err := service.GetWorkspace(ctx, core.Session{}, sourceSchema, snapshotID)
+	source, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, sourceSchema, snapshotID)
 	if err != nil || source.Revision != 0 {
 		t.Fatalf("initial workspace = %#v, err = %v; want revision zero", source, err)
 	}
@@ -368,7 +369,7 @@ func TestCopySnapshotContentSupportsUntouchedSourceRevisionZero(t *testing.T) {
 	targetSchema := readySchema(false)
 	targetSchema.State = "provisioning"
 	targetSchema.PageSnapshotID = targetID
-	result, err := service.CopySnapshotContent(ctx, core.Session{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
+	result, err := service.CopySnapshotContent(ctx, contracts.AuthorizationSubject{}, sourceSchema, targetSchema, contentapi.CopySnapshotContentRequest{
 		SourceSnapshotID: snapshotID, TargetSnapshotID: targetID, ExpectedSourceRevision: 0,
 		ExpectedSourceSelectionRevision: source.SelectionRevision, IdempotencyKey: "copy-empty-source-0001", SelectionPolicy: contentapi.SelectionPolicyCopy,
 	})
@@ -427,8 +428,8 @@ func readySchema(singleton bool) domain.Schema {
 
 type inertFiles struct{}
 
-func (inertFiles) StatFile(context.Context, core.Session, string) (core.File, error) {
-	return core.File{}, core.ErrFileNotFound
+func (inertFiles) StatFile(context.Context, contracts.AuthorizationSubject, string) (contracts.File, error) {
+	return contracts.File{}, contracts.ErrFileNotFound
 }
 
 const memoryGlobalKey = "global"

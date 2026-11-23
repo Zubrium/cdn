@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"errors"
@@ -72,14 +74,14 @@ type storedUpload = model.Upload
 type idempotencyRecord = model.IdempotencyRecord
 type cleanupRecord = model.CleanupRecord
 
-// ModuleDataDescriptor is registered once by the composition root. Upload
+// RecordDescriptor is registered once by the composition root. Upload
 // sessions, individual parts, idempotency records and cleanup jobs share one
 // loader-owned namespace and one global scope so lifecycle changes can batch.
-func ModuleDataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{ModuleID: moduleID, Namespaces: []core.ModuleDataNamespace{{
-		Name: "loader", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-			"kind": {Type: core.SelectorString}, "upload_id": {Type: core.SelectorString},
-			"principal_id": {Type: core.SelectorString}, "state": {Type: core.SelectorString},
+func RecordDescriptor() recorddata.RecordDescriptor {
+	return recorddata.RecordDescriptor{OwnerID: moduleID, Namespaces: []recorddata.RecordNamespace{{
+		Name: "loader", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+			"kind": {Type: recorddata.RecordSelectorString}, "upload_id": {Type: recorddata.RecordSelectorString},
+			"principal_id": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString},
 		},
 	}}}
 }

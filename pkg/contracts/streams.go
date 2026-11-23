@@ -18,6 +18,12 @@ type ScopedStreamCapability interface {
 	Close() error
 }
 
+// StreamRetainer keeps an active bus stream operation alive until its
+// producer has completed, even when the enclosing JSON dispatch has returned.
+type StreamRetainer interface {
+	Retain() (func(), error)
+}
+
 type streamCapabilityKey struct{}
 
 func WithStreamCapability(ctx context.Context, capability StreamCapability) context.Context {

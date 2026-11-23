@@ -30,20 +30,15 @@ const (
 func ValidAccessGroupKey(value string) bool      { return appaccess.ValidGroupKey(value) }
 func ValidAccessAction(action AccessAction) bool { return appaccess.ValidAction(action) }
 
-// Generic component contracts let engines and workers register capabilities
-// without importing Core domain or application packages.
-type ComponentOperation = corecoord.ComponentOperation
-type ComponentDescriptor = corecoord.ComponentDescriptor
-type ComponentDescriptorProvider = corecoord.ComponentDescriptorProvider
 type Task = corecoord.Task
 type TaskKind = corecoord.TaskKind
 
 const (
-	TaskKindWorker = corecoord.TaskKindWorker
-	TaskKindJoin   = corecoord.TaskKindJoin
+	TaskKindOperation = corecoord.TaskKindOperation
+	TaskKindJoin      = corecoord.TaskKindJoin
 )
 
-type WorkerRef = corecoord.WorkerRef
+type OperationRef = corecoord.OperationRef
 type TaskChild = corecoord.TaskChild
 type TaskOutcome = corecoord.TaskOutcome
 type Workflow = corecoord.Workflow
@@ -58,12 +53,11 @@ type TaskSummary = corecoord.TaskSummary
 type TaskPage = corecoord.TaskPage
 type CoordinatorDescriptor = appcoord.Descriptor
 
-// Build and lifecycle contracts are the only public surface for the generic
-// component composition and durable Coordinator worker catalog.
+// Build and lifecycle contracts support the Core-owned Coordinator instance.
 type BuildPlan = appcoord.BuildPlan
-type ComponentWorkerSet = appcoord.ComponentWorkerSet
-type WorkerHandler = appcoord.WorkerHandler
-type WorkerCatalog = appcoord.WorkerCatalog
+type OperationExecutor = appcoord.OperationExecutor
+type OperationExecutorFunc = appcoord.OperationExecutorFunc
+type TaskFailure = appcoord.TaskFailure
 type RuntimeRegistry = appcoord.RuntimeRegistry
 type RuntimeComponent = appcoord.RuntimeComponent
 type ManagedComponent = appcoord.ManagedComponent
@@ -76,20 +70,18 @@ type ComponentFactory = appcoord.ComponentFactory
 type ComponentApplication = appcoord.Runtime
 
 var (
-	ErrComponentPlanInvalid         = appcoord.ErrInvalid
-	ErrComponentAlreadyRegistered   = appcoord.ErrDuplicate
-	ErrComponentUnavailable         = appcoord.ErrComponentUnavailable
-	ErrComponentPanic               = appcoord.ErrComponentPanic
-	ErrWorkerHandlerConflict        = appcoord.ErrWorkerHandlerConflict
-	ErrWorkflowOperationUnavailable = appcoord.ErrWorkflowOperationUnavailable
-	ErrCoordinatorNotReady          = appcoord.ErrInstanceNotReady
-	ErrCoordinatorInputInvalid      = appcoord.ErrInvalid
+	ErrComponentPlanInvalid       = appcoord.ErrInvalid
+	ErrComponentAlreadyRegistered = appcoord.ErrDuplicate
+	ErrComponentUnavailable       = appcoord.ErrComponentUnavailable
+	ErrComponentPanic             = appcoord.ErrComponentPanic
+	ErrCoordinatorNotReady        = appcoord.ErrInstanceNotReady
+	ErrCoordinatorInputInvalid    = appcoord.ErrInvalid
 )
 
 func NewRuntimeRegistry() *RuntimeRegistry { return appcoord.NewRuntimeRegistry() }
 
-func BuildWorkerCatalog(plan BuildPlan, providers []ComponentWorkerSet) (*WorkerCatalog, error) {
-	return appcoord.BuildWorkerCatalog(plan, providers)
+func NewTaskFailure(code string, retryable bool) *TaskFailure {
+	return appcoord.NewTaskFailure(code, retryable)
 }
 
 func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shutdownTimeout time.Duration) (*ComponentApplication, error) {

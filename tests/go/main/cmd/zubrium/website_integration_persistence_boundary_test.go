@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -74,10 +75,10 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		})
 
 		// Core exposes only registered modules to the data-capability factory.
-		if err := runtime.Registry.Register(websiteengine.ModuleDataDescriptor().ModuleID, websitePersistenceModule{}); err != nil {
+		if err := runtime.Registry.Register(websiteengine.RecordDescriptor().OwnerID); err != nil {
 			t.Fatalf("register Website module in disposable Core registry: %v", err)
 		}
-		store, err := runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+		store, err := websiteAcceptanceRecordStore(t, runtime, websiteengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("issue scoped Website module-data capability: %v", err)
 		}
@@ -152,7 +153,7 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		if current.Revision < 2 {
 			t.Fatalf("root record has no stale revision to probe: %d", current.Revision)
 		}
-		value := core.ModuleDataValue{
+		value := contracts.RecordValue{
 			Payload: current.Payload, PayloadVersion: current.PayloadVersion, IndexData: current.IndexData,
 		}
 		if _, err := store.Put(ctx, rootKey, value, current.Revision-1); !errors.Is(err, core.ErrModuleDataConflict) {
@@ -170,13 +171,13 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 
 		// A Website capability must not read, write, or list an undeclared
 		// namespace or an undeclared scope of a declared namespace.
-		foreignNamespace := core.ModuleDataKey{
+		foreignNamespace := contracts.RecordKey{
 			Namespace: "content/records", ScopeType: "global", ScopeID: "global", RecordKey: "web018-foreign",
 		}
 		if _, err := store.Get(ctx, foreignNamespace); !errors.Is(err, core.ErrModuleDataInvalid) {
 			t.Fatalf("foreign namespace read = %v, want Core ErrModuleDataInvalid", err)
 		}
-		if _, err := store.Put(ctx, foreignNamespace, core.ModuleDataValue{
+		if _, err := store.Put(ctx, foreignNamespace, contracts.RecordValue{
 			Payload: json.RawMessage(`{}`), PayloadVersion: 1, IndexData: json.RawMessage(`{}`),
 		}, 0); !errors.Is(err, core.ErrModuleDataInvalid) {
 			t.Fatalf("foreign namespace write = %v, want Core ErrModuleDataInvalid", err)
@@ -184,15 +185,15 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		if _, _, _, err := store.List(ctx, foreignNamespace.Namespace, foreignNamespace.ScopeType, foreignNamespace.ScopeID, "", nil, 10); !errors.Is(err, core.ErrModuleDataInvalid) {
 			t.Fatalf("foreign namespace list = %v, want Core ErrModuleDataInvalid", err)
 		}
-		foreignScope := core.ModuleDataKey{
+		foreignScope := contracts.RecordKey{
 			Namespace: websiterepo.SnapshotNamespace, ScopeType: "job", ScopeID: "web018", RecordKey: "web018-foreign",
 		}
 		if _, err := store.Get(ctx, foreignScope); !errors.Is(err, core.ErrModuleDataInvalid) {
 			t.Fatalf("undeclared scope read = %v, want Core ErrModuleDataInvalid", err)
 		}
-		if err := store.Batch(ctx, []core.ModuleDataMutation{{
+		if err := store.Batch(ctx, []contracts.RecordMutation{{
 			Key: foreignNamespace, ExpectedRevision: 0,
-			Value: &core.ModuleDataValue{Payload: json.RawMessage(`{}`), PayloadVersion: 1, IndexData: json.RawMessage(`{}`)},
+			Value: &contracts.RecordValue{Payload: json.RawMessage(`{}`), PayloadVersion: 1, IndexData: json.RawMessage(`{}`)},
 		}}); !errors.Is(err, core.ErrModuleDataInvalid) {
 			t.Fatalf("foreign namespace batch = %v, want Core ErrModuleDataInvalid", err)
 		}
@@ -442,18 +443,14 @@ func websiteProxyPrivateS3Checks(t *testing.T, env *websitePersistenceEnv) {
 	env.insecureS3HTTP = true
 }
 
-type websitePersistenceModule struct{}
-
-func (websitePersistenceModule) Operations() []core.Operation { return nil }
-
 type websiteOwnedKeys struct {
-	store *core.ModuleDataStore
-	keys  map[core.ModuleDataKey]struct{}
+	store contracts.RecordDataStore
+	keys  map[contracts.RecordKey]struct{}
 }
 
-func (o *websiteOwnedKeys) add(keys ...core.ModuleDataKey) {
+func (o *websiteOwnedKeys) add(keys ...contracts.RecordKey) {
 	if o.keys == nil {
-		o.keys = make(map[core.ModuleDataKey]struct{}, len(keys))
+		o.keys = make(map[contracts.RecordKey]struct{}, len(keys))
 	}
 	for _, key := range keys {
 		o.keys[key] = struct{}{}
@@ -482,9 +479,9 @@ func (o *websiteOwnedKeys) deleteAll(t *testing.T) {
 	}
 }
 
-func seedWebsiteRecord(t *testing.T, ctx context.Context, store *core.ModuleDataStore, key core.ModuleDataKey, payload []byte, index map[string]any) {
+func seedWebsiteRecord(t *testing.T, ctx context.Context, store contracts.RecordDataStore, key contracts.RecordKey, payload []byte, index map[string]any) {
 	t.Helper()
-	if _, err := store.Put(ctx, key, core.ModuleDataValue{
+	if _, err := store.Put(ctx, key, contracts.RecordValue{
 		Payload: payload, PayloadVersion: 1, IndexData: mustWebsiteJSON(index),
 	}, 0); err != nil {
 		t.Fatalf("seed Website record %+v: %v", key, err)
@@ -496,7 +493,7 @@ func seedWebsiteRecord(t *testing.T, ctx context.Context, store *core.ModuleData
 	// Core assigns a fresh opaque revision on every write, including the index
 	// projection update, so the second write must use the next sequence value.
 	index["revision"] = stored.Revision + 1
-	if _, err := store.Put(ctx, key, core.ModuleDataValue{
+	if _, err := store.Put(ctx, key, contracts.RecordValue{
 		Payload: stored.Payload, PayloadVersion: stored.PayloadVersion, IndexData: mustWebsiteJSON(index),
 	}, stored.Revision); err != nil {
 		t.Fatalf("set Website record index revision %+v: %v", key, err)
@@ -511,7 +508,7 @@ func mustWebsiteJSON(value any) []byte {
 	return encoded
 }
 
-func assertCoreCASConflict(t *testing.T, ctx context.Context, store *core.ModuleDataStore, key core.ModuleDataKey) {
+func assertCoreCASConflict(t *testing.T, ctx context.Context, store contracts.RecordDataStore, key contracts.RecordKey) {
 	t.Helper()
 	current, err := store.Get(ctx, key)
 	if err != nil {
@@ -520,7 +517,7 @@ func assertCoreCASConflict(t *testing.T, ctx context.Context, store *core.Module
 	if current.Revision < 1 {
 		t.Fatalf("record %+v has invalid revision %d", key, current.Revision)
 	}
-	value := core.ModuleDataValue{
+	value := contracts.RecordValue{
 		Payload:        append(json.RawMessage(nil), current.Payload...),
 		PayloadVersion: current.PayloadVersion,
 		IndexData:      append(json.RawMessage(nil), current.IndexData...),
@@ -538,23 +535,23 @@ func assertCoreCASConflict(t *testing.T, ctx context.Context, store *core.Module
 	}
 }
 
-func websiteSnapshotKey(pageID, snapshotID string) core.ModuleDataKey {
-	return core.ModuleDataKey{
+func websiteSnapshotKey(pageID, snapshotID string) contracts.RecordKey {
+	return contracts.RecordKey{
 		Namespace: websiterepo.SnapshotNamespace, ScopeType: "global", ScopeID: "global",
 		RecordKey: "snapshot/" + strings.ToLower(pageID) + "/" + strings.ToLower(snapshotID),
 	}
 }
 
-func websiteSnapshotReceiptKey(pageID, idempotencyKey string) core.ModuleDataKey {
+func websiteSnapshotReceiptKey(pageID, idempotencyKey string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(idempotencyKey))
-	return core.ModuleDataKey{
+	return contracts.RecordKey{
 		Namespace: websiterepo.SnapshotNamespace, ScopeType: "global", ScopeID: "global",
 		RecordKey: fmt.Sprintf("idempotency/%s/%s", strings.ToLower(pageID), hex.EncodeToString(digest[:])),
 	}
 }
 
-func websiteSnapshotRegistryKey(pageID string) core.ModuleDataKey {
-	return core.ModuleDataKey{
+func websiteSnapshotRegistryKey(pageID string) contracts.RecordKey {
+	return contracts.RecordKey{
 		Namespace: websiterepo.SnapshotNamespace, ScopeType: "global", ScopeID: "global",
 		RecordKey: "registry/" + strings.ToLower(pageID),
 	}

@@ -4,8 +4,8 @@ package prerender
 import (
 	"context"
 	"errors"
+	"github.com/Zubrium/cdn/pkg/contracts"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
@@ -48,15 +48,13 @@ type Worker interface {
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() core.ComponentDescriptor { return ComponentDescriptor() }
-func (Descriptor) Operations() []core.Operation                  { return nil }
+func (Descriptor) ComponentDescriptor() contracts.ComponentDescriptor { return ComponentDescriptor() }
 
 var (
-	_ core.ComponentDescriptorProvider = Descriptor{}
-	_ core.Module                      = Descriptor{}
+	_ contracts.ComponentDescriptorProvider = Descriptor{}
 )
 
-func ComponentDescriptor() core.ComponentDescriptor {
-	return core.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
-		Operations: []core.ComponentOperation{{ID: OperationID, ContractVersion: 1}}}
+func ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
+		Operations: []contracts.ComponentOperation{{ID: OperationID, ContractVersion: 1}}}
 }

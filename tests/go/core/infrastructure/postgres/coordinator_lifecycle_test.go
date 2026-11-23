@@ -153,7 +153,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 		for index := 0; index < 2; index++ {
 			go func() {
 				<-gate
-				tasks, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+				tasks, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 1, time.Minute, time.Hour)
 				results <- claimResult{tasks: tasks, err: err}
 			}()
 		}
@@ -187,11 +187,11 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"root":true}`), Children: []corecoord.TaskChild{
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "ref:a", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "ref:b", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "ref:c", Payload: json.RawMessage(`{}`), MaxAttempts: 2, DependsOnEmissions: []string{"ref:a", "ref:b"}},
 		}}
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, outcome); err != nil {
@@ -219,16 +219,16 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		cyclic := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "cycle:a", Payload: json.RawMessage(`{}`), MaxAttempts: 1, DependsOnEmissions: []string{"cycle:b"}},
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "cycle:b", Payload: json.RawMessage(`{}`), MaxAttempts: 1, DependsOnEmissions: []string{"cycle:a"}},
 		}}
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, cyclic); !errors.Is(err, ErrCoordinatorInvalid) {
 			t.Fatalf("dependency cycle was accepted: %v", err)
 		}
 		repeated := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "repeat:a", Payload: json.RawMessage(`{}`), MaxAttempts: 1, DependsOn: []uuid.UUID{root.ID, root.ID}},
 		}}
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, repeated); !errors.Is(err, ErrCoordinatorInvalid) {
@@ -268,7 +268,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{"attempted":true}`), Children: []corecoord.TaskChild{
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "outage:child", Payload: json.RawMessage(`{}`), MaxAttempts: 1},
 		}}
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, outcome); err == nil {
@@ -294,9 +294,9 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "join:one", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "join:two", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
 			{Kind: corecoord.TaskKindJoin, EmissionKey: "join:barrier", Payload: json.RawMessage(`{}`),
 				DependsOnEmissions: []string{"join:one", "join:two"}},
@@ -304,7 +304,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, outcome); err != nil {
 			t.Fatal(err)
 		}
-		branches, err := ClaimTasks(ctx, pool, owner, epoch, 2, time.Minute, time.Hour)
+		branches, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 2, time.Minute, time.Hour)
 		if err != nil || len(branches) != 2 {
 			t.Fatalf("claim join dependencies: tasks=%+v err=%v", branches, err)
 		}
@@ -313,7 +313,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 			if branch.EmissionKey == "join:one" {
 				failedBranch = branch
 			}
-			if branch.Kind != corecoord.TaskKindWorker || branch.Worker == nil {
+			if branch.Kind != corecoord.TaskKindOperation || branch.Operation == nil {
 				t.Fatalf("join task was claimed as worker work: %+v", branch)
 			}
 		}
@@ -342,7 +342,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{
-			{Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: "retry:worker", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
 			{Kind: corecoord.TaskKindJoin, EmissionKey: "retry:join", Payload: json.RawMessage(`{}`),
 				DependsOnEmissions: []string{"retry:worker"}},
@@ -350,7 +350,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, outcome); err != nil {
 			t.Fatal(err)
 		}
-		claimed, err := ClaimTasks(ctx, pool, owner, epoch, 1, time.Minute, time.Hour)
+		claimed, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 1, time.Minute, time.Hour)
 		if err != nil || len(claimed) != 1 || claimed[0].EmissionKey != "retry:worker" {
 			t.Fatalf("claim retryable worker: tasks=%+v err=%v", claimed, err)
 		}
@@ -384,7 +384,7 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 		if count := scalarInt(t, `SELECT count(*) FROM coordination.workflows WHERE workflow_id=$1`, request.ID); count != 0 {
 			t.Fatalf("start outage persisted %d workflows", count)
 		}
-		if _, err := ClaimTasks(outageCtx, pool, owner, epoch, 1, time.Minute, time.Hour); err == nil {
+		if _, err := ClaimTasks(outageCtx, pool, owner, epoch, []string{"engine.example"}, 1, time.Minute, time.Hour); err == nil {
 			t.Fatal("claim outage returned success")
 		}
 		root, err := claimWorkflowRoot(ctx, pool, owner, epoch)

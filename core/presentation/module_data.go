@@ -42,7 +42,7 @@ type ModuleDataRecord = appengine.ModuleDataRecord
 type ModuleDataMutation = appengine.ModuleDataMutation
 type ModuleDataSelector = appengine.ModuleDataSelector
 
-// ModuleDataStore is a capability bound to one engine ID and its declared
+// ModuleDataStore is a capability bound to one opaque owner ID and its declared
 // namespaces. Its implementation is an application service with no database
 // or storage dependency in the public Core contract.
 type ModuleDataStore = appengine.Store
@@ -51,8 +51,8 @@ func ValidModuleDataLimits(limits ModuleDataLimits) bool {
 	return appengine.ValidModuleDataLimits(limits)
 }
 
-// RegisterDataModule issues the engine-scoped data capability from the Core
-// composition root after validating registration and its declared contract.
+// RegisterDataModule issues the owner-scoped data capability from the Core
+// composition root after validating its declared contract.
 func (r *Runtime) RegisterDataModule(descriptor ModuleDataDescriptor) (*ModuleDataStore, error) {
 	if err := r.valid(); err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func (r *Runtime) RegisterDataModule(descriptor ModuleDataDescriptor) (*ModuleDa
 	if r.engineDataRepository == nil {
 		return nil, ErrModuleDataUnavailable
 	}
-	if _, err := r.Registry.Lookup(descriptor.ModuleID); err != nil {
+	if err := r.Registry.Lookup(descriptor.ModuleID); err != nil {
 		return nil, ErrModuleDataInvalid
 	}
 

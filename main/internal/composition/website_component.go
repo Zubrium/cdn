@@ -22,6 +22,14 @@ type websiteEngineComponent struct {
 	inputResolver    websiteapp.BuildInputResolver
 }
 
+func newWebsiteEngineComponent(core *coreComponent, config appconfig.Resolved) *websiteEngineComponent {
+	return &websiteEngineComponent{
+		core: core, config: config,
+		localeCatalog:    newWebsiteLocaleCatalog(),
+		contentBuildView: newWebsiteContentBuildProjection(),
+	}
+}
+
 func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if component == nil || ctx == nil || component.core == nil || component.core.runtime == nil {
 		return errors.New("Website dependencies are not initialized")
@@ -30,7 +38,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		return err
 	}
 	component.core.websiteHandle.Store(component)
-	data, err := component.core.runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+	data, err := component.core.registerModuleData(websiteengine.RecordDescriptor())
 	if err != nil {
 		return err
 	}
@@ -47,9 +55,13 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		buildWorkflow = newWebsiteBuildWorkflowClient(workflowClient, workflowClient, workflowClient, workflowControl,
 			component.config.Coordinator.MaxWorkflowTasks)
 	}
-	localeCatalog := newWebsiteLocaleCatalog()
-	contentBuildView := newWebsiteContentBuildProjection()
-	buildInputResolver, err := websiteapp.NewModuleBuildInputResolver(data, contentBuildView, component.config.Prerender.SandboxImage)
+	if component.localeCatalog == nil {
+		component.localeCatalog = newWebsiteLocaleCatalog()
+	}
+	if component.contentBuildView == nil {
+		component.contentBuildView = newWebsiteContentBuildProjection()
+	}
+	buildInputResolver, err := websiteapp.NewModuleBuildInputResolver(data, component.contentBuildView, component.config.Prerender.SandboxImage)
 	if err != nil {
 		return err
 	}
@@ -57,9 +69,9 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		AccessGroup:            "features",
 		CoordinatorAccessGroup: component.config.Coordinator.WorkflowAccessGroup,
 		BuildWorkflow:          buildWorkflow,
-		LocaleCatalog:          localeCatalog,
+		LocaleCatalog:          component.localeCatalog,
 		BuildInputResolver:     buildInputResolver,
-		BuildFiles:             component.core.runtime.EngineFiles(),
+		BuildFiles:             component.core.runtime.Files(),
 		PrerenderImageDigest:   component.config.Prerender.SandboxImage,
 		BuildOperationID:       websiteworkflow.OperationID,
 		BuildContractVersion:   websiteworkflow.ContractVersion,
@@ -70,7 +82,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		serviceConfig.Files = component.core.runtime.EngineFiles()
+		serviceConfig.Files = component.core.runtime.Files()
 		serviceConfig.Workflow = workflow
 		serviceConfig.Sessions = component.core.runtime.Sessions()
 	}
@@ -89,7 +101,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		}
 		serviceConfig.MediaWorkflow = newWebsiteBuildWorkflowClient(workflowClient, workflowClient, workflowClient,
 			workflowControl, component.config.Coordinator.MaxWorkflowTasks)
-		serviceConfig.MediaFiles = component.core.runtime.EngineFiles()
+		serviceConfig.MediaFiles = component.core.runtime.Files()
 		serviceConfig.MediaOperationID = websiteworkflow.MediaOperationID
 		serviceConfig.MediaContractVersion = websiteworkflow.MediaContractVersion
 		serviceConfig.MediaProcessorVersion = component.config.Media.ProcessorVersion
@@ -100,8 +112,6 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		return err
 	}
 	component.service = service
-	component.localeCatalog = localeCatalog
-	component.contentBuildView = contentBuildView
 	component.inputResolver = buildInputResolver
 	return nil
 }

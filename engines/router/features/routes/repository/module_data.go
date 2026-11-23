@@ -9,15 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Zubrium/cdn/engines/router/features/routes/model"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"math"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	core "github.com/Zubrium/cdn/core/presentation"
-	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
 const (
@@ -33,11 +32,11 @@ var (
 )
 
 type ModuleDataStore interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Delete(context.Context, core.ModuleDataKey, int64) error
-	Batch(context.Context, []core.ModuleDataMutation) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Delete(context.Context, recorddata.RecordKey, int64) error
+	Batch(context.Context, []recorddata.RecordMutation) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 }
 
@@ -108,12 +107,12 @@ func (repository *ModuleDataRepository) Create(ctx context.Context, route model.
 		return model.Route{}, err
 	}
 	idemIndex, _ := json.Marshal(map[string]any{"record_type": "idempotency"})
-	mutations := []core.ModuleDataMutation{
+	mutations := []recorddata.RecordMutation{
 		{Key: dataKey(route.BranchID, routeKey), ExpectedRevision: 0, Value: routeValue},
-		{Key: dataKey(route.BranchID, idemKey), ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: idemEncoded, PayloadVersion: dataVersion, IndexData: idemIndex}},
+		{Key: dataKey(route.BranchID, idemKey), ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: idemEncoded, PayloadVersion: dataVersion, IndexData: idemIndex}},
 	}
 	if err := repository.data.Batch(ctx, mutations); err != nil {
-		if !errors.Is(err, core.ErrModuleDataConflict) {
+		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return model.Route{}, mapDataError(err)
 		}
 		if prior, readErr := repository.readIdempotency(ctx, route.BranchID, idemKey); readErr == nil {
@@ -133,9 +132,9 @@ func (repository *ModuleDataRepository) GetByID(ctx context.Context, branchID, i
 	if repository == nil || repository.data == nil || ctx == nil || branchID == "" || id == "" {
 		return model.Route{}, ErrInvalid
 	}
-	keys, records, _, err := repository.data.List(ctx, routeNamespace, "branch", branchID, "", []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"route"}},
-		{Field: "route_id", Operator: core.SelectorEqual, Values: []any{id}},
+	keys, records, _, err := repository.data.List(ctx, routeNamespace, "branch", branchID, "", []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"route"}},
+		{Field: "route_id", Operator: recorddata.RecordSelectorEqual, Values: []any{id}},
 	}, 2)
 	if err != nil {
 		return model.Route{}, mapDataError(err)
@@ -157,9 +156,9 @@ func (repository *ModuleDataRepository) List(ctx context.Context, branchID, host
 	if repository == nil || repository.data == nil || ctx == nil || branchID == "" || limit < 1 || len(cursor) > 256 {
 		return nil, "", ErrInvalid
 	}
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"route"}}}
+	selectors := []recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"route"}}}
 	if host != "" {
-		selectors = append(selectors, core.ModuleDataSelector{Field: "host", Operator: core.SelectorEqual, Values: []any{host}})
+		selectors = append(selectors, recorddata.RecordSelector{Field: "host", Operator: recorddata.RecordSelectorEqual, Values: []any{host}})
 	}
 	keys, records, next, err := repository.data.List(ctx, routeNamespace, "branch", branchID, cursor, selectors, limit)
 	if err != nil {
@@ -195,10 +194,10 @@ func (repository *ModuleDataRepository) FindMatch(ctx context.Context, branchID,
 	for index, prefix := range prefixes {
 		pathValues[index] = prefix
 	}
-	selectors := []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"route"}},
-		{Field: "host", Operator: core.SelectorEqual, Values: []any{host}},
-		{Field: "path", Operator: core.SelectorIn, Values: pathValues},
+	selectors := []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"route"}},
+		{Field: "host", Operator: recorddata.RecordSelectorEqual, Values: []any{host}},
+		{Field: "path", Operator: recorddata.RecordSelectorIn, Values: pathValues},
 	}
 	cursor := ""
 	var best model.Route
@@ -333,13 +332,13 @@ func (repository *ModuleDataRepository) ReplaceLocaleTarget(ctx context.Context,
 		return model.Route{}, ErrInvalid
 	}
 	receiptIndex, _ := json.Marshal(map[string]any{"record_type": "idempotency"})
-	mutations := []core.ModuleDataMutation{
+	mutations := []recorddata.RecordMutation{
 		{Key: key, ExpectedRevision: observed.Revision, Value: routeValue},
 		{Key: dataKey(branchID, idempotencyRecordKey(update.IdempotencyKey)), ExpectedRevision: 0,
-			Value: &core.ModuleDataValue{Payload: receipt, PayloadVersion: dataVersion, IndexData: receiptIndex}},
+			Value: &recorddata.RecordValue{Payload: receipt, PayloadVersion: dataVersion, IndexData: receiptIndex}},
 	}
 	if err := repository.data.Batch(ctx, mutations); err != nil {
-		if !errors.Is(err, core.ErrModuleDataConflict) {
+		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return model.Route{}, mapDataError(err)
 		}
 		if prior, readErr := repository.readIdempotency(ctx, branchID, update.IdempotencyKey); readErr == nil {
@@ -373,30 +372,30 @@ func (repository *ModuleDataRepository) Delete(ctx context.Context, branchID, id
 	return mapDataError(repository.data.Delete(ctx, key, observed.Revision))
 }
 
-func (repository *ModuleDataRepository) findRecord(ctx context.Context, branchID, id string) (core.ModuleDataKey, core.ModuleDataRecord, model.Route, error) {
-	keys, records, _, err := repository.data.List(ctx, routeNamespace, "branch", branchID, "", []core.ModuleDataSelector{
-		{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"route"}},
-		{Field: "route_id", Operator: core.SelectorEqual, Values: []any{id}},
+func (repository *ModuleDataRepository) findRecord(ctx context.Context, branchID, id string) (recorddata.RecordKey, recorddata.Record, model.Route, error) {
+	keys, records, _, err := repository.data.List(ctx, routeNamespace, "branch", branchID, "", []recorddata.RecordSelector{
+		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"route"}},
+		{Field: "route_id", Operator: recorddata.RecordSelectorEqual, Values: []any{id}},
 	}, 2)
 	if err != nil {
-		return core.ModuleDataKey{}, core.ModuleDataRecord{}, model.Route{}, mapDataError(err)
+		return recorddata.RecordKey{}, recorddata.Record{}, model.Route{}, mapDataError(err)
 	}
 	if len(keys) == 0 || len(records) == 0 {
-		return core.ModuleDataKey{}, core.ModuleDataRecord{}, model.Route{}, ErrNotFound
+		return recorddata.RecordKey{}, recorddata.Record{}, model.Route{}, ErrNotFound
 	}
 	if len(keys) != 1 || len(records) != 1 {
-		return core.ModuleDataKey{}, core.ModuleDataRecord{}, model.Route{}, ErrInvalid
+		return recorddata.RecordKey{}, recorddata.Record{}, model.Route{}, ErrInvalid
 	}
 	route, err := decodeRoute(records[0])
 	if err != nil || route.ID != id || route.BranchID != branchID {
-		return core.ModuleDataKey{}, core.ModuleDataRecord{}, model.Route{}, ErrInvalid
+		return recorddata.RecordKey{}, recorddata.Record{}, model.Route{}, ErrInvalid
 	}
 	return keys[0], records[0], route, nil
 }
 
 func (repository *ModuleDataRepository) readIdempotency(ctx context.Context, branchID, key string) (idempotencyPayload, error) {
 	record, err := repository.data.Get(ctx, dataKey(branchID, key))
-	if errors.Is(err, core.ErrModuleDataNotFound) {
+	if errors.Is(err, recorddata.ErrRecordNotFound) {
 		return idempotencyPayload{}, ErrNotFound
 	}
 	if err != nil {
@@ -409,7 +408,7 @@ func (repository *ModuleDataRepository) readIdempotency(ctx context.Context, bra
 	return payload, nil
 }
 
-func encodeRoute(route model.Route) (*core.ModuleDataValue, error) {
+func encodeRoute(route model.Route) (*recorddata.RecordValue, error) {
 	payload, err := json.Marshal(routePayload{Kind: "route", Route: route})
 	if err != nil {
 		return nil, ErrInvalid
@@ -421,10 +420,10 @@ func encodeRoute(route model.Route) (*core.ModuleDataValue, error) {
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	return &core.ModuleDataValue{Payload: payload, PayloadVersion: dataVersion, IndexData: index}, nil
+	return &recorddata.RecordValue{Payload: payload, PayloadVersion: dataVersion, IndexData: index}, nil
 }
 
-func decodeRoute(record core.ModuleDataRecord) (model.Route, error) {
+func decodeRoute(record recorddata.Record) (model.Route, error) {
 	var payload routePayload
 	// Core's record revision is global and opaque; Router's route revision is
 	// a logical CAS token stored in the payload and advanced only by Router.
@@ -491,8 +490,8 @@ func decodeLocaleRevisions(encoded string) (map[string]int64, error) {
 	return result, nil
 }
 
-func dataKey(branchID, key string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: routeNamespace, ScopeType: "branch", ScopeID: branchID, RecordKey: key}
+func dataKey(branchID, key string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: routeNamespace, ScopeType: "branch", ScopeID: branchID, RecordKey: key}
 }
 
 func routeRecordKey(host, path string) string {
@@ -527,11 +526,11 @@ func mapDataError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, recorddata.ErrRecordNotFound):
 		return ErrNotFound
-	case errors.Is(err, core.ErrModuleDataConflict):
+	case errors.Is(err, recorddata.ErrRecordConflict):
 		return ErrConflict
-	case errors.Is(err, core.ErrModuleDataInvalid), errors.Is(err, core.ErrModuleDataLimitExceeded):
+	case errors.Is(err, recorddata.ErrRecordInvalid), errors.Is(err, recorddata.ErrRecordLimit):
 		return ErrInvalid
 	default:
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)

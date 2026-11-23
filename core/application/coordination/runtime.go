@@ -34,9 +34,8 @@ type RuntimeComponent struct {
 }
 
 type RuntimeRegistry struct {
-	mu             sync.RWMutex
-	components     map[string]RuntimeComponent
-	workerHandlers map[string]map[string]WorkerHandler
+	mu         sync.RWMutex
+	components map[string]RuntimeComponent
 }
 
 func NewRuntimeRegistry() *RuntimeRegistry {
@@ -58,47 +57,6 @@ func (r *RuntimeRegistry) Register(component RuntimeComponent) error {
 	component.Requires = append([]string(nil), component.Requires...)
 	r.components[component.ID] = component
 	return nil
-}
-
-// RegisterWorkerHandlers installs statically compiled operation handlers for a
-// generic component. The selected composition is validated before startup.
-func (r *RuntimeRegistry) RegisterWorkerHandlers(componentID string, handlers map[string]WorkerHandler) error {
-	if r == nil || !componentIDPattern.MatchString(componentID) || len(handlers) == 0 {
-		return ErrInvalid
-	}
-	copyHandlers := make(map[string]WorkerHandler, len(handlers))
-	for operationType, handler := range handlers {
-		if _, _, valid := parseRegisteredWorkerType(operationType); !valid || handler == nil {
-			return ErrInvalid
-		}
-		copyHandlers[operationType] = handler
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.workerHandlers == nil {
-		r.workerHandlers = make(map[string]map[string]WorkerHandler)
-	}
-	if _, exists := r.workerHandlers[componentID]; exists {
-		return ErrDuplicate
-	}
-	r.workerHandlers[componentID] = copyHandlers
-	return nil
-}
-
-// CompileWorkerCatalog exposes a defensive immutable view of the handlers that
-// match a selected profile. Composition uses the same method before startup so
-// missing handlers fail before Core or any listener has side effects.
-func (r *RuntimeRegistry) CompileWorkerCatalog(plan BuildPlan) (*WorkerCatalog, error) {
-	if r == nil {
-		return nil, ErrInvalid
-	}
-	r.mu.RLock()
-	providers := make([]ComponentWorkerSet, 0, len(r.workerHandlers))
-	for componentID, handlers := range r.workerHandlers {
-		providers = append(providers, ComponentWorkerSet{ComponentID: componentID, Handlers: handlers})
-	}
-	r.mu.RUnlock()
-	return BuildWorkerCatalog(plan, providers)
 }
 
 func (r *RuntimeRegistry) lookup(id string) (RuntimeComponent, bool) {
@@ -130,7 +88,6 @@ type Runtime struct {
 	monitorCancel   context.CancelFunc
 	monitorWG       sync.WaitGroup
 	failures        chan error
-	catalog         *WorkerCatalog
 }
 
 func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shutdownTimeout time.Duration) (*Runtime, error) {
@@ -146,7 +103,7 @@ func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shu
 	selected := make(map[string]bool, len(plan.Components))
 	seen := make(map[string]bool, len(plan.Components))
 	for _, id := range plan.Components {
-		if !componentIDPattern.MatchString(id) || selected[id] {
+		if !taskClassPattern.MatchString(id) || selected[id] {
 			return nil, ErrInvalid
 		}
 		selected[id] = true
@@ -166,11 +123,7 @@ func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shu
 		}
 		seen[id] = true
 	}
-	catalog, err := registry.CompileWorkerCatalog(plan)
-	if err != nil {
-		return nil, err
-	}
-	runtime := &Runtime{closeDone: make(chan struct{}), failures: make(chan error, len(plan.Components)), shutdownTimeout: shutdownTimeout, catalog: catalog}
+	runtime := &Runtime{closeDone: make(chan struct{}), failures: make(chan error, len(plan.Components)), shutdownTimeout: shutdownTimeout}
 	cleanup := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
@@ -286,17 +239,6 @@ func Compose(ctx context.Context, plan BuildPlan, registry *RuntimeRegistry, shu
 		go runtime.monitorFailures(monitorCtx, source.id, source.errors)
 	}
 	return runtime, nil
-}
-
-// WorkerCatalog returns the immutable handler set compiled into this runtime.
-// A composition without task handlers has no task catalog.
-func (r *Runtime) WorkerCatalog() *WorkerCatalog {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.catalog
 }
 
 func (r *Runtime) Ready() bool {

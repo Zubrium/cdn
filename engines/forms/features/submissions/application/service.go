@@ -1,20 +1,21 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"errors"
 	"strings"
-	"unicode/utf8"
 	"time"
+	"unicode/utf8"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/forms/features/submissions/model"
 	submissionpkg "github.com/Zubrium/cdn/engines/forms/features/submissions/pkg"
 )
 
 type Files interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	DeleteFile(context.Context, core.Session, string, int64) error
+	StatFile(context.Context, recorddata.AuthorizationSubject, string) (recorddata.File, error)
+	DeleteFile(context.Context, recorddata.AuthorizationSubject, string, int64) error
 }
 
 type Service struct {
@@ -51,14 +52,14 @@ type CreateInput struct {
 
 func New(repository Repository, files Files, maxPage int) (*Service, error) {
 	if repository == nil || files == nil || maxPage < 1 {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	return &Service{repository: repository, files: files, maxPage: maxPage}, nil
 }
 
 func (service *Service) Get(ctx context.Context, id string) (model.Submission, int64, error) {
 	if !validIdentifier(id) {
-		return model.Submission{}, 0, core.ErrModuleDataInvalid
+		return model.Submission{}, 0, recorddata.ErrRecordInvalid
 	}
 	entry, err := service.repository.Get(ctx, id)
 	return entry.Submission, entry.Revision, err
@@ -67,15 +68,15 @@ func (service *Service) Get(ctx context.Context, id string) (model.Submission, i
 func (service *Service) CreateAccepted(ctx context.Context, input CreateInput) (model.Submission, int64, error) {
 	if !validIdentifier(input.ID) || !validIdentifier(input.FormID) || input.SchemaVersion < 1 ||
 		input.Values == nil || input.IdempotencyKeyHash == "" || input.IdempotencyFingerprint == "" || input.CreatedAt.IsZero() {
-		return model.Submission{}, 0, core.ErrModuleDataInvalid
+		return model.Submission{}, 0, recorddata.ErrRecordInvalid
 	}
 	seen := make(map[string]struct{}, len(input.Attachments))
 	for _, id := range input.Attachments {
 		if !validIdentifier(id) {
-			return model.Submission{}, 0, core.ErrModuleDataInvalid
+			return model.Submission{}, 0, recorddata.ErrRecordInvalid
 		}
 		if _, exists := seen[id]; exists {
-			return model.Submission{}, 0, core.ErrModuleDataInvalid
+			return model.Submission{}, 0, recorddata.ErrRecordInvalid
 		}
 		seen[id] = struct{}{}
 	}
@@ -93,7 +94,7 @@ func (service *Service) CreateAccepted(ctx context.Context, input CreateInput) (
 func (service *Service) List(ctx context.Context, formID, formKey, state, after string, limit int) ([]Versioned, string, error) {
 	if !validIdentifier(formID) || (formKey != "" && !validText(formKey, 128)) ||
 		(state != "" && !validStatus(state)) || limit < 1 || limit > service.maxPage {
-		return nil, "", core.ErrModuleDataInvalid
+		return nil, "", recorddata.ErrRecordInvalid
 	}
 	entries, next, err := service.repository.List(ctx, formID, formKey, state, after, limit)
 	if err != nil {
@@ -108,15 +109,15 @@ func (service *Service) List(ctx context.Context, formID, formKey, state, after 
 
 func (service *Service) SetState(ctx context.Context, id, state string, expectedRevision int64) (model.Submission, int64, error) {
 	if !validIdentifier(id) || !validStatus(state) || expectedRevision < 1 {
-		return model.Submission{}, 0, core.ErrModuleDataInvalid
+		return model.Submission{}, 0, recorddata.ErrRecordInvalid
 	}
 	entry, err := service.repository.SetState(ctx, id, state, expectedRevision)
 	return entry.Submission, entry.Revision, err
 }
 
-func (service *Service) Delete(ctx context.Context, session core.Session, id string, expectedRevision int64) error {
+func (service *Service) Delete(ctx context.Context, session recorddata.AuthorizationSubject, id string, expectedRevision int64) error {
 	if !validIdentifier(id) || expectedRevision < 1 {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	entry, err := service.repository.BeginDelete(ctx, id, expectedRevision)
 	if err != nil {
@@ -126,7 +127,7 @@ func (service *Service) Delete(ctx context.Context, session core.Session, id str
 		removed := false
 		for attempt := 0; attempt < 3; attempt++ {
 			file, err := service.files.StatFile(ctx, session, fileID)
-			if errors.Is(err, core.ErrFileNotFound) {
+			if errors.Is(err, recorddata.ErrFileNotFound) {
 				removed = true
 				break
 			}
@@ -134,16 +135,16 @@ func (service *Service) Delete(ctx context.Context, session core.Session, id str
 				return err
 			}
 			err = service.files.DeleteFile(ctx, session, fileID, file.Revision)
-			if err == nil || errors.Is(err, core.ErrFileNotFound) {
+			if err == nil || errors.Is(err, recorddata.ErrFileNotFound) {
 				removed = true
 				break
 			}
-			if !errors.Is(err, core.ErrRevisionConflict) {
+			if !errors.Is(err, recorddata.ErrFileRevisionConflict) {
 				return err
 			}
 		}
 		if !removed {
-			return core.ErrRevisionConflict
+			return recorddata.ErrFileRevisionConflict
 		}
 	}
 	return service.repository.FinishDelete(ctx, id, entry.Revision)

@@ -35,21 +35,8 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = ReleaseCoordinatorInstance(context.Background(), pool, owner, epoch) })
 
-		registry := appcoord.NewRuntimeRegistry()
-		noop := func(context.Context, appcoord.Task) (corecoord.TaskOutcome, error) {
-			return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
-		}
-		if err := registry.RegisterWorkerHandlers("engine.website", map[string]appcoord.WorkerHandler{
-			"build-page/v1": noop,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		workers, err := registry.CompileWorkerCatalog(appcoord.BuildPlan{Components: []string{"engine.website"}})
-		if err != nil {
-			t.Fatal(err)
-		}
 		client, err := appcoord.NewWorkflowClient(appcoord.WorkflowClientConfig{
-			Store: store, Workers: workers, OwnerEngineID: "engine.website",
+			Store: store, TaskClass: "engine.website", TaskClasses: []string{"engine.website", "worker.prerender"},
 			InstanceID: owner, ConfigEpoch: epoch, MaxAttempts: 3, Retention: time.Hour,
 		})
 		if err != nil {
@@ -71,9 +58,9 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 		rootOutcome := corecoord.TaskOutcome{
 			Result: json.RawMessage(`{"root":"committed"}`),
 			Children: []corecoord.TaskChild{{
-				Kind: corecoord.TaskKindWorker,
-				Worker: &corecoord.WorkerRef{
-					ComponentID: "worker.prerender", OperationID: "render-page", ContractVersion: 1,
+				Kind: corecoord.TaskKindOperation,
+				Operation: &corecoord.OperationRef{
+					ClassID: "worker.prerender", ID: "render-page", Version: 1,
 				},
 				EmissionKey: "prerender:integration-build",
 				Payload:     json.RawMessage(`{"plan":"pinned"}`),
@@ -84,8 +71,8 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		claimed, err := store.Claim(ctx, owner, epoch, 1, time.Minute, time.Hour)
-		if err != nil || len(claimed) != 1 || claimed[0].Kind != corecoord.TaskKindWorker {
+		claimed, err := store.Claim(ctx, owner, epoch, []string{"engine.example", "worker.example"}, 1, time.Minute, time.Hour)
+		if err != nil || len(claimed) != 1 || claimed[0].Kind != corecoord.TaskKindOperation {
 			t.Fatalf("claim prerender child: %+v %v", claimed, err)
 		}
 		child := claimed[0]
@@ -102,8 +89,8 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 		if result.TaskID != child.ID || result.WorkflowID != receipt.WorkflowID || result.State != "succeeded" {
 			t.Fatalf("unexpected result identity/state: %+v", result)
 		}
-		if result.Worker == nil || result.Worker.ComponentID != "worker.prerender" || result.Worker.OperationID != "render-page" || result.Worker.ContractVersion != 1 {
-			t.Fatalf("unexpected worker reference: %+v", result.Worker)
+		if result.Operation == nil || result.Operation.ClassID != "worker.prerender" || result.Operation.ID != "render-page" || result.Operation.Version != 1 {
+			t.Fatalf("unexpected worker reference: %+v", result.Operation)
 		}
 		var gotPayload, wantPayload any
 		if err := json.Unmarshal(result.Result, &gotPayload); err != nil {
@@ -118,8 +105,8 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 
 		t.Run("foreign engine cannot read", func(t *testing.T) {
 			foreign, err := appcoord.NewWorkflowClient(appcoord.WorkflowClientConfig{
-				Store: store, Workers: mustWorkflowCatalog(t, "engine.content", "read/v1"),
-				OwnerEngineID: "engine.content", InstanceID: owner, ConfigEpoch: epoch,
+				Store: store, TaskClass: "engine.content", TaskClasses: []string{"engine.website", "worker.prerender", "engine.content"},
+				InstanceID: owner, ConfigEpoch: epoch,
 				MaxAttempts: 3, Retention: time.Hour,
 			})
 			if err != nil {
@@ -139,20 +126,4 @@ func TestDisposableOwnerScopedTaskResult(t *testing.T) {
 			}
 		})
 	})
-}
-
-func mustWorkflowCatalog(t *testing.T, componentID, operation string) *appcoord.WorkerCatalog {
-	t.Helper()
-	registry := appcoord.NewRuntimeRegistry()
-	noop := func(context.Context, appcoord.Task) (corecoord.TaskOutcome, error) {
-		return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
-	}
-	if err := registry.RegisterWorkerHandlers(componentID, map[string]appcoord.WorkerHandler{operation: noop}); err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := registry.CompileWorkerCatalog(appcoord.BuildPlan{Components: []string{componentID}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return catalog
 }

@@ -3,23 +3,17 @@ package presentation
 import (
 	"testing"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	routerengine "github.com/Zubrium/cdn/engines/router"
 	routemodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
 func TestRouterDescriptorDeclaresOnlyExplicitFileOperations(t *testing.T) {
-	operations := (Descriptor{}).Operations()
-	if len(operations) == 0 {
-		t.Fatal("Router descriptor must expose its typed operation inventory")
+	component := (Descriptor{}).ComponentDescriptor()
+	if component.ID != "engine.router" || len(component.AccessGroups) != 1 || component.AccessGroups[0] != "router_routes" {
+		t.Fatalf("invalid neutral Router profile metadata: %#v", component)
 	}
-	for _, operation := range operations {
-		if operation.Name == "" || operation.ResourceType == "" || !platform.ValidAccessAction(operation.Action) {
-			t.Fatalf("invalid Router operation: %#v", operation)
-		}
-	}
-	descriptor := routerengine.ModuleDataDescriptor()
-	if descriptor.ModuleID != "router" || len(descriptor.Namespaces) == 0 {
+	descriptor := routerengine.RecordDescriptor()
+	if descriptor.OwnerID != "router" || len(descriptor.Namespaces) == 0 {
 		t.Fatalf("invalid Router module-data descriptor: %#v", descriptor)
 	}
 }

@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"strconv"
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
 	featureruntime "github.com/Zubrium/cdn/engines/website/features/runtime"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
@@ -37,7 +37,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 	}
 	if _, _, existing, err := s.loadRun(ctx, runID); err == nil {
 		return s.result(ctx, existing)
-	} else if !errors.Is(err, core.ErrModuleDataNotFound) && !errors.Is(err, ErrInvalid) {
+	} else if !errors.Is(err, contracts.ErrRecordNotFound) && !errors.Is(err, ErrInvalid) {
 		return Result{}, err
 	}
 
@@ -55,12 +55,12 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		ContentPublicationRevision: trigger.ContentPublicationRevision, SystemModelRevision: trigger.SystemModelRevision,
 		State: stateRunning, CreatedAt: now, UpdatedAt: now,
 	}
-	mutations := make([]core.ModuleDataMutation, 0, maxTargets+1)
+	mutations := make([]contracts.RecordMutation, 0, maxTargets+1)
 	runValue, err := encodeModuleData(run, runIndex(run))
 	if err != nil {
 		return Result{}, err
 	}
-	mutations = append(mutations, core.ModuleDataMutation{
+	mutations = append(mutations, contracts.RecordMutation{
 		Key: runDataKey(s.config.BranchID, runID), ExpectedRevision: 0, Value: runValue,
 	})
 	for _, target := range s.target {
@@ -82,7 +82,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		}
 		key := targetDataKey(s.config.BranchID, runID, target.RouteID, locale)
 		run.TargetKeys = append(run.TargetKeys, key.RecordKey)
-		mutations = append(mutations, core.ModuleDataMutation{Key: key, ExpectedRevision: 0, Value: value})
+		mutations = append(mutations, contracts.RecordMutation{Key: key, ExpectedRevision: 0, Value: value})
 	}
 	if len(run.TargetKeys) == 0 {
 		return Result{}, fmt.Errorf("%w: no trusted target for locale %s", ErrInvalid, locale)
@@ -124,7 +124,7 @@ func (s *Service) advance(ctx, websiteCtx, routerCtx context.Context, runID stri
 		return Result{}, err
 	}
 	for _, recordKey := range run.TargetKeys {
-		key := core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
 		current, target, err := s.loadTarget(ctx, key, runID)
 		if err != nil {
 			return Result{}, err
@@ -162,7 +162,7 @@ func (s *Service) advance(ctx, websiteCtx, routerCtx context.Context, runID stri
 	loaded := run
 	loaded.State = stateSuccess
 	for _, recordKey := range loaded.TargetKeys {
-		key := core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, runID)
 		if err != nil {
 			return Result{}, err
@@ -329,7 +329,7 @@ func (s *Service) resolveInputDigest(ctx context.Context, target Target, locale 
 func (s *Service) result(ctx context.Context, run runRecord) (Result, error) {
 	result := Result{RunID: run.RunID, State: run.State, Targets: make([]TargetResult, 0, len(run.TargetKeys))}
 	for _, recordKey := range run.TargetKeys {
-		key := core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, run.RunID)
 		if err != nil {
 			return Result{}, err

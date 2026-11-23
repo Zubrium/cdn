@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
@@ -72,12 +71,12 @@ func (s *Service) retire(ctx context.Context, request contracts.RetirePageReques
 			return contracts.PageRetirement{}, fmt.Errorf("%w: invalid retirement receipt", ErrUnavailable)
 		}
 		return s.status(ctx, receipt.JobID, request.PageID)
-	} else if !errors.Is(err, core.ErrModuleDataNotFound) {
+	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
 		return contracts.PageRetirement{}, mapStoreError(err)
 	}
 	if _, err := s.config.Store.Get(ctx, withBranch(tombstoneKey(request.PageID), branch)); err == nil {
 		return contracts.PageRetirement{}, fmt.Errorf("%w: page identity is retired and cannot be reused", ErrConflict)
-	} else if !errors.Is(err, core.ErrModuleDataNotFound) {
+	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
 		return contracts.PageRetirement{}, mapStoreError(err)
 	}
 	routes, registered := s.config.Routes[request.PageID]
@@ -111,7 +110,7 @@ func (s *Service) retire(ctx context.Context, request contracts.RetirePageReques
 		return contracts.PageRetirement{}, err
 	}
 	if err := s.config.Store.Batch(ctx, mutations); err != nil {
-		if errors.Is(err, core.ErrModuleDataConflict) {
+		if errors.Is(err, contracts.ErrRecordConflict) {
 			// A concurrent start with the same key committed first; the
 			// durable receipt is authoritative.
 			if record, readErr := s.config.Store.Get(ctx, withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), branch)); readErr == nil {
@@ -288,7 +287,7 @@ func (s *Service) updateJob(ctx context.Context, jobID string, mutate func(*jobR
 			return jobRecord{}, err
 		}
 		if _, err := s.config.Store.Put(ctx, key, *value, record.Revision); err != nil {
-			if errors.Is(err, core.ErrModuleDataConflict) && attempt+1 < 8 {
+			if errors.Is(err, contracts.ErrRecordConflict) && attempt+1 < 8 {
 				continue
 			}
 			return jobRecord{}, mapStoreError(err)

@@ -15,8 +15,8 @@ import (
 
 type fakeCore struct{ access map[string]core.AccessLevel }
 
-func (f fakeCore) EngineIdentity() core.EngineIdentityCapability { return fakeCore{access: f.access} }
-func (f fakeCore) Sessions() core.SessionCapability              { return fakeCore{access: f.access} }
+func (f fakeCore) Identity() core.IdentityCapability { return fakeCore{access: f.access} }
+func (f fakeCore) Sessions() core.SessionCapability  { return fakeCore{access: f.access} }
 func (f fakeCore) GroupAuthorization() core.GroupAuthorizationCapability {
 	return f
 }

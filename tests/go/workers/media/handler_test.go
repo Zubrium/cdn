@@ -7,41 +7,36 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"testing"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
-type testSessions struct{}
-
-func (testSessions) WithSession(ctx context.Context, fn func(core.Session) error) error {
-	return fn(core.Session{})
-}
-
 type testFiles struct {
-	source       core.File
+	source       contracts.File
 	created      map[string]Result
 	createGroups []string
 	createCalls  int
 }
 
-func (f *testFiles) StatFile(_ context.Context, _ core.Session, fileID string) (core.File, error) {
+func (f *testFiles) StatFile(_ context.Context, fileID string) (contracts.File, error) {
 	if fileID == f.source.ID {
 		return f.source, nil
 	}
 	for _, result := range f.created {
 		if result.OutputFileID == fileID {
-			return core.File{ID: fileID, Groups: append([]string(nil), f.source.Groups...), ContentType: result.ContentType, SHA256: result.Checksum, Size: result.Size}, nil
+			return contracts.File{ID: fileID, Groups: append([]string(nil), f.source.Groups...), ContentType: result.ContentType, SHA256: result.Checksum, Size: result.Size}, nil
 		}
 	}
-	return core.File{}, core.ErrFileNotFound
+	return contracts.File{}, contracts.ErrFileNotFound
 }
-func (f *testFiles) ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error) {
+func (f *testFiles) ReadFile(context.Context, string) (io.ReadCloser, contracts.File, error) {
 	return io.NopCloser(bytes.NewReader([]byte("source bytes"))), f.source, nil
 }
-func (f *testFiles) CreateFileVerified(_ context.Context, _ core.Session, requestKey string, groups []string, _ map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
+func (f *testFiles) CreateFileVerified(_ context.Context, requestKey string, groups []string, _ map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
 	f.createCalls++
 	f.createGroups = append([]string(nil), groups...)
 	if prior, ok := f.created[requestKey]; ok {
@@ -53,31 +48,47 @@ func (f *testFiles) CreateFileVerified(_ context.Context, _ core.Session, reques
 	}
 	hash := sha256.Sum256(data)
 	if int64(len(data)) != size || hex.EncodeToString(hash[:]) != checksum {
-		return "", core.ErrChecksumMismatch
+		return "", contracts.ErrFileChecksumMismatch
 	}
 	result := Result{OutputFileID: "output-1", Checksum: checksum, ContentType: contentType, Size: size}
 	f.created[requestKey] = result
 	return result.OutputFileID, nil
 }
-
-type testData struct {
-	record core.ModuleDataRecord
-	key    core.ModuleDataKey
+func (*testFiles) DeleteFile(context.Context, string, int64) error { return nil }
+func (*testFiles) GetManagedFileSet(context.Context, string) (contracts.FileSet, error) {
+	return contracts.FileSet{}, nil
+}
+func (*testFiles) ListManagedFileSets(context.Context, string, string, string, int) ([]contracts.FileSet, string, error) {
+	return nil, "", nil
+}
+func (*testFiles) ListFileSet(context.Context, string, string, int) ([]contracts.File, string, error) {
+	return nil, "", nil
+}
+func (*testFiles) AddFileToManagedSet(context.Context, string, string, int64) (contracts.FileSet, error) {
+	return contracts.FileSet{}, nil
+}
+func (*testFiles) RemoveFileFromManagedSet(context.Context, string, string, int64) (contracts.FileSet, error) {
+	return contracts.FileSet{}, nil
 }
 
-func (d *testData) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+type testData struct {
+	record recorddata.Record
+	key    recorddata.RecordKey
+}
+
+func (d *testData) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	d.key = key
 	if d.record.Revision == 0 {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return d.record, nil
 }
-func (d *testData) Put(_ context.Context, key core.ModuleDataKey, value core.ModuleDataValue, revision int64) (core.ModuleDataRecord, error) {
+func (d *testData) Put(_ context.Context, key recorddata.RecordKey, value recorddata.RecordValue, revision int64) (recorddata.Record, error) {
 	d.key = key
 	if revision != d.record.Revision {
-		return core.ModuleDataRecord{}, core.ErrModuleDataConflict
+		return recorddata.Record{}, recorddata.ErrRecordConflict
 	}
-	d.record = core.ModuleDataRecord{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion, Revision: revision + 1}
+	d.record = recorddata.Record{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion, Revision: revision + 1}
 	return d.record, nil
 }
 
@@ -102,9 +113,9 @@ func handlerFixture(t *testing.T, runner Runner) (*Handler, *testFiles, *testDat
 	}
 	input := []byte("source bytes")
 	sum := sha256.Sum256(input)
-	files := &testFiles{source: core.File{ID: "source-1", Groups: []string{"media", "uploads"}, ContentType: "image/png", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(input))}, created: map[string]Result{}}
+	files := &testFiles{source: contracts.File{ID: "source-1", Groups: []string{"media", "uploads"}, ContentType: "image/png", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(input))}, created: map[string]Result{}}
 	data := &testData{}
-	handler, err := NewHandler(registry, testSessions{}, files, data, runner, 2, 6000)
+	handler, err := NewHandler(registry, files, data, runner, 2, 6000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,14 +127,14 @@ func TestHandlerRequiresIsolatedRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewHandler(registry, testSessions{}, &testFiles{}, &testData{}, &testRunner{}, 1, 20); !errors.Is(err, ErrNotReady) {
+	if _, err := NewHandler(registry, &testFiles{}, &testData{}, &testRunner{}, 1, 20); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("unisolated runner accepted: %v", err)
 	}
 }
 
 func TestDataDescriptorUsesWorkerNamespaceNotWebsiteNamespace(t *testing.T) {
 	descriptor := DataDescriptor()
-	if descriptor.ModuleID != "worker.media" || len(descriptor.Namespaces) != 1 || descriptor.Namespaces[0].Name != "media" || descriptor.Namespaces[0].Name == "website/media" {
+	if descriptor.OwnerID != "worker.media" || len(descriptor.Namespaces) != 1 || descriptor.Namespaces[0].Name != "media" || descriptor.Namespaces[0].Name == "website/media" {
 		t.Fatalf("unexpected worker data descriptor: %#v", descriptor)
 	}
 	if descriptor.Namespaces[0].ScopeTypes[0] != "task" {
@@ -221,18 +232,16 @@ func TestHandlerRejectsIdempotencyKeyReuseWithDifferentTask(t *testing.T) {
 func TestWorkerHandlerRejectsWrongOperationAndUnknownFields(t *testing.T) {
 	runner := &testRunner{isolated: true}
 	handler, _, data := handlerFixture(t, runner)
-	task := core.Task{Kind: core.TaskKindWorker, Worker: &core.WorkerRef{ComponentID: DataModuleID, OperationID: OperationID, ContractVersion: 1},
-		IdempotencyKey: "idem-worker"}
-	task.ID[15] = 1
+	task := contracts.OperationTask{TaskID: "00000000-0000-0000-0000-000000000001", IdempotencyKey: "idem-worker"}
 	task.Payload, _ = json.Marshal(Request{SourceFileID: "source-1", Profile: "web", ProfileVersion: "1", IdempotencyKey: task.IdempotencyKey})
 	if _, err := handler.WorkerHandler(context.Background(), task); err != nil {
 		t.Fatalf("Worker handler did not derive task identity from its envelope: %v", err)
 	}
-	if data.key.ScopeID != task.ID.String() {
-		t.Fatalf("worker state was not scoped to the envelope task: got %q, want %q", data.key.ScopeID, task.ID.String())
+	if data.key.ScopeID != task.TaskID {
+		t.Fatalf("worker state was not scoped to the envelope task: got %q, want %q", data.key.ScopeID, task.TaskID)
 	}
-	otherTask := core.Task{Kind: core.TaskKindWorker, Worker: &core.WorkerRef{ComponentID: "other", OperationID: OperationID, ContractVersion: 1}}
+	otherTask := contracts.OperationTask{}
 	if _, err := handler.WorkerHandler(context.Background(), otherTask); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("wrong component accepted: %v", err)
+		t.Fatalf("task without an identity accepted: %v", err)
 	}
 }

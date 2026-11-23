@@ -59,7 +59,7 @@ func (provider *contentProjectionProvider) getContentProjectionsForLocaleAllowSt
 	}
 	snapshot, err := provider.website.GetSnapshot(provider.ctx, pageSnapshotID)
 	if err != nil {
-		return contentapi.Projections{}, err
+		return contentapi.Projections{}, fmt.Errorf("load snapshot: %w", err)
 	}
 	if snapshot.PageID == "" || (snapshot.State != "ready" && !(allowProvisioning && snapshot.State == "provisioning")) {
 		return contentapi.Projections{}, fmt.Errorf("%w: page snapshot is not ready", contentapi.ErrNotFound)
@@ -69,7 +69,7 @@ func (provider *contentProjectionProvider) getContentProjectionsForLocaleAllowSt
 	}
 	model, err := provider.website.GetContentModel(provider.ctx)
 	if err != nil {
-		return contentapi.Projections{}, err
+		return contentapi.Projections{}, fmt.Errorf("load content model: %w", err)
 	}
 	contentModel := contentapi.ContentModelProjection{
 		Version: model.Version, ModelRevision: model.ModelRevision, Digest: model.Digest, DataModel: model.DataModel,
@@ -79,7 +79,7 @@ func (provider *contentProjectionProvider) getContentProjectionsForLocaleAllowSt
 	}
 	page, err := provider.website.GetPagePlacementProjection(provider.ctx, snapshot.PageID, pageSnapshotID)
 	if err != nil {
-		return contentapi.Projections{}, err
+		return contentapi.Projections{}, fmt.Errorf("load page placement: %w", err)
 	}
 	if page.PageSnapshotID != pageSnapshotID || page.PageID != snapshot.PageID || (page.State != "ready" && !(allowProvisioning && page.State == "provisioning")) {
 		return contentapi.Projections{}, fmt.Errorf("%w: page placement projection scope or state", contentapi.ErrNotFound)
@@ -116,7 +116,7 @@ func (provider *contentProjectionProvider) buildPlacements(ctx context.Context, 
 		}
 		feature, err := provider.website.GetFeatureVersion(provider.ctx, placement.FeatureKey, pin)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("load feature version: %w", err)
 		}
 		if feature.FeatureID != placement.FeatureKey || feature.Version != pin || feature.State != "ready" {
 			return nil, fmt.Errorf("%w: feature version %s@%s is not ready", contentapi.ErrNotFound, placement.FeatureKey, pin)

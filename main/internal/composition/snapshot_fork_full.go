@@ -5,6 +5,7 @@ package composition
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content"
@@ -73,21 +74,28 @@ type snapshotForkContentCopier struct {
 	projections *contentProjectionProvider
 }
 
+func snapshotForkStageError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("snapshot fork %s: %w", stage, err)
+}
+
 func (c snapshotForkContentCopier) CopySnapshotContent(ctx context.Context, payload websiteapi.SnapshotForkWorkflowPayload) error {
 	if c.engine == nil || c.projections == nil {
 		return errors.New("content fork dependency is not initialized")
 	}
 	sourceSchema, err := c.projections.GetContentProjectionsForLocale(ctx, payload.SourceSnapshotID, c.projections.locale)
 	if err != nil {
-		return err
+		return snapshotForkStageError("load source projection", err)
 	}
 	targetSchema, err := c.projections.getContentProjectionsForLocaleAllowState(ctx, payload.TargetSnapshotID, c.projections.locale, true)
 	if err != nil {
-		return err
+		return snapshotForkStageError("load target projection", err)
 	}
 	workspace, err := c.engine.GetWorkspace(ctx, sourceSchema)
 	if err != nil {
-		return err
+		return snapshotForkStageError("load source workspace", err)
 	}
 	_, err = c.engine.CopySnapshotContent(ctx, contentapi.CopySnapshotContentRequest{
 		SourceSchema:                    sourceSchema,
@@ -99,5 +107,5 @@ func (c snapshotForkContentCopier) CopySnapshotContent(ctx context.Context, payl
 		SelectionPolicy:                 payload.SelectionPolicy,
 		IdempotencyKey:                  payload.ContentCopyIdempotencyKey,
 	})
-	return err
+	return snapshotForkStageError("copy source workspace", err)
 }

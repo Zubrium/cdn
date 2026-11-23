@@ -1,27 +1,27 @@
 package forms
 
-import core "github.com/Zubrium/cdn/core/presentation"
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
 
 const moduleID = "forms"
 
 const globalScopeID = "global"
 
-func ModuleDataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{
-		ModuleID: moduleID,
-		Namespaces: []core.ModuleDataNamespace{
-			{Name: "forms/schemas", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"form_id": {Type: core.SelectorString}, "form_key": {Type: core.SelectorString},
-				"record_type": {Type: core.SelectorString}, "revision": {Type: core.SelectorNumber},
+func RecordDescriptor() recorddata.RecordDescriptor {
+	return recorddata.RecordDescriptor{
+		OwnerID: moduleID,
+		Namespaces: []recorddata.RecordNamespace{
+			{Name: "forms/schemas", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"form_id": {Type: recorddata.RecordSelectorString}, "form_key": {Type: recorddata.RecordSelectorString},
+				"record_type": {Type: recorddata.RecordSelectorString}, "revision": {Type: recorddata.RecordSelectorNumber},
 			}},
-			{Name: "forms/submissions", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"form_id": {Type: core.SelectorString}, "form_key": {Type: core.SelectorString},
-				"schema_version": {Type: core.SelectorNumber}, "state": {Type: core.SelectorString},
-				"created_at": {Type: core.SelectorString},
+			{Name: "forms/submissions", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"form_id": {Type: recorddata.RecordSelectorString}, "form_key": {Type: recorddata.RecordSelectorString},
+				"schema_version": {Type: recorddata.RecordSelectorNumber}, "state": {Type: recorddata.RecordSelectorString},
+				"created_at": {Type: recorddata.RecordSelectorString},
 			}},
-			{Name: "forms/sessions", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"form_id": {Type: core.SelectorString}, "schema_version": {Type: core.SelectorNumber},
-				"state": {Type: core.SelectorString},
+			{Name: "forms/sessions", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"form_id": {Type: recorddata.RecordSelectorString}, "schema_version": {Type: recorddata.RecordSelectorNumber},
+				"state": {Type: recorddata.RecordSelectorString},
 			}},
 		},
 	}

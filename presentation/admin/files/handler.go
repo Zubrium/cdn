@@ -14,8 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	loaderapi "github.com/Zubrium/cdn/engines/loader/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
 )
@@ -923,7 +923,7 @@ func validSHA256(value string) bool {
 }
 
 func validGroupKey(value string) bool {
-	return core.ValidAccessGroupKey(value)
+	return contracts.ValidAccessGroupKey(value)
 }
 
 func validNamespace(value string) bool {

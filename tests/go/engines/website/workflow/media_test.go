@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 	"github.com/google/uuid"
 )
 
-func web019MediaTask(t *testing.T) core.Task {
+func web019MediaTask(t *testing.T) contracts.OperationTask {
 	t.Helper()
 	payload, err := json.Marshal(websiteworkflow.MediaRequest{
 		Version: 1, JobID: uuid.New(), SnapshotID: uuid.New(),
@@ -25,12 +25,7 @@ func web019MediaTask(t *testing.T) core.Task {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return core.Task{
-		ID: uuid.New(), Kind: core.TaskKindWorker,
-		Worker: &core.WorkerRef{ComponentID: websiteworkflow.ComponentID,
-			OperationID: websiteworkflow.MediaOperationID, ContractVersion: websiteworkflow.MediaContractVersion},
-		Payload: payload,
-	}
+	return contracts.OperationTask{TaskID: uuid.NewString(), Payload: payload}
 }
 
 func TestMediaRootWorkflowEmitsOnlyPinnedRenditionChildren(t *testing.T) {
@@ -48,9 +43,8 @@ func TestMediaRootWorkflowEmitsOnlyPinnedRenditionChildren(t *testing.T) {
 	}
 	for i, name := range []string{"card", "full"} {
 		child := outcome.Children[i]
-		if child.Worker == nil || child.Worker.ComponentID != "worker.media" ||
-			child.Worker.OperationID != "derivative" || child.Worker.ContractVersion != mediaprofile.WorkContractVersion {
-			t.Fatalf("unexpected worker ref: %+v", child.Worker)
+		if child.OperationID != "derivative" || child.Version != mediaprofile.WorkContractVersion {
+			t.Fatalf("unexpected operation reference: %+v", child)
 		}
 		if child.EmissionKey == "" || !strings.Contains(child.EmissionKey, name) {
 			t.Fatalf("unexpected emission key: %q", child.EmissionKey)
@@ -77,9 +71,9 @@ func TestMediaRootWorkflowRejectsUntrustedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := web019MediaTask(t)
-	task.Worker.OperationID = "build-page"
+	task.TaskID = ""
 	if _, err := handler.MediaWorkerHandler(context.Background(), task); err == nil {
-		t.Fatal("unexpected operation must be rejected")
+		t.Fatal("task without trusted identity must be rejected")
 	}
 	task = web019MediaTask(t)
 	var request map[string]any

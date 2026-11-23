@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/google/uuid"
 )
@@ -23,7 +23,6 @@ const (
 	RootFormat       = "website.build-root/v2"
 	RenderPlanFormat = prerendercontract.PlanVersion
 
-	prerenderComponentID     = "worker.prerender"
 	prerenderOperationID     = "render-page"
 	prerenderContractVersion = 1
 	maxPayloadBytes          = 1 << 20
@@ -97,21 +96,19 @@ func PlanDigest(plan []byte) string {
 // WorkerHandler is registered only by static composition. It validates the
 // pinned input and emits one child prerender task; it never renders or writes
 // files, and it does not call another engine.
-func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if h == nil || ctx == nil {
-		return core.TaskOutcome{}, ErrInvalidTask
+func (h *Handler) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	if h == nil || ctx == nil || task.TaskID == "" {
+		return contracts.OperationOutcome{}, ErrInvalidTask
 	}
 	if err := ctx.Err(); err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
-	if task.Kind != core.TaskKindWorker || task.Worker == nil ||
-		task.Worker.ComponentID != ComponentID || task.Worker.OperationID != OperationID ||
-		task.Worker.ContractVersion != ContractVersion || len(task.Payload) == 0 || len(task.Payload) > maxPayloadBytes {
-		return core.TaskOutcome{}, ErrInvalidTask
+	if len(task.Payload) == 0 || len(task.Payload) > maxPayloadBytes {
+		return contracts.OperationOutcome{}, ErrInvalidTask
 	}
 	request, err := decodeRequest(task.Payload)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
 
 	plan, err := json.Marshal(renderPlan{
@@ -119,23 +116,23 @@ func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskO
 		Input: request.Input, Page: request.Page,
 	})
 	if err != nil || len(plan) == 0 || len(plan) > maxPayloadBytes {
-		return core.TaskOutcome{}, ErrInvalidPayload
+		return contracts.OperationOutcome{}, ErrInvalidPayload
 	}
 	planDigest := PlanDigest(plan)
 	emissionKey := "prerender:" + request.BuildID.String()
-	// Core carries the workflow idempotency key on Task.IdempotencyKey; the
+	// The scheduler carries the workflow idempotency key on the operation task; the
 	// child render identity is the emission key. Keeping both identical lets
 	// the worker bind the exact emitted task without accepting task payloads
 	// that select a different identity.
 	idempotencyKey := emissionKey
 	if !emissionPattern.MatchString(emissionKey) || !emissionPattern.MatchString(idempotencyKey) {
-		return core.TaskOutcome{}, ErrInvalidPayload
+		return contracts.OperationOutcome{}, ErrInvalidPayload
 	}
 	childPayload, err := json.Marshal(prerenderRequest{
 		IdempotencyKey: idempotencyKey, Plan: plan, PlanDigest: planDigest, InputDigest: request.InputDigest,
 	})
 	if err != nil || len(childPayload) == 0 || len(childPayload) > maxPayloadBytes {
-		return core.TaskOutcome{}, ErrInvalidPayload
+		return contracts.OperationOutcome{}, ErrInvalidPayload
 	}
 
 	root, err := json.Marshal(RootResult{
@@ -143,14 +140,12 @@ func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskO
 		PrerenderEmissionKey: emissionKey, InputDigest: request.InputDigest,
 	})
 	if err != nil {
-		return core.TaskOutcome{}, ErrInvalidPayload
+		return contracts.OperationOutcome{}, ErrInvalidPayload
 	}
-	return core.TaskOutcome{
+	return contracts.OperationOutcome{
 		Result: root,
-		Children: []core.TaskChild{{
-			Kind: core.TaskKindWorker,
-			Worker: &core.WorkerRef{ComponentID: prerenderComponentID, OperationID: prerenderOperationID,
-				ContractVersion: prerenderContractVersion},
+		Children: []contracts.OperationTaskChild{{
+			OperationID: prerenderOperationID, Version: prerenderContractVersion,
 			EmissionKey: emissionKey, Payload: childPayload, MaxAttempts: h.config.MaxAttempts,
 		}},
 	}, nil

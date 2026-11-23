@@ -25,6 +25,16 @@ func closeApplication(observer *observability.Observer, application *platform.Co
 	}, "component.lifecycle", nil, func(context.Context) error { return application.Close(ctx) })
 }
 
+func parseRunConfigArguments(args []string) (string, bool, bool) {
+	if len(args) == 2 && args[0] == "--config" && args[1] != "" {
+		return args[1], false, true
+	}
+	if len(args) == 3 && args[0] == "--suppress-bootstrap-secret" && args[1] == "--config" && args[2] != "" {
+		return args[2], true, true
+	}
+	return "", false, false
+}
+
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Fprintln(stdout, "zubrium dev_v2")
@@ -54,8 +64,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "configuration is valid")
 		return 0
 	}
-	if len(args) == 2 && (args[0] == "--config" || args[0] == "--recover-admin") {
-		file, err := os.Open(args[1])
+	configPath, suppressBootstrapSecret, runConfigured := parseRunConfigArguments(args)
+	recoverAdmin := len(args) == 2 && args[0] == "--recover-admin" && args[1] != ""
+	if runConfigured || recoverAdmin {
+		if recoverAdmin {
+			configPath = args[1]
+		}
+		file, err := os.Open(configPath)
 		if err != nil {
 			fmt.Fprintln(stderr, "cannot open configuration")
 			return 1
@@ -79,7 +94,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		}
-		if args[0] == "--recover-admin" {
+		if recoverAdmin {
 			ctx, cancel := context.WithTimeout(context.Background(), resolved.Core.Database.ConnectTimeout)
 			defer cancel()
 			secret, err := platform.RecoverBootstrap(ctx, resolved.Core.Database)
@@ -140,7 +155,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 				_ = closeApplication(observer, application, shutdownCtx)
 			}
 		}()
-		if secret := components.InitialAdminSecret(); secret != "" {
+		if secret := components.InitialAdminSecret(); secret != "" && !suppressBootstrapSecret {
 			if _, err := fmt.Fprintln(stderr, "Initial administrator secret (shown once):", secret); err != nil {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), resolved.HTTP.ShutdownTimeout)
 				_ = closeApplication(observer, application, shutdownCtx)
@@ -181,6 +196,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	fmt.Fprintln(stderr, "zubrium: provide --config <path>, --check-config <path>, or --recover-admin <path>")
+	fmt.Fprintln(stderr, "zubrium: provide --config <path>, --suppress-bootstrap-secret --config <path>, --check-config <path>, or --recover-admin <path>")
 	return 1
 }

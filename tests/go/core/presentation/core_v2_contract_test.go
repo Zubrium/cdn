@@ -189,7 +189,7 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	if !ok {
 		t.Fatal("Runtime does not implement the frozen Core v2 acceptance contract")
 	}
-	if err := first.Registry.Register("core-contract-test", coreV2ContractModule{}); err != nil {
+	if err := first.Registry.Register("core-contract-test"); err != nil {
 		t.Fatalf("register contract-test module: %v", err)
 	}
 	manager, err := core.Authenticate(ctx, managerSecret)
@@ -250,7 +250,7 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register scoped module-data capability: %v", err)
 	}
-	if err := first.Registry.Register("media-contract-test", coreV2ContractModule{}); err != nil {
+	if err := first.Registry.Register("media-contract-test"); err != nil {
 		t.Fatalf("register second module-data consumer: %v", err)
 	}
 	mediaData, err := first.RegisterDataModule(ModuleDataDescriptor{ModuleID: "media-contract-test", Namespaces: []ModuleDataNamespace{{
@@ -417,7 +417,7 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 
 	// Engine-data acceptance gaps on the same disposable PostgreSQL runtime.
 	gapsModuleID := "engine-data-gaps"
-	if err := first.Registry.Register(gapsModuleID, coreV2ContractModule{}); err != nil {
+	if err := first.Registry.Register(gapsModuleID); err != nil {
 		t.Fatalf("register engine-data gap module: %v", err)
 	}
 	gapsData, err := first.RegisterDataModule(ModuleDataDescriptor{ModuleID: gapsModuleID, Namespaces: []ModuleDataNamespace{{
@@ -1539,36 +1539,28 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 		t.Fatalf("permanently deleted file remained addressable: %v", err)
 	}
 
-	if err := first.Registry.Register("coordinator", CoordinatorDescriptor{}); err != nil {
+	if err := first.Registry.Register("coordinator"); err != nil {
 		t.Fatalf("register Core Coordinator descriptor: %v", err)
 	}
-	if err := first.Registry.Register("engine-example", componentDescriptorTestModule{descriptor: ComponentDescriptor{
-		ID: "engine.example", Kind: "engine", Version: 1,
-		Operations: []ComponentOperation{{ID: "process", ContractVersion: 1}},
-	}}); err != nil {
-		t.Fatalf("register generic workflow component: %v", err)
+	if err := first.Registry.Register("engine.example"); err != nil {
+		t.Fatalf("register opaque workflow owner: %v", err)
 	}
-	workerStarted := make(chan struct{}, 1)
-	catalog, err := BuildWorkerCatalog(BuildPlan{Components: []string{"engine.example"}}, []ComponentWorkerSet{{
-		ComponentID: "engine.example",
-		Handlers: map[string]WorkerHandler{"process/v1": func(taskCtx context.Context, _ Task) (TaskOutcome, error) {
-			select {
-			case workerStarted <- struct{}{}:
-			default:
-			}
-			<-taskCtx.Done()
-			return TaskOutcome{}, taskCtx.Err()
-		}},
-	}})
-	if err != nil {
-		t.Fatalf("build registered workflow task catalog: %v", err)
-	}
+	operationStarted := make(chan struct{}, 1)
+	executor := OperationExecutorFunc(func(taskCtx context.Context, _ Task) (TaskOutcome, error) {
+		select {
+		case operationStarted <- struct{}{}:
+		default:
+		}
+		<-taskCtx.Done()
+		return TaskOutcome{}, taskCtx.Err()
+	})
 	if err := first.StartCoordinator(ctx, CoordinatorRuntimeConfig{
 		Fingerprint: strings.Repeat("c", 64), InstanceLease: 6 * time.Second, HeartbeatInterval: time.Second,
 		ExecutorConcurrency: 1, TaskLease: 4 * time.Second, TaskTimeout: 15 * time.Second,
 		PollInterval: 100 * time.Millisecond, RetryBase: time.Second, RetryMaximum: 5 * time.Second,
 		MaxAttempts: 2, MaxWorkflowTasks: 10, MaxChildrenPerTask: 2,
-		WorkflowRetention: time.Hour, ShutdownTimeout: 10 * time.Second, WorkerCatalog: catalog,
+		WorkflowRetention: time.Hour, ShutdownTimeout: 10 * time.Second, TaskClasses: []string{"engine.example"},
+		OperationExecutor: executor,
 	}); err != nil {
 		t.Fatalf("start Core-owned Coordinator: %v", err)
 	}
@@ -1600,7 +1592,7 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 		t.Fatalf("submit workflow through the public Core capability: receipt=%+v err=%v", receipt, err)
 	}
 	select {
-	case <-workerStarted:
+	case <-operationStarted:
 	case <-ctx.Done():
 		t.Fatalf("registered worker did not receive its durable task: %v", ctx.Err())
 	}
@@ -1629,10 +1621,6 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 		t.Fatalf("stopped Coordinator still issued a workflow capability: %v", err)
 	}
 }
-
-type coreV2ContractModule struct{}
-
-func (coreV2ContractModule) Operations() []Operation { return nil }
 
 func newCoreV2TestConfig(t *testing.T, dsn, migrationDSN, endpoint, bucket, accessKey, secretKey string) RuntimeConfig {
 	t.Helper()

@@ -5,9 +5,9 @@ package presentation
 import (
 	"context"
 	"errors"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"time"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	schemapodel "github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 )
 
@@ -30,7 +30,6 @@ var (
 type FieldDefinition = schemapodel.FieldDefinition
 
 type Contract interface {
-	platform.Module
 	API
 }
 
@@ -204,11 +203,11 @@ type CancelVisitorSessionRequest struct {
 }
 
 type ListSubmissionsRequest struct {
-	FormID     string `json:"form_id"`
-	Key        string `json:"key,omitempty"`
-	State      string `json:"state,omitempty"`
-	Cursor     string `json:"cursor,omitempty"`
-	Limit      int    `json:"limit"`
+	FormID string `json:"form_id"`
+	Key    string `json:"key,omitempty"`
+	State  string `json:"state,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit"`
 }
 
 type SubmissionPage struct {
@@ -229,24 +228,9 @@ type DeleteSubmissionRequest struct {
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{
+func (Descriptor) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{
 		ID: "engine.forms", Kind: "engine", Version: 1,
 		AccessGroups: []string{SchemaAccessGroup, SubmissionAccessGroup},
 	}
 }
-
-func (Descriptor) Operations() []platform.Operation {
-	return []platform.Operation{
-		{Name: "form-schema.list", Action: platform.AccessActionRead, ResourceType: "form-schema"},
-		{Name: "form-schema.read", Action: platform.AccessActionRead, ResourceType: "form-schema"},
-		{Name: "form-schema.write", Action: platform.AccessActionWrite, ResourceType: "form-schema"},
-		{Name: "submission.list", Action: platform.AccessActionRead, ResourceType: "form-submission"},
-		{Name: "submission.read", Action: platform.AccessActionRead, ResourceType: "form-submission"},
-		{Name: "submission.export", Action: platform.AccessActionRead, ResourceType: "form-submission"},
-		{Name: "submission.status.write", Action: platform.AccessActionWrite, ResourceType: "form-submission"},
-		{Name: "submission.delete", Action: platform.AccessActionDelete, ResourceType: "form-submission"},
-	}
-}
-
-var _ platform.Module = Descriptor{}

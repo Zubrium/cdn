@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,7 +26,7 @@ type web001CountingStore struct {
 	gets int
 }
 
-func (s *web001CountingStore) Get(ctx context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (s *web001CountingStore) Get(ctx context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	s.gets++
 	return s.memoryStore.Get(ctx, key)
 }

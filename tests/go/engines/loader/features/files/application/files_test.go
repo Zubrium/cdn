@@ -30,8 +30,8 @@ type fileOperationsSpy struct {
 }
 
 func TestLoaderModuleDataDescriptorDeclaresBoundedIndexFields(t *testing.T) {
-	descriptor := ModuleDataDescriptor()
-	if descriptor.ModuleID != "loader" || len(descriptor.Namespaces) != 1 {
+	descriptor := RecordDescriptor()
+	if descriptor.OwnerID != "loader" || len(descriptor.Namespaces) != 1 {
 		t.Fatalf("unexpected Loader data descriptor: %+v", descriptor)
 	}
 	namespace := descriptor.Namespaces[0]

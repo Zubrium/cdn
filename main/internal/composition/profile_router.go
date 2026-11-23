@@ -4,7 +4,7 @@ package composition
 
 import "github.com/Zubrium/cdn/core/presentation"
 
-func RegisterProfile(registry *presentation.Registry) error {
+func RegisterProfile(registry *ProfileRegistry) error {
 	return RegisterGeneratedEngines(registry)
 }
 

@@ -7,10 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	mediaprofile "github.com/Zubrium/cdn/pkg/contracts/media"
 )
 
@@ -24,18 +25,16 @@ const (
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() core.ComponentDescriptor { return ComponentDescriptor() }
-func (Descriptor) DataDescriptor() core.ModuleDataDescriptor     { return DataDescriptor() }
-func (Descriptor) Operations() []core.Operation                  { return nil }
+func (Descriptor) ComponentDescriptor() recorddata.ComponentDescriptor { return ComponentDescriptor() }
+func (Descriptor) DataDescriptor() recorddata.RecordDescriptor         { return DataDescriptor() }
 
 var (
-	_ core.ComponentDescriptorProvider = Descriptor{}
-	_ core.Module                      = Descriptor{}
+	_ recorddata.ComponentDescriptorProvider = Descriptor{}
 )
 
-func ComponentDescriptor() core.ComponentDescriptor {
-	return core.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
-		Operations: []core.ComponentOperation{
+func ComponentDescriptor() recorddata.ComponentDescriptor {
+	return recorddata.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
+		Operations: []recorddata.ComponentOperation{
 			{ID: OperationID, ContractVersion: 1},
 			{ID: OperationID, ContractVersion: mediaprofile.WorkContractVersion},
 		}}
@@ -43,8 +42,8 @@ func ComponentDescriptor() core.ComponentDescriptor {
 
 // DataDescriptor declares media records under this worker's own Core module
 // identity. The namespace is not the Website module's website/media namespace.
-func DataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{ModuleID: DataModuleID, Namespaces: []core.ModuleDataNamespace{{
+func DataDescriptor() recorddata.RecordDescriptor {
+	return recorddata.RecordDescriptor{OwnerID: DataModuleID, Namespaces: []recorddata.RecordNamespace{{
 		Name: DataNamespace, ScopeTypes: []string{DataScopeType},
 	}}}
 }
@@ -56,20 +55,9 @@ var (
 	ErrOutputInvalid   = errors.New("media_output_invalid")
 )
 
-type SessionCapability interface {
-	// WithSession must supply an authenticated, revocation-aware Core session.
-	WithSession(context.Context, func(core.Session) error) error
-}
-
-type FileCapability interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	ReadFile(context.Context, core.Session, string) (io.ReadCloser, core.File, error)
-	CreateFileVerified(context.Context, core.Session, string, []string, map[string]string, string, int64, string, io.Reader) (string, error)
-}
-
 type DataCapability interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
 }
 
 type ProcessedOutput struct {
@@ -102,8 +90,7 @@ type RunRecord struct {
 
 type Handler struct {
 	registry  *Registry
-	sessions  SessionCapability
-	files     FileCapability
+	files     contracts.CoreFiles
 	data      DataCapability
 	runner    Runner
 	semaphore chan struct{}
@@ -113,49 +100,48 @@ type Handler struct {
 
 // NewHandler refuses runners without a separately supervised OS isolation
 // boundary. FFmpegRunner is deliberately not marked isolated.
-func NewHandler(registry *Registry, sessions SessionCapability, files FileCapability, data DataCapability, runner Runner, maxConcurrency int, maxStagedBytes int64) (*Handler, error) {
-	if registry == nil || sessions == nil || files == nil || data == nil || runner == nil || !runner.Isolated() || maxConcurrency <= 0 || maxStagedBytes <= 0 ||
+func NewHandler(registry *Registry, files contracts.CoreFiles, data DataCapability, runner Runner, maxConcurrency int, maxStagedBytes int64) (*Handler, error) {
+	if registry == nil || files == nil || data == nil || runner == nil || !runner.Isolated() || maxConcurrency <= 0 || maxStagedBytes <= 0 ||
 		!registry.validExecutionLimits(maxConcurrency, maxStagedBytes) {
 		return nil, ErrNotReady
 	}
-	return &Handler{registry: registry, sessions: sessions, files: files, data: data, runner: runner, semaphore: make(chan struct{}, maxConcurrency)}, nil
+	return &Handler{registry: registry, files: files, data: data, runner: runner, semaphore: make(chan struct{}, maxConcurrency)}, nil
 }
 
-func (h *Handler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if task.Kind != core.TaskKindWorker || task.Worker == nil || task.Worker.ComponentID != "worker.media" ||
-		task.Worker.OperationID != OperationID || task.Worker.ContractVersion != 1 || len(task.Payload) == 0 || len(task.Payload) > 16<<10 {
-		return core.TaskOutcome{}, ErrInvalidRequest
+func (h *Handler) WorkerHandler(ctx context.Context, task recorddata.OperationTask) (recorddata.OperationOutcome, error) {
+	if task.TaskID == "" || len(task.Payload) == 0 || len(task.Payload) > 16<<10 {
+		return recorddata.OperationOutcome{}, ErrInvalidRequest
 	}
 	decoder := json.NewDecoder(bytes.NewReader(task.Payload))
 	decoder.DisallowUnknownFields()
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return core.TaskOutcome{}, ErrInvalidRequest
+		return recorddata.OperationOutcome{}, ErrInvalidRequest
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return core.TaskOutcome{}, ErrInvalidRequest
+		return recorddata.OperationOutcome{}, ErrInvalidRequest
 	}
-	if (request.TaskID != "" && request.TaskID != task.ID.String()) || request.IdempotencyKey != task.IdempotencyKey {
-		return core.TaskOutcome{}, ErrInvalidRequest
+	if (request.TaskID != "" && request.TaskID != task.TaskID) || request.IdempotencyKey != task.IdempotencyKey {
+		return recorddata.OperationOutcome{}, ErrInvalidRequest
 	}
-	request.TaskID = task.ID.String()
+	request.TaskID = task.TaskID
 	result, err := h.Handle(ctx, request)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return recorddata.OperationOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.TaskOutcome{}, ErrOutputInvalid
+		return recorddata.OperationOutcome{}, ErrOutputInvalid
 	}
-	return core.TaskOutcome{Result: encoded}, nil
+	return recorddata.OperationOutcome{Result: encoded}, nil
 }
 
 // Handle executes one trusted, versioned worker request. Durable state is
 // written with optimistic revisions before/after external effects; ambiguous
 // create outcomes are reconciled by the same Core idempotency key.
 func (h *Handler) Handle(ctx context.Context, request Request) (Result, error) {
-	if h == nil || ctx == nil || h.registry == nil || h.sessions == nil || h.files == nil || h.data == nil || h.runner == nil || h.semaphore == nil || !h.runner.Isolated() {
+	if h == nil || ctx == nil || h.registry == nil || h.files == nil || h.data == nil || h.runner == nil || h.semaphore == nil || !h.runner.Isolated() {
 		return Result{}, ErrNotReady
 	}
 	preset, err := h.registry.ValidateRequest(request)
@@ -168,17 +154,11 @@ func (h *Handler) Handle(ctx context.Context, request Request) (Result, error) {
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
 	}
-	var result Result
-	err = h.sessions.WithSession(ctx, func(session core.Session) error {
-		var callErr error
-		result, callErr = h.handleWithSession(ctx, session, request, preset)
-		return callErr
-	})
-	return result, err
+	return h.handle(ctx, request, preset)
 }
 
-func (h *Handler) handleWithSession(ctx context.Context, session core.Session, request Request, preset Preset) (Result, error) {
-	source, err := h.files.StatFile(ctx, session, request.SourceFileID)
+func (h *Handler) handle(ctx context.Context, request Request, preset Preset) (Result, error) {
+	source, err := h.files.StatFile(ctx, request.SourceFileID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -207,7 +187,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 			if err := ValidateOutput(preset, *persisted.Result); err != nil {
 				return Result{}, ErrOutputInvalid
 			}
-			if err := h.verifyOutput(ctx, session, *persisted.Result); err != nil {
+			if err := h.verifyOutput(ctx, *persisted.Result); err != nil {
 				return Result{}, err
 			}
 			return *persisted.Result, nil
@@ -215,8 +195,8 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 		if persisted.State != "queued" && persisted.State != "retryable_failed" && persisted.State != "processing" && persisted.State != "storing" {
 			return Result{}, ErrTaskConflict
 		}
-	} else if errors.Is(err, core.ErrModuleDataNotFound) {
-		record = core.ModuleDataRecord{}
+	} else if errors.Is(err, recorddata.ErrRecordNotFound) {
+		record = recorddata.Record{}
 	} else {
 		return Result{}, err
 	}
@@ -235,7 +215,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 		return Result{}, err
 	}
 
-	body, actualSource, err := h.files.ReadFile(ctx, session, request.SourceFileID)
+	body, actualSource, err := h.files.ReadFile(ctx, request.SourceFileID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -274,7 +254,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 		return Result{}, err
 	}
 	metadata := map[string]string{"worker": "media", "job_id": request.TaskID, "source_file_id": request.SourceFileID, "fingerprint": fingerprint}
-	outputID, err := h.files.CreateFileVerified(ctx, session, state.OutputRequestKey, actualSource.Groups, metadata,
+	outputID, err := h.files.CreateFileVerified(ctx, state.OutputRequestKey, actualSource.Groups, metadata,
 		output.ContentType, output.Size, output.SHA256, output.Body)
 	if err != nil {
 		// A retry with the same request key asks Core to reconcile idempotently.
@@ -284,7 +264,7 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 	if err := ValidateOutput(preset, final); err != nil {
 		return Result{}, ErrOutputInvalid
 	}
-	if err := h.verifyOutput(ctx, session, final); err != nil {
+	if err := h.verifyOutput(ctx, final); err != nil {
 		return Result{}, err
 	}
 	state.State, state.Result, state.UpdatedAt = "ready", &final, time.Now().UTC()
@@ -294,8 +274,8 @@ func (h *Handler) handleWithSession(ctx context.Context, session core.Session, r
 	return final, nil
 }
 
-func (h *Handler) verifyOutput(ctx context.Context, session core.Session, expected Result) error {
-	file, err := h.files.StatFile(ctx, session, expected.OutputFileID)
+func (h *Handler) verifyOutput(ctx context.Context, expected Result) error {
+	file, err := h.files.StatFile(ctx, expected.OutputFileID)
 	if err != nil {
 		return ErrOutputUncertain
 	}
@@ -305,21 +285,21 @@ func (h *Handler) verifyOutput(ctx context.Context, session core.Session, expect
 	return nil
 }
 
-func (h *Handler) putState(ctx context.Context, key core.ModuleDataKey, value RunRecord, revision int64) error {
+func (h *Handler) putState(ctx context.Context, key recorddata.RecordKey, value RunRecord, revision int64) error {
 	_, err := h.putStateWithRecord(ctx, key, value, revision)
 	return err
 }
 
-func (h *Handler) putStateWithRecord(ctx context.Context, key core.ModuleDataKey, state RunRecord, revision int64) (core.ModuleDataRecord, error) {
+func (h *Handler) putStateWithRecord(ctx context.Context, key recorddata.RecordKey, state RunRecord, revision int64) (recorddata.Record, error) {
 	payload, err := json.Marshal(state)
 	if err != nil {
-		return core.ModuleDataRecord{}, err
+		return recorddata.Record{}, err
 	}
-	return h.data.Put(ctx, key, core.ModuleDataValue{Payload: payload, PayloadVersion: DataPayloadVersion, IndexData: json.RawMessage(`{}`)}, revision)
+	return h.data.Put(ctx, key, recorddata.RecordValue{Payload: payload, PayloadVersion: DataPayloadVersion, IndexData: json.RawMessage(`{}`)}, revision)
 }
 
-func taskRunKey(id string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: id, RecordKey: "task"}
+func taskRunKey(id string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: DataNamespace, ScopeType: DataScopeType, ScopeID: id, RecordKey: "task"}
 }
 func sameRun(saved RunRecord, request Request) bool {
 	return saved.Version == DataPayloadVersion && saved.TaskID == request.TaskID && saved.SourceFileID == request.SourceFileID &&

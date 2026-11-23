@@ -7,10 +7,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type registeredDataTestModule struct{}
-
-func (registeredDataTestModule) Operations() []Operation { return nil }
-
 type testEngineDataRepository struct{ engine_data.Repository }
 
 func TestRegisterModuleDataRequiresRegisteredEngineAndIssuesOnce(t *testing.T) {
@@ -25,7 +21,7 @@ func TestRegisterModuleDataRequiresRegisteredEngineAndIssuesOnce(t *testing.T) {
 	if _, err := runtime.RegisterDataModule(descriptor); err == nil {
 		t.Fatal("Core issued data capability to an unregistered module")
 	}
-	if err := runtime.Registry.Register("engine.example", registeredDataTestModule{}); err != nil {
+	if err := runtime.Registry.Register("engine.example"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.RegisterDataModule(descriptor); err != nil {

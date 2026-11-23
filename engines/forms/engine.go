@@ -1,5 +1,7 @@
 package forms
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"encoding/base64"
@@ -8,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	schemaapp "github.com/Zubrium/cdn/engines/forms/features/schemas/application"
 	schemamodel "github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 	schemarepo "github.com/Zubrium/cdn/engines/forms/features/schemas/repository"
@@ -20,12 +21,12 @@ import (
 )
 
 type DataStore interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Delete(context.Context, core.ModuleDataKey, int64) error
-	Batch(context.Context, []core.ModuleDataMutation) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
-	ListExpired(context.Context, string, string, string, string, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Delete(context.Context, recorddata.RecordKey, int64) error
+	Batch(context.Context, []recorddata.RecordMutation) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
+	ListExpired(context.Context, string, string, string, string, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 	MaxBatchSize() int
 	MaxPayloadBytes() int
@@ -34,26 +35,26 @@ type DataStore interface {
 }
 
 type FileOperations interface {
-	StatFile(context.Context, core.Session, string) (core.File, error)
-	DeleteFile(context.Context, core.Session, string, int64) error
+	StatFile(context.Context, recorddata.AuthorizationSubject, string) (recorddata.File, error)
+	DeleteFile(context.Context, recorddata.AuthorizationSubject, string, int64) error
 }
 
 type Dependencies struct {
-	Identity          core.EngineIdentityCapability
-	Sessions          core.SessionCapability
-	Authorization     core.GroupAuthorizationCapability
+	Identity          Identity
+	Sessions          Sessions
+	Authorization     Authorization
 	Files             FileOperations
 	Data              DataStore
-	FileSession       core.Session
+	FileSession       recorddata.AuthorizationSubject
 	VisitorSessionTTL time.Duration
 }
 
 type Engine struct {
 	formapi.Descriptor
-	identity      core.EngineIdentityCapability
-	sessions      core.SessionCapability
-	authorization core.GroupAuthorizationCapability
-	fileSession   core.Session
+	identity      Identity
+	sessions      Sessions
+	authorization Authorization
+	fileSession   recorddata.AuthorizationSubject
 	schemas       *schemaapp.Service
 	submissions   *submissionapp.Service
 	visitors      *sessionapp.Service
@@ -63,8 +64,8 @@ type authenticatedContextKey struct{}
 
 type authenticatedState struct {
 	owner     *Engine
-	session   core.Session
-	principal core.Principal
+	session   recorddata.AuthorizationSubject
+	principal recorddata.Principal
 }
 
 func New(dependencies Dependencies) (*Engine, error) {
@@ -126,14 +127,14 @@ func (engine *Engine) AuthenticateSession(ctx context.Context, token string) (co
 	return engine.authenticatedContext(ctx, session, principal)
 }
 
-func (engine *Engine) authenticatedContext(ctx context.Context, session core.Session, principal core.Principal) (context.Context, error) {
+func (engine *Engine) authenticatedContext(ctx context.Context, session recorddata.AuthorizationSubject, principal recorddata.Principal) (context.Context, error) {
 	if ctx == nil || principal.ID == "" || !principal.Active {
 		return nil, formapi.ErrUnauthorized
 	}
 	return context.WithValue(ctx, authenticatedContextKey{}, authenticatedState{owner: engine, session: session, principal: principal}), nil
 }
 
-func (engine *Engine) authorize(ctx context.Context, group string, required core.AccessLevel) (authenticatedState, error) {
+func (engine *Engine) authorize(ctx context.Context, group string, required recorddata.AccessLevel) (authenticatedState, error) {
 	if engine == nil || ctx == nil || nilCapability(engine.authorization) {
 		return authenticatedState{}, formapi.ErrUnauthorized
 	}
@@ -148,7 +149,7 @@ func (engine *Engine) authorize(ctx context.Context, group string, required core
 }
 
 func (engine *Engine) ListSchemas(ctx context.Context, cursor string, limit int) (formapi.SchemaPage, error) {
-	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, recorddata.AccessLevelRead); err != nil {
 		return formapi.SchemaPage{}, err
 	}
 	after, err := decodeCursor(cursor)
@@ -168,7 +169,7 @@ func (engine *Engine) ListSchemas(ctx context.Context, cursor string, limit int)
 }
 
 func (engine *Engine) GetSchema(ctx context.Context, schemaID string) (formapi.Schema, error) {
-	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, recorddata.AccessLevelRead); err != nil {
 		return formapi.Schema{}, err
 	}
 	schema, revision, err := engine.schemas.Get(ctx, schemaID)
@@ -179,7 +180,7 @@ func (engine *Engine) GetSchema(ctx context.Context, schemaID string) (formapi.S
 }
 
 func (engine *Engine) SaveSchema(ctx context.Context, request formapi.SaveSchemaRequest) (formapi.Schema, error) {
-	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SchemaAccessGroup, recorddata.AccessLevelWrite); err != nil {
 		return formapi.Schema{}, err
 	}
 	schema, revision, err := engine.schemas.Save(ctx, request.SchemaID, request.Key, request.Fields, request.ExpectedRevision)
@@ -289,7 +290,7 @@ func (engine *Engine) RunVisitorSessionCleanup(ctx context.Context, interval tim
 }
 
 func (engine *Engine) ListSubmissions(ctx context.Context, request formapi.ListSubmissionsRequest) (formapi.SubmissionPage, error) {
-	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, recorddata.AccessLevelRead); err != nil {
 		return formapi.SubmissionPage{}, err
 	}
 	after, err := decodeCursor(request.Cursor)
@@ -312,7 +313,7 @@ func (engine *Engine) ListSubmissions(ctx context.Context, request formapi.ListS
 }
 
 func (engine *Engine) GetSubmission(ctx context.Context, id string) (formapi.Submission, error) {
-	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelRead); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, recorddata.AccessLevelRead); err != nil {
 		return formapi.Submission{}, err
 	}
 	submission, revision, err := engine.submissions.Get(ctx, id)
@@ -326,7 +327,7 @@ func (engine *Engine) GetSubmission(ctx context.Context, id string) (formapi.Sub
 }
 
 func (engine *Engine) SetSubmissionStatus(ctx context.Context, request formapi.SetSubmissionStatusRequest) (formapi.Submission, error) {
-	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, recorddata.AccessLevelWrite); err != nil {
 		return formapi.Submission{}, err
 	}
 	submission, revision, err := engine.submissions.SetState(ctx, request.SubmissionID, request.Status, request.ExpectedRevision)
@@ -340,7 +341,7 @@ func (engine *Engine) SetSubmissionStatus(ctx context.Context, request formapi.S
 }
 
 func (engine *Engine) DeleteSubmission(ctx context.Context, request formapi.DeleteSubmissionRequest) error {
-	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, core.AccessLevelWrite); err != nil {
+	if _, err := engine.authorize(ctx, formapi.SubmissionAccessGroup, recorddata.AccessLevelWrite); err != nil {
 		return err
 	}
 	if err := engine.submissions.Delete(ctx, engine.fileSession, request.SubmissionID, request.ExpectedRevision); err != nil {
@@ -374,13 +375,13 @@ func (engine *Engine) ValidatePublicForm(ctx context.Context, binding formapi.Pu
 // public upload route can be persisted.
 func (engine *Engine) ValidatePublicUploadRoute(ctx context.Context, binding formapi.PublicUploadRouteBinding) error {
 	if engine == nil || ctx == nil || binding.PublicFormBinding.Validate() != nil ||
-		!core.ValidAccessGroupKey(binding.AccessGroup) || binding.MaxBytes <= 0 || len(binding.AllowedContentTypes) == 0 || len(binding.AllowedContentTypes) > 32 {
+		!recorddata.ValidAccessGroupKey(binding.AccessGroup) || binding.MaxBytes <= 0 || len(binding.AllowedContentTypes) == 0 || len(binding.AllowedContentTypes) > 32 {
 		return formapi.ErrInvalid
 	}
 	if err := engine.ValidatePublicForm(ctx, binding.PublicFormBinding); err != nil {
 		return err
 	}
-	if err := engine.authorization.RequireGroupLevel(ctx, engine.fileSession, []string{binding.AccessGroup}, core.AccessLevelWrite); err != nil {
+	if err := engine.authorization.RequireGroupLevel(ctx, engine.fileSession, []string{binding.AccessGroup}, recorddata.AccessLevelWrite); err != nil {
 		return mapCoreError(err)
 	}
 	schema, _, err := engine.schemas.Get(ctx, binding.FormID)
@@ -438,17 +439,17 @@ func mapCoreError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrUnauthorized):
+	case errors.Is(err, recorddata.ErrAccessUnauthorized):
 		return formapi.ErrUnauthorized
-	case errors.Is(err, core.ErrForbidden):
+	case errors.Is(err, recorddata.ErrAccessForbidden):
 		return formapi.ErrForbidden
-	case errors.Is(err, core.ErrModuleDataNotFound), errors.Is(err, core.ErrFileNotFound):
+	case errors.Is(err, recorddata.ErrRecordNotFound), errors.Is(err, recorddata.ErrFileNotFound):
 		return formapi.ErrNotFound
-	case errors.Is(err, core.ErrModuleDataConflict), errors.Is(err, core.ErrRevisionConflict):
+	case errors.Is(err, recorddata.ErrRecordConflict), errors.Is(err, recorddata.ErrFileRevisionConflict):
 		return formapi.ErrConflict
-	case errors.Is(err, core.ErrModuleDataInvalid):
+	case errors.Is(err, recorddata.ErrRecordInvalid):
 		return formapi.ErrInvalid
-	case errors.Is(err, core.ErrModuleDataLimitExceeded):
+	case errors.Is(err, recorddata.ErrRecordLimit):
 		return formapi.ErrTooLarge
 	default:
 		return formapi.ErrUnavailable
@@ -480,4 +481,3 @@ func nilCapability(value any) bool {
 }
 
 var _ formapi.Contract = (*Engine)(nil)
-var _ core.Module = (*Engine)(nil)

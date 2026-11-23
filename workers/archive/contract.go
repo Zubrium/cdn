@@ -4,8 +4,7 @@ package archive
 
 import (
 	"context"
-
-	core "github.com/Zubrium/cdn/core/presentation"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const (
@@ -18,22 +17,20 @@ const (
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() core.ComponentDescriptor { return ComponentDescriptor() }
-func (Descriptor) DataDescriptor() core.ModuleDataDescriptor     { return DataDescriptor() }
-func (Descriptor) Operations() []core.Operation                  { return nil }
+func (Descriptor) ComponentDescriptor() recorddata.ComponentDescriptor { return ComponentDescriptor() }
+func (Descriptor) DataDescriptor() recorddata.RecordDescriptor         { return DataDescriptor() }
 
 var (
-	_ core.ComponentDescriptorProvider = Descriptor{}
-	_ core.Module                      = Descriptor{}
+	_ recorddata.ComponentDescriptorProvider = Descriptor{}
 )
 
-func ComponentDescriptor() core.ComponentDescriptor {
-	return core.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
-		Operations: []core.ComponentOperation{{ID: OperationID, ContractVersion: 1}}}
+func ComponentDescriptor() recorddata.ComponentDescriptor {
+	return recorddata.ComponentDescriptor{ID: DataModuleID, Kind: "worker", Version: 1,
+		Operations: []recorddata.ComponentOperation{{ID: OperationID, ContractVersion: 1}}}
 }
 
-func DataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{ModuleID: DataModuleID, Namespaces: []core.ModuleDataNamespace{{
+func DataDescriptor() recorddata.RecordDescriptor {
+	return recorddata.RecordDescriptor{OwnerID: DataModuleID, Namespaces: []recorddata.RecordNamespace{{
 		Name: DataNamespace, ScopeTypes: []string{DataScopeType},
 	}}}
 }

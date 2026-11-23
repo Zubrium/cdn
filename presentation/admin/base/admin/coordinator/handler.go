@@ -114,24 +114,24 @@ type WorkflowListResponse struct {
 }
 
 type TaskSummary struct {
-	ID           string            `json:"id"`
-	WorkflowID   string            `json:"workflow_id"`
-	Kind         platform.TaskKind `json:"kind"`
-	Worker       *WorkerReference  `json:"worker,omitempty"`
-	ParentTaskID string            `json:"parent_task_id,omitempty"`
-	DependsOn    []string          `json:"depends_on"`
-	EmissionKey  string            `json:"emission_key,omitempty"`
-	State        string            `json:"state"`
-	Attempts     int               `json:"attempts"`
-	MaxAttempts  int               `json:"max_attempts"`
-	AvailableAt  time.Time         `json:"available_at"`
-	LeaseUntil   *time.Time        `json:"lease_until,omitempty"`
-	ErrorCode    string            `json:"error_code,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ID           string              `json:"id"`
+	WorkflowID   string              `json:"workflow_id"`
+	Kind         platform.TaskKind   `json:"kind"`
+	Operation    *OperationReference `json:"worker,omitempty"`
+	ParentTaskID string              `json:"parent_task_id,omitempty"`
+	DependsOn    []string            `json:"depends_on"`
+	EmissionKey  string              `json:"emission_key,omitempty"`
+	State        string              `json:"state"`
+	Attempts     int                 `json:"attempts"`
+	MaxAttempts  int                 `json:"max_attempts"`
+	AvailableAt  time.Time           `json:"available_at"`
+	LeaseUntil   *time.Time          `json:"lease_until,omitempty"`
+	ErrorCode    string              `json:"error_code,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    time.Time           `json:"updated_at"`
 }
 
-type WorkerReference struct {
+type OperationReference struct {
 	ComponentID     string `json:"component_id"`
 	OperationID     string `json:"operation_id"`
 	ContractVersion int    `json:"contract_version"`
@@ -252,7 +252,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	response := WorkflowListResponse{Items: make([]WorkflowSummary, 0, len(page.Items))}
 	for _, item := range page.Items {
-		response.Items = append(response.Items, WorkflowSummary{ID: item.ID.String(), OwnerEngineID: item.OwnerEngineID,
+		response.Items = append(response.Items, WorkflowSummary{ID: item.ID.String(), OwnerEngineID: item.OwnerClassID,
 			State: item.State, TaskCount: item.TaskCount, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt})
 	}
 	if page.Next != nil {
@@ -301,17 +301,17 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := WorkflowDetailResponse{Workflow: WorkflowView{ID: detail.Workflow.ID.String(),
-		OwnerEngineID: detail.Workflow.OwnerEngineID, State: detail.Workflow.State,
+		OwnerEngineID: detail.Workflow.OwnerClassID, State: detail.Workflow.State,
 		RootTaskID: detail.Workflow.RootTaskID.String(), CreatedAt: detail.Workflow.CreatedAt, UpdatedAt: detail.Workflow.UpdatedAt},
 		Tasks: TaskPage{Items: make([]TaskSummary, 0, len(detail.TaskPage.Items))}}
 	for _, item := range detail.TaskPage.Items {
-		task := TaskSummary{ID: item.ID.String(), WorkflowID: item.WorkflowID.String(), Kind: item.Kind,
+		task := TaskSummary{ID: item.ID.String(), WorkflowID: item.WorkflowID.String(), Kind: externalTaskKind(item.Kind),
 			DependsOn: make([]string, 0, len(item.DependsOn)), EmissionKey: item.EmissionKey,
 			State: item.State, Attempts: item.Attempts, MaxAttempts: item.MaxAttempts, AvailableAt: item.AvailableAt,
 			LeaseUntil: item.LeaseUntil, ErrorCode: item.ErrorCode, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
-		if item.Worker != nil {
-			task.Worker = &WorkerReference{ComponentID: item.Worker.ComponentID, OperationID: item.Worker.OperationID,
-				ContractVersion: item.Worker.ContractVersion}
+		if item.Operation != nil {
+			task.Operation = &OperationReference{ComponentID: item.Operation.ClassID, OperationID: item.Operation.ID,
+				ContractVersion: item.Operation.Version}
 		}
 		if item.ParentTaskID != uuid.Nil {
 			task.ParentTaskID = item.ParentTaskID.String()
@@ -325,6 +325,13 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		response.Tasks.NextCursor = encodeCursor(detail.TaskPage.Next.CreatedAt, detail.TaskPage.Next.ID)
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func externalTaskKind(kind platform.TaskKind) platform.TaskKind {
+	if kind == platform.TaskKindOperation {
+		return "worker"
+	}
+	return kind
 }
 
 func (h *Handler) retryTask(w http.ResponseWriter, r *http.Request) {

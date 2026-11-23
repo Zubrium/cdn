@@ -32,7 +32,7 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 		component.config.Publication.WebsiteCredential == "" {
 		return errors.New("Publication dependencies are not initialized")
 	}
-	data, err := component.core.runtime.RegisterDataModule(publication.ModuleDataDescriptor())
+	data, err := component.core.registerModuleData(publication.ModuleDataDescriptor())
 	if err != nil {
 		return err
 	}
@@ -44,8 +44,8 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 		WebsiteCredential: component.config.Publication.WebsiteCredential,
 		Router:            component.router.api,
 		RouterCredential:  component.config.Publication.RouterCredential,
-		FileIdentity:      component.core.runtime.EngineIdentity(),
-		Files:             component.core.runtime.EngineFiles(),
+		FileIdentity:      component.core.runtime.Identity(),
+		Files:             component.core.runtime.Files(),
 		FileCredential:    component.config.Publication.WebsiteCredential,
 		LocaleCatalog:     component.website.localeCatalog,
 		InputResolver:     component.website.inputResolver,
@@ -55,29 +55,29 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := bus.Register(component.dispatcher, contracts.PublicationPublishOperation(), func(ctx context.Context, request contracts.PublicationPublishRequest) (contracts.PublicationPublishResponse, error) {
-		result, err := service.Publish(ctx, publication.Trigger{
-			Locale:                     request.Locale,
-			ContentPublicationRevision: request.ContentPublicationRevision,
-			SystemModelRevision:        request.SystemModelRevision,
-			IdempotencyKey:             request.IdempotencyKey,
-		})
-		if err != nil {
-			return contracts.PublicationPublishResponse{}, err
-		}
-		response := contracts.PublicationPublishResponse{RunID: result.RunID, State: result.State, Targets: make([]contracts.PublicationTargetResult, 0, len(result.Targets))}
-		for _, target := range result.Targets {
-			response.Targets = append(response.Targets, contracts.PublicationTargetResult{
-				RouteID: target.RouteID, Locale: target.Locale, State: target.State,
-				BuildID: target.BuildID, ArtifactManifestFileID: target.ArtifactManifestFileID, ErrorCode: target.ErrorCode,
-			})
-		}
-		return response, nil
-	}); err != nil {
-		return err
-	}
 	component.service = service
 	return nil
+}
+
+func (component *publicationComponent) publish(ctx context.Context, request contracts.PublicationPublishRequest) (contracts.PublicationPublishResponse, error) {
+	if component == nil || component.service == nil {
+		return contracts.PublicationPublishResponse{}, errors.New("Publication fan-out is unavailable")
+	}
+	result, err := component.service.Publish(ctx, publication.Trigger{
+		Locale: request.Locale, ContentPublicationRevision: request.ContentPublicationRevision,
+		SystemModelRevision: request.SystemModelRevision, IdempotencyKey: request.IdempotencyKey,
+	})
+	if err != nil {
+		return contracts.PublicationPublishResponse{}, err
+	}
+	response := contracts.PublicationPublishResponse{RunID: result.RunID, State: result.State, Targets: make([]contracts.PublicationTargetResult, 0, len(result.Targets))}
+	for _, target := range result.Targets {
+		response.Targets = append(response.Targets, contracts.PublicationTargetResult{
+			RouteID: target.RouteID, Locale: target.Locale, State: target.State,
+			BuildID: target.BuildID, ArtifactManifestFileID: target.ArtifactManifestFileID, ErrorCode: target.ErrorCode,
+		})
+	}
+	return response, nil
 }
 
 func (component *publicationComponent) Ready(context.Context) error {

@@ -10,18 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/google/uuid"
 )
 
-func buildTask() core.Task {
-	return core.Task{
-		ID:     uuid.MustParse("99999999-9999-4999-8999-999999999999"),
-		Kind:   core.TaskKindWorker,
-		Worker: &core.WorkerRef{ComponentID: "engine.website", OperationID: websiteworkflow.OperationID, ContractVersion: 1},
-	}
+func buildTask() contracts.OperationTask {
+	return contracts.OperationTask{TaskID: "99999999-9999-4999-8999-999999999999"}
 }
 
 func buildPayload(t *testing.T) json.RawMessage {
@@ -67,9 +63,8 @@ func TestWebsiteBuildPageHandlerEmitsPinnedPrerenderChild(t *testing.T) {
 		t.Fatalf("children = %d, want 1", len(outcome.Children))
 	}
 	child := outcome.Children[0]
-	if child.Kind != core.TaskKindWorker || child.Worker == nil || child.Worker.ComponentID != "worker.prerender" ||
-		child.Worker.OperationID != "render-page" || child.Worker.ContractVersion != 1 {
-		t.Fatalf("child identity = %#v", child)
+	if child.OperationID != "render-page" || child.Version != 1 {
+		t.Fatalf("child operation = %#v", child)
 	}
 	if child.MaxAttempts != 3 || child.EmissionKey == "" || len(child.Payload) == 0 {
 		t.Fatalf("child scheduling = %#v", child)
@@ -123,16 +118,10 @@ func TestWebsiteBuildPageHandlerRejectsInvalidTaskAndPayload(t *testing.T) {
 	valid := buildTask()
 	valid.Payload = buildPayload(t)
 
-	wrongWorker := valid
-	wrongWorker.Worker = &core.WorkerRef{ComponentID: "engine.website", OperationID: websiteworkflow.OperationID, ContractVersion: 2}
-	if _, err := handler.WorkerHandler(ctx, wrongWorker); err == nil {
-		t.Fatal("wrong contract version was accepted")
-	}
-
-	wrongKind := valid
-	wrongKind.Kind = core.TaskKindJoin
-	if _, err := handler.WorkerHandler(ctx, wrongKind); err == nil {
-		t.Fatal("join task was accepted")
+	missingIdentity := valid
+	missingIdentity.TaskID = ""
+	if _, err := handler.WorkerHandler(ctx, missingIdentity); err == nil {
+		t.Fatal("task without a trusted identity was accepted")
 	}
 
 	validPayload := string(buildPayload(t))

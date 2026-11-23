@@ -30,7 +30,7 @@ func (r *Runtime) requireAdmin(ctx context.Context, session Session) (access.Pri
 }
 
 // CurrentPrincipal resolves the authenticated session to its current identity
-// so scoped engines can bind durable state without trusting a caller ID.
+// so owner-scoped capabilities can bind durable state without trusting a caller ID.
 func (r *Runtime) CurrentPrincipal(ctx context.Context, session Session) (Principal, error) {
 	return r.actor(ctx, session)
 }

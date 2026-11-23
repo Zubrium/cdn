@@ -133,3 +133,20 @@ func TestNewRouteRequiresExactCoreFilePathAndExplicitOperationConfig(t *testing.
 		t.Fatalf("static artifact route accepted explicit fallback: route=%+v err=%v", artifact, err)
 	}
 }
+
+func TestNewRouteAssignsInitialRevisionToLocaleArtifactTargets(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	target, err := NewStaticArtifactTarget("en-US", []LocaleArtifactTarget{
+		{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125302"},
+	})
+	if err != nil {
+		t.Fatalf("NewStaticArtifactTarget(): %v", err)
+	}
+	route, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "main", "example.com", "/site", MatchPrefix, target, now)
+	if err != nil {
+		t.Fatalf("NewRoute(): %v", err)
+	}
+	if got := route.Target.LocaleTargets[0].Revision; got != 1 {
+		t.Fatalf("initial locale target revision = %d, want 1", got)
+	}
+}

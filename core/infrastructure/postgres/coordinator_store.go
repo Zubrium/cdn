@@ -58,18 +58,18 @@ func (s CoordinatorStore) CancelWorkflow(ctx context.Context, owner string, inst
 	return CancelCoordinatorWorkflow(ctx, s.Pool, owner, instanceID, epoch, workflowID, retention)
 }
 
-func (s CoordinatorStore) GetTaskResult(ctx context.Context, ownerEngineID string, owner uuid.UUID, epoch int64, workflowID, taskID uuid.UUID) (coordination.TaskResult, error) {
+func (s CoordinatorStore) GetTaskResult(ctx context.Context, ownerClassID string, owner uuid.UUID, epoch int64, workflowID, taskID uuid.UUID) (coordination.TaskResult, error) {
 	if !s.valid() {
 		return coordination.TaskResult{}, coordination.ErrInvalid
 	}
-	return GetCoordinatorTaskResult(ctx, s.Pool, ownerEngineID, owner, epoch, workflowID, taskID)
+	return GetCoordinatorTaskResult(ctx, s.Pool, ownerClassID, owner, epoch, workflowID, taskID)
 }
 
-func (s CoordinatorStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64, limit int, lease, retention time.Duration) ([]coordination.Task, error) {
+func (s CoordinatorStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64, taskClasses []string, limit int, lease, retention time.Duration) ([]coordination.Task, error) {
 	if !s.valid() {
 		return nil, coordination.ErrInvalid
 	}
-	return ClaimTasks(ctx, s.Pool, owner, epoch, limit, lease, retention)
+	return ClaimTasks(ctx, s.Pool, owner, epoch, taskClasses, limit, lease, retention)
 }
 
 func (s CoordinatorStore) Extend(ctx context.Context, taskID, owner uuid.UUID, epoch, token int64, lease time.Duration) error {
@@ -125,7 +125,7 @@ var _ interface {
 	ListWorkflows(context.Context, coordination.WorkflowListRequest) (coordination.WorkflowPage, error)
 	GetWorkflowDetail(context.Context, uuid.UUID, int64, uuid.UUID, int, *coordination.TaskCursor) (coordination.WorkflowDetail, error)
 	RetryTask(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int64) error
-	Claim(context.Context, uuid.UUID, int64, int, time.Duration, time.Duration) ([]coordination.Task, error)
+	Claim(context.Context, uuid.UUID, int64, []string, int, time.Duration, time.Duration) ([]coordination.Task, error)
 	Extend(context.Context, uuid.UUID, uuid.UUID, int64, int64, time.Duration) error
 	Complete(context.Context, uuid.UUID, uuid.UUID, int64, int64, int, int, time.Duration, coordination.TaskOutcome) error
 	Fail(context.Context, uuid.UUID, uuid.UUID, int64, int64, string, bool, time.Duration, time.Duration) error

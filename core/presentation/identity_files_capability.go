@@ -5,15 +5,15 @@ import (
 	"io"
 )
 
-// EngineIdentityCapability authenticates a configured Core user and returns
+// IdentityCapability authenticates a configured Core user and returns
 // only its opaque session and public principal summary.
-type EngineIdentityCapability interface {
+type IdentityCapability interface {
 	Authenticate(context.Context, string) (Session, Principal, error)
 }
 
-// EngineFilesCapability exposes authorized file and FileSet operations without
-// giving an engine access to Runtime, SQL, S3, or identity administration.
-type EngineFilesCapability interface {
+// FilesCapability exposes authorized file and FileSet operations without
+// giving a caller access to Runtime, SQL, S3, or identity administration.
+type FilesCapability interface {
 	CreateFile(context.Context, Session, string, []string, map[string]string, string, int64, io.Reader) (string, error)
 	CreateFileVerified(context.Context, Session, string, []string, map[string]string, string, int64, string, io.Reader) (string, error)
 	ReadFile(context.Context, Session, string) (io.ReadCloser, File, error)
@@ -34,18 +34,18 @@ type EngineFilesCapability interface {
 	ListFileSet(context.Context, Session, string, string, int) ([]File, string, error)
 }
 
-type engineIdentityCapability struct{ runtime *Runtime }
-type engineFilesCapability struct{ runtime *Runtime }
+type identityCapability struct{ runtime *Runtime }
+type filesCapability struct{ runtime *Runtime }
 
-func (r *Runtime) EngineIdentity() EngineIdentityCapability {
-	return &engineIdentityCapability{runtime: r}
+func (r *Runtime) Identity() IdentityCapability {
+	return &identityCapability{runtime: r}
 }
 
-func (r *Runtime) EngineFiles() EngineFilesCapability {
-	return &engineFilesCapability{runtime: r}
+func (r *Runtime) Files() FilesCapability {
+	return &filesCapability{runtime: r}
 }
 
-func (c *engineIdentityCapability) Authenticate(ctx context.Context, credential string) (Session, Principal, error) {
+func (c *identityCapability) Authenticate(ctx context.Context, credential string) (Session, Principal, error) {
 	if c == nil || c.runtime == nil {
 		return Session{}, Principal{}, ErrUnavailable
 	}
@@ -56,7 +56,7 @@ func (c *engineIdentityCapability) Authenticate(ctx context.Context, credential 
 	return session, Principal{ID: actor.ID, Name: actor.Name, Active: actor.Active, CanManageAdministrators: actor.CanManageAdministrators}, nil
 }
 
-func (c *engineFilesCapability) runtimeOrError() (*Runtime, error) {
+func (c *filesCapability) runtimeOrError() (*Runtime, error) {
 	if c == nil || c.runtime == nil {
 		return nil, ErrUnavailable
 	}
@@ -66,7 +66,7 @@ func (c *engineFilesCapability) runtimeOrError() (*Runtime, error) {
 	return c.runtime, nil
 }
 
-func (c *engineFilesCapability) CreateFile(ctx context.Context, session Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, body io.Reader) (string, error) {
+func (c *filesCapability) CreateFile(ctx context.Context, session Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, body io.Reader) (string, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return "", err
@@ -74,7 +74,7 @@ func (c *engineFilesCapability) CreateFile(ctx context.Context, session Session,
 	return r.CreateFile(ctx, session, requestKey, groups, metadata, contentType, size, body)
 }
 
-func (c *engineFilesCapability) CreateFileVerified(ctx context.Context, session Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
+func (c *filesCapability) CreateFileVerified(ctx context.Context, session Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return "", err
@@ -82,7 +82,7 @@ func (c *engineFilesCapability) CreateFileVerified(ctx context.Context, session 
 	return r.CreateFileVerified(ctx, session, requestKey, groups, metadata, contentType, size, checksum, body)
 }
 
-func (c *engineFilesCapability) ReadFile(ctx context.Context, session Session, id string) (io.ReadCloser, File, error) {
+func (c *filesCapability) ReadFile(ctx context.Context, session Session, id string) (io.ReadCloser, File, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return nil, File{}, err
@@ -90,7 +90,7 @@ func (c *engineFilesCapability) ReadFile(ctx context.Context, session Session, i
 	return r.ReadFile(ctx, session, id)
 }
 
-func (c *engineFilesCapability) ReadFileRange(ctx context.Context, session Session, id string, start, end int64) (io.ReadCloser, File, error) {
+func (c *filesCapability) ReadFileRange(ctx context.Context, session Session, id string, start, end int64) (io.ReadCloser, File, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return nil, File{}, err
@@ -98,7 +98,7 @@ func (c *engineFilesCapability) ReadFileRange(ctx context.Context, session Sessi
 	return r.ReadFileRange(ctx, session, id, start, end)
 }
 
-func (c *engineFilesCapability) StatFile(ctx context.Context, session Session, id string) (File, error) {
+func (c *filesCapability) StatFile(ctx context.Context, session Session, id string) (File, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return File{}, err
@@ -106,7 +106,7 @@ func (c *engineFilesCapability) StatFile(ctx context.Context, session Session, i
 	return r.StatFile(ctx, session, id)
 }
 
-func (c *engineFilesCapability) SearchFiles(ctx context.Context, session Session, query, group, cursor, setID string, limit int) ([]File, string, error) {
+func (c *filesCapability) SearchFiles(ctx context.Context, session Session, query, group, cursor, setID string, limit int) ([]File, string, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return nil, "", err
@@ -114,7 +114,7 @@ func (c *engineFilesCapability) SearchFiles(ctx context.Context, session Session
 	return r.SearchFiles(ctx, session, query, group, cursor, setID, limit)
 }
 
-func (c *engineFilesCapability) UpdateFileWithContentType(ctx context.Context, session Session, id string, expected int64, metadata map[string]string, contentType string) error {
+func (c *filesCapability) UpdateFileWithContentType(ctx context.Context, session Session, id string, expected int64, metadata map[string]string, contentType string) error {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (c *engineFilesCapability) UpdateFileWithContentType(ctx context.Context, s
 	return r.files.UpdateWithContentType(ctx, actor, id, expected, metadata, contentType)
 }
 
-func (c *engineFilesCapability) AddFileToGroup(ctx context.Context, session Session, id, group string, expected int64) error {
+func (c *filesCapability) AddFileToGroup(ctx context.Context, session Session, id, group string, expected int64) error {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return err
@@ -134,7 +134,7 @@ func (c *engineFilesCapability) AddFileToGroup(ctx context.Context, session Sess
 	return r.AddFileToGroup(ctx, session, id, group, expected)
 }
 
-func (c *engineFilesCapability) RemoveFileFromGroup(ctx context.Context, session Session, id, group string, expected int64) error {
+func (c *filesCapability) RemoveFileFromGroup(ctx context.Context, session Session, id, group string, expected int64) error {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return err
@@ -142,7 +142,7 @@ func (c *engineFilesCapability) RemoveFileFromGroup(ctx context.Context, session
 	return r.RemoveFileFromGroup(ctx, session, id, group, expected)
 }
 
-func (c *engineFilesCapability) DeleteFile(ctx context.Context, session Session, id string, expected int64) error {
+func (c *filesCapability) DeleteFile(ctx context.Context, session Session, id string, expected int64) error {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return err
@@ -150,7 +150,7 @@ func (c *engineFilesCapability) DeleteFile(ctx context.Context, session Session,
 	return r.DeleteFile(ctx, session, id, expected)
 }
 
-func (c *engineFilesCapability) CreateManagedFileSet(ctx context.Context, session Session, namespace, name, managementGroup string) (FileSet, error) {
+func (c *filesCapability) CreateManagedFileSet(ctx context.Context, session Session, namespace, name, managementGroup string) (FileSet, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return FileSet{}, err
@@ -158,7 +158,7 @@ func (c *engineFilesCapability) CreateManagedFileSet(ctx context.Context, sessio
 	return r.CreateManagedFileSet(ctx, session, namespace, name, managementGroup)
 }
 
-func (c *engineFilesCapability) GetManagedFileSet(ctx context.Context, session Session, id string) (FileSet, error) {
+func (c *filesCapability) GetManagedFileSet(ctx context.Context, session Session, id string) (FileSet, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return FileSet{}, err
@@ -166,7 +166,7 @@ func (c *engineFilesCapability) GetManagedFileSet(ctx context.Context, session S
 	return r.GetManagedFileSet(ctx, session, id)
 }
 
-func (c *engineFilesCapability) UpdateManagedFileSet(ctx context.Context, session Session, id string, expected int64, name string) (FileSet, error) {
+func (c *filesCapability) UpdateManagedFileSet(ctx context.Context, session Session, id string, expected int64, name string) (FileSet, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return FileSet{}, err
@@ -174,7 +174,7 @@ func (c *engineFilesCapability) UpdateManagedFileSet(ctx context.Context, sessio
 	return r.UpdateManagedFileSet(ctx, session, id, expected, name)
 }
 
-func (c *engineFilesCapability) DeleteManagedFileSet(ctx context.Context, session Session, id string, expected int64) error {
+func (c *filesCapability) DeleteManagedFileSet(ctx context.Context, session Session, id string, expected int64) error {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func (c *engineFilesCapability) DeleteManagedFileSet(ctx context.Context, sessio
 	return r.DeleteManagedFileSet(ctx, session, id, expected)
 }
 
-func (c *engineFilesCapability) AddFileToManagedSet(ctx context.Context, session Session, setID, fileID string, expected int64) (FileSet, error) {
+func (c *filesCapability) AddFileToManagedSet(ctx context.Context, session Session, setID, fileID string, expected int64) (FileSet, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return FileSet{}, err
@@ -190,7 +190,7 @@ func (c *engineFilesCapability) AddFileToManagedSet(ctx context.Context, session
 	return r.AddFileToManagedSet(ctx, session, setID, fileID, expected)
 }
 
-func (c *engineFilesCapability) RemoveFileFromManagedSet(ctx context.Context, session Session, setID, fileID string, expected int64) (FileSet, error) {
+func (c *filesCapability) RemoveFileFromManagedSet(ctx context.Context, session Session, setID, fileID string, expected int64) (FileSet, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return FileSet{}, err
@@ -198,7 +198,7 @@ func (c *engineFilesCapability) RemoveFileFromManagedSet(ctx context.Context, se
 	return r.RemoveFileFromManagedSet(ctx, session, setID, fileID, expected)
 }
 
-func (c *engineFilesCapability) ListManagedFileSets(ctx context.Context, session Session, namespace, query, cursor string, limit int) ([]FileSet, string, error) {
+func (c *filesCapability) ListManagedFileSets(ctx context.Context, session Session, namespace, query, cursor string, limit int) ([]FileSet, string, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return nil, "", err
@@ -206,7 +206,7 @@ func (c *engineFilesCapability) ListManagedFileSets(ctx context.Context, session
 	return r.ListManagedFileSets(ctx, session, namespace, query, cursor, limit)
 }
 
-func (c *engineFilesCapability) ListFileSet(ctx context.Context, session Session, setID, cursor string, limit int) ([]File, string, error) {
+func (c *filesCapability) ListFileSet(ctx context.Context, session Session, setID, cursor string, limit int) ([]File, string, error) {
 	r, err := c.runtimeOrError()
 	if err != nil {
 		return nil, "", err
@@ -214,5 +214,5 @@ func (c *engineFilesCapability) ListFileSet(ctx context.Context, session Session
 	return r.ListFileSet(ctx, session, setID, cursor, limit)
 }
 
-var _ EngineIdentityCapability = (*engineIdentityCapability)(nil)
-var _ EngineFilesCapability = (*engineFilesCapability)(nil)
+var _ IdentityCapability = (*identityCapability)(nil)
+var _ FilesCapability = (*filesCapability)(nil)

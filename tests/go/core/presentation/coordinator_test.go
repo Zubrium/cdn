@@ -3,57 +3,22 @@ package presentation
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/Zubrium/cdn/core/domain/access"
-	corecoord "github.com/Zubrium/cdn/core/domain/coordination"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type coordinatorTestModule struct{}
-
-func (coordinatorTestModule) Operations() []Operation { return nil }
-
-type componentDescriptorTestModule struct {
-	descriptor corecoord.ComponentDescriptor
-}
-
-func (m componentDescriptorTestModule) Operations() []Operation { return nil }
-func (m componentDescriptorTestModule) ComponentDescriptor() corecoord.ComponentDescriptor {
-	return m.descriptor
-}
-
-func TestRegistryExposesOnlyExplicitGenericComponentDescriptors(t *testing.T) {
+func TestRegistryStoresOpaqueOwnerIdentities(t *testing.T) {
 	registry := NewRegistry()
-	if err := registry.Register("unannotated", coordinatorTestModule{}); err != nil {
+	if err := registry.Register("owner.example"); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Register("module-b", componentDescriptorTestModule{descriptor: corecoord.ComponentDescriptor{
-		ID: "component.b", Kind: "worker", Version: 2,
-	}}); err != nil {
-		t.Fatal(err)
+	if err := registry.Lookup("owner.example"); err != nil {
+		t.Fatalf("registered owner is not available: %v", err)
 	}
-	if err := registry.Register("module-a", componentDescriptorTestModule{descriptor: corecoord.ComponentDescriptor{
-		ID: "component.a", Kind: "engine", Version: 1,
-		Operations:   []corecoord.ComponentOperation{{ID: "prepare", ContractVersion: 1}},
-		AccessGroups: []string{"content"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	got := registry.ComponentDescriptors()
-	want := []corecoord.ComponentDescriptor{
-		{ID: "component.a", Kind: "engine", Version: 1, Operations: []corecoord.ComponentOperation{{ID: "prepare", ContractVersion: 1}}, AccessGroups: []string{"content"}},
-		{ID: "component.b", Kind: "worker", Version: 2},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("generic component descriptors = %#v, want %#v", got, want)
-	}
-	got[0].Operations[0].ID = "caller-mutation"
-	got[0].AccessGroups[0] = "caller-mutation"
-	registered := registry.ComponentDescriptors()[0]
-	if registered.Operations[0].ID != "prepare" || registered.AccessGroups[0] != "content" {
-		t.Fatal("caller mutated registered component descriptor slices")
+	if err := registry.Lookup("other.example"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unregistered owner lookup = %v, want unavailable", err)
 	}
 }
 
@@ -63,7 +28,7 @@ func TestCoordinatorAuthorizationCapabilityIsOptInAndValidatesPolicyInputs(t *te
 	if _, err := capability.Authenticate(context.Background(), "invalid"); !errors.Is(err, ErrCoordinatorInvalid) {
 		t.Fatalf("Coordinator identity capability was available without module registration: %v", err)
 	}
-	if err := runtime.Registry.Register("coordinator", coordinatorTestModule{}); err != nil {
+	if err := runtime.Registry.Register("coordinator"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := capability.Authenticate(context.Background(), "invalid"); !errors.Is(err, ErrUnavailable) {

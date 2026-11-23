@@ -6,10 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"time"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	routemodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
@@ -34,7 +34,6 @@ var (
 )
 
 type Contract interface {
-	platform.Module
 	SettingsAPI
 	DeliveryAPI
 }
@@ -187,19 +186,6 @@ type FormSessionCookieChange struct {
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() platform.ComponentDescriptor {
-	return platform.ComponentDescriptor{ID: "engine.router", Kind: "engine", Version: 1, AccessGroups: []string{"router_routes"}}
+func (Descriptor) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: "engine.router", Kind: "engine", Version: 1, AccessGroups: []string{"router_routes"}}
 }
-
-func (Descriptor) Operations() []platform.Operation {
-	return []platform.Operation{
-		{Name: "route.list", Action: platform.AccessActionRead, ResourceType: "router-route"},
-		{Name: "route.read", Action: platform.AccessActionRead, ResourceType: "router-route"},
-		{Name: "route.create", Action: platform.AccessActionWrite, ResourceType: "router-route"},
-		{Name: "route.target.replace", Action: platform.AccessActionWrite, ResourceType: "router-route"},
-		{Name: "route.delete", Action: platform.AccessActionDelete, ResourceType: "router-route"},
-		{Name: "route.deliver", Action: platform.AccessActionRead, ResourceType: "configured-route"},
-	}
-}
-
-var _ platform.Module = Descriptor{}

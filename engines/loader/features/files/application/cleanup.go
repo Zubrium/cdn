@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"encoding/json"
@@ -76,7 +78,7 @@ func (s *Service) markExpiredSessions(ctx context.Context, limit int) error {
 				if upload.State == "committing" {
 					job.CommitAttempt = true
 				}
-				jobRecord = core.ModuleDataRecord{}
+				jobRecord = recorddata.Record{}
 			} else if jobErr != nil {
 				return jobErr
 			}
@@ -121,7 +123,7 @@ func (s *Service) markExpiredSessions(ctx context.Context, limit int) error {
 				if valueErr != nil {
 					return api.ErrUnavailable
 				}
-				if _, err := s.data.Put(ctx, cleanupDataKey(upload.ID), value, jobRecord.Revision); err != nil && !errors.Is(err, core.ErrModuleDataConflict) {
+				if _, err := s.data.Put(ctx, cleanupDataKey(upload.ID), value, jobRecord.Revision); err != nil && !errors.Is(err, recorddata.ErrRecordConflict) {
 					return mapDataError(err)
 				}
 			}
@@ -140,8 +142,8 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 	defer s.cleanupMu.Unlock()
 	cursor := s.cleanupCursor
 	remaining := limit
-	selectors := []core.ModuleDataSelector{{Field: "kind", Operator: core.SelectorEqual, Values: []any{"cleanup"}},
-		{Field: "state", Operator: core.SelectorEqual, Values: []any{"pending"}}}
+	selectors := []recorddata.RecordSelector{{Field: "kind", Operator: recorddata.RecordSelectorEqual, Values: []any{"cleanup"}},
+		{Field: "state", Operator: recorddata.RecordSelectorEqual, Values: []any{"pending"}}}
 	for remaining > 0 {
 		pageSize := min(remaining, s.data.MaxPageSize())
 		keys, records, next, err := s.data.List(ctx, "loader", "global", "global", cursor, selectors, pageSize)
@@ -195,11 +197,11 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 				return err
 			}
 			if err := s.data.Delete(ctx, cleanupDataKey(job.UploadID), record.Revision); err != nil {
-				if errors.Is(err, core.ErrModuleDataNotFound) {
+				if errors.Is(err, recorddata.ErrRecordNotFound) {
 					continue
 				}
-				if errors.Is(err, core.ErrModuleDataConflict) {
-					if _, readErr := s.data.Get(ctx, cleanupDataKey(job.UploadID)); errors.Is(readErr, core.ErrModuleDataNotFound) {
+				if errors.Is(err, recorddata.ErrRecordConflict) {
+					if _, readErr := s.data.Get(ctx, cleanupDataKey(job.UploadID)); errors.Is(readErr, recorddata.ErrRecordNotFound) {
 						continue
 					} else if readErr != nil {
 						return mapDataError(readErr)
@@ -220,8 +222,8 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 }
 
 func (s *Service) deleteUploadParts(ctx context.Context, uploadID string, limit int) error {
-	selectors := []core.ModuleDataSelector{{Field: "kind", Operator: core.SelectorEqual, Values: []any{"part"}},
-		{Field: "upload_id", Operator: core.SelectorEqual, Values: []any{uploadID}}}
+	selectors := []recorddata.RecordSelector{{Field: "kind", Operator: recorddata.RecordSelectorEqual, Values: []any{"part"}},
+		{Field: "upload_id", Operator: recorddata.RecordSelectorEqual, Values: []any{uploadID}}}
 	cursor := ""
 	for {
 		keys, records, next, err := s.data.List(ctx, "loader", "global", "global", cursor, selectors, min(limit, s.data.MaxPageSize()))
@@ -229,7 +231,7 @@ func (s *Service) deleteUploadParts(ctx context.Context, uploadID string, limit 
 			return mapDataError(err)
 		}
 		for i := range keys {
-			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, core.ErrModuleDataConflict) && !errors.Is(err, core.ErrModuleDataNotFound) {
+			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, recorddata.ErrRecordConflict) && !errors.Is(err, recorddata.ErrRecordNotFound) {
 				return mapDataError(err)
 			}
 		}
@@ -250,7 +252,7 @@ func (s *Service) deleteExpiredRecords(ctx context.Context, limit int) error {
 			return mapDataError(err)
 		}
 		for i := range keys {
-			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, core.ErrModuleDataConflict) && !errors.Is(err, core.ErrModuleDataNotFound) {
+			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, recorddata.ErrRecordConflict) && !errors.Is(err, recorddata.ErrRecordNotFound) {
 				return mapDataError(err)
 			}
 		}

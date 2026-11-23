@@ -75,6 +75,11 @@ docker_config_dir=''
 cleanup() {
 	status=$?
 	trap - EXIT HUP INT TERM
+	if [ "${KEEP_E2E_ON_FAIL:-0}" = "1" ] && [ "$status" -ne 0 ]; then
+		printf '==> keeping E2E run %s for debugging (run_dir=%s)
+' "$run_id" "$run_dir" >&2
+		exit "$status"
+	fi
 	if [ -n "$server_pid" ]; then
 		kill "$server_pid" >/dev/null 2>&1 || true
 		wait "$server_pid" 2>/dev/null || true
@@ -320,7 +325,7 @@ write_config() {
 	bindings_json=$3
 	python3 - "$checkout" "$target" "$admin_port" "$public_port" "$atlas_wrapper" \
 		"$run_dir/staging/feature-import" "$run_dir/staging/prerender" "$run_dir/staging/router" \
-		"$file_set_id" "$bindings_json" "$docker_bin" "$sandbox_platform" \
+		"$file_set_id" "$bindings_json" "$docker_bin" "$sandbox_platform" "$evidence_dir/observability" \
 		"$config_s3_endpoint" "$WEBSITE_TEST_S3_BUCKET" <<'PY'
 import json
 import pathlib
@@ -330,8 +335,8 @@ import sys
 (
     checkout, target, admin_port, public_port, atlas,
     feature_stage, prerender_stage, router_stage, file_set_id, bindings_json,
-    docker_bin, sandbox_platform, s3_endpoint, s3_bucket,
-) = sys.argv[1:15]
+    docker_bin, sandbox_platform, observability_dir, s3_endpoint, s3_bucket,
+) = sys.argv[1:16]
 
 source = (pathlib.Path(checkout) / "main/config.example.yaml").read_text(encoding="utf-8")
 text = source
@@ -360,6 +365,23 @@ replace_once(r"^(\s*s3_bucket:\s*).*$", yaml(s3_bucket), "s3 bucket")
 replace_once(r"^(\s*s3_access_key_env:\s*).*$", "WEBSITE_TEST_S3_ACCESS_KEY", "s3 access env")
 replace_once(r"^(\s*s3_secret_key_env:\s*).*$", "WEBSITE_TEST_S3_SECRET_KEY", "s3 secret env")
 replace_once(r"^(\s*atlas_binary:\s*).*$", yaml(atlas), "atlas binary")
+observability_block = (
+    "observability:\n"
+    "  mode: file\n"
+    "  min_level: info\n"
+    "  file:\n"
+    "    directory: " + yaml(observability_dir) + "\n"
+    "    max_file_bytes: 16777216\n"
+    "    max_files: 4"
+)
+text, count = re.subn(
+    r"observability:\n  mode: noop\n  min_level: info",
+    lambda _: observability_block,
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("cannot patch E2E file observability")
 text = text.replace("ZUBRIUM_ROUTER_SERVICE_CREDENTIAL", "ZUBRIUM_E2E_SERVICE_CREDENTIAL")
 text = text.replace("ZUBRIUM_FORMS_FILE_SERVICE_CREDENTIAL", "ZUBRIUM_E2E_SERVICE_CREDENTIAL")
 text = text.replace("ZUBRIUM_CONTENT_SERVICE_CREDENTIAL", "ZUBRIUM_E2E_SERVICE_CREDENTIAL")
@@ -473,7 +495,7 @@ start_server() {
 	phase=$2
 	(
 		cd "$checkout"
-		exec "$checkout/bin/zubrium" --config "$config"
+		exec "$checkout/bin/zubrium" --suppress-bootstrap-secret --config "$config"
 	) >"$evidence_dir/server-$phase.log" 2>&1 &
 	server_pid=$!
 	wait_ready || {

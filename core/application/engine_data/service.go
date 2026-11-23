@@ -89,7 +89,7 @@ type moduleDataNamespace struct {
 	fields map[string]SelectorField
 }
 
-// ModuleDataStore is a capability bound to one registered module ID and its
+// Store is a capability bound to one registered owner ID and its
 // declared namespaces. It deliberately exposes neither module ID nor SQL.
 type Store struct {
 	moduleID   string
@@ -98,7 +98,7 @@ type Store struct {
 	limits     ModuleDataLimits
 }
 
-// NewStore creates one engine-scoped capability after its descriptor has been
+// NewStore creates one owner-scoped capability after its contract has been
 // registered by the Core composition root.
 func NewStore(repository domainengine.Repository, descriptor ModuleDataDescriptor, limits ModuleDataLimits) (*Store, error) {
 	if repository == nil {
@@ -354,8 +354,10 @@ func (s *Store) Batch(ctx context.Context, mutations []ModuleDataMutation) error
 		s.limits.MaxBatchBytes, s.limits.MaxPayloadBytes, s.limits.MaxIndexBytes))
 }
 
-// validateModuleDataBatch keeps a transaction inside one engine aggregate
-// scope and prevents ambiguous repeated CAS operations on the same record.
+// validateModuleDataBatch keeps a transaction inside one owner's namespace
+// and prevents ambiguous repeated CAS operations on the same record. A batch
+// may include multiple scopes so modules can atomically update records whose
+// independent scopes participate in one domain transaction.
 func validateModuleDataBatch(mutations []ModuleDataMutation) error {
 	if len(mutations) == 0 {
 		return ErrModuleDataInvalid
@@ -364,7 +366,7 @@ func validateModuleDataBatch(mutations []ModuleDataMutation) error {
 	seen := make(map[ModuleDataKey]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		key := mutation.Key
-		if key.Namespace != first.Namespace || key.ScopeType != first.ScopeType || key.ScopeID != first.ScopeID || mutation.ExpectedRevision < 0 {
+		if key.Namespace != first.Namespace || mutation.ExpectedRevision < 0 {
 			return ErrModuleDataInvalid
 		}
 		if mutation.Value == nil && mutation.ExpectedRevision == 0 {

@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -13,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
@@ -62,7 +64,7 @@ type templateCreateFingerprintInput struct {
 
 // ListPages returns the dynamic page registry.
 func (s *Service) ListPages(ctx context.Context, cursor string, limit int) (websiteapi.PagePage, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.PagePage{}, err
 	}
 	if limit < 1 || limit > s.store.MaxPageSize() {
@@ -76,7 +78,7 @@ func (s *Service) ListPages(ctx context.Context, cursor string, limit int) (webs
 		}
 		state = parsed
 	}
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"page"}}}
+	selectors := []recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"page"}}}
 	keys, records, next, err := s.store.List(ctx, snapshotsNamespace, "global", "global", state.After, selectors, limit)
 	if err != nil {
 		return websiteapi.PagePage{}, mapCoreError(err)
@@ -100,7 +102,7 @@ func (s *Service) ListPages(ctx context.Context, cursor string, limit int) (webs
 
 // GetPage reads one dynamic page identity.
 func (s *Service) GetPage(ctx context.Context, pageID string) (websiteapi.Page, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.Page{}, err
 	}
 	if !snapshotIDPattern.MatchString(pageID) {
@@ -113,7 +115,7 @@ func (s *Service) GetPage(ctx context.Context, pageID string) (websiteapi.Page, 
 // CreatePage synchronously writes a server-generated page, a ready root
 // snapshot and the idempotency receipt in one Website-scoped Core batch.
 func (s *Service) CreatePage(ctx context.Context, request websiteapi.CreatePageRequest) (websiteapi.Page, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.Page{}, err
 	}
 	if !validSnapshotName(request.Name) || !snapshotIdempotencyKeyPattern.MatchString(request.IdempotencyKey) {
@@ -177,6 +179,10 @@ func (s *Service) CreatePage(ctx context.Context, request websiteapi.CreatePageR
 	}
 	root := websiteapi.Snapshot{ID: rootID, PageID: pageID, Name: request.Name,
 		Sequence: 1, Revision: 1, FeaturePins: pins, State: "ready", CreatedAt: time.Now().UTC(), Payload: cloneSnapshotPayload(payload)}
+	root.Digest, err = snapshotContentDigest(root)
+	if err != nil {
+		return websiteapi.Page{}, websiteapi.ErrUnavailable
+	}
 	rootPayload, err := json.Marshal(root)
 	if err != nil {
 		return websiteapi.Page{}, websiteapi.ErrUnavailable
@@ -195,7 +201,7 @@ func (s *Service) CreatePage(ctx context.Context, request websiteapi.CreatePageR
 	if err != nil {
 		return websiteapi.Page{}, err
 	}
-	treeMutation, err := pageTreeRegistryMutation(pageID, core.ModuleDataRecord{}, 1)
+	treeMutation, err := pageTreeRegistryMutation(pageID, recorddata.Record{}, 1)
 	if err != nil {
 		return websiteapi.Page{}, err
 	}
@@ -204,11 +210,11 @@ func (s *Service) CreatePage(ctx context.Context, request websiteapi.CreatePageR
 		return websiteapi.Page{}, websiteapi.ErrUnavailable
 	}
 	receiptIndex, _ := json.Marshal(map[string]any{"record_type": "page_idempotency", "page_id": pageID, "snapshot_id": rootID, "state": "created", "revision": int64(1)})
-	mutations := []core.ModuleDataMutation{
-		{Key: snapshotKey(pageID, rootID), ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: rootPayload, PayloadVersion: 1, IndexData: rootIndex}},
+	mutations := []recorddata.RecordMutation{
+		{Key: snapshotKey(pageID, rootID), ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: rootPayload, PayloadVersion: 1, IndexData: rootIndex}},
 		{Key: websiterepo.PageKey(pageID), ExpectedRevision: 0, Value: pageValue},
 		treeMutation,
-		{Key: websiterepo.PageCreateReceiptKey(request.IdempotencyKey), ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
+		{Key: websiterepo.PageCreateReceiptKey(request.IdempotencyKey), ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
 	}
 	if err := s.store.Batch(ctx, mutations); err != nil {
 		if errors.Is(mapCoreError(err), websiteapi.ErrConflict) {
@@ -223,30 +229,30 @@ func (s *Service) CreatePage(ctx context.Context, request websiteapi.CreatePageR
 	return page, nil
 }
 
-func (s *Service) loadPage(ctx context.Context, pageID string) (websiteapi.Page, core.ModuleDataRecord, error) {
+func (s *Service) loadPage(ctx context.Context, pageID string) (websiteapi.Page, recorddata.Record, error) {
 	key := websiterepo.PageKey(pageID)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		return websiteapi.Page{}, core.ModuleDataRecord{}, mapCoreError(err)
+		return websiteapi.Page{}, recorddata.Record{}, mapCoreError(err)
 	}
 	page, err := decodePageRecord(key, record)
 	if err != nil {
-		return websiteapi.Page{}, core.ModuleDataRecord{}, err
+		return websiteapi.Page{}, recorddata.Record{}, err
 	}
 	latest, _, err := s.snapshotInPage(ctx, page.ID, page.LatestSnapshotID)
 	if err != nil {
 		if errors.Is(err, websiteapi.ErrNotFound) {
-			return websiteapi.Page{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
+			return websiteapi.Page{}, recorddata.Record{}, websiteapi.ErrUnavailable
 		}
-		return websiteapi.Page{}, core.ModuleDataRecord{}, err
+		return websiteapi.Page{}, recorddata.Record{}, err
 	}
 	if latest.State != page.LatestSnapshotState || latest.Name != page.Name {
-		return websiteapi.Page{}, core.ModuleDataRecord{}, websiteapi.ErrUnavailable
+		return websiteapi.Page{}, recorddata.Record{}, websiteapi.ErrUnavailable
 	}
 	return page, record, nil
 }
 
-func decodePageRecord(key core.ModuleDataKey, record core.ModuleDataRecord) (websiteapi.Page, error) {
+func decodePageRecord(key recorddata.RecordKey, record recorddata.Record) (websiteapi.Page, error) {
 	var stored pageDocument
 	var index struct {
 		RecordType     string `json:"record_type"`
@@ -288,11 +294,11 @@ func validPageLifecycle(state string) bool {
 
 func snapshotIndex(snapshot websiteapi.Snapshot) (json.RawMessage, error) {
 	index := map[string]any{"record_type": "snapshot", "snapshot_id": snapshot.ID, "page_id": snapshot.PageID,
-		"state": snapshot.State, "revision": snapshot.Revision, "parent_id": snapshot.ParentID}
+		"state": snapshot.State, "revision": snapshot.Revision, "parent_id": snapshot.ParentID, "digest": snapshot.Digest}
 	return json.Marshal(index)
 }
 
-func pageModuleDataValue(page websiteapi.Page, revision int64) (*core.ModuleDataValue, error) {
+func pageModuleDataValue(page websiteapi.Page, revision int64) (*recorddata.RecordValue, error) {
 	payload, err := json.Marshal(pageDocument{Page: page})
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
@@ -302,13 +308,13 @@ func pageModuleDataValue(page websiteapi.Page, revision int64) (*core.ModuleData
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
 	}
-	return &core.ModuleDataValue{Payload: payload, PayloadVersion: pageRecordVersion, IndexData: index}, nil
+	return &recorddata.RecordValue{Payload: payload, PayloadVersion: pageRecordVersion, IndexData: index}, nil
 }
 
 func (s *Service) readPageCreateReceipt(ctx context.Context, idempotencyKey, fingerprint string) (websiteapi.Page, bool, error) {
 	record, err := s.store.Get(ctx, websiterepo.PageCreateReceiptKey(idempotencyKey))
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return websiteapi.Page{}, false, nil
 		}
 		return websiteapi.Page{}, false, mapCoreError(err)
@@ -363,7 +369,7 @@ func jsonEscape(value string) string {
 }
 
 func (s *Service) ListPageTemplates(ctx context.Context, cursor string, limit int) (websiteapi.PageTemplatePage, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.PageTemplatePage{}, err
 	}
 	if limit < 1 || limit > s.store.MaxPageSize() {
@@ -377,7 +383,7 @@ func (s *Service) ListPageTemplates(ctx context.Context, cursor string, limit in
 		}
 		state = parsed
 	}
-	selectors := []core.ModuleDataSelector{{Field: "record_type", Operator: core.SelectorEqual, Values: []any{"page_template"}}}
+	selectors := []recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"page_template"}}}
 	keys, records, next, err := s.store.List(ctx, websiterepo.TemplateNamespace, "global", "global", state.After, selectors, limit)
 	if err != nil {
 		return websiteapi.PageTemplatePage{}, mapCoreError(err)
@@ -400,7 +406,7 @@ func (s *Service) ListPageTemplates(ctx context.Context, cursor string, limit in
 }
 
 func (s *Service) GetPageTemplate(ctx context.Context, templateID string) (websiteapi.PageTemplate, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelRead); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelRead); err != nil {
 		return websiteapi.PageTemplate{}, err
 	}
 	if !snapshotIDPattern.MatchString(templateID) {
@@ -411,7 +417,7 @@ func (s *Service) GetPageTemplate(ctx context.Context, templateID string) (websi
 }
 
 func (s *Service) CreatePageTemplate(ctx context.Context, request websiteapi.CreatePageTemplateRequest) (websiteapi.PageTemplate, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.PageTemplate{}, err
 	}
 	if !validSnapshotName(request.Name) || !validTemplateDescription(request.Description) || !snapshotIdempotencyKeyPattern.MatchString(request.IdempotencyKey) {
@@ -453,9 +459,9 @@ func (s *Service) CreatePageTemplate(ctx context.Context, request websiteapi.Cre
 		return websiteapi.PageTemplate{}, websiteapi.ErrUnavailable
 	}
 	receiptIndex, _ := json.Marshal(map[string]any{"record_type": "template_idempotency", "template_id": templateID, "revision": int64(1), "digest": value.Digest})
-	if err := s.store.Batch(ctx, []core.ModuleDataMutation{
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{
 		{Key: websiterepo.PageTemplateKey(templateID), ExpectedRevision: 0, Value: templateValue},
-		{Key: websiterepo.PageTemplateCreateReceiptKey(request.IdempotencyKey), ExpectedRevision: 0, Value: &core.ModuleDataValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
+		{Key: websiterepo.PageTemplateCreateReceiptKey(request.IdempotencyKey), ExpectedRevision: 0, Value: &recorddata.RecordValue{Payload: receiptPayload, PayloadVersion: 1, IndexData: receiptIndex}},
 	}); err != nil {
 		if errors.Is(mapCoreError(err), websiteapi.ErrConflict) {
 			if existing, found, readErr := s.readTemplateCreateReceipt(ctx, request.IdempotencyKey, fingerprint); readErr != nil {
@@ -470,7 +476,7 @@ func (s *Service) CreatePageTemplate(ctx context.Context, request websiteapi.Cre
 }
 
 func (s *Service) UpdatePageTemplate(ctx context.Context, request websiteapi.UpdatePageTemplateRequest) (websiteapi.PageTemplate, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.PageTemplate{}, err
 	}
 	if request.ExpectedRevision < 1 || !validSnapshotName(request.Name) || !validTemplateDescription(request.Description) {
@@ -500,14 +506,14 @@ func (s *Service) UpdatePageTemplate(ctx context.Context, request websiteapi.Upd
 	if err != nil {
 		return websiteapi.PageTemplate{}, err
 	}
-	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{Key: websiterepo.PageTemplateKey(request.TemplateID), ExpectedRevision: record.Revision, Value: moduleValue}}); err != nil {
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{{Key: websiterepo.PageTemplateKey(request.TemplateID), ExpectedRevision: record.Revision, Value: moduleValue}}); err != nil {
 		return websiteapi.PageTemplate{}, mapCoreError(err)
 	}
 	return value, nil
 }
 
 func (s *Service) DeletePageTemplate(ctx context.Context, request websiteapi.DeletePageTemplateRequest) error {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return err
 	}
 	if request.ExpectedRevision < 1 {
@@ -520,7 +526,7 @@ func (s *Service) DeletePageTemplate(ctx context.Context, request websiteapi.Del
 	if record.Revision != request.ExpectedRevision {
 		return websiteapi.ErrConflict
 	}
-	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{Key: websiterepo.PageTemplateKey(request.TemplateID), ExpectedRevision: record.Revision}}); err != nil {
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{{Key: websiterepo.PageTemplateKey(request.TemplateID), ExpectedRevision: record.Revision}}); err != nil {
 		return mapCoreError(err)
 	}
 	return nil
@@ -529,7 +535,7 @@ func (s *Service) DeletePageTemplate(ctx context.Context, request websiteapi.Del
 // ApplyPageTemplate creates a provisioning child snapshot and records immutable
 // template provenance. It deliberately does not invoke Content or Coordinator.
 func (s *Service) ApplyPageTemplate(ctx context.Context, request websiteapi.ApplyPageTemplateRequest) (websiteapi.Snapshot, error) {
-	if err := s.requireLevel(ctx, core.AccessLevelWrite); err != nil {
+	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.Snapshot{}, err
 	}
 	if !snapshotIDPattern.MatchString(request.PageID) || !snapshotIDPattern.MatchString(request.TemplateID) ||
@@ -592,17 +598,17 @@ func (s *Service) ApplyPageTemplate(ctx context.Context, request websiteapi.Appl
 	return s.CreateSnapshot(ctx, requestToCreate)
 }
 
-func (s *Service) loadPageTemplate(ctx context.Context, templateID string) (websiteapi.PageTemplate, core.ModuleDataRecord, error) {
+func (s *Service) loadPageTemplate(ctx context.Context, templateID string) (websiteapi.PageTemplate, recorddata.Record, error) {
 	key := websiterepo.PageTemplateKey(templateID)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
-		return websiteapi.PageTemplate{}, core.ModuleDataRecord{}, mapCoreError(err)
+		return websiteapi.PageTemplate{}, recorddata.Record{}, mapCoreError(err)
 	}
 	value, err := decodePageTemplate(key, record)
 	return value, record, err
 }
 
-func decodePageTemplate(key core.ModuleDataKey, record core.ModuleDataRecord) (websiteapi.PageTemplate, error) {
+func decodePageTemplate(key recorddata.RecordKey, record recorddata.Record) (websiteapi.PageTemplate, error) {
 	var value websiteapi.PageTemplate
 	var index struct {
 		RecordType string `json:"record_type"`
@@ -628,7 +634,7 @@ func decodePageTemplate(key core.ModuleDataKey, record core.ModuleDataRecord) (w
 	return value, nil
 }
 
-func pageTemplateModuleDataValue(value websiteapi.PageTemplate) (*core.ModuleDataValue, error) {
+func pageTemplateModuleDataValue(value websiteapi.PageTemplate) (*recorddata.RecordValue, error) {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
@@ -637,7 +643,7 @@ func pageTemplateModuleDataValue(value websiteapi.PageTemplate) (*core.ModuleDat
 	if err != nil {
 		return nil, websiteapi.ErrUnavailable
 	}
-	return &core.ModuleDataValue{Payload: payload, PayloadVersion: pageTemplateRecordVersion, IndexData: index}, nil
+	return &recorddata.RecordValue{Payload: payload, PayloadVersion: pageTemplateRecordVersion, IndexData: index}, nil
 }
 
 func (s *Service) validateTemplateConfiguration(ctx context.Context, configuration websiteapi.PageTemplateConfiguration) (websiteapi.PageTemplateConfiguration, error) {
@@ -809,7 +815,7 @@ func templateCreateFingerprint(request websiteapi.CreatePageTemplateRequest) (st
 func (s *Service) readTemplateCreateReceipt(ctx context.Context, idempotencyKey, fingerprint string) (websiteapi.PageTemplate, bool, error) {
 	record, err := s.store.Get(ctx, websiterepo.PageTemplateCreateReceiptKey(idempotencyKey))
 	if err != nil {
-		if errors.Is(err, core.ErrModuleDataNotFound) {
+		if errors.Is(err, recorddata.ErrRecordNotFound) {
 			return websiteapi.PageTemplate{}, false, nil
 		}
 		return websiteapi.PageTemplate{}, false, mapCoreError(err)

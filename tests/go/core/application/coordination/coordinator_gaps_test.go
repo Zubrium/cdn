@@ -56,15 +56,15 @@ func TestTaskExecutorNeverInvokesClaimedJoinTask(t *testing.T) {
 	owner := uuid.New()
 	join := workerTestTask(owner)
 	join.Kind = corecoord.TaskKindJoin
-	join.Worker = nil
+	join.Operation = nil
 	store := &fakeTaskStore{task: join, failCh: make(chan TaskFailure, 1)}
 	var invoked atomic.Int32
-	pool, err := NewTaskExecutor(store, workerTestConfig(owner), map[string]WorkerHandler{
-		workerHandlerKey("worker.example", "inspect", 1): func(context.Context, Task) (corecoord.TaskOutcome, error) {
+	pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(map[string]TestTaskHandler{
+		operationHandlerKey("worker.example", "inspect", 1): func(context.Context, Task) (corecoord.TaskOutcome, error) {
 			invoked.Add(1)
 			return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,12 +94,12 @@ func TestWorkerHandlerReceivesDurableTaskIdentity(t *testing.T) {
 	task := workerTestTask(owner)
 	store := &fakeTaskStore{task: task}
 	calls := make(chan Task, 1)
-	pool, err := NewTaskExecutor(store, workerTestConfig(owner), map[string]WorkerHandler{
-		workerHandlerKey("worker.example", "inspect", 1): func(_ context.Context, received Task) (corecoord.TaskOutcome, error) {
+	pool, err := NewTaskExecutor(store, workerTestConfig(owner), testExecutorFor(map[string]TestTaskHandler{
+		operationHandlerKey("worker.example", "inspect", 1): func(_ context.Context, received Task) (corecoord.TaskOutcome, error) {
 			calls <- received
 			return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestWorkerHandlerReceivesDurableTaskIdentity(t *testing.T) {
 	case received := <-calls:
 		if received.ID != task.ID || received.ID == uuid.Nil || received.WorkflowID != task.WorkflowID ||
 			received.WorkflowID == uuid.Nil || received.LeaseOwner != owner || received.FencingToken != task.FencingToken ||
-			received.ConfigEpoch != task.ConfigEpoch || received.Worker == nil || received.Worker.OperationID != "inspect" {
+			received.ConfigEpoch != task.ConfigEpoch || received.Operation == nil || received.Operation.ID != "inspect" {
 			t.Fatalf("handler received a non-durable or spoofable identity: got=%+v durable=%+v", received, task)
 		}
 	case <-time.After(time.Second):
@@ -138,7 +138,7 @@ func (s *capturingWorkflowStore) StartWorkflow(_ context.Context, request coreco
 	if s.startErr != nil {
 		return corecoord.Workflow{}, false, s.startErr
 	}
-	return corecoord.Workflow{ID: request.ID, OwnerEngineID: request.OwnerEngineID,
+	return corecoord.Workflow{ID: request.ID, OwnerClassID: request.OwnerClassID,
 		RootTaskID: request.Root.ID, State: "queued"}, true, nil
 }
 
@@ -162,14 +162,8 @@ func (s *capturingWorkflowStore) copyRequests() []corecoord.WorkflowRequest {
 
 func workflowClientForGaps(t *testing.T, store *capturingWorkflowStore) *WorkflowClient {
 	t.Helper()
-	catalog, err := BuildWorkerCatalog(BuildPlan{Components: []string{"core", "engine.example"}}, []ComponentWorkerSet{{
-		ComponentID: "engine.example", Handlers: map[string]WorkerHandler{"process/v1": taskHandlerForTest},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := NewWorkflowClient(WorkflowClientConfig{Store: store, Workers: catalog,
-		OwnerEngineID: "engine.example", InstanceID: uuid.New(), ConfigEpoch: 5,
+	client, err := NewWorkflowClient(WorkflowClientConfig{Store: store, TaskClass: "engine.example", TaskClasses: []string{"engine.example"},
+		InstanceID: uuid.New(), ConfigEpoch: 5,
 		MaxAttempts: 3, Retention: time.Hour})
 	if err != nil {
 		t.Fatal(err)
@@ -194,9 +188,9 @@ func TestWorkflowStartCannotBeSpoofedByPayloadOrCallerMetadata(t *testing.T) {
 	request := requests[0]
 	if request.Owner == uuid.Nil || request.ConfigEpoch != 5 || request.Root.ID == uuid.Nil || request.Root.ID == spoofedTask ||
 		request.Root.WorkflowID != request.ID || request.Root.ParentTaskID != uuid.Nil || request.Root.EmissionKey != "" ||
-		request.Root.Kind != corecoord.TaskKindWorker || request.Root.Worker == nil ||
-		request.Root.Worker.ComponentID != "engine.example" || request.Root.Worker.OperationID != "process" ||
-		request.Root.Worker.ContractVersion != 1 {
+		request.Root.Kind != corecoord.TaskKindOperation || request.Root.Operation == nil ||
+		request.Root.Operation.ClassID != "engine.example" || request.Root.Operation.ID != "process" ||
+		request.Root.Operation.Version != 1 {
 		t.Fatalf("caller payload or metadata replaced server-derived workflow identity: %+v", request)
 	}
 	if len(request.InputHash) != 32 {
@@ -278,38 +272,11 @@ func TestServiceStartFailureIsRetryableAndDoesNotLeakLease(t *testing.T) {
 	}
 }
 
-func TestServiceExecutorInitFailureIsRetryable(t *testing.T) {
-	base := &serviceStore{}
-	validConfig := serviceTestConfig(base)
-	config := validConfig
-	config.Workers = &WorkerCatalog{workers: map[string]Worker{
-		"not-a-dispatch-key": {ComponentID: "engine.example", OperationID: "process", ContractVersion: 1, Handler: taskHandlerForTest},
-	}}
-	service, err := NewService(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Start(context.Background()); err == nil {
-		t.Fatal("invalid executor initialization did not fail service startup")
-	}
-	base.mu.Lock()
-	leaked := base.lease
-	base.mu.Unlock()
-	if leaked {
-		t.Fatal("failed executor initialization left an instance lease registered")
-	}
-	service.cfg.Workers = validConfig.Workers
-	if err := service.Start(context.Background()); err != nil {
-		t.Fatalf("service could not retry startup after executor initialization failed: %v", err)
-	}
-	if err := service.CheckStartup(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Activate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Close(context.Background()); err != nil {
-		t.Fatal(err)
+func TestServiceRejectsMissingOperationExecutor(t *testing.T) {
+	config := serviceTestConfig(&serviceStore{})
+	config.Executor = nil
+	if _, err := NewService(config); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("service accepted a missing DataBus operation executor: %v", err)
 	}
 }
 
@@ -317,7 +284,7 @@ func TestTaskOutcomeRejectsCombinedDependencyLimitAndRepeatedRefs(t *testing.T) 
 	t.Run("repeated dependency", func(t *testing.T) {
 		dependency := uuid.New()
 		outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{{
-			Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+			Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 			EmissionKey: "child", Payload: json.RawMessage(`{}`), MaxAttempts: 1,
 			DependsOn: []uuid.UUID{dependency, dependency},
 		}}}
@@ -333,7 +300,7 @@ func TestTaskOutcomeRejectsCombinedDependencyLimitAndRepeatedRefs(t *testing.T) 
 			key := "emission:" + uuid.NewString()
 			emissions = append(emissions, key)
 			children = append(children, corecoord.TaskChild{
-				Kind: corecoord.TaskKindWorker, Worker: &corecoord.WorkerRef{ComponentID: "worker.example", OperationID: "run", ContractVersion: 1},
+				Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.example", ID: "run", Version: 1},
 				EmissionKey: key, Payload: json.RawMessage(`{}`), MaxAttempts: 1,
 			})
 		}

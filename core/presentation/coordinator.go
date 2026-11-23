@@ -46,7 +46,8 @@ type CoordinatorRuntimeConfig struct {
 	MaxChildrenPerTask  int
 	WorkflowRetention   time.Duration
 	ShutdownTimeout     time.Duration
-	WorkerCatalog       *appcoord.WorkerCatalog
+	TaskClasses         []string
+	OperationExecutor   appcoord.OperationExecutor
 }
 
 // StartCoordinator is called once during Core startup after component
@@ -59,7 +60,7 @@ func (r *Runtime) StartCoordinator(ctx context.Context, cfg CoordinatorRuntimeCo
 	if ctx == nil || cfg.ShutdownTimeout <= 0 || r.Registry == nil {
 		return ErrCoordinatorInvalid
 	}
-	if _, err := r.Registry.Lookup("coordinator"); err != nil {
+	if err := r.Registry.Lookup("coordinator"); err != nil {
 		return ErrCoordinatorInvalid
 	}
 	if err := ctx.Err(); err != nil {
@@ -82,7 +83,7 @@ func (r *Runtime) StartCoordinator(ctx context.Context, cfg CoordinatorRuntimeCo
 		RetryBase: cfg.RetryBase, RetryMaximum: cfg.RetryMaximum,
 		MaxAttempts: cfg.MaxAttempts, MaxWorkflowTasks: cfg.MaxWorkflowTasks,
 		MaxChildrenPerTask: cfg.MaxChildrenPerTask, WorkflowRetention: cfg.WorkflowRetention,
-		Workers: cfg.WorkerCatalog,
+		TaskClasses: cfg.TaskClasses, Executor: cfg.OperationExecutor,
 	})
 	if err != nil {
 		r.coordinatorMu.Lock()
@@ -155,12 +156,12 @@ func (r *Runtime) CoordinatorErrors() <-chan error {
 	return closed
 }
 
-func (r *Runtime) NewWorkflowClient(componentID string) (*WorkflowClient, error) {
+func (r *Runtime) NewWorkflowClient(taskClass string) (*WorkflowClient, error) {
 	service := r.coordinatorService()
 	if service == nil {
 		return nil, appcoord.ErrInstanceNotReady
 	}
-	return service.NewWorkflowClient(componentID)
+	return service.NewWorkflowClient(taskClass)
 }
 
 // NewWorkflowControl exposes workflow summaries, task graphs, and task retry.

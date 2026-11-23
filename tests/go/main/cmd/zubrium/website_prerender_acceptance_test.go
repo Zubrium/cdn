@@ -25,6 +25,8 @@ import (
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/main/internal/composition"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	"github.com/Zubrium/cdn/workers/prerender"
 	"github.com/google/uuid"
@@ -68,28 +70,28 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			}
 		})
 
-		if err := runtime.Registry.Register("coordinator", core.CoordinatorDescriptor{}); err != nil {
+		if err := runtime.Registry.Register("coordinator"); err != nil {
 			t.Fatalf("register disposable Coordinator: %v", err)
 		}
-		if err := runtime.Registry.Register(websiteengine.ModuleDataDescriptor().ModuleID, websitePersistenceModule{}); err != nil {
+		if err := runtime.Registry.Register(websiteengine.RecordDescriptor().OwnerID); err != nil {
 			t.Fatalf("register Website module: %v", err)
 		}
-		if err := runtime.Registry.Register(prerender.DataModuleID, web020PrerenderModule{}); err != nil {
+		if err := runtime.Registry.Register(prerender.DataModuleID); err != nil {
 			t.Fatalf("register prerender worker module: %v", err)
 		}
-		websiteData, err := runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+		websiteData, err := websiteAcceptanceRecordStore(t, runtime, websiteengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Website module data: %v", err)
 		}
 		owned := &websiteOwnedKeys{store: websiteData}
 		t.Cleanup(func() { owned.deleteAll(t) })
 
-		identity := runtime.EngineIdentity()
+		identity := runtime.Identity()
 		serviceSession, _, err := identity.Authenticate(ctx, credential)
 		if err != nil {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
-		files := runtime.EngineFiles()
+		files := runtime.Files()
 
 		base, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
@@ -124,7 +126,7 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			"digest": prerendercontract.HexDigest(featureManifest), "artifact_size": len(featureManifest),
 			"state": "ready", "created_at": time.Now().UTC(),
 		})
-		if _, err := websiteData.Put(ctx, featureKey, core.ModuleDataValue{
+		if _, err := websiteData.Put(ctx, featureKey, contracts.RecordValue{
 			Payload: featurePayload, PayloadVersion: 1,
 			IndexData: web020JSON(map[string]any{"record_type": "feature_version", "feature_id": web020FeatureID,
 				"version": web020FeatureVersion, "state": "ready"}),
@@ -335,19 +337,13 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Website build workflow handler: %v", err)
 		}
-		catalogWorkers, err := core.BuildWorkerCatalog(core.BuildPlan{Components: []string{
-			websiteworkflow.ComponentID, prerender.DataModuleID,
-		}}, []core.ComponentWorkerSet{
-			{ComponentID: websiteworkflow.ComponentID, Handlers: map[string]core.WorkerHandler{
-				websiteworkflow.OperationID + "/v1": workflowHandler.WorkerHandler,
-			}},
-			{ComponentID: prerender.DataModuleID, Handlers: map[string]core.WorkerHandler{
-				prerender.OperationID + "/v1": worker.WorkerHandler,
-			}},
-		})
-		if err != nil || catalogWorkers == nil {
-			t.Fatalf("build disposable worker catalog: %v", err)
+		workflowKey := contracts.Key{ID: websiteworkflow.OperationID, Version: 1}
+		prerenderKey := contracts.Key{ID: prerender.OperationID, Version: 1}
+		bindings := map[contracts.Key]composition.TaskOperationBinding{
+			workflowKey:  {TaskClass: websiteworkflow.ComponentID, Handler: workflowHandler.WorkerHandler},
+			prerenderKey: {TaskClass: prerender.DataModuleID, Handler: worker.WorkerHandler},
 		}
+		dispatcher := websiteAcceptanceExecutor(t, bindings)
 		fingerprint := sha256.Sum256([]byte("web020-" + scenarioID))
 		if err := runtime.StartCoordinator(ctx, core.CoordinatorRuntimeConfig{
 			Fingerprint: hex.EncodeToString(fingerprint[:]), InstanceLease: 30 * time.Second,
@@ -355,7 +351,9 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			TaskTimeout: 90 * time.Second, PollInterval: 25 * time.Millisecond,
 			RetryBase: 50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
 			MaxAttempts: 3, MaxWorkflowTasks: 32, MaxChildrenPerTask: 8,
-			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second, WorkerCatalog: catalogWorkers,
+			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second,
+			TaskClasses:       []string{websiteworkflow.ComponentID, prerender.DataModuleID},
+			OperationExecutor: composition.NewDataBusTaskExecutor(dispatcher, bindings),
 		}); err != nil {
 			t.Fatalf("start disposable Coordinator: %v", err)
 		}
@@ -459,16 +457,13 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 		if !found {
 			t.Fatal("workflow start payload was not recorded")
 		}
-		rootTask := core.Task{
-			ID: started.receipt.RootTaskID, Kind: core.TaskKindWorker,
-			Worker: &core.WorkerRef{ComponentID: websiteworkflow.ComponentID, OperationID: websiteworkflow.OperationID,
-				ContractVersion: websiteworkflow.ContractVersion},
-			Payload: started.payload,
+		rootTask := contracts.OperationTask{
+			TaskID: started.receipt.RootTaskID.String(), WorkflowID: started.receipt.WorkflowID.String(),
+			IdempotencyKey: "build/" + ready.ID, EmissionKey: "root", Payload: started.payload,
 		}
 		outcome, err := workflowHandler.WorkerHandler(ctx, rootTask)
-		if err != nil || len(outcome.Children) != 1 || outcome.Children[0].Worker == nil ||
-			outcome.Children[0].Worker.ComponentID != prerender.DataModuleID ||
-			outcome.Children[0].Worker.OperationID != prerender.OperationID ||
+		if err != nil || len(outcome.Children) != 1 ||
+			outcome.Children[0].OperationID != prerender.OperationID ||
 			outcome.Children[0].EmissionKey != "prerender:"+ready.ID {
 			t.Fatalf("root workflow child = %+v, %v", outcome, err)
 		}
@@ -481,8 +476,8 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			t.Fatalf("decode child request: %v", err)
 		}
 		childRequest.TaskID = childTaskID.String()
-		replayTask := core.Task{
-			ID: childTaskID, Kind: core.TaskKindWorker, Worker: outcome.Children[0].Worker,
+		replayTask := contracts.OperationTask{
+			TaskID: childTaskID.String(), WorkflowID: started.receipt.WorkflowID.String(),
 			IdempotencyKey: "build/" + ready.ID, EmissionKey: outcome.Children[0].EmissionKey,
 			Payload: outcome.Children[0].Payload,
 		}
@@ -543,14 +538,6 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 	})
 }
 
-type web020PrerenderModule struct{}
-
-func (web020PrerenderModule) Operations() []core.Operation { return nil }
-
-func (web020PrerenderModule) ComponentDescriptor() core.ComponentDescriptor {
-	return prerender.ComponentDescriptor()
-}
-
 type web020LocaleCatalog struct{ revision atomic.Int64 }
 
 func (c *web020LocaleCatalog) LocaleCatalogRevision(_ context.Context, locale string) (int64, error) {
@@ -574,7 +561,7 @@ func (p *web020ContentProjection) ResolveContentBuildProjection(_ context.Contex
 }
 
 type web020CoreArtifactWriter struct {
-	files   core.EngineFilesCapability
+	files   core.FilesCapability
 	session core.Session
 }
 
@@ -757,7 +744,7 @@ printf 'network-policy-denied\n'
 	}
 }
 
-func web020ReadCoreFile(t *testing.T, ctx context.Context, files core.EngineFilesCapability, session core.Session, fileID string, limit int64) []byte {
+func web020ReadCoreFile(t *testing.T, ctx context.Context, files core.FilesCapability, session core.Session, fileID string, limit int64) []byte {
 	t.Helper()
 	reader, _, err := files.ReadFile(ctx, session, fileID)
 	if err != nil {
@@ -771,7 +758,7 @@ func web020ReadCoreFile(t *testing.T, ctx context.Context, files core.EngineFile
 	return body
 }
 
-func web020TrackFile(t *testing.T, files core.EngineFilesCapability, session core.Session, fileID string) {
+func web020TrackFile(t *testing.T, files core.FilesCapability, session core.Session, fileID string) {
 	t.Helper()
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)

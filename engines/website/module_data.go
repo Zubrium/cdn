@@ -1,43 +1,43 @@
 package website
 
-import core "github.com/Zubrium/cdn/core/presentation"
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
 
 const moduleID = "website"
 
-// ModuleDataDescriptor declares Website-owned persistent namespaces. All
+// RecordDescriptor declares Website-owned persistent namespaces. All
 // records use TTL 0; operational expiry is modeled in the payload itself.
-func ModuleDataDescriptor() core.ModuleDataDescriptor {
-	return core.ModuleDataDescriptor{
-		ModuleID: moduleID,
-		Namespaces: []core.ModuleDataNamespace{
-			{Name: "features/catalog", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "feature_id": {Type: core.SelectorString}, "version": {Type: core.SelectorString}, "state": {Type: core.SelectorString},
+func RecordDescriptor() recorddata.RecordDescriptor {
+	return recorddata.RecordDescriptor{
+		OwnerID: moduleID,
+		Namespaces: []recorddata.RecordNamespace{
+			{Name: "features/catalog", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString}, "feature_id": {Type: recorddata.RecordSelectorString}, "version": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString},
 			}},
-			{Name: "features/imports", ScopeTypes: []string{"job"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "source_file_id": {Type: core.SelectorString}, "feature_id": {Type: core.SelectorString},
-				"revision": {Type: core.SelectorNumber},
+			{Name: "features/imports", ScopeTypes: []string{"job"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString}, "source_file_id": {Type: recorddata.RecordSelectorString}, "feature_id": {Type: recorddata.RecordSelectorString},
+				"revision": {Type: recorddata.RecordSelectorNumber},
 			}},
-			{Name: "website/content-models", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString},
-				"revision":    {Type: core.SelectorNumber}, "digest": {Type: core.SelectorString},
+			{Name: "website/content-models", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString},
+				"revision":    {Type: recorddata.RecordSelectorNumber}, "digest": {Type: recorddata.RecordSelectorString},
 			}},
-			{Name: "website/snapshots", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "revision": {Type: core.SelectorNumber},
-				"parent_id": {Type: core.SelectorString}, "page_id": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString}, "action": {Type: core.SelectorString},
-				"lifecycle_state": {Type: core.SelectorString},
+			{Name: "website/snapshots", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString}, "revision": {Type: recorddata.RecordSelectorNumber},
+				"parent_id": {Type: recorddata.RecordSelectorString}, "page_id": {Type: recorddata.RecordSelectorString}, "snapshot_id": {Type: recorddata.RecordSelectorString}, "action": {Type: recorddata.RecordSelectorString},
+				"lifecycle_state": {Type: recorddata.RecordSelectorString}, "digest": {Type: recorddata.RecordSelectorString},
 			}},
-			{Name: "website/page-templates", ScopeTypes: []string{"global"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "template_id": {Type: core.SelectorString},
-				"revision": {Type: core.SelectorNumber}, "digest": {Type: core.SelectorString},
+			{Name: "website/page-templates", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString}, "template_id": {Type: recorddata.RecordSelectorString},
+				"revision": {Type: recorddata.RecordSelectorNumber}, "digest": {Type: recorddata.RecordSelectorString},
 			}},
-			{Name: "website/builds", ScopeTypes: []string{"job"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "snapshot_id": {Type: core.SelectorString},
-				"revision": {Type: core.SelectorNumber},
+			{Name: "website/builds", ScopeTypes: []string{"job"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString}, "snapshot_id": {Type: recorddata.RecordSelectorString},
+				"revision": {Type: recorddata.RecordSelectorNumber},
 			}},
-			{Name: "website/media", ScopeTypes: []string{"job"}, Fields: map[string]core.SelectorField{
-				"record_type": {Type: core.SelectorString}, "state": {Type: core.SelectorString}, "source_file_id": {Type: core.SelectorString},
-				"profile_digest": {Type: core.SelectorString}, "processor_version": {Type: core.SelectorString},
-				"revision": {Type: core.SelectorNumber},
+			{Name: "website/media", ScopeTypes: []string{"job"}, Fields: map[string]recorddata.RecordSelectorField{
+				"record_type": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString}, "source_file_id": {Type: recorddata.RecordSelectorString},
+				"profile_digest": {Type: recorddata.RecordSelectorString}, "processor_version": {Type: recorddata.RecordSelectorString},
+				"revision": {Type: recorddata.RecordSelectorNumber},
 			}},
 		},
 	}

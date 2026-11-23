@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"reflect"
 	"sort"
 	"testing"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/content/domain"
 	"github.com/Zubrium/cdn/engines/content/repository"
 )
@@ -72,8 +72,8 @@ func TestGlobalWorkspaceAndPageSelectionsUseDistinctCoreScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	globalKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "global", ScopeID: domain.GlobalScopeID, RecordKey: "workspace/en-US"}
-	pageKey := core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageID, RecordKey: "page-selections/en-US"}
+	globalKey := recorddata.RecordKey{Namespace: "content/workspaces", ScopeType: "global", ScopeID: domain.GlobalScopeID, RecordKey: "workspace/en-US"}
+	pageKey := recorddata.RecordKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageID, RecordKey: "page-selections/en-US"}
 	if _, ok := store.rows[globalKey]; !ok {
 		t.Fatal("missing globally scoped workspace record")
 	}
@@ -84,6 +84,37 @@ func TestGlobalWorkspaceAndPageSelectionsUseDistinctCoreScopes(t *testing.T) {
 	pageState, exists := stored.PageSelections[pageID]
 	if err != nil || !exists || pageState.Draft == nil || pageState.Published == nil || pageState.StoreRevision != 1 {
 		t.Fatalf("Get() did not hydrate page-scoped selections: %#v, err %v", stored, err)
+	}
+}
+
+func TestRepositoryReturnsOpaqueStoreRevisionsFromBatchWrites(t *testing.T) {
+	store := &sequenceRevisionStore{memoryStore: newMemoryStore(), sequence: 30}
+	repo, err := repository.New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageID := "22222222-2222-4222-8222-222222222222"
+	created, err := repo.Create(context.Background(), domain.StoredWorkspace{
+		Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}},
+		PageSelections: map[string]domain.StoredPageSelections{
+			pageID: {Draft: []domain.Selection{}, Published: []domain.Selection{}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	if created.StoreRevision != 31 || created.PageSelections[pageID].StoreRevision != 32 {
+		t.Fatalf("Create() revisions = workspace %d, selection %d; want Core-issued 31 and 32", created.StoreRevision, created.PageSelections[pageID].StoreRevision)
+	}
+	next := cloneRepositoryStored(created)
+	next.Aggregate.Revision = 1
+	committed, err := repo.Commit(context.Background(), created.StoreRevision, next, nil)
+	if err != nil || committed.StoreRevision != 34 || committed.PageSelections[pageID].StoreRevision != 35 {
+		t.Fatalf("Commit() revisions = workspace %d, selection %d, err %v; want Core-issued 34 and 35", committed.StoreRevision, committed.PageSelections[pageID].StoreRevision, err)
+	}
+	updated, err := repo.CommitPageSelections(context.Background(), pageID, "en-US", 35, []domain.Selection{}, []domain.Selection{}, nil)
+	if err != nil || updated.StoreRevision != 36 {
+		t.Fatalf("CommitPageSelections() revision = %d, err %v; want Core-issued revision 36", updated.StoreRevision, err)
 	}
 }
 
@@ -158,7 +189,7 @@ func TestCommitUpdatesOnlyChangedPageSelectionRecords(t *testing.T) {
 	if committed.PageSelections[pageB].StoreRevision != 1 {
 		t.Fatalf("unchanged page revision = %d, want 1", committed.PageSelections[pageB].StoreRevision)
 	}
-	pageRecord, err := store.Get(ctx, core.ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageB, RecordKey: "page-selections/en-US"})
+	pageRecord, err := store.Get(ctx, recorddata.RecordKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: pageB, RecordKey: "page-selections/en-US"})
 	if err != nil || pageRecord.Revision != 1 {
 		t.Fatalf("unchanged page record = %#v, err %v", pageRecord, err)
 	}
@@ -258,41 +289,19 @@ func cloneRepositoryStored(value domain.StoredWorkspace) domain.StoredWorkspace 
 }
 
 type memoryStore struct {
-	rows map[core.ModuleDataKey]core.ModuleDataRecord
+	rows map[recorddata.RecordKey]recorddata.Record
 }
 
-func newMemoryStore() *memoryStore {
-	return &memoryStore{rows: map[core.ModuleDataKey]core.ModuleDataRecord{}}
+type sequenceRevisionStore struct {
+	*memoryStore
+	sequence int64
 }
-func (store *memoryStore) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
-	row, exists := store.rows[key]
-	if !exists {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
-	}
-	return cloneRow(row), nil
-}
-func (store *memoryStore) Put(_ context.Context, key core.ModuleDataKey, value core.ModuleDataValue, expected int64) (core.ModuleDataRecord, error) {
-	current, exists := store.rows[key]
-	if (!exists && expected != 0) || (exists && current.Revision != expected) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataConflict
-	}
-	row := core.ModuleDataRecord{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion, IndexData: append(json.RawMessage(nil), value.IndexData...), Revision: expected + 1}
-	store.rows[key] = row
-	return cloneRow(row), nil
-}
-func (store *memoryStore) Delete(_ context.Context, key core.ModuleDataKey, expected int64) error {
-	row, exists := store.rows[key]
-	if !exists || row.Revision != expected {
-		return core.ErrModuleDataConflict
-	}
-	delete(store.rows, key)
-	return nil
-}
-func (store *memoryStore) Batch(_ context.Context, mutations []core.ModuleDataMutation) error {
+
+func (store *sequenceRevisionStore) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
 	for _, mutation := range mutations {
 		current, exists := store.rows[mutation.Key]
 		if (!exists && mutation.ExpectedRevision != 0) || (exists && current.Revision != mutation.ExpectedRevision) {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 	}
 	for _, mutation := range mutations {
@@ -300,12 +309,57 @@ func (store *memoryStore) Batch(_ context.Context, mutations []core.ModuleDataMu
 			delete(store.rows, mutation.Key)
 			continue
 		}
-		store.rows[mutation.Key] = core.ModuleDataRecord{Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion, IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: mutation.ExpectedRevision + 1}
+		store.sequence++
+		store.rows[mutation.Key] = recorddata.Record{Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion, IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: store.sequence}
 	}
 	return nil
 }
-func (store *memoryStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
-	keys := make([]core.ModuleDataKey, 0)
+
+func newMemoryStore() *memoryStore {
+	return &memoryStore{rows: map[recorddata.RecordKey]recorddata.Record{}}
+}
+func (store *memoryStore) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
+	row, exists := store.rows[key]
+	if !exists {
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
+	}
+	return cloneRow(row), nil
+}
+func (store *memoryStore) Put(_ context.Context, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
+	current, exists := store.rows[key]
+	if (!exists && expected != 0) || (exists && current.Revision != expected) {
+		return recorddata.Record{}, recorddata.ErrRecordConflict
+	}
+	row := recorddata.Record{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion, IndexData: append(json.RawMessage(nil), value.IndexData...), Revision: expected + 1}
+	store.rows[key] = row
+	return cloneRow(row), nil
+}
+func (store *memoryStore) Delete(_ context.Context, key recorddata.RecordKey, expected int64) error {
+	row, exists := store.rows[key]
+	if !exists || row.Revision != expected {
+		return recorddata.ErrRecordConflict
+	}
+	delete(store.rows, key)
+	return nil
+}
+func (store *memoryStore) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
+	for _, mutation := range mutations {
+		current, exists := store.rows[mutation.Key]
+		if (!exists && mutation.ExpectedRevision != 0) || (exists && current.Revision != mutation.ExpectedRevision) {
+			return recorddata.ErrRecordConflict
+		}
+	}
+	for _, mutation := range mutations {
+		if mutation.Value == nil {
+			delete(store.rows, mutation.Key)
+			continue
+		}
+		store.rows[mutation.Key] = recorddata.Record{Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion, IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: mutation.ExpectedRevision + 1}
+	}
+	return nil
+}
+func (store *memoryStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []recorddata.RecordSelector, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
+	keys := make([]recorddata.RecordKey, 0)
 	for key, row := range store.rows {
 		if key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matches(row.IndexData, selectors) {
 			continue
@@ -317,7 +371,7 @@ func (store *memoryStore) List(_ context.Context, namespace, scopeType, scopeID,
 	if more {
 		keys = keys[:limit]
 	}
-	rows := make([]core.ModuleDataRecord, len(keys))
+	rows := make([]recorddata.Record, len(keys))
 	for index, key := range keys {
 		rows[index] = cloneRow(store.rows[key])
 	}
@@ -332,13 +386,13 @@ func (store *memoryStore) MaxPayloadBytes() int { return 1 << 20 }
 func (store *memoryStore) MaxIndexBytes() int   { return 1 << 16 }
 func (store *memoryStore) MaxBatchBytes() int   { return 1 << 22 }
 
-func matches(raw json.RawMessage, selectors []core.ModuleDataSelector) bool {
+func matches(raw json.RawMessage, selectors []recorddata.RecordSelector) bool {
 	var index map[string]any
 	if err := json.Unmarshal(raw, &index); err != nil {
 		return false
 	}
 	for _, selector := range selectors {
-		if selector.Operator != core.SelectorEqual || len(selector.Values) != 1 {
+		if selector.Operator != recorddata.RecordSelectorEqual || len(selector.Values) != 1 {
 			return false
 		}
 		actual, _ := json.Marshal(index[selector.Field])
@@ -350,7 +404,7 @@ func matches(raw json.RawMessage, selectors []core.ModuleDataSelector) bool {
 	return true
 }
 
-func cloneRow(row core.ModuleDataRecord) core.ModuleDataRecord {
+func cloneRow(row recorddata.Record) recorddata.Record {
 	row.Payload = append(json.RawMessage(nil), row.Payload...)
 	row.IndexData = append(json.RawMessage(nil), row.IndexData...)
 	return row

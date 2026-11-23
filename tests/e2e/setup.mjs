@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const adminURL = required("E2E_ADMIN_URL").replace(/\/+$/, "");
 const publicURL = required("E2E_PUBLIC_URL").replace(/\/+$/, "");
+const publicHost = new URL(publicURL).hostname;
 const credential = required("E2E_BOOTSTRAP_CREDENTIAL");
 const runId = required("E2E_RUN_ID");
 const statePath = required("E2E_STATE_FILE");
@@ -180,19 +181,19 @@ async function writeState(state) {
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
-async function uploadFile(client, bytes) {
+async function uploadFile(client, bytes, { name = "e2e-feature.zip", contentType = "application/zip" } = {}) {
   const digest = sha256(bytes);
   const begin = await client.json(
     "POST",
     "/api/files/uploads",
     {
-      name: "e2e-feature.zip",
-      contentType: "application/zip",
+      name,
+      contentType,
       size: bytes.length,
       sha256: digest,
       groups: ["features"],
     },
-    { "Idempotency-Key": key("feature-upload") },
+    { "Idempotency-Key": key(`upload-${name}`) },
   );
   if (begin.state === "committed" && begin.fileId) return { id: begin.fileId, digest };
   let session = begin;
@@ -217,6 +218,30 @@ async function uploadFile(client, bytes) {
     {},
   );
   return { id: committed.body.id, digest };
+}
+
+function canonicalJSON(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJSON).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJSON(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function uploadBootstrapArtifact(client, locale) {
+  const html = Buffer.from(`<!doctype html><html lang="${locale}"><main>bootstrap ${locale}</main></html>`);
+  const document = await uploadFile(client, html, { name: `bootstrap-${locale}.html`, contentType: "text/html; charset=utf-8" });
+  const manifest = {
+    format: "static-page-artifact/v1",
+    digest: "",
+    document: { file_id: document.id, content_type: "text/html; charset=utf-8", sha256: document.digest, size: html.length },
+    assets: {},
+  };
+  const { digest: _digest, ...payload } = manifest;
+  manifest.digest = `sha256:${sha256(canonicalJSON(payload))}`;
+  const encoded = Buffer.from(JSON.stringify(manifest));
+  const uploaded = await uploadFile(client, encoded, { name: `bootstrap-${locale}.json`, contentType: "application/json" });
+  return uploaded.id;
 }
 
 async function publishWorkspace(client, snapshotID, locale) {
@@ -266,6 +291,10 @@ if (mode === "prepare") {
     },
     { "Idempotency-Key": key("locales") },
   );
+  await client.json("PUT", "/api/admin/model", {
+    expected_revision: 0,
+    data_model: { formatVersion: 1, entities: [] },
+  });
   const fileSet = await client.json("POST", "/api/files/sets", {
     namespace: "e2e",
     name: `e2e-features-${runId}`,
@@ -364,7 +393,7 @@ if (mode === "prepare") {
 
   const artifacts = {};
   for (const locale of ["en-US", "de-DE"]) {
-    artifacts[locale] = await buildArtifact(client, snapshot.id, locale);
+    artifacts[locale] = await uploadBootstrapArtifact(client, locale);
   }
 
   const routes = [];
@@ -373,7 +402,7 @@ if (mode === "prepare") {
       "POST",
       "/api/admin/router/routes",
       {
-        host: "",
+        host: publicHost,
         path: `/e2e-${runId}-${suffix}`,
         match: "exact",
         target: {

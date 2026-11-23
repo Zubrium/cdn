@@ -20,10 +20,10 @@ import (
 	"reflect"
 	"strings"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	forms "github.com/Zubrium/cdn/engines/forms/presentation"
 	loader "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	"github.com/Zubrium/cdn/presentation/router/publicforms"
 	"github.com/google/uuid"
@@ -60,8 +60,8 @@ type Config struct {
 // service identity. Loader still performs the authoritative write checks for
 // each file and FileSet operation.
 type GroupAuthorization interface {
-	Authenticate(context.Context, string) (core.Session, core.Principal, error)
-	RequireGroupLevel(context.Context, core.Session, []string, core.AccessLevel) error
+	Authenticate(context.Context, string) (contracts.AuthorizationSubject, contracts.Principal, error)
+	RequireGroupLevel(context.Context, contracts.AuthorizationSubject, []string, contracts.AccessLevel) error
 }
 
 type Operation struct {
@@ -249,7 +249,7 @@ func (operation *Operation) authorizeRoute(ctx context.Context, config routeConf
 	if !principal.Active {
 		return nil, engine.ErrUnauthorized
 	}
-	if err := operation.authorization.RequireGroupLevel(ctx, session, []string{config.AccessGroup}, core.AccessLevelWrite); err != nil {
+	if err := operation.authorization.RequireGroupLevel(ctx, session, []string{config.AccessGroup}, contracts.AccessLevelWrite); err != nil {
 		return nil, mapCoreAuthorizationError(err)
 	}
 	loaderCtx, err := operation.loader.Authenticate(ctx, operation.credential)
@@ -266,7 +266,7 @@ func (operation *Operation) authorizeRoute(ctx context.Context, config routeConf
 		}
 		return nil, mapLoaderAuthorizationError(err)
 	}
-	if err := operation.authorization.RequireGroupLevel(ctx, session, []string{set.ManagementGroup}, core.AccessLevelWrite); err != nil {
+	if err := operation.authorization.RequireGroupLevel(ctx, session, []string{set.ManagementGroup}, contracts.AccessLevelWrite); err != nil {
 		return nil, mapCoreAuthorizationError(err)
 	}
 	return loaderCtx, nil
@@ -738,9 +738,9 @@ func mapLoaderError(err error) error {
 
 func mapCoreAuthorizationError(err error) error {
 	switch {
-	case errors.Is(err, core.ErrForbidden):
+	case errors.Is(err, contracts.ErrAccessForbidden):
 		return engine.ErrForbidden
-	case errors.Is(err, core.ErrUnauthorized):
+	case errors.Is(err, contracts.ErrAccessUnauthorized):
 		return engine.ErrUnauthorized
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

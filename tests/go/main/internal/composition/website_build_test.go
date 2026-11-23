@@ -53,7 +53,7 @@ func TestWebsiteBuildWorkflowResolvesOnlyOwnedEmissionKey(t *testing.T) {
 	id := uuid.MustParse("55555555-5555-4555-8555-555555555555")
 	other := uuid.MustParse("44444444-4444-4444-8444-444444444444")
 	details := &workflowDetailFake{detail: platform.WorkflowDetail{
-		Workflow: platform.Workflow{ID: id, OwnerEngineID: "engine.website"},
+		Workflow: platform.Workflow{ID: id, OwnerClassID: "engine.website"},
 		TaskPage: platform.TaskPage{Items: []platform.TaskSummary{{ID: other, EmissionKey: "prerender:other"}}},
 	}}
 	client := &websiteBuildWorkflowClient{details: details, maxPages: 1}
@@ -67,7 +67,7 @@ func TestWebsiteBuildWorkflowResolvesOnlyOwnedEmissionKey(t *testing.T) {
 	}
 
 	foreign := &websiteBuildWorkflowClient{details: &workflowDetailFake{detail: platform.WorkflowDetail{
-		Workflow: platform.Workflow{ID: id, OwnerEngineID: "engine.content"},
+		Workflow: platform.Workflow{ID: id, OwnerClassID: "engine.content"},
 	}}, maxPages: 1}
 	if _, err := foreign.ResolveTaskID(context.Background(), id, "prerender:other"); !errors.Is(err, platform.ErrTaskMissing) {
 		t.Fatalf("foreign owner emission resolution = %v", err)

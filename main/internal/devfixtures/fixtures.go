@@ -15,6 +15,7 @@ import (
 	content "github.com/Zubrium/cdn/engines/content/presentation"
 	forms "github.com/Zubrium/cdn/engines/forms/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const (
@@ -34,7 +35,7 @@ const (
 )
 
 type Core interface {
-	EngineIdentity() core.EngineIdentityCapability
+	Identity() core.IdentityCapability
 	Sessions() core.SessionCapability
 	GroupAuthorization() core.GroupAuthorizationCapability
 }
@@ -50,7 +51,7 @@ type Set struct {
 }
 
 func New(authority Core, config Config) (*Set, error) {
-	if nilInterface(authority) || nilInterface(authority.EngineIdentity()) || nilInterface(authority.Sessions()) || nilInterface(authority.GroupAuthorization()) {
+	if nilInterface(authority) || nilInterface(authority.Identity()) || nilInterface(authority.Sessions()) || nilInterface(authority.GroupAuthorization()) {
 		return nil, errors.New("development fixtures require Core identity, sessions, and group authorization")
 	}
 	for _, group := range []string{websiteGroup, contentGroup, formsSchemaGroup, formsSubmissionGroup} {
@@ -61,7 +62,7 @@ func New(authority Core, config Config) (*Set, error) {
 			return nil, errors.New("development fixtures require all configured engine access groups")
 		}
 	}
-	identity := authority.EngineIdentity()
+	identity := authority.Identity()
 	sessions := authority.Sessions()
 	authorization := authority.GroupAuthorization()
 	return &Set{
@@ -77,7 +78,7 @@ func New(authority Core, config Config) (*Set, error) {
 type sessionContextKey struct{}
 
 type base struct {
-	identity      core.EngineIdentityCapability
+	identity      core.IdentityCapability
 	sessions      core.SessionCapability
 	authorization core.GroupAuthorizationCapability
 	group         string
@@ -479,13 +480,9 @@ func demoFeature() website.FeatureVersion {
 
 type Descriptor struct{}
 
-func (Descriptor) ComponentDescriptor() core.ComponentDescriptor {
-	return core.ComponentDescriptor{ID: "development.fixtures", Kind: "development-fixture", Version: 1}
+func (Descriptor) ComponentDescriptor() contracts.ComponentDescriptor {
+	return contracts.ComponentDescriptor{ID: "development.fixtures", Kind: "development-fixture", Version: 1}
 }
-
-func (Descriptor) Operations() []core.Operation { return nil }
-
-var _ core.Module = Descriptor{}
 
 var demoTime = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 

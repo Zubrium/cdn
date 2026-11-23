@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -48,37 +49,35 @@ type ForkResult struct {
 	TargetRevision   int64  `json:"target_revision"`
 }
 
-func (h *ForkHandler) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if h == nil || ctx == nil {
-		return core.TaskOutcome{}, errInvalidForkTask
+func (h *ForkHandler) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	if h == nil || ctx == nil || task.TaskID == "" {
+		return contracts.OperationOutcome{}, errInvalidForkTask
 	}
 	if err := ctx.Err(); err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
-	if task.Kind != core.TaskKindWorker || task.Worker == nil ||
-		task.Worker.ComponentID != ComponentID || task.Worker.OperationID != ForkOperationID ||
-		task.Worker.ContractVersion != ForkContractVersion || len(task.Payload) == 0 || len(task.Payload) > maxPayloadBytes {
-		return core.TaskOutcome{}, errInvalidForkTask
+	if len(task.Payload) == 0 || len(task.Payload) > maxPayloadBytes {
+		return contracts.OperationOutcome{}, errInvalidForkTask
 	}
 	payload, err := decodeForkPayload(task.Payload)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
 	if err := h.content.CopySnapshotContent(ctx, payload); err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, fmt.Errorf("copy snapshot content: %w", err)
 	}
 	snapshot, err := h.website.MarkSnapshotReady(ctx, payload.TargetSnapshotID, payload.TargetSnapshotRevision)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, fmt.Errorf("finalize snapshot: %w", err)
 	}
 	result, err := json.Marshal(ForkResult{
 		Format: ForkRootFormat, SourceSnapshotID: payload.SourceSnapshotID,
 		TargetSnapshotID: payload.TargetSnapshotID, TargetRevision: snapshot.Revision,
 	})
 	if err != nil {
-		return core.TaskOutcome{}, ErrInvalidPayload
+		return contracts.OperationOutcome{}, ErrInvalidPayload
 	}
-	return core.TaskOutcome{Result: result}, nil
+	return contracts.OperationOutcome{Result: result}, nil
 }
 
 func decodeForkPayload(raw json.RawMessage) (websiteapi.SnapshotForkWorkflowPayload, error) {

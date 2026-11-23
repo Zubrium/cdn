@@ -1,9 +1,9 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"context"
-
-	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
@@ -62,7 +62,7 @@ func (s *Service) RetirePage(ctx context.Context, request websiteapi.RetirePageR
 		return websiteapi.Page{}, err
 	}
 	updatedRevision := record.Revision + 1
-	if err := s.store.Batch(ctx, []core.ModuleDataMutation{{
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{{
 		Key: websiterepo.PageKey(page.ID), ExpectedRevision: record.Revision, Value: value,
 	}}); err != nil {
 		return websiteapi.Page{}, mapCoreError(err)

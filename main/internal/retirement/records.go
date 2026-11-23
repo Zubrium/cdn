@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -48,25 +47,25 @@ type tombstoneRecord struct {
 	JobID  string `json:"job_id"`
 }
 
-func jobKey(jobID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "job/" + jobID}
+func jobKey(jobID string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "job/" + jobID}
 }
 
-func tombstoneKey(pageID string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "page/" + pageID}
+func tombstoneKey(pageID string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "page/" + pageID}
 }
 
-func idempotencyKey(pageID, key string) core.ModuleDataKey {
+func idempotencyKey(pageID, key string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(pageID + "\x00" + key))
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "idem/" + hex.EncodeToString(digest[:])}
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "idem/" + hex.EncodeToString(digest[:])}
 }
 
-func withBranch(key core.ModuleDataKey, branchID string) core.ModuleDataKey {
+func withBranch(key contracts.RecordKey, branchID string) contracts.RecordKey {
 	key.ScopeID = branchID
 	return key
 }
 
-func encodeRecord(payload any, index map[string]any) (*core.ModuleDataValue, error) {
+func encodeRecord(payload any, index map[string]any) (*contracts.RecordValue, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode retirement record: %v", ErrInvalid, err)
@@ -75,14 +74,14 @@ func encodeRecord(payload any, index map[string]any) (*core.ModuleDataValue, err
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode retirement index: %v", ErrInvalid, err)
 	}
-	return &core.ModuleDataValue{Payload: encoded, PayloadVersion: dataVersion, IndexData: indexed}, nil
+	return &contracts.RecordValue{Payload: encoded, PayloadVersion: dataVersion, IndexData: indexed}, nil
 }
 
 func jobIndex(job jobRecord) map[string]any {
 	return map[string]any{"record_type": recordTypeJob, "page_id": job.PageID, "state": job.State}
 }
 
-func jobCreationMutations(branchID string, request contracts.RetirePageRequest, job jobRecord) ([]core.ModuleDataMutation, error) {
+func jobCreationMutations(branchID string, request contracts.RetirePageRequest, job jobRecord) ([]contracts.RecordMutation, error) {
 	jobValue, err := encodeRecord(job, jobIndex(job))
 	if err != nil {
 		return nil, err
@@ -97,14 +96,14 @@ func jobCreationMutations(branchID string, request contracts.RetirePageRequest, 
 	if err != nil {
 		return nil, err
 	}
-	return []core.ModuleDataMutation{
+	return []contracts.RecordMutation{
 		{Key: withBranch(jobKey(job.ID), branchID), ExpectedRevision: 0, Value: jobValue},
 		{Key: withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), branchID), ExpectedRevision: 0, Value: receiptValue},
 		{Key: withBranch(tombstoneKey(request.PageID), branchID), ExpectedRevision: 0, Value: tombstoneValue},
 	}, nil
 }
 
-func decodeJob(record core.ModuleDataRecord, jobID, pageID string) (jobRecord, error) {
+func decodeJob(record contracts.Record, jobID, pageID string) (jobRecord, error) {
 	var job jobRecord
 	var index struct {
 		RecordType string `json:"record_type"`
@@ -154,11 +153,11 @@ func mapStoreError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, contracts.ErrRecordNotFound):
 		return ErrNotFound
-	case errors.Is(err, core.ErrModuleDataConflict):
+	case errors.Is(err, contracts.ErrRecordConflict):
 		return ErrConflict
-	case errors.Is(err, core.ErrModuleDataInvalid):
+	case errors.Is(err, contracts.ErrRecordInvalid):
 		return ErrInvalid
 	default:
 		return ErrUnavailable

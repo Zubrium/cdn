@@ -1,15 +1,15 @@
 package repository
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
-
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/forms/features/submissions/model"
 	submissionpkg "github.com/Zubrium/cdn/engines/forms/features/submissions/pkg"
+	"time"
 )
 
 const (
@@ -19,10 +19,10 @@ const (
 )
 
 type Store interface {
-	Get(context.Context, core.ModuleDataKey) (core.ModuleDataRecord, error)
-	Put(context.Context, core.ModuleDataKey, core.ModuleDataValue, int64) (core.ModuleDataRecord, error)
-	Delete(context.Context, core.ModuleDataKey, int64) error
-	List(context.Context, string, string, string, string, []core.ModuleDataSelector, int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error)
+	Get(context.Context, recorddata.RecordKey) (recorddata.Record, error)
+	Put(context.Context, recorddata.RecordKey, recorddata.RecordValue, int64) (recorddata.Record, error)
+	Delete(context.Context, recorddata.RecordKey, int64) error
+	List(context.Context, string, string, string, string, []recorddata.RecordSelector, int) ([]recorddata.RecordKey, []recorddata.Record, string, error)
 	MaxPageSize() int
 	MaxPayloadBytes() int
 	MaxIndexBytes() int
@@ -32,7 +32,7 @@ type Repository struct{ store Store }
 
 func New(store Store) (*Repository, error) {
 	if store == nil || store.MaxPageSize() < 1 || store.MaxPayloadBytes() < 1 || store.MaxIndexBytes() < 1 {
-		return nil, core.ErrModuleDataUnavailable
+		return nil, recorddata.ErrRecordUnavailable
 	}
 	return &Repository{store: store}, nil
 }
@@ -51,17 +51,17 @@ func (repo *Repository) Create(ctx context.Context, payload submissionpkg.Payloa
 		return model.StoredSubmission{}, err
 	}
 	record, err := repo.store.Put(ctx, dataKey(payload.ID), value, 0)
-	if errors.Is(err, core.ErrModuleDataConflict) {
+	if errors.Is(err, recorddata.ErrRecordConflict) {
 		existing, readErr := repo.Get(ctx, payload.ID)
 		if readErr == nil && existing.Submission.IdempotencyKeyHash == payload.IdempotencyKeyHash &&
 			existing.Submission.IdempotencyFingerprint == payload.IdempotencyFingerprint && existing.Submission.FormID == payload.FormID &&
 			existing.Submission.SchemaVersion == payload.SchemaVersion {
 			return existing, nil
 		}
-		if readErr != nil && !errors.Is(readErr, core.ErrModuleDataNotFound) {
+		if readErr != nil && !errors.Is(readErr, recorddata.ErrRecordNotFound) {
 			return model.StoredSubmission{}, readErr
 		}
-		return model.StoredSubmission{}, core.ErrModuleDataConflict
+		return model.StoredSubmission{}, recorddata.ErrRecordConflict
 	}
 	if err != nil {
 		return model.StoredSubmission{}, err
@@ -70,12 +70,12 @@ func (repo *Repository) Create(ctx context.Context, payload submissionpkg.Payloa
 }
 
 func (repo *Repository) List(ctx context.Context, formID, formKey, state, after string, limit int) ([]model.StoredSubmission, string, error) {
-	selectors := []core.ModuleDataSelector{{Field: "form_id", Operator: core.SelectorEqual, Values: []any{formID}}}
+	selectors := []recorddata.RecordSelector{{Field: "form_id", Operator: recorddata.RecordSelectorEqual, Values: []any{formID}}}
 	if formKey != "" {
-		selectors = append(selectors, core.ModuleDataSelector{Field: "form_key", Operator: core.SelectorEqual, Values: []any{formKey}})
+		selectors = append(selectors, recorddata.RecordSelector{Field: "form_key", Operator: recorddata.RecordSelectorEqual, Values: []any{formKey}})
 	}
 	if state != "" {
-		selectors = append(selectors, core.ModuleDataSelector{Field: "state", Operator: core.SelectorEqual, Values: []any{state}})
+		selectors = append(selectors, recorddata.RecordSelector{Field: "state", Operator: recorddata.RecordSelectorEqual, Values: []any{state}})
 	}
 	_, records, next, err := repo.store.List(ctx, namespace, scopeType, scopeID, after, selectors, limit)
 	if err != nil {
@@ -98,7 +98,7 @@ func (repo *Repository) SetState(ctx context.Context, id, state string, expected
 		return model.StoredSubmission{}, err
 	}
 	if entry.DeletePending {
-		return model.StoredSubmission{}, core.ErrModuleDataConflict
+		return model.StoredSubmission{}, recorddata.ErrRecordConflict
 	}
 	payload := submissionpkg.PayloadV1{
 		ID: entry.Submission.ID, FormID: entry.Submission.FormID, FormKey: entry.Submission.FormKey,
@@ -125,12 +125,12 @@ func (repo *Repository) BeginDelete(ctx context.Context, id string, expectedRevi
 	}
 	if entry.DeletePending {
 		if expectedRevision != entry.DeleteStartedFromRevision && expectedRevision != entry.Revision {
-			return model.StoredSubmission{}, core.ErrModuleDataConflict
+			return model.StoredSubmission{}, recorddata.ErrRecordConflict
 		}
 		return entry, nil
 	}
 	if entry.Revision != expectedRevision {
-		return model.StoredSubmission{}, core.ErrModuleDataConflict
+		return model.StoredSubmission{}, recorddata.ErrRecordConflict
 	}
 	payload := submissionpkg.PayloadV1{
 		ID: entry.Submission.ID, FormID: entry.Submission.FormID, FormKey: entry.Submission.FormKey,
@@ -155,14 +155,14 @@ func (repo *Repository) FinishDelete(ctx context.Context, id string, expectedRev
 	return repo.store.Delete(ctx, dataKey(id), expectedRevision)
 }
 
-func dataKey(id string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: id}
+func dataKey(id string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: id}
 }
 
-func encode(payload submissionpkg.PayloadV1) (core.ModuleDataValue, error) {
+func encode(payload submissionpkg.PayloadV1) (recorddata.RecordValue, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
 	index, err := json.Marshal(map[string]any{
 		"form_id":        payload.FormID,
@@ -172,20 +172,20 @@ func encode(payload submissionpkg.PayloadV1) (core.ModuleDataValue, error) {
 		"created_at":     payload.CreatedAt.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		return core.ModuleDataValue{}, core.ErrModuleDataInvalid
+		return recorddata.RecordValue{}, recorddata.ErrRecordInvalid
 	}
-	return core.ModuleDataValue{Payload: encoded, PayloadVersion: submissionpkg.PayloadVersion, IndexData: index}, nil
+	return recorddata.RecordValue{Payload: encoded, PayloadVersion: submissionpkg.PayloadVersion, IndexData: index}, nil
 }
 
-func decode(record core.ModuleDataRecord) (model.StoredSubmission, error) {
+func decode(record recorddata.Record) (model.StoredSubmission, error) {
 	if record.PayloadVersion != submissionpkg.PayloadVersion {
-		return model.StoredSubmission{}, core.ErrModuleDataUnavailable
+		return model.StoredSubmission{}, recorddata.ErrRecordUnavailable
 	}
 	var payload submissionpkg.PayloadV1
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil || payload.ID == "" || payload.FormID == "" || payload.SchemaVersion < 1 || payload.State == "" {
-		return model.StoredSubmission{}, core.ErrModuleDataUnavailable
+		return model.StoredSubmission{}, recorddata.ErrRecordUnavailable
 	}
 	if payload.Values == nil {
 		payload.Values = map[string]any{}
@@ -196,23 +196,23 @@ func decode(record core.ModuleDataRecord) (model.StoredSubmission, error) {
 	seen := make(map[string]struct{}, len(payload.AttachmentIDs))
 	for _, id := range payload.AttachmentIDs {
 		if id == "" {
-			return model.StoredSubmission{}, core.ErrModuleDataUnavailable
+			return model.StoredSubmission{}, recorddata.ErrRecordUnavailable
 		}
 		if _, exists := seen[id]; exists {
-			return model.StoredSubmission{}, core.ErrModuleDataUnavailable
+			return model.StoredSubmission{}, recorddata.ErrRecordUnavailable
 		}
 		seen[id] = struct{}{}
 	}
 	if payload.DeletePending && payload.DeleteStartedFromRevision < 1 {
-		return model.StoredSubmission{}, core.ErrModuleDataUnavailable
+		return model.StoredSubmission{}, recorddata.ErrRecordUnavailable
 	}
 	return model.StoredSubmission{
 		Submission: model.Submission{ID: payload.ID, FormID: payload.FormID, FormKey: payload.FormKey,
 			SchemaVersion: payload.SchemaVersion, State: payload.State, Values: payload.Values, CreatedAt: payload.CreatedAt,
 			IdempotencyKeyHash: payload.IdempotencyKeyHash, IdempotencyFingerprint: payload.IdempotencyFingerprint},
-		Revision:   record.Revision, Attachments: append([]string(nil), payload.AttachmentIDs...), DeletePending: payload.DeletePending,
+		Revision: record.Revision, Attachments: append([]string(nil), payload.AttachmentIDs...), DeletePending: payload.DeletePending,
 		DeleteStartedFromRevision: payload.DeleteStartedFromRevision,
 	}, nil
 }
 
-func IsNotFound(err error) bool { return errors.Is(err, core.ErrModuleDataNotFound) }
+func IsNotFound(err error) bool { return errors.Is(err, recorddata.ErrRecordNotFound) }

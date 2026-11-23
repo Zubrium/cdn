@@ -7,21 +7,19 @@ import (
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 func TestFullProfileRegistersEngineContractsAndOperations(t *testing.T) {
-	r := platform.NewRegistry()
+	r := NewProfileRegistry(platform.NewRegistry())
 	if err := RegisterProfile(r); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"router", "website", "content", "forms"} {
-		module, err := r.Lookup(name)
-		if err != nil || len(module.Operations()) == 0 {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
 	groups := map[string]bool{}
 	for _, descriptor := range r.ComponentDescriptors() {
+		if descriptor.Kind == "engine" && len(descriptor.AccessGroups) == 0 && descriptor.ID != "engine.loader" {
+			t.Errorf("%s has no static profile metadata", descriptor.ID)
+		}
 		for _, group := range descriptor.AccessGroups {
 			groups[group] = true
 		}
@@ -34,20 +32,19 @@ func TestFullProfileRegistersEngineContractsAndOperations(t *testing.T) {
 }
 
 func TestFullProfileCompilesWebsiteBuildAndPrerenderHandlers(t *testing.T) {
-	registry := platform.NewRuntimeRegistry()
 	selected := map[string]struct{}{
 		"core": {}, "engine.website": {}, "worker.prerender": {},
 	}
 	config := appconfig.Resolved{}
 	config.Coordinator.MaxAttempts = 3
-	if err := registerWorkerHandlers(registry, selected, config, &coreComponent{}, nil); err != nil {
-		t.Fatalf("register worker handlers: %v", err)
+	operations, err := registerWorkerHandlers(selected, config, &coreComponent{}, nil)
+	if err != nil {
+		t.Fatalf("compile task operations: %v", err)
 	}
-	catalog, err := registry.CompileWorkerCatalog(platform.BuildPlan{Components: []string{"core", "engine.website", "worker.prerender"}})
-	if err != nil || catalog == nil {
-		t.Fatalf("compile worker catalog: %#v, %v", catalog, err)
+	if _, exists := operations[contracts.Key{ID: "build-page", Version: 1}]; !exists {
+		t.Fatalf("Website operation missing from static DataBus bindings: %v", operations)
 	}
-	if err := registerWorkerHandlers(registry, selected, config, &coreComponent{}, nil); err == nil {
-		t.Fatal("duplicate worker handler registration was accepted")
+	if _, exists := operations[contracts.Key{ID: "render-page", Version: 1}]; !exists {
+		t.Fatalf("prerender operation missing from static DataBus bindings: %v", operations)
 	}
 }

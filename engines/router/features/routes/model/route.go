@@ -285,7 +285,7 @@ func (target Target) Validate() error {
 		defaultFound := false
 		for _, item := range target.LocaleTargets {
 			locale, err := CanonicalLocale(item.Locale)
-			if err != nil || locale != item.Locale || item.Revision < 1 {
+			if err != nil || locale != item.Locale || item.Revision < 0 {
 				return ErrInvalidRoute
 			}
 			if _, duplicate := seen[locale]; duplicate {
@@ -334,6 +334,14 @@ func NewStaticArtifactTarget(defaultLocale string, items []LocaleArtifactTarget)
 }
 
 func NewRoute(id, branchID, host, routePath, match string, target Target, now time.Time) (Route, error) {
+	if target.Kind == TargetStaticSiteArtifact {
+		target.LocaleTargets = append([]LocaleArtifactTarget(nil), target.LocaleTargets...)
+		for index := range target.LocaleTargets {
+			if target.LocaleTargets[index].Revision == 0 {
+				target.LocaleTargets[index].Revision = 1
+			}
+		}
+	}
 	parsedID, err := uuid.Parse(id)
 	if err != nil || parsedID == uuid.Nil || branchID == "" || len(branchID) > 128 || strings.TrimSpace(branchID) != branchID ||
 		strings.ContainsAny(branchID, "\r\n\x00/\\") {
@@ -389,6 +397,13 @@ func (route Route) ValidateForStorage() error {
 		(route.Target.Kind == TargetCoreFile && route.Match != MatchExact) ||
 		(route.Target.Kind == TargetRegisteredOperation && route.Match != MatchExact) {
 		return ErrInvalidRoute
+	}
+	if route.Target.Kind == TargetStaticSiteArtifact {
+		for _, item := range route.Target.LocaleTargets {
+			if item.Revision < 1 {
+				return ErrInvalidRoute
+			}
+		}
 	}
 	return nil
 }

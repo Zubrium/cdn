@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
+	platform "github.com/Zubrium/cdn/engines/website/application/platform"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 )
@@ -24,7 +26,7 @@ const (
 func TestBuildRejectsProvisioningSnapshot(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshotWithState(t, store, snapshotA, 3, "provisioning")
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +44,7 @@ func TestMarkSnapshotReadyFinalizesProvisioningChild(t *testing.T) {
 	putSnapshot(t, store, rootID, 1)
 	putSnapshotWithState(t, store, snapshotA, 3, "provisioning")
 	setSnapshotParent(t, store, snapshotA, rootID, "Home", 7)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +79,7 @@ func TestMarkSnapshotReadyRejectsStaleRevisionWithoutMutation(t *testing.T) {
 	putSnapshot(t, store, rootID, 1)
 	putSnapshotWithState(t, store, snapshotA, 3, "provisioning")
 	setSnapshotParent(t, store, snapshotA, rootID, "Home", 7)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -102,10 +104,13 @@ func TestDeleteSnapshotReparentsChildrenInOneAtomicRevisionBatch(t *testing.T) {
 	putSnapshot(t, store, childID, 1)
 	setSnapshotParent(t, store, targetID, rootID, "Home", 7)
 	setSnapshotParent(t, store, childID, targetID, "Home", 7)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := service.GetSnapshot(ctx, rootID); err != nil {
+		t.Fatalf("root snapshot fixture is not readable: %v", err)
 	}
 
 	if err := service.DeleteSnapshot(ctx, websiteapi.DeleteSnapshotRequest{SnapshotID: targetID, ExpectedRevision: 1}); err != nil {
@@ -133,7 +138,7 @@ func TestDeleteSnapshotReparentsChildrenInOneAtomicRevisionBatch(t *testing.T) {
 func TestDeleteSnapshotRejectsStaleRevisionWithoutMutation(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 3)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +154,7 @@ func TestDeleteSnapshotRejectsStaleRevisionWithoutMutation(t *testing.T) {
 func TestDeleteSnapshotRejectsCurrentLatestPageSnapshot(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 1)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +171,7 @@ func TestListSnapshotsPaginatesDeterministicallyWithinPage(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 2)
 	putSnapshot(t, store, "55555555-5555-4555-8555-555555555555", 1)
-	service := newService(t, store, core.AccessLevelRead, websiteConfig())
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +206,7 @@ func TestListSnapshotsPaginatesDeterministicallyWithinPage(t *testing.T) {
 
 func TestCreatePageSurvivesCoreGlobalRevisionSequence(t *testing.T) {
 	store := newGlobalRevisionMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +239,13 @@ func TestCreatePageSurvivesCoreGlobalRevisionSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading created snapshot payload: %v", err)
 	}
+	if len(snapshot.Digest) != 64 {
+		t.Fatalf("created snapshot digest = %q, want a SHA-256 hex digest", snapshot.Digest)
+	}
+	loadedAgain, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
+	if err != nil || loadedAgain.Digest != snapshot.Digest {
+		t.Fatalf("snapshot digest is not stable across reads: first=%q second=%q err=%v", snapshot.Digest, loadedAgain.Digest, err)
+	}
 	var metadata struct {
 		FormatVersion int    `json:"formatVersion"`
 		SiteName      string `json:"siteName"`
@@ -252,11 +264,71 @@ func TestCreatePageSurvivesCoreGlobalRevisionSequence(t *testing.T) {
 	}
 }
 
+func TestGetSnapshotRejectsPayloadThatDoesNotMatchItsDigest(t *testing.T) {
+	store := newMemoryStore()
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{Name: "Digest check", IdempotencyKey: "snapshot-digest-page-0001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := snapshotRecordKeyForPage(page.ID, page.LatestSnapshotID)
+	record := store.records[key]
+	var snapshot websiteapi.Snapshot
+	if err := json.Unmarshal(record.Payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Payload.Config = json.RawMessage(`{"formatVersion":1,"tampered":true}`)
+	record.Payload, err = json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.records[key] = record
+
+	if _, err := service.GetSnapshot(ctx, page.LatestSnapshotID); !errors.Is(err, websiteapi.ErrUnavailable) {
+		t.Fatalf("tampered snapshot payload error = %v, want unavailable", err)
+	}
+}
+
+func TestCreateSnapshotReturnsCoreIssuedRevisionForForkFinalization(t *testing.T) {
+	store := newGlobalRevisionMemoryStore()
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.CreatePage(ctx, websiteapi.CreatePageRequest{Name: "Snapshot revision", IdempotencyKey: "global-revision-snapshot-001"})
+	if err != nil {
+		t.Fatalf("CreatePage(): %v", err)
+	}
+	parent, err := service.GetSnapshot(ctx, page.LatestSnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot(parent): %v", err)
+	}
+	child, err := service.CreateSnapshot(ctx, websiteapi.CreateSnapshotRequest{
+		PageID: page.ID, ParentID: parent.ID, Name: "Revision child", ExpectedRevision: parent.Revision,
+		ExpectedContentRevision: parent.ContentRevision, Payload: *parent.Payload, IdempotencyKey: "global-revision-child-001",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshot(): %v", err)
+	}
+	ready, err := service.MarkSnapshotReady(ctx, child.ID, child.Revision)
+	if err != nil {
+		t.Fatalf("MarkSnapshotReady() with CreateSnapshot revision %d: %v", child.Revision, err)
+	}
+	if ready.State != "ready" || ready.Revision <= child.Revision {
+		t.Fatalf("finalized child = %#v; expected ready with a newer Core-issued revision", ready)
+	}
+}
+
 func TestListSnapshotsWithoutPageFilterListsEveryPageTree(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 1)
 	putSnapshotForPageWithState(t, store, pageB, snapshotB, 1, "ready")
-	service := newService(t, store, core.AccessLevelRead, websiteConfig())
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +353,7 @@ func TestListSnapshotsWithoutPageFilterListsEveryPageTree(t *testing.T) {
 func TestListSnapshotsFailsClosedForUnknownLifecycleState(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshotWithState(t, store, snapshotA, 3, "draft")
-	service := newService(t, store, core.AccessLevelRead, websiteConfig())
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +365,7 @@ func TestListSnapshotsFailsClosedForUnknownLifecycleState(t *testing.T) {
 
 func TestContentModelUsesIndependentRevisionAndDigest(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +399,7 @@ func TestContentModelUsesIndependentRevisionAndDigest(t *testing.T) {
 
 func TestPagePlacementProjectionIsScopedToExactPage(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +415,7 @@ func TestPagePlacementProjectionIsScopedToExactPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := snapshotRecordKey(snapshotA)
-	store.records[key] = core.ModuleDataRecord{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "snapshot_id": snapshotA, "page_id": pageA, "state": "ready", "revision": float64(1), "parent_id": ""}), Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	store.records[key] = recorddata.Record{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "snapshot_id": snapshotA, "page_id": pageA, "state": "ready", "revision": float64(1), "parent_id": ""}), Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	putPageRecord(t, store, websiteapi.Page{ID: pageA, Name: "Home", LatestSnapshotID: snapshotA, LatestSnapshotState: "ready", CreatedAt: snapshot.CreatedAt})
 	readCtx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
@@ -364,7 +436,7 @@ func TestPagePlacementProjectionIsScopedToExactPage(t *testing.T) {
 func TestGetSnapshotConfigDoesNotContainContentModel(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 3)
-	service := newService(t, store, core.AccessLevelRead, websiteConfig())
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +460,7 @@ func TestGetSnapshotConfigDoesNotContainContentModel(t *testing.T) {
 
 func TestSnapshotReadRequiresReadAccessBeforeLookingUpTarget(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelNone, websiteConfig())
+	service := newService(t, store, platform.AccessLevelDenied, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -402,7 +474,7 @@ func TestSnapshotReadRequiresReadAccessBeforeLookingUpTarget(t *testing.T) {
 
 func TestSnapshotListRejectsMalformedCursor(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelRead, websiteConfig())
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +490,7 @@ func TestCreateSnapshotTreesAreIndependentPerPage(t *testing.T) {
 	contactRoot := "aaaaaaaa-1111-4111-8111-111111111111"
 	putSnapshotForPageWithState(t, store, pageA, homeRoot, 1, "ready")
 	putSnapshotForPageWithState(t, store, pageB, contactRoot, 1, "ready")
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -482,7 +554,7 @@ func snapshotPageContains(items []websiteapi.Snapshot, id string) bool {
 
 func TestCreatePageRootAndSnapshotChildUseSequenceAndLifecycle(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +605,7 @@ func TestCreatePageRootAndSnapshotChildUseSequenceAndLifecycle(t *testing.T) {
 
 func TestCreateChildSnapshotAcceptsUntouchedContentRevisionZero(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -562,7 +634,7 @@ func TestCreateChildSnapshotAcceptsUntouchedContentRevisionZero(t *testing.T) {
 
 func TestCreatePageReplaysIdempotencyAndConflictsOnDifferentInput(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +664,7 @@ func TestCreatePageReplaysIdempotencyAndConflictsOnDifferentInput(t *testing.T) 
 func TestCreateSnapshotRejectsConflictingPlacementVersionsWithoutWrites(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 1)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -611,7 +683,7 @@ func TestCreateSnapshotRejectsConflictingPlacementVersionsWithoutWrites(t *testi
 func TestCreateSnapshotRejectsContentModelInsidePageConfig(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 1)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +704,7 @@ func TestCreateSnapshotRejectsStaleOrProvisioningParent(t *testing.T) {
 	putSnapshot(t, store, snapshotA, 2)
 	provisioningID := "55555555-5555-4555-8555-555555555555"
 	putSnapshotWithState(t, store, provisioningID, 1, "provisioning")
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -656,7 +728,7 @@ func TestCreateSnapshotRejectsStaleOrProvisioningParent(t *testing.T) {
 func TestCreateSnapshotRequiresZeroContentRevisionForRootsAndNonnegativeForChildren(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 1)
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -681,7 +753,7 @@ func TestCreateSnapshotRequiresZeroContentRevisionForRootsAndNonnegativeForChild
 
 func TestSnapshotOperationsRequireConfiguredSitePagePair(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -701,7 +773,7 @@ func TestSnapshotOperationsRequireConfiguredSitePagePair(t *testing.T) {
 
 func TestCreatePageRegistersReadyRootAndSupportsIdempotentReplay(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -736,7 +808,7 @@ func TestCreatePageRegistersReadyRootAndSupportsIdempotentReplay(t *testing.T) {
 
 func TestPageTemplatesCRUDAndApplyMaterializesExactRevision(t *testing.T) {
 	store := newMemoryStore()
-	service := newService(t, store, core.AccessLevelWrite, websiteConfig())
+	service := newService(t, store, platform.AccessLevelWrite, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -850,11 +922,11 @@ func createSnapshotRequest(name, idempotencyKey string) websiteapi.CreateSnapsho
 	}
 }
 
-func newService(t *testing.T, store *memoryStore, level core.AccessLevel, config websiteapp.Config) *websiteapp.Service {
+func newService(t *testing.T, store *memoryStore, level platform.AccessLevel, config websiteapp.Config) *websiteapp.Service {
 	return newServiceWithLevels(t, store, level, level, config)
 }
 
-func newServiceWithLevels(t *testing.T, store *memoryStore, level, coordinatorLevel core.AccessLevel, config websiteapp.Config) *websiteapp.Service {
+func newServiceWithLevels(t *testing.T, store *memoryStore, level, coordinatorLevel platform.AccessLevel, config websiteapp.Config) *websiteapp.Service {
 	t.Helper()
 	authority := &fakeAuthority{level: level, coordinatorLevel: coordinatorLevel}
 	service, err := websiteapp.NewService(config, store, authority, fakeSessions{})
@@ -867,7 +939,7 @@ func newServiceWithLevels(t *testing.T, store *memoryStore, level, coordinatorLe
 func TestWorkerActionsRequireCoordinatorWriteAccess(t *testing.T) {
 	store := newMemoryStore()
 	putSnapshot(t, store, snapshotA, 1)
-	service := newServiceWithLevels(t, store, core.AccessLevelWrite, core.AccessLevelRead, websiteConfig())
+	service := newServiceWithLevels(t, store, platform.AccessLevelWrite, platform.AccessLevelRead, websiteConfig())
 	ctx, err := service.Authenticate(context.Background(), "credential")
 	if err != nil {
 		t.Fatal(err)
@@ -881,6 +953,99 @@ func TestWorkerActionsRequireCoordinatorWriteAccess(t *testing.T) {
 	}
 	if _, err := service.BuildSnapshot(ctx, websiteapi.BuildSnapshotRequest{SnapshotID: snapshotA}); !errors.Is(err, websiteapi.ErrForbidden) {
 		t.Fatalf("snapshot build with coordinator read access = %v, want forbidden", err)
+	}
+}
+
+func TestFeatureCatalogReadsImmutableReadyVersionsWithPagination(t *testing.T) {
+	store := newMemoryStore()
+	putFeatureVersionRecord(t, store, "e2e-page", "1.0.0", "ready")
+	putFeatureVersionRecord(t, store, "e2e-page", "2.0.0", "ready")
+	putFeatureVersionRecord(t, store, "other-page", "1.0.0", "processing")
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.ListFeatureCatalog(ctx, "", 1)
+	if err != nil {
+		t.Fatalf("ListFeatureCatalog first page: %v", err)
+	}
+	if len(first.Items) != 1 || first.Items[0].FeatureID != "e2e-page" || first.Items[0].Version != "1.0.0" || first.NextCursor == "" {
+		t.Fatalf("first feature page = %#v", first)
+	}
+	second, err := service.ListFeatureCatalog(ctx, first.NextCursor, 1)
+	if err != nil {
+		t.Fatalf("ListFeatureCatalog second page: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].FeatureID != "e2e-page" || second.Items[0].Version != "2.0.0" || second.NextCursor != "" {
+		t.Fatalf("second feature page = %#v", second)
+	}
+
+	versions, err := service.ListFeatureVersions(ctx, "e2e-page", "", 10)
+	if err != nil || len(versions.Items) != 2 {
+		t.Fatalf("ListFeatureVersions = %#v, %v", versions, err)
+	}
+	if _, err := service.ListFeatureVersions(ctx, "invalid feature", "", 10); !errors.Is(err, websiteapi.ErrInvalid) {
+		t.Fatalf("invalid feature ID error = %v, want invalid", err)
+	}
+}
+
+func TestGetFeatureVersionReturnsStoredVersionAndMapsMissingRecord(t *testing.T) {
+	store := newMemoryStore()
+	putFeatureVersionRecord(t, store, "e2e-page", "1.0.0", "ready")
+	service := newService(t, store, platform.AccessLevelRead, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	version, err := service.GetFeatureVersion(ctx, "e2e-page", "1.0.0")
+	if err != nil {
+		t.Fatalf("GetFeatureVersion: %v", err)
+	}
+	if version.FeatureID != "e2e-page" || version.Version != "1.0.0" || version.State != "ready" ||
+		len(version.Manifest) == 0 || version.FileSetID == "" || version.Files["assets/app.js"] == "" || version.Digest == "" {
+		t.Fatalf("feature version = %#v", version)
+	}
+	if _, err := service.GetFeatureVersion(ctx, "e2e-page", "9.9.9"); !errors.Is(err, websiteapi.ErrNotFound) {
+		t.Fatalf("missing feature version error = %v, want not found", err)
+	}
+}
+
+func putFeatureVersionRecord(t *testing.T, store *memoryStore, featureID, version, state string) {
+	t.Helper()
+	createdAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	manifest, err := json.Marshal(map[string]any{
+		"formatVersion": 2, "key": featureID, "name": "Test feature", "version": version,
+		"engineApi": "v1", "slots": []string{"main"}, "arguments": map[string]any{}, "dataInputs": []any{},
+		"runtime": map[string]any{"abi": "static-lifecycle", "entry": "assets/app.js", "styles": []any{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"record_type": "feature_version", "feature_id": featureID, "version": version,
+		"manifest":    manifest,
+		"file_set_id": "00000000-0000-4000-8000-000000000099",
+		"files":       map[string]string{"assets/app.js": "00000000-0000-4000-8000-000000000098"},
+		"digest":      strings.Repeat("a", 64), "artifact_size": 123, "state": state, "created_at": createdAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := json.Marshal(map[string]string{
+		"record_type": "feature_version", "feature_id": featureID, "version": version, "state": state,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := websiterepo.FeatureVersionKey(featureID, version)
+	if err := store.Batch(context.Background(), []recorddata.RecordMutation{{
+		Key: key, ExpectedRevision: 0,
+		Value: &recorddata.RecordValue{Payload: payload, PayloadVersion: 1, IndexData: index},
+	}}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -908,7 +1073,7 @@ func putSnapshotForPageWithState(t *testing.T, store *memoryStore, pageID, id st
 		t.Fatal(err)
 	}
 	key := snapshotRecordKeyForPage(pageID, id)
-	store.records[key] = core.ModuleDataRecord{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "snapshot_id": id, "page_id": pageID, "state": state, "revision": revision, "parent_id": ""}), Revision: revision, CreatedAt: now, UpdatedAt: now}
+	store.records[key] = recorddata.Record{Payload: payload, PayloadVersion: 1, IndexData: mustJSON(map[string]any{"record_type": "snapshot", "snapshot_id": id, "page_id": pageID, "state": state, "revision": revision, "parent_id": ""}), Revision: revision, CreatedAt: now, UpdatedAt: now}
 	putPageRecord(t, store, websiteapi.Page{ID: pageID, Name: snapshot.Name, LatestSnapshotID: id, LatestSnapshotState: state, CreatedAt: now})
 }
 
@@ -919,17 +1084,17 @@ func putPageRecord(t *testing.T, store *memoryStore, page websiteapi.Page) {
 	if revision == 1 && page.CreatedAt.IsZero() {
 		page.CreatedAt = time.Now().UTC()
 	}
-	store.records[key] = core.ModuleDataRecord{Payload: mustJSON(map[string]any{"page": page}), PayloadVersion: 1,
+	store.records[key] = recorddata.Record{Payload: mustJSON(map[string]any{"page": page}), PayloadVersion: 1,
 		IndexData: mustJSON(map[string]any{"record_type": "page", "page_id": page.ID, "snapshot_id": page.LatestSnapshotID, "state": page.LatestSnapshotState, "revision": revision}),
 		Revision:  revision, CreatedAt: page.CreatedAt, UpdatedAt: time.Now().UTC()}
 }
 
-func snapshotRecordKey(id string) core.ModuleDataKey {
+func snapshotRecordKey(id string) recorddata.RecordKey {
 	return snapshotRecordKeyForPage(pageA, id)
 }
 
-func snapshotRecordKeyForPage(pageID, id string) core.ModuleDataKey {
-	return core.ModuleDataKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global", RecordKey: "snapshot/" + pageID + "/" + id}
+func snapshotRecordKeyForPage(pageID, id string) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: "website/snapshots", ScopeType: "global", ScopeID: "global", RecordKey: "snapshot/" + pageID + "/" + id}
 }
 
 func setSnapshotParent(t *testing.T, store *memoryStore, id, parentID, parentName string, parentSequence int64) {
@@ -943,19 +1108,21 @@ func setSnapshotParent(t *testing.T, store *memoryStore, id, parentID, parentNam
 	snapshot.ParentID = parentID
 	snapshot.ParentName = parentName
 	snapshot.ParentSequence = parentSequence
+	snapshot.Digest = "" // recomputed by application on read; avoid stale fixture digest
 	record.Payload = mustJSON(snapshot)
 	var index map[string]any
 	if err := json.Unmarshal(record.IndexData, &index); err != nil {
 		t.Fatal(err)
 	}
 	index["parent_id"] = parentID
+	delete(index, "digest")
 	record.IndexData = mustJSON(index)
 	store.records[key] = record
 }
 
-func putRecord(t *testing.T, store *memoryStore, key core.ModuleDataKey, payload, index map[string]any) {
+func putRecord(t *testing.T, store *memoryStore, key recorddata.RecordKey, payload, index map[string]any) {
 	t.Helper()
-	store.records[key] = core.ModuleDataRecord{Payload: mustJSON(payload), PayloadVersion: 1, IndexData: mustJSON(index), Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	store.records[key] = recorddata.Record{Payload: mustJSON(payload), PayloadVersion: 1, IndexData: mustJSON(index), Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 }
 
 func mustJSON(value any) json.RawMessage {
@@ -967,22 +1134,22 @@ func mustJSON(value any) json.RawMessage {
 }
 
 type fakeAuthority struct {
-	level            core.AccessLevel
-	coordinatorLevel core.AccessLevel
+	level            platform.AccessLevel
+	coordinatorLevel platform.AccessLevel
 }
 
-func (a *fakeAuthority) Authenticate(_ context.Context, credential string) (core.Session, core.Principal, error) {
+func (a *fakeAuthority) Authenticate(_ context.Context, credential string) (platform.Session, platform.Principal, error) {
 	if credential != "credential" {
-		return core.Session{}, core.Principal{}, core.ErrUnauthorized
+		return platform.Session{}, platform.Principal{}, platform.ErrUnauthorized
 	}
-	return core.Session{}, core.Principal{ID: "principal-1", Active: true}, nil
+	return platform.Session{}, platform.Principal{ID: "principal-1", Active: true}, nil
 }
 
-func (a *fakeAuthority) RequireGroupLevel(_ context.Context, _ core.Session, groups []string, minimum core.AccessLevel) error {
+func (a *fakeAuthority) RequireGroupLevel(_ context.Context, _ platform.Session, groups []string, minimum platform.AccessLevel) error {
 	if len(groups) != 1 {
 		return errors.New("unexpected access group")
 	}
-	var level core.AccessLevel
+	var level platform.AccessLevel
 	switch groups[0] {
 	case "features":
 		level = a.level
@@ -992,28 +1159,24 @@ func (a *fakeAuthority) RequireGroupLevel(_ context.Context, _ core.Session, gro
 		return errors.New("unexpected access group")
 	}
 	if level < minimum {
-		return core.ErrForbidden
+		return platform.ErrForbidden
 	}
 	return nil
 }
 
 type fakeSessions struct{}
 
-func (fakeSessions) CreateSession(context.Context, string) (core.CreatedSession, error) {
-	return core.CreatedSession{}, core.ErrUnauthorized
-}
-
-func (fakeSessions) AuthenticateSession(_ context.Context, token string) (core.Session, core.Principal, error) {
+func (fakeSessions) AuthenticateSession(_ context.Context, token string) (platform.Session, platform.Principal, error) {
 	if token != "session" {
-		return core.Session{}, core.Principal{}, core.ErrUnauthorized
+		return platform.Session{}, platform.Principal{}, platform.ErrUnauthorized
 	}
-	return core.Session{}, core.Principal{ID: "principal-1", Active: true}, nil
+	return platform.Session{}, platform.Principal{ID: "principal-1", Active: true}, nil
 }
 
 func (fakeSessions) RevokeSession(context.Context, string) error { return nil }
 
 type memoryStore struct {
-	records         map[core.ModuleDataKey]core.ModuleDataRecord
+	records         map[recorddata.RecordKey]recorddata.Record
 	maxPageSize     int
 	maxBatchSize    int
 	maxPayload      int
@@ -1022,14 +1185,14 @@ type memoryStore struct {
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{records: map[core.ModuleDataKey]core.ModuleDataRecord{}, maxPageSize: 100, maxBatchSize: 100, maxPayload: 16 << 20}
+	return &memoryStore{records: map[recorddata.RecordKey]recorddata.Record{}, maxPageSize: 100, maxBatchSize: 100, maxPayload: 16 << 20}
 }
 
 // newGlobalRevisionMemoryStore mirrors Core's engine_data.revision_seq: one
 // monotonic sequence is shared by every record in the module, so a record's
 // assigned revision cannot be predicted from its own previous revision.
 func newGlobalRevisionMemoryStore() *memoryStore {
-	return &memoryStore{records: map[core.ModuleDataKey]core.ModuleDataRecord{}, maxPageSize: 100, maxBatchSize: 100, maxPayload: 16 << 20, globalRevisions: true, nextRevision: 7}
+	return &memoryStore{records: map[recorddata.RecordKey]recorddata.Record{}, maxPageSize: 100, maxBatchSize: 100, maxPayload: 16 << 20, globalRevisions: true, nextRevision: 7}
 }
 
 func (s *memoryStore) MaxPageSize() int { return s.maxPageSize }
@@ -1038,34 +1201,34 @@ func (s *memoryStore) MaxBatchSize() int { return s.maxBatchSize }
 
 func (s *memoryStore) MaxPayloadBytes() int { return s.maxPayload }
 
-func (s *memoryStore) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (s *memoryStore) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	record, ok := s.records[key]
 	if !ok {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return record, nil
 }
 
-func (s *memoryStore) Batch(_ context.Context, mutations []core.ModuleDataMutation) error {
+func (s *memoryStore) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
 	if len(mutations) == 0 {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	first := mutations[0].Key
-	seen := map[core.ModuleDataKey]struct{}{}
+	seen := map[recorddata.RecordKey]struct{}{}
 	for _, mutation := range mutations {
 		if mutation.Key.Namespace != first.Namespace || mutation.Key.ScopeType != first.ScopeType || mutation.Key.ScopeID != first.ScopeID {
-			return core.ErrModuleDataInvalid
+			return recorddata.ErrRecordInvalid
 		}
 		if _, exists := seen[mutation.Key]; exists {
-			return core.ErrModuleDataInvalid
+			return recorddata.ErrRecordInvalid
 		}
 		seen[mutation.Key] = struct{}{}
 		current := s.records[mutation.Key]
 		if current.Revision != mutation.ExpectedRevision {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 		if mutation.Value == nil && mutation.ExpectedRevision == 0 {
-			return core.ErrModuleDataInvalid
+			return recorddata.ErrRecordInvalid
 		}
 	}
 	for _, mutation := range mutations {
@@ -1087,7 +1250,7 @@ func (s *memoryStore) Batch(_ context.Context, mutations []core.ModuleDataMutati
 				createdAt = time.Now().UTC()
 			}
 		}
-		s.records[mutation.Key] = core.ModuleDataRecord{
+		s.records[mutation.Key] = recorddata.Record{
 			Payload: append(json.RawMessage(nil), mutation.Value.Payload...), PayloadVersion: mutation.Value.PayloadVersion,
 			IndexData: append(json.RawMessage(nil), mutation.Value.IndexData...), Revision: revision,
 			CreatedAt: createdAt, UpdatedAt: time.Now().UTC(),
@@ -1096,11 +1259,11 @@ func (s *memoryStore) Batch(_ context.Context, mutations []core.ModuleDataMutati
 	return nil
 }
 
-func (s *memoryStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
+func (s *memoryStore) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []recorddata.RecordSelector, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
 	if limit > s.maxPageSize || limit < 1 {
-		return nil, nil, "", core.ErrModuleDataLimitExceeded
+		return nil, nil, "", recorddata.ErrRecordLimit
 	}
-	keys := make([]core.ModuleDataKey, 0)
+	keys := make([]recorddata.RecordKey, 0)
 	for key, record := range s.records {
 		if key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matchesSelectors(record.IndexData, selectors) {
 			continue
@@ -1109,30 +1272,46 @@ func (s *memoryStore) List(_ context.Context, namespace, scopeType, scopeID, aft
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].RecordKey < keys[j].RecordKey })
 	if len(keys) <= limit {
-		records := make([]core.ModuleDataRecord, len(keys))
+		records := make([]recorddata.Record, len(keys))
 		for i, key := range keys {
 			records[i] = s.records[key]
 		}
 		return keys, records, "", nil
 	}
 	pageKeys := keys[:limit]
-	records := make([]core.ModuleDataRecord, len(pageKeys))
+	records := make([]recorddata.Record, len(pageKeys))
 	for i, key := range pageKeys {
 		records[i] = s.records[key]
 	}
 	return pageKeys, records, pageKeys[len(pageKeys)-1].RecordKey, nil
 }
 
-func matchesSelectors(raw json.RawMessage, selectors []core.ModuleDataSelector) bool {
+func matchesSelectors(raw json.RawMessage, selectors []recorddata.RecordSelector) bool {
 	var index map[string]any
 	if json.Unmarshal(raw, &index) != nil {
 		return false
 	}
 	for _, selector := range selectors {
 		actual, ok := index[selector.Field]
-		if !ok || selector.Operator != core.SelectorEqual || len(selector.Values) != 1 || actual != selector.Values[0] {
+		if !ok || selector.Operator != recorddata.RecordSelectorEqual || len(selector.Values) != 1 || actual != selector.Values[0] {
 			return false
 		}
 	}
 	return true
+}
+
+func TestMarkSnapshotReadyRequiresWriteAccess(t *testing.T) {
+	store := newMemoryStore()
+	putSnapshot(t, store, snapshotA, 1)
+	putSnapshotWithState(t, store, snapshotB, 2, "provisioning")
+	setSnapshotParent(t, store, snapshotB, snapshotA, "Home", 1)
+	service := newServiceWithLevels(t, store, platform.AccessLevelRead, platform.AccessLevelRead, websiteConfig())
+	ctx, err := service.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.MarkSnapshotReady(ctx, snapshotB, 2)
+	if !errors.Is(err, websiteapi.ErrForbidden) {
+		t.Fatalf("MarkSnapshotReady read-only = %v, want forbidden", err)
+	}
 }

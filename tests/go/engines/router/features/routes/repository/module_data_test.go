@@ -4,38 +4,38 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"sort"
 	"testing"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
 )
 
 type memoryModuleData struct {
-	values map[core.ModuleDataKey]core.ModuleDataRecord
+	values map[recorddata.RecordKey]recorddata.Record
 }
 
 func newMemoryModuleData() *memoryModuleData {
-	return &memoryModuleData{values: make(map[core.ModuleDataKey]core.ModuleDataRecord)}
+	return &memoryModuleData{values: make(map[recorddata.RecordKey]recorddata.Record)}
 }
 
-func (store *memoryModuleData) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (store *memoryModuleData) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	value, ok := store.values[key]
 	if !ok {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return value, nil
 }
 
-func (store *memoryModuleData) Put(_ context.Context, key core.ModuleDataKey, value core.ModuleDataValue, expected int64) (core.ModuleDataRecord, error) {
+func (store *memoryModuleData) Put(_ context.Context, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
 	current, ok := store.values[key]
 	if (!ok && expected != 0) || (ok && current.Revision != expected) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataConflict
+		return recorddata.Record{}, recorddata.ErrRecordConflict
 	}
 	revision := expected + 1
 	now := time.Now().UTC()
-	record := core.ModuleDataRecord{Payload: append(json.RawMessage(nil), value.Payload...), IndexData: append(json.RawMessage(nil), value.IndexData...),
+	record := recorddata.Record{Payload: append(json.RawMessage(nil), value.Payload...), IndexData: append(json.RawMessage(nil), value.IndexData...),
 		PayloadVersion: value.PayloadVersion, Revision: revision, CreatedAt: now, UpdatedAt: now}
 	if ok {
 		record.CreatedAt = current.CreatedAt
@@ -44,23 +44,23 @@ func (store *memoryModuleData) Put(_ context.Context, key core.ModuleDataKey, va
 	return record, nil
 }
 
-func (store *memoryModuleData) Delete(_ context.Context, key core.ModuleDataKey, expected int64) error {
+func (store *memoryModuleData) Delete(_ context.Context, key recorddata.RecordKey, expected int64) error {
 	current, ok := store.values[key]
 	if !ok {
-		return core.ErrModuleDataNotFound
+		return recorddata.ErrRecordNotFound
 	}
 	if current.Revision != expected {
-		return core.ErrModuleDataConflict
+		return recorddata.ErrRecordConflict
 	}
 	delete(store.values, key)
 	return nil
 }
 
-func (store *memoryModuleData) Batch(_ context.Context, mutations []core.ModuleDataMutation) error {
+func (store *memoryModuleData) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
 	for _, mutation := range mutations {
 		current, ok := store.values[mutation.Key]
 		if (!ok && mutation.ExpectedRevision != 0) || (ok && current.Revision != mutation.ExpectedRevision) {
-			return core.ErrModuleDataConflict
+			return recorddata.ErrRecordConflict
 		}
 	}
 	for _, mutation := range mutations {
@@ -75,8 +75,8 @@ func (store *memoryModuleData) Batch(_ context.Context, mutations []core.ModuleD
 	return nil
 }
 
-func (store *memoryModuleData) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
-	keys := make([]core.ModuleDataKey, 0)
+func (store *memoryModuleData) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []recorddata.RecordSelector, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
+	keys := make([]recorddata.RecordKey, 0)
 	for key, value := range store.values {
 		if key.Namespace != namespace || key.ScopeType != scopeType || key.ScopeID != scopeID || key.RecordKey <= after || !matchesIndex(value.IndexData, selectors) {
 			continue
@@ -89,7 +89,7 @@ func (store *memoryModuleData) List(_ context.Context, namespace, scopeType, sco
 		next = keys[limit-1].RecordKey
 		keys = keys[:limit]
 	}
-	records := make([]core.ModuleDataRecord, 0, len(keys))
+	records := make([]recorddata.Record, 0, len(keys))
 	for _, key := range keys {
 		records = append(records, store.values[key])
 	}
@@ -98,7 +98,7 @@ func (store *memoryModuleData) List(_ context.Context, namespace, scopeType, sco
 
 func (*memoryModuleData) MaxPageSize() int { return 100 }
 
-func matchesIndex(raw json.RawMessage, selectors []core.ModuleDataSelector) bool {
+func matchesIndex(raw json.RawMessage, selectors []recorddata.RecordSelector) bool {
 	var index map[string]any
 	if json.Unmarshal(raw, &index) != nil {
 		return false
@@ -109,11 +109,11 @@ func matchesIndex(raw json.RawMessage, selectors []core.ModuleDataSelector) bool
 			return false
 		}
 		switch selector.Operator {
-		case core.SelectorEqual:
+		case recorddata.RecordSelectorEqual:
 			if len(selector.Values) != 1 || value != selector.Values[0] {
 				return false
 			}
-		case core.SelectorIn:
+		case recorddata.RecordSelectorIn:
 			matched := false
 			for _, candidate := range selector.Values {
 				if value == candidate {

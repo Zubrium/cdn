@@ -10,7 +10,7 @@ import (
 	_ "github.com/Zubrium/cdn/presentation/fileapi"
 )
 
-func RegisterGeneratedEngines(registry *platform.Registry) error {
+func RegisterGeneratedEngines(registry *ProfileRegistry) error {
 	if registry == nil {
 		return platform.ErrInvalid
 	}

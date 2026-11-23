@@ -20,6 +20,13 @@ func TestRequiresConfiguration(t *testing.T) {
 	}
 }
 
+func TestParseRunConfigArgumentsCanSuppressBootstrapSecret(t *testing.T) {
+	path, suppressSecret, ok := parseRunConfigArguments([]string{"--suppress-bootstrap-secret", "--config", "config.yaml"})
+	if !ok || path != "config.yaml" || !suppressSecret {
+		t.Fatalf("parsed run arguments = (%q, %t, %t)", path, suppressSecret, ok)
+	}
+}
+
 func TestCheckConfig(t *testing.T) {
 	var out, stderr bytes.Buffer
 	if code := Run([]string{"--check-config", filepath.Join(t.TempDir(), "missing")}, &out, &stderr); code == 0 {

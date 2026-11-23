@@ -188,6 +188,7 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
+	println("ROUTE_DIAG entered")
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -199,18 +200,22 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	var input engine.CreateRouteRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
+		println("ROUTE_DIAG decode_error")
 		writeDecodeError(w, err)
 		return
 	}
 	if input.BranchID != "" && input.BranchID != h.cfg.BranchID {
+		println("ROUTE_DIAG branch_invalid")
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if !validTargetMatch(input.Match, input.Target.Kind) {
+		println("ROUTE_DIAG match_invalid", input.Match, input.Target.Kind)
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if err := h.validateTarget(ctx, input.Target); err != nil {
+		println("ROUTE_DIAG target_invalid", input.Target.Kind)
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -218,6 +223,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	input.IdempotencyKey = key
 	route, err := h.api.CreateRoute(ctx, input)
 	if err != nil {
+		println("ROUTE_DIAG api_create_error", input.Host, input.Match, input.Target.Kind, fmt.Sprintf("%T", err), err.Error())
 		writeEngineError(w, err)
 		return
 	}

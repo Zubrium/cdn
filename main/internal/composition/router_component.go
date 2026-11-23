@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	routerengine "github.com/Zubrium/cdn/engines/router"
 	routesapp "github.com/Zubrium/cdn/engines/router/features/routes/application"
 	routesrepo "github.com/Zubrium/cdn/engines/router/features/routes/repository"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
@@ -70,12 +70,17 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		operations = append(operations, submit)
 	}
 	if _, enabled := component.selected["public.form-upload"]; enabled {
+		accessDispatcher := bus.NewModuleDispatcher(component.dispatcher, "engine.router")
+		access, err := contracts.NewCoreAccessClient(accessDispatcher)
+		if err != nil {
+			return fmt.Errorf("configure Router access DataBus client: %w", err)
+		}
 		upload, err := publicupload.New(component.loader.service, publicupload.Config{
 			Credential: settings.ServiceCredential, StagingDirectory: settings.UploadStagingDirectory,
 			MaxFileBytes: settings.UploadMaxFileBytes, PartSize: component.config.Loader.PartSize,
 			MaxParts: component.config.Loader.MaxParts, MaxConcurrentUploads: settings.UploadMaxConcurrent,
 			MaxStagedBytes: settings.UploadMaxStagedBytes, AllowedContentTypes: append([]string(nil), settings.UploadAllowedContentTypes...),
-			GroupAuthorization: component.core.runtime.GroupAuthorization(),
+			GroupAuthorization: moduleCoreGroupAuthorization{access: access},
 			Forms:              formsAPI,
 		})
 		if err != nil {
@@ -87,7 +92,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	moduleData, err := component.core.runtime.RegisterDataModule(routerengine.ModuleDataDescriptor())
+	moduleData, err := component.core.registerModuleData(routerengine.RecordDescriptor())
 	if err != nil {
 		return fmt.Errorf("register Router Core module data: %w", err)
 	}
@@ -95,19 +100,33 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	identity := routerIdentityAdapter{identity: component.core.runtime.EngineIdentity(), sessions: component.core.runtime.Sessions()}
-	validator, err := router.NewCoreTargetValidator(component.core.runtime.EngineIdentity(), component.core.runtime.EngineFiles(), settings.ServiceCredential, registry)
+	moduleDispatcher := bus.NewModuleDispatcher(component.dispatcher, "engine.router")
+	access, err := contracts.NewCoreAccessClient(moduleDispatcher)
+	if err != nil {
+		return fmt.Errorf("configure Router Core access DataBus client: %w", err)
+	}
+	fileSession, _, err := component.core.runtime.Identity().Authenticate(ctx, settings.ServiceCredential)
+	if err != nil {
+		return fmt.Errorf("authenticate Router file service: %w", err)
+	}
+	component.core.setCoreFiles("engine.router", coreSessionFileAdapter{files: component.core.runtime.Files(), session: fileSession})
+	files, err := contracts.NewCoreFilesClient(moduleDispatcher, func() contracts.StreamRegistrar {
+		return bus.NewScopedStreams()
+	})
+	if err != nil {
+		return fmt.Errorf("configure Router Core file DataBus client: %w", err)
+	}
+	validator, err := router.NewCoreTargetValidator(files, registry)
 	if err != nil {
 		return err
 	}
-	routeService, err := routesapp.New(repository, identity, component.core.runtime.GroupAuthorization(), validator, routesapp.Config{
+	routeService, err := routesapp.New(repository, access, access, validator, routesapp.Config{
 		BranchID: settings.BranchID, AccessGroup: "router_routes", DefaultPageSize: settings.DefaultPageSize, MaxPageSize: settings.MaxPageSize,
 	})
 	if err != nil {
 		return err
 	}
-	delivery, err := router.NewCoreDelivery(settings.BranchID, settings.ServiceCredential, component.core.runtime.EngineIdentity(),
-		component.core.runtime.EngineFiles(), routeService, registry)
+	delivery, err := router.NewCoreDelivery(settings.BranchID, files, routeService, registry)
 	if err != nil {
 		return err
 	}
@@ -139,26 +158,6 @@ func (component *routerEngineComponent) Stop(context.Context) error {
 
 func (component *routerEngineComponent) IsReady() bool {
 	return component != nil && component.api != nil && component.registry != nil
-}
-
-type routerIdentityAdapter struct {
-	identity platform.EngineIdentityCapability
-	sessions platform.SessionCapability
-}
-
-func (adapter routerIdentityAdapter) Authenticate(ctx context.Context, credential string) (platform.Session, error) {
-	if adapter.identity == nil {
-		return platform.Session{}, platform.ErrUnavailable
-	}
-	session, _, err := adapter.identity.Authenticate(ctx, credential)
-	return session, err
-}
-
-func (adapter routerIdentityAdapter) AuthenticateSession(ctx context.Context, token string) (platform.Session, platform.Principal, error) {
-	if adapter.sessions == nil {
-		return platform.Session{}, platform.Principal{}, platform.ErrUnavailable
-	}
-	return adapter.sessions.AuthenticateSession(ctx, token)
 }
 
 type routerAdminComponent struct{}

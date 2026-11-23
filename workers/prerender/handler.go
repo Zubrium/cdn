@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 // FailClosedWorker validates the versioned plan envelope but deliberately does
@@ -33,30 +33,29 @@ func (worker FailClosedWorker) Render(ctx context.Context, request Request) (Res
 // WorkerHandler exposes only the statically registered render-page/v1 identity.
 // This fail-closed worker never returns success because no supervised renderer
 // and Core artifact writer are available in this package.
-func (worker FailClosedWorker) WorkerHandler(ctx context.Context, task core.Task) (core.TaskOutcome, error) {
-	if task.Kind != core.TaskKindWorker || task.Worker == nil || task.Worker.ComponentID != DataModuleID ||
-		task.Worker.OperationID != OperationID || task.Worker.ContractVersion != 1 || len(task.Payload) == 0 || len(task.Payload) > 23<<20 {
-		return core.TaskOutcome{}, ErrInvalidPlan
+func (worker FailClosedWorker) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	if task.TaskID == "" || len(task.Payload) == 0 || len(task.Payload) > 23<<20 {
+		return contracts.OperationOutcome{}, ErrInvalidPlan
 	}
 	decoder := json.NewDecoder(bytes.NewReader(task.Payload))
 	decoder.DisallowUnknownFields()
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return core.TaskOutcome{}, ErrInvalidPlan
+		return contracts.OperationOutcome{}, ErrInvalidPlan
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) ||
-		(request.TaskID != "" && request.TaskID != task.ID.String()) || request.IdempotencyKey != task.IdempotencyKey {
-		return core.TaskOutcome{}, ErrInvalidPlan
+		(request.TaskID != "" && request.TaskID != task.TaskID) || request.IdempotencyKey != task.IdempotencyKey {
+		return contracts.OperationOutcome{}, ErrInvalidPlan
 	}
-	request.TaskID = task.ID.String()
+	request.TaskID = task.TaskID
 	result, err := worker.Render(ctx, request)
 	if err != nil {
-		return core.TaskOutcome{}, err
+		return contracts.OperationOutcome{}, err
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > 1<<20 {
-		return core.TaskOutcome{}, ErrInvalidResult
+		return contracts.OperationOutcome{}, ErrInvalidResult
 	}
-	return core.TaskOutcome{Result: encoded}, nil
+	return contracts.OperationOutcome{Result: encoded}, nil
 }

@@ -54,6 +54,20 @@ func TestModuleDataRejectsInvalidJSONBUnicodeAndUnrepresentableVersions(t *testi
 	}
 }
 
+func TestModuleDataBatchScopeValidationAllowsMultipleScopesWithinNamespace(t *testing.T) {
+	workspaceKey := ModuleDataKey{Namespace: "content/workspaces", ScopeType: "global", ScopeID: "global", RecordKey: "workspace/en-US"}
+	selectionKey := ModuleDataKey{Namespace: "content/workspaces", ScopeType: "page_snapshot", ScopeID: "snapshot-1", RecordKey: "page-selections/en-US"}
+	if err := validateModuleDataBatchKeys("engine.content", []ModuleDataMutation{{Key: workspaceKey, Value: &ModuleDataValue{}}, {Key: selectionKey, Value: &ModuleDataValue{}}}); err != nil {
+		t.Fatalf("same-namespace multi-scope batch rejected: %v", err)
+	}
+	if err := validateModuleDataBatchKeys("engine.content", []ModuleDataMutation{{Key: workspaceKey, Value: &ModuleDataValue{}}, {Key: ModuleDataKey{Namespace: "content/history", ScopeType: "global", ScopeID: "global", RecordKey: "history/en-US/1"}, Value: &ModuleDataValue{}}}); err == nil {
+		t.Fatal("cross-namespace batch accepted")
+	}
+	if err := validateModuleDataBatchKeys("engine.content", []ModuleDataMutation{{Key: workspaceKey, Value: &ModuleDataValue{}}, {Key: workspaceKey, Value: &ModuleDataValue{}}}); err == nil {
+		t.Fatal("duplicate scoped record accepted")
+	}
+}
+
 func TestModuleDataKeyValidationMatchesRegisteredDottedEngineIDs(t *testing.T) {
 	key := ModuleDataKey{Namespace: "uploads", ScopeType: "global", ScopeID: "global", RecordKey: "contract"}
 	for _, moduleID := range []string{"engine", "engine-example", "engine.example", "loader.v2"} {

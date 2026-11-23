@@ -32,7 +32,7 @@ func TestFormsGlobalContractHasNoSnapshotScope(t *testing.T) {
 	if schemapkg.PayloadVersion != 2 {
 		t.Errorf("schema payload version = %d, want 2", schemapkg.PayloadVersion)
 	}
-	descriptor := forms.ModuleDataDescriptor()
+	descriptor := forms.RecordDescriptor()
 	for _, namespace := range descriptor.Namespaces {
 		if len(namespace.ScopeTypes) != 1 || namespace.ScopeTypes[0] != "global" {
 			t.Errorf("namespace %q scope types = %v, want [global]", namespace.Name, namespace.ScopeTypes)

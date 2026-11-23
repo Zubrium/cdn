@@ -25,6 +25,8 @@ import (
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
+	"github.com/Zubrium/cdn/main/internal/composition"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/google/uuid"
 )
@@ -72,30 +74,30 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 			}
 		})
 
-		if err := runtime.Registry.Register("coordinator", core.CoordinatorDescriptor{}); err != nil {
+		if err := runtime.Registry.Register("coordinator"); err != nil {
 			t.Fatalf("register disposable Coordinator: %v", err)
 		}
-		if err := runtime.Registry.Register(websiteengine.ModuleDataDescriptor().ModuleID, web012WebsiteModule{}); err != nil {
+		if err := runtime.Registry.Register(websiteengine.RecordDescriptor().OwnerID); err != nil {
 			t.Fatalf("register Website module: %v", err)
 		}
-		if err := runtime.Registry.Register(archive.DataModuleID, web012ArchiveModule{}); err != nil {
+		if err := runtime.Registry.Register(archive.DataModuleID); err != nil {
 			t.Fatalf("register Archive module: %v", err)
 		}
-		websiteData, err := runtime.RegisterDataModule(websiteengine.ModuleDataDescriptor())
+		websiteData, err := websiteAcceptanceRecordStore(t, runtime, websiteengine.RecordDescriptor())
 		if err != nil {
 			t.Fatalf("register Website module data: %v", err)
 		}
-		archiveData, err := runtime.RegisterDataModule(archive.DataDescriptor())
+		archiveData, err := websiteAcceptanceRecordStore(t, runtime, archive.DataDescriptor())
 		if err != nil {
 			t.Fatalf("register Archive module data: %v", err)
 		}
 
-		identity := runtime.EngineIdentity()
+		identity := runtime.Identity()
 		serviceSession, _, err := identity.Authenticate(ctx, credential)
 		if err != nil {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
-		files := runtime.EngineFiles()
+		files := runtime.Files()
 		fileSet, err := files.CreateManagedFileSet(ctx, serviceSession, "web012", "archive", "features")
 		if err != nil {
 			t.Fatalf("create run-owned target FileSet: %v", err)
@@ -117,8 +119,8 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 			t.Fatalf("secure run-owned archive staging: %v", err)
 		}
 		failures := &web012FailureInjector{sourceDeleteFailures: map[string]int{}}
-		coreFiles := &web012CoreFiles{files: files, session: serviceSession, failures: failures}
-		handler, err := archive.NewHandler(coreFiles, serviceSession, archive.Config{
+		coreFiles := &web012CoreFiles{testCoreFilesAdapter: testCoreFilesAdapter{files: files, session: serviceSession}, failures: failures}
+		handler, err := archive.NewHandler(coreFiles, archive.Config{
 			Limits: archive.Limits{
 				MaxArchiveBytes: 1 << 20, MaxEntries: 16, MaxEntryBytes: 1 << 16,
 				MaxExpandedBytes: 1 << 18, MaxCompressionRatio: 100,
@@ -127,18 +129,16 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 			TargetFileSetID: fileSet.ID,
 			OutputGroups:    []string{"features"},
 			Progress:        archiveData,
-			Index:           files,
+			Index:           coreFiles,
 		})
 		if err != nil {
 			t.Fatalf("construct real Archive handler: %v", err)
 		}
-		catalog, err := core.BuildWorkerCatalog(core.BuildPlan{Components: []string{"worker.archive"}}, []core.ComponentWorkerSet{{
-			ComponentID: archive.DataModuleID,
-			Handlers:    map[string]core.WorkerHandler{archive.OperationID + "/v1": handler.WorkerHandler},
-		}})
-		if err != nil || catalog == nil {
-			t.Fatalf("build disposable worker catalog: %v", err)
-		}
+		operationKey := contracts.Key{ID: archive.OperationID, Version: 1}
+		bindings := map[contracts.Key]composition.TaskOperationBinding{operationKey: {
+			TaskClass: archive.DataModuleID, Handler: handler.WorkerHandler,
+		}}
+		dispatcher := websiteAcceptanceExecutor(t, bindings)
 		fingerprint := sha256.Sum256([]byte("web012-" + env.runID))
 		if err := runtime.StartCoordinator(ctx, core.CoordinatorRuntimeConfig{
 			Fingerprint: hex.EncodeToString(fingerprint[:]), InstanceLease: 30 * time.Second,
@@ -146,7 +146,8 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 			TaskTimeout: 30 * time.Second, PollInterval: 50 * time.Millisecond,
 			RetryBase: 50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
 			MaxAttempts: 2, MaxWorkflowTasks: 16, MaxChildrenPerTask: 4,
-			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second, WorkerCatalog: catalog,
+			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second,
+			TaskClasses: []string{archive.DataModuleID}, OperationExecutor: composition.NewDataBusTaskExecutor(dispatcher, bindings),
 		}); err != nil {
 			t.Fatalf("start disposable Coordinator: %v", err)
 		}
@@ -257,7 +258,7 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 				}
 			}
 		}
-		for _, key := range []core.ModuleDataKey{
+		for _, key := range []contracts.RecordKey{
 			websiterepo.FeatureVersionKey("web012-valid", "1.2.3"),
 		} {
 			record, err := websiteData.Get(ctx, key)
@@ -277,17 +278,6 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 			}
 		}
 	})
-}
-
-type web012WebsiteModule struct{}
-
-func (web012WebsiteModule) Operations() []core.Operation { return nil }
-
-type web012ArchiveModule struct{}
-
-func (web012ArchiveModule) Operations() []core.Operation { return nil }
-func (web012ArchiveModule) ComponentDescriptor() core.ComponentDescriptor {
-	return archive.ComponentDescriptor()
 }
 
 type web012FailureInjector struct {
@@ -317,24 +307,23 @@ func (i *web012FailureInjector) deleteAttempts(sourceID string) int {
 }
 
 type web012CoreFiles struct {
-	files    core.EngineFilesCapability
-	session  core.Session
+	testCoreFilesAdapter
 	failures *web012FailureInjector
 
 	mu      sync.Mutex
 	creates map[string]int
 }
 
-func (f *web012CoreFiles) StatFile(ctx context.Context, session core.Session, id string) (core.File, error) {
-	return f.files.StatFile(ctx, session, id)
+func (f *web012CoreFiles) StatFile(ctx context.Context, id string) (contracts.File, error) {
+	return f.testCoreFilesAdapter.StatFile(ctx, id)
 }
 
-func (f *web012CoreFiles) ReadFile(ctx context.Context, session core.Session, id string) (io.ReadCloser, core.File, error) {
-	return f.files.ReadFile(ctx, session, id)
+func (f *web012CoreFiles) ReadFile(ctx context.Context, id string) (io.ReadCloser, contracts.File, error) {
+	return f.testCoreFilesAdapter.ReadFile(ctx, id)
 }
 
-func (f *web012CoreFiles) CreateFileVerified(ctx context.Context, session core.Session, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
-	id, err := f.files.CreateFileVerified(ctx, session, requestKey, groups, metadata, contentType, size, checksum, body)
+func (f *web012CoreFiles) CreateFileVerified(ctx context.Context, requestKey string, groups []string, metadata map[string]string, contentType string, size int64, checksum string, body io.Reader) (string, error) {
+	id, err := f.testCoreFilesAdapter.CreateFileVerified(ctx, requestKey, groups, metadata, contentType, size, checksum, body)
 	if err == nil {
 		f.mu.Lock()
 		if f.creates == nil {
@@ -352,14 +341,14 @@ func (f *web012CoreFiles) createCount(sourceID string) int {
 	return f.creates[sourceID]
 }
 
-func (f *web012CoreFiles) DeleteFile(ctx context.Context, session core.Session, id string, expected int64) error {
+func (f *web012CoreFiles) DeleteFile(ctx context.Context, id string, expected int64) error {
 	if f.failures.failDelete(id) {
 		return fmt.Errorf("web012 injected source cleanup failure")
 	}
-	return f.files.DeleteFile(ctx, session, id, expected)
+	return f.testCoreFilesAdapter.DeleteFile(ctx, id, expected)
 }
 
-func web012CreateSource(t *testing.T, ctx context.Context, files core.EngineFilesCapability, session core.Session, name string, payload []byte) string {
+func web012CreateSource(t *testing.T, ctx context.Context, files core.FilesCapability, session core.Session, name string, payload []byte) string {
 	t.Helper()
 	id, err := files.CreateFile(ctx, session, uuid.NewString(), []string{"features"},
 		map[string]string{"web012_source": name}, "application/zip", int64(len(payload)), bytes.NewReader(payload))

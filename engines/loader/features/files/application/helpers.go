@@ -1,5 +1,7 @@
 package application
 
+import recorddata "github.com/Zubrium/cdn/pkg/contracts"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -101,9 +103,9 @@ func mapCoreError(err error) error {
 
 func mapDataError(err error) error {
 	switch {
-	case errors.Is(err, core.ErrModuleDataNotFound):
+	case errors.Is(err, recorddata.ErrRecordNotFound):
 		return api.ErrNotFound
-	case errors.Is(err, core.ErrModuleDataConflict):
+	case errors.Is(err, recorddata.ErrRecordConflict):
 		return api.ErrConflict
 	default:
 		return fmt.Errorf("%w: Loader state operation failed", api.ErrUnavailable)

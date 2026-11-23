@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
@@ -31,9 +32,14 @@ type coreComponent struct {
 	config          appconfig.Resolved
 	runtime         *platform.Runtime
 	secret          string
-	catalog         *platform.WorkerCatalog
+	operations      map[contracts.Key]TaskOperationBinding
 	selected        map[string]struct{}
+	accessGroups    map[string][]string
 	dispatcher      *bus.Dispatcher
+	recordStoreMu   sync.RWMutex
+	recordStores    map[string]contracts.RecordDataStore
+	fileServiceMu   sync.RWMutex
+	fileServices    map[string]contracts.CoreFiles
 	archiveHandle   atomic.Pointer[archive.Handler]
 	mediaHandle     atomic.Pointer[media.V2Handler]
 	mediaSandbox    atomic.Pointer[media.DockerSandbox]
@@ -42,7 +48,7 @@ type coreComponent struct {
 	contentHandle   atomic.Pointer[contentEngineComponent]
 }
 
-func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descriptors []platform.ComponentDescriptor) (map[string]platform.AccessLevel, error) {
+func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descriptors []contracts.ComponentDescriptor) (map[string]platform.AccessLevel, error) {
 	groups := make(map[string]platform.AccessLevel, len(configured))
 	for key, level := range configured {
 		groups[key] = level
@@ -61,9 +67,15 @@ func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descri
 }
 
 func (c *coreComponent) Start(ctx context.Context) error {
-	profileRegistry := platform.NewRegistry()
+	profileRegistry := NewProfileRegistry(platform.NewRegistry())
 	if err := RegisterProfile(profileRegistry); err != nil {
 		return fmt.Errorf("register compiled profile: %w", err)
+	}
+	c.accessGroups = make(map[string][]string)
+	for _, descriptor := range profileRegistry.ComponentDescriptors() {
+		if moduleUsesCoreAccess(descriptor.ID, c.selected) && len(descriptor.AccessGroups) > 0 {
+			c.accessGroups[descriptor.ID] = append([]string(nil), descriptor.AccessGroups...)
+		}
 	}
 	coreConfig := c.config.Core
 	groups, err := mergeProfileAccessGroups(coreConfig.AccessGroups, profileRegistry.ComponentDescriptors())
@@ -77,11 +89,11 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		return err
 	}
 	c.runtime, c.secret = runtime, secret
-	if err := RegisterProfile(runtime.Registry); err != nil {
+	if err := RegisterProfile(NewProfileRegistry(runtime.Registry)); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("register compiled profile: %w", err)
 	}
-	if err := runtime.Registry.Register("coordinator", platform.CoordinatorDescriptor{}); err != nil {
+	if err := runtime.Registry.Register("coordinator"); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("register Coordinator capability: %w", err)
 	}
@@ -112,7 +124,8 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		RetryBase: settings.RetryBase, RetryMaximum: settings.RetryMaximum,
 		MaxAttempts: settings.MaxAttempts, MaxWorkflowTasks: settings.MaxWorkflowTasks,
 		MaxChildrenPerTask: settings.MaxChildrenPerTask, WorkflowRetention: settings.WorkflowRetention,
-		ShutdownTimeout: c.config.HTTP.ShutdownTimeout, WorkerCatalog: c.catalog,
+		ShutdownTimeout: c.config.HTTP.ShutdownTimeout, TaskClasses: taskClasses(c.operations),
+		OperationExecutor: NewDataBusTaskExecutor(c.dispatcher, c.operations),
 	}); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("start Core Coordinator: %w", err)
@@ -124,6 +137,40 @@ func (c *coreComponent) Start(ctx context.Context) error {
 	if err := bus.RegisterCoreReadiness(c.dispatcher, runtime.CoordinatorStartupReady); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("register Core readiness operation: %w", err)
+	}
+	if hasModuleDataConsumers(c.selected) {
+		if err := bus.RegisterRecordDataStore(c.dispatcher, c.recordDataStore); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core record operations: %w", err)
+		}
+	}
+	if hasCoreFileConsumers(c.selected) {
+		if err := bus.RegisterFileCreateVerified(c.dispatcher, c.coreFileCreator); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core file creation operation: %w", err)
+		}
+		if err := bus.RegisterFileRead(c.dispatcher, c.coreFileReader); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core file read operation: %w", err)
+		}
+		if err := bus.RegisterFileStat(c.dispatcher, c.coreFileStat); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core file stat operation: %w", err)
+		}
+		if err := bus.RegisterFileDelete(c.dispatcher, c.coreFileDelete); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core file delete operation: %w", err)
+		}
+		if err := bus.RegisterFileSetOperations(c.dispatcher, c.coreFiles); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core FileSet operations: %w", err)
+		}
+	}
+	if len(c.accessGroups) > 0 {
+		if err := bus.RegisterCoreAccess(c.dispatcher, coreRuntimeAccess{runtime: runtime}, c.accessGroups); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core access operations: %w", err)
+		}
 	}
 	if _, selected := c.selected["admin.coordinator"]; selected {
 		control, err := runtime.NewWorkflowControl()
@@ -148,21 +195,28 @@ func (c *coreComponent) Start(ctx context.Context) error {
 // cross this boundary; the worker receives one authenticated service session.
 func (c *coreComponent) configureArchiveImport(ctx context.Context, runtime *platform.Runtime) error {
 	settings := c.config.FeatureImport
-	session, _, err := runtime.EngineIdentity().Authenticate(ctx, settings.ServiceCredential)
+	session, _, err := runtime.Identity().Authenticate(ctx, settings.ServiceCredential)
 	if err != nil {
 		return fmt.Errorf("authenticate feature import service: %w", err)
 	}
-	progress, err := runtime.RegisterDataModule(archive.DataDescriptor())
+	c.setCoreFiles(archive.DataModuleID, coreSessionFileAdapter{files: runtime.Files(), session: session})
+	progress, err := c.registerModuleData(archive.DataDescriptor())
 	if err != nil {
 		return fmt.Errorf("register archive progress capability: %w", err)
 	}
-	handler, err := archive.NewHandler(runtime.EngineFiles(), session, archive.Config{
+	fileClient, err := contracts.NewCoreFilesClient(bus.NewModuleDispatcher(c.dispatcher, archive.DataModuleID), func() contracts.StreamRegistrar {
+		return bus.NewScopedStreams()
+	})
+	if err != nil {
+		return err
+	}
+	handler, err := archive.NewHandler(fileClient, archive.Config{
 		Limits:          settings.Limits,
 		StagingDir:      settings.StagingDirectory,
 		TargetFileSetID: settings.TargetFileSetID,
 		OutputGroups:    settings.OutputGroups,
 		Progress:        progress,
-		Index:           runtime.EngineFiles(),
+		Index:           fileClient,
 	})
 	if err != nil {
 		return err
@@ -176,11 +230,12 @@ func (c *coreComponent) configureArchiveImport(ctx context.Context, runtime *pla
 // a failed probe prevents worker registration instead of falling back.
 func (c *coreComponent) configureMedia(ctx context.Context, runtime *platform.Runtime) error {
 	settings := c.config.Media
-	session, _, err := runtime.EngineIdentity().Authenticate(ctx, settings.ServiceCredential)
+	session, _, err := runtime.Identity().Authenticate(ctx, settings.ServiceCredential)
 	if err != nil {
 		return err
 	}
-	progress, err := runtime.RegisterDataModule(media.DataDescriptor())
+	c.setCoreFiles(media.DataModuleID, coreSessionFileAdapter{files: runtime.Files(), session: session})
+	progress, err := c.registerModuleData(media.DataDescriptor())
 	if err != nil {
 		return err
 	}
@@ -192,7 +247,13 @@ func (c *coreComponent) configureMedia(ctx context.Context, runtime *platform.Ru
 	if err != nil {
 		return err
 	}
-	handler, err := media.NewV2Handler(runtime.EngineFiles(), session, progress, sandbox,
+	fileClient, err := contracts.NewCoreFilesClient(bus.NewModuleDispatcher(c.dispatcher, media.DataModuleID), func() contracts.StreamRegistrar {
+		return bus.NewScopedStreams()
+	})
+	if err != nil {
+		return err
+	}
+	handler, err := media.NewV2Handler(fileClient, progress, sandbox,
 		settings.MaxConcurrency, settings.MaxInputBytes+settings.MaxOutputBytes)
 	if err != nil {
 		return err
@@ -211,7 +272,7 @@ func (c *coreComponent) configurePrerender(ctx context.Context, runtime *platfor
 	if secret == "" {
 		secret = c.config.Core.BootstrapSecret
 	}
-	session, _, err := runtime.EngineIdentity().Authenticate(ctx, secret)
+	session, _, err := runtime.Identity().Authenticate(ctx, secret)
 	if err != nil {
 		return err
 	}
@@ -226,30 +287,95 @@ func (c *coreComponent) configurePrerender(ctx context.Context, runtime *platfor
 			MaxPlanBytes: settings.MaxPlanBytes, MaxArtifacts: settings.MaxArtifacts,
 			MaxArtifactBytes: settings.MaxArtifactBytes, MaxTotalBytes: settings.MaxTotalBytes,
 		},
-		Files: corePrerenderArtifactWriter{files: runtime.EngineFiles(), session: session},
+		Files: corePrerenderArtifactWriter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, prerender.DataModuleID)},
 	})
 	if err != nil {
 		return err
 	}
+	c.setCoreFiles(prerender.DataModuleID, coreSessionFileAdapter{files: runtime.Files(), session: session})
 	c.prerenderHandle.Store(worker)
 	return nil
 }
 
 type corePrerenderArtifactWriter struct {
-	files   platform.EngineFilesCapability
-	session platform.Session
+	dispatcher contracts.Dispatcher
 }
 
 func (w corePrerenderArtifactWriter) WriteArtifact(ctx context.Context, requestKey, path, contentType string, size int64, checksum string, body io.Reader) (string, error) {
-	if w.files == nil {
+	if w.dispatcher == nil {
 		return "", errors.New("Core artifact writer is not configured")
 	}
 	// Core requires an opaque UUID request key. Derive it from the stable task
 	// identity and artifact path so retries remain idempotent without letting
 	// task payloads choose the key.
 	key := uuid.NewSHA1(uuid.NameSpaceURL, []byte("website-prerender/"+requestKey)).String()
-	return w.files.CreateFileVerified(ctx, w.session, key, []string{"features"},
-		map[string]string{"artifact_path": path, "artifact_kind": "website_prerender"}, contentType, size, checksum, body)
+	streams := bus.NewScopedStreams()
+	response, err := contracts.CallFileCreateVerified(ctx, w.dispatcher, streams, contracts.FileCreateVerifiedInput{
+		RequestKey: key, Groups: []string{"features"},
+		Metadata:    map[string]string{"artifact_path": path, "artifact_kind": "website_prerender"},
+		ContentType: contentType, Size: size, SHA256: checksum,
+	}, body)
+	if err != nil {
+		return "", err
+	}
+	return response.FileID, nil
+}
+
+func (c *coreComponent) setCoreFiles(moduleID string, files contracts.CoreFiles) {
+	c.fileServiceMu.Lock()
+	if c.fileServices == nil {
+		c.fileServices = make(map[string]contracts.CoreFiles)
+	}
+	c.fileServices[moduleID] = files
+	c.fileServiceMu.Unlock()
+}
+
+func (c *coreComponent) coreFiles(_ context.Context, moduleID string) (contracts.CoreFiles, error) {
+	if c == nil || !isCoreFileConsumer(moduleID) {
+		return nil, contracts.ErrDispatcherUnavailable
+	}
+	c.fileServiceMu.RLock()
+	files := c.fileServices[moduleID]
+	c.fileServiceMu.RUnlock()
+	if files == nil {
+		return nil, contracts.ErrDispatcherUnavailable
+	}
+	return files, nil
+}
+
+func (c *coreComponent) coreFileCreator(ctx context.Context, moduleID string) (contracts.VerifiedFileCreator, error) {
+	return c.coreFiles(ctx, moduleID)
+}
+
+func (c *coreComponent) coreFileReader(ctx context.Context, moduleID string) (contracts.CoreFileReader, error) {
+	return c.coreFiles(ctx, moduleID)
+}
+
+func (c *coreComponent) coreFileStat(ctx context.Context, moduleID string, subject contracts.AuthorizationSubject) (contracts.CoreFileStat, error) {
+	if c == nil || c.runtime == nil || !isCoreFileConsumer(moduleID) {
+		return nil, contracts.ErrDispatcherUnavailable
+	}
+	if subject.Credential == "" && subject.SessionToken == "" {
+		return c.coreFiles(ctx, moduleID)
+	}
+	if subject.Validate() != nil {
+		return nil, contracts.ErrAccessInvalid
+	}
+	var session platform.Session
+	var err error
+	if subject.Credential != "" {
+		session, _, err = c.runtime.Identity().Authenticate(ctx, subject.Credential)
+	} else {
+		session, _, err = c.runtime.Sessions().AuthenticateSession(ctx, subject.SessionToken)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return coreSubjectFileStat{files: c.runtime.Files(), session: session}, nil
+}
+
+func (c *coreComponent) coreFileDelete(ctx context.Context, moduleID string) (contracts.CoreFileDeleter, error) {
+	return c.coreFiles(ctx, moduleID)
 }
 
 // MediaSandboxState exposes the verified probe result to Website. It is not
@@ -345,7 +471,7 @@ func (c *loaderComponent) Start(ctx context.Context) error {
 	if c.core == nil || c.core.runtime == nil {
 		return errors.New("Core is not initialized")
 	}
-	moduleData, err := c.core.runtime.RegisterDataModule(loaderapp.ModuleDataDescriptor())
+	moduleData, err := c.core.registerModuleData(loaderapp.RecordDescriptor())
 	if err != nil {
 		return err
 	}
@@ -614,10 +740,15 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		selected[id] = struct{}{}
 	}
 	core := &coreComponent{config: resolved, selected: selected, dispatcher: nil}
-	if err := registerWorkerHandlers(registry, selected, resolved, core, observer); err != nil {
+	operations, err := registerWorkerHandlers(selected, resolved, core, observer)
+	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("register worker handlers: %w", err)
 	}
+	core.operations = operations
 	keys := []contracts.Key{contracts.CoreReadinessOperation().Key}
+	for key := range operations {
+		keys = append(keys, key)
+	}
 	if _, ok := selected["admin.coordinator"]; ok {
 		keys = append(keys, contracts.WorkflowListOperation().Key, contracts.WorkflowGetOperation().Key, contracts.WorkflowRetryOperation().Key)
 	}
@@ -630,12 +761,43 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	if _, enabled := selected["composition.retirement"]; enabled {
 		keys = append(keys, contracts.RetirePageOperation().Key, contracts.GetPageRetirementOperation().Key)
 	}
+	if hasModuleDataConsumers(selected) {
+		keys = append(keys,
+			contracts.RecordGetOperation().Key, contracts.RecordGetExpiredOperation().Key,
+			contracts.RecordPutOperation().Key, contracts.RecordDeleteOperation().Key,
+			contracts.RecordBatchOperation().Key, contracts.RecordListOperation().Key,
+			contracts.RecordListExpiredOperation().Key,
+		)
+	}
+	if hasCoreFileConsumers(selected) {
+		keys = append(keys,
+			contracts.FileCreateVerifiedOperation().Key, contracts.FileReadOperation().Key, contracts.FileStatOperation().Key, contracts.FileDeleteOperation().Key,
+			contracts.FileSetGetOperation().Key, contracts.FileSetListOperation().Key, contracts.FileSetMembersOperation().Key,
+			contracts.FileSetAddOperation().Key, contracts.FileSetRemoveOperation().Key,
+		)
+	}
+	if hasCoreAccessConsumers(selected) {
+		keys = append(keys,
+			contracts.AccessAuthenticateOperation().Key,
+			contracts.AccessAuthenticateSessionOperation().Key,
+			contracts.AccessRequireGroupOperation().Key,
+		)
+	}
 	dispatcher, err := bus.NewAllowlisted(keys...)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	if err := dispatcher.EnableScopedStreams(); err != nil {
 		return nil, nil, nil, nil, err
+	}
+	if len(operations) > 0 {
+		handlers := make(map[contracts.Key]bus.TaskOperationHandler, len(operations))
+		for key, binding := range operations {
+			handlers[key] = binding.Handler
+		}
+		if err := bus.RegisterTaskOperations(dispatcher, handlers); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("register DataBus task operations: %w", err)
+		}
 	}
 	dispatcher.WithObserver(observer)
 	if err := validateRunnableComposition(selected); err != nil {
@@ -687,7 +849,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	}
 	var websiteEngine *websiteEngineComponent
 	if _, enabled := selected["engine.website"]; enabled && !fileAPI.developmentFixtures {
-		websiteEngine = &websiteEngineComponent{core: core, config: resolved}
+		websiteEngine = newWebsiteEngineComponent(core, resolved)
 		fileAPI.websiteEngine = websiteEngine
 		if err := register(platform.RuntimeComponent{ID: "engine.website", Requires: []string{"core"}, New: func(context.Context) (platform.ManagedComponent, error) { return websiteEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
@@ -829,6 +991,9 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		publicationEngine := &publicationComponent{
 			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
 		}
+		if err := bus.Register(dispatcher, contracts.PublicationPublishOperation(), publicationEngine.publish); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("register publication operation: %w", err)
+		}
 		fileAPI.publicationEngine = publicationEngine
 		if err := register(platform.RuntimeComponent{ID: "engine.publication", Requires: []string{"core", "engine.website", "engine.content", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
 			return publicationEngine, nil
@@ -842,6 +1007,12 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		}
 		retirementEngine := &retirementComponent{
 			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
+		}
+		if err := bus.Register(dispatcher, contracts.RetirePageOperation(), retirementEngine.retirePage); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("register page retirement operation: %w", err)
+		}
+		if err := bus.Register(dispatcher, contracts.GetPageRetirementOperation(), retirementEngine.getPageRetirement); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("register page retirement lookup operation: %w", err)
 		}
 		fileAPI.retirementEngine = retirementEngine
 		if err := register(platform.RuntimeComponent{ID: "composition.retirement", Requires: []string{"core", "engine.website", "engine.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
@@ -911,11 +1082,6 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			return nil, nil, nil, nil, err
 		}
 	}
-	catalog, err := registry.CompileWorkerCatalog(plan)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	core.catalog = catalog
 	return registry, core, loader, fileAPI, nil
 }
 
@@ -944,13 +1110,18 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	return nil
 }
 
-func failClosedWorker(componentID string) platform.WorkerHandler {
-	return func(ctx context.Context, _ platform.Task) (platform.TaskOutcome, error) {
-		if err := ctx.Err(); err != nil {
-			return platform.TaskOutcome{}, err
+func taskClasses(operations map[contracts.Key]TaskOperationBinding) []string {
+	seen := make(map[string]struct{}, len(operations))
+	classes := make([]string, 0, len(operations))
+	for _, binding := range operations {
+		if _, exists := seen[binding.TaskClass]; exists {
+			continue
 		}
-		return platform.TaskOutcome{}, fmt.Errorf("%s is compiled but has no server-side execution configuration", componentID)
+		seen[binding.TaskClass] = struct{}{}
+		classes = append(classes, binding.TaskClass)
 	}
+	sort.Strings(classes)
+	return classes
 }
 
 type readyComponent struct {

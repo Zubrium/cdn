@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"sort"
 	"testing"
@@ -135,17 +136,17 @@ func (f *testFiles) ResolveUploadRequest(context.Context, string, string) (core.
 }
 
 type testData struct {
-	records      map[core.ModuleDataKey]core.ModuleDataRecord
+	records      map[recorddata.RecordKey]recorddata.Record
 	now          func() time.Time
 	next         int64
 	page         int
 	indexBytes   int
 	batchBytes   int
-	beforeDelete func(core.ModuleDataKey)
+	beforeDelete func(recorddata.RecordKey)
 }
 
 func newTestData() *testData {
-	return &testData{records: make(map[core.ModuleDataKey]core.ModuleDataRecord), now: time.Now, page: 100,
+	return &testData{records: make(map[recorddata.RecordKey]recorddata.Record), now: time.Now, page: 100,
 		indexBytes: 1 << 16, batchBytes: 4 << 20}
 }
 
@@ -155,50 +156,50 @@ func (d *testData) MaxPayloadBytes() int { return 1 << 20 }
 func (d *testData) MaxIndexBytes() int   { return d.indexBytes }
 func (d *testData) MaxBatchBytes() int   { return d.batchBytes }
 
-func (d *testData) Get(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (d *testData) Get(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	record, ok := d.records[key]
 	if !ok || expired(record, d.now()) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return cloneRecord(record), nil
 }
 
-func (d *testData) GetExpired(_ context.Context, key core.ModuleDataKey) (core.ModuleDataRecord, error) {
+func (d *testData) GetExpired(_ context.Context, key recorddata.RecordKey) (recorddata.Record, error) {
 	record, ok := d.records[key]
 	if !ok || !expired(record, d.now()) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataNotFound
+		return recorddata.Record{}, recorddata.ErrRecordNotFound
 	}
 	return cloneRecord(record), nil
 }
 
-func (d *testData) Put(_ context.Context, key core.ModuleDataKey, value core.ModuleDataValue, expected int64) (core.ModuleDataRecord, error) {
+func (d *testData) Put(_ context.Context, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
 	records := cloneRecords(d.records)
 	record, err := d.write(records, key, value, expected)
 	if err != nil {
-		return core.ModuleDataRecord{}, err
+		return recorddata.Record{}, err
 	}
 	d.records = records
 	return record, nil
 }
 
-func (d *testData) Delete(_ context.Context, key core.ModuleDataKey, expected int64) error {
+func (d *testData) Delete(_ context.Context, key recorddata.RecordKey, expected int64) error {
 	if d.beforeDelete != nil {
 		d.beforeDelete(key)
 	}
 	record, ok := d.records[key]
 	if !ok || expired(record, d.now()) {
-		return core.ErrModuleDataNotFound
+		return recorddata.ErrRecordNotFound
 	}
 	if record.Revision != expected {
-		return core.ErrModuleDataConflict
+		return recorddata.ErrRecordConflict
 	}
 	delete(d.records, key)
 	return nil
 }
 
-func (d *testData) Batch(_ context.Context, mutations []core.ModuleDataMutation) error {
+func (d *testData) Batch(_ context.Context, mutations []recorddata.RecordMutation) error {
 	if err := validateTestDataBatch(mutations); err != nil {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	records := cloneRecords(d.records)
 	next := d.next
@@ -206,10 +207,10 @@ func (d *testData) Batch(_ context.Context, mutations []core.ModuleDataMutation)
 		if mutation.Value == nil {
 			current, ok := records[mutation.Key]
 			if !ok || expired(current, d.now()) {
-				return core.ErrModuleDataNotFound
+				return recorddata.ErrRecordNotFound
 			}
 			if current.Revision != mutation.ExpectedRevision {
-				return core.ErrModuleDataConflict
+				return recorddata.ErrRecordConflict
 			}
 			delete(records, mutation.Key)
 			continue
@@ -228,28 +229,28 @@ func (d *testData) Batch(_ context.Context, mutations []core.ModuleDataMutation)
 	return nil
 }
 
-func validateTestDataBatch(mutations []core.ModuleDataMutation) error {
+func validateTestDataBatch(mutations []recorddata.RecordMutation) error {
 	if len(mutations) == 0 {
-		return core.ErrModuleDataInvalid
+		return recorddata.ErrRecordInvalid
 	}
 	first := mutations[0].Key
-	seen := make(map[core.ModuleDataKey]struct{}, len(mutations))
+	seen := make(map[recorddata.RecordKey]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		key := mutation.Key
 		if key.Namespace != first.Namespace || key.ScopeType != first.ScopeType || key.ScopeID != first.ScopeID || mutation.ExpectedRevision < 0 ||
 			(mutation.Value == nil && mutation.ExpectedRevision == 0) {
-			return core.ErrModuleDataInvalid
+			return recorddata.ErrRecordInvalid
 		}
 		if _, exists := seen[key]; exists {
-			return core.ErrModuleDataInvalid
+			return recorddata.ErrRecordInvalid
 		}
 		seen[key] = struct{}{}
 	}
 	return nil
 }
 
-func (d *testData) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []core.ModuleDataSelector, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
-	var keys []core.ModuleDataKey
+func (d *testData) List(_ context.Context, namespace, scopeType, scopeID, after string, selectors []recorddata.RecordSelector, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
+	var keys []recorddata.RecordKey
 	for key, record := range d.records {
 		if key.Namespace == namespace && key.ScopeType == scopeType && key.ScopeID == scopeID && key.RecordKey > after && !expired(record, d.now()) && matchesSelectors(record.IndexData, selectors) {
 			keys = append(keys, key)
@@ -258,8 +259,8 @@ func (d *testData) List(_ context.Context, namespace, scopeType, scopeID, after 
 	return d.pageRecords(keys, limit)
 }
 
-func (d *testData) ListExpired(_ context.Context, namespace, scopeType, scopeID, after string, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
-	var keys []core.ModuleDataKey
+func (d *testData) ListExpired(_ context.Context, namespace, scopeType, scopeID, after string, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
+	var keys []recorddata.RecordKey
 	for key, record := range d.records {
 		if key.Namespace == namespace && key.ScopeType == scopeType && key.ScopeID == scopeID && key.RecordKey > after && expired(record, d.now()) {
 			keys = append(keys, key)
@@ -268,30 +269,30 @@ func (d *testData) ListExpired(_ context.Context, namespace, scopeType, scopeID,
 	return d.pageRecords(keys, limit)
 }
 
-func (d *testData) pageRecords(keys []core.ModuleDataKey, limit int) ([]core.ModuleDataKey, []core.ModuleDataRecord, string, error) {
+func (d *testData) pageRecords(keys []recorddata.RecordKey, limit int) ([]recorddata.RecordKey, []recorddata.Record, string, error) {
 	sort.Slice(keys, func(i, j int) bool { return keys[i].RecordKey < keys[j].RecordKey })
 	next := ""
 	if len(keys) > limit {
 		keys = keys[:limit]
 		next = keys[len(keys)-1].RecordKey
 	}
-	records := make([]core.ModuleDataRecord, len(keys))
+	records := make([]recorddata.Record, len(keys))
 	for i, key := range keys {
 		records[i] = cloneRecord(d.records[key])
 	}
 	return keys, records, next, nil
 }
 
-func (d *testData) write(records map[core.ModuleDataKey]core.ModuleDataRecord, key core.ModuleDataKey, value core.ModuleDataValue, expected int64) (core.ModuleDataRecord, error) {
+func (d *testData) write(records map[recorddata.RecordKey]recorddata.Record, key recorddata.RecordKey, value recorddata.RecordValue, expected int64) (recorddata.Record, error) {
 	current, exists := records[key]
 	if exists && expired(current, d.now()) {
 		exists = false
 	}
 	if (!exists && expected != 0) || (exists && current.Revision != expected) || (exists && expected == 0) {
-		return core.ModuleDataRecord{}, core.ErrModuleDataConflict
+		return recorddata.Record{}, recorddata.ErrRecordConflict
 	}
 	d.next++
-	record := core.ModuleDataRecord{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion,
+	record := recorddata.Record{Payload: append(json.RawMessage(nil), value.Payload...), PayloadVersion: value.PayloadVersion,
 		IndexData: append(json.RawMessage(nil), value.IndexData...), Revision: d.next, CreatedAt: d.now(), UpdatedAt: d.now()}
 	if value.TTL > 0 {
 		expires := d.now().Add(value.TTL)
@@ -304,15 +305,15 @@ func (d *testData) write(records map[core.ModuleDataKey]core.ModuleDataRecord, k
 	return record, nil
 }
 
-func cloneRecords(source map[core.ModuleDataKey]core.ModuleDataRecord) map[core.ModuleDataKey]core.ModuleDataRecord {
-	result := make(map[core.ModuleDataKey]core.ModuleDataRecord, len(source))
+func cloneRecords(source map[recorddata.RecordKey]recorddata.Record) map[recorddata.RecordKey]recorddata.Record {
+	result := make(map[recorddata.RecordKey]recorddata.Record, len(source))
 	for key, record := range source {
 		result[key] = cloneRecord(record)
 	}
 	return result
 }
 
-func cloneRecord(record core.ModuleDataRecord) core.ModuleDataRecord {
+func cloneRecord(record recorddata.Record) recorddata.Record {
 	record.Payload = append(json.RawMessage(nil), record.Payload...)
 	record.IndexData = append(json.RawMessage(nil), record.IndexData...)
 	if record.ExpiresAt != nil {
@@ -322,11 +323,11 @@ func cloneRecord(record core.ModuleDataRecord) core.ModuleDataRecord {
 	return record
 }
 
-func expired(record core.ModuleDataRecord, now time.Time) bool {
+func expired(record recorddata.Record, now time.Time) bool {
 	return record.ExpiresAt != nil && !record.ExpiresAt.After(now)
 }
 
-func matchesSelectors(encoded json.RawMessage, selectors []core.ModuleDataSelector) bool {
+func matchesSelectors(encoded json.RawMessage, selectors []recorddata.RecordSelector) bool {
 	var values map[string]any
 	if json.Unmarshal(encoded, &values) != nil {
 		return false
@@ -338,13 +339,13 @@ func matchesSelectors(encoded json.RawMessage, selectors []core.ModuleDataSelect
 		}
 		match := false
 		switch selector.Operator {
-		case core.SelectorEqual:
+		case recorddata.RecordSelectorEqual:
 			match = len(selector.Values) == 1 && fmt.Sprint(actual) == fmt.Sprint(selector.Values[0])
-		case core.SelectorIn:
+		case recorddata.RecordSelectorIn:
 			for _, expected := range selector.Values {
 				match = match || fmt.Sprint(actual) == fmt.Sprint(expected)
 			}
-		case core.SelectorContains:
+		case recorddata.RecordSelectorContains:
 			array, ok := actual.([]any)
 			if ok {
 				for _, item := range array {
@@ -635,7 +636,7 @@ func TestAbortSchedulesDurableStagingCleanup(t *testing.T) {
 	if len(files.staged) != 0 {
 		t.Fatalf("aborted staging objects were not removed: %d remain", len(files.staged))
 	}
-	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, core.ErrModuleDataNotFound) {
+	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, recorddata.ErrRecordNotFound) {
 		t.Fatalf("cleanup job was not retired: %v", err)
 	}
 }
@@ -721,7 +722,7 @@ func TestExpiredCommitRecoveryPromotesReadyFileBeforeCleanup(t *testing.T) {
 	if len(files.staged) != 0 {
 		t.Fatalf("recovered commit left staged bytes behind: %d remain", len(files.staged))
 	}
-	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, core.ErrModuleDataNotFound) {
+	if _, err := data.Get(ctx, cleanupDataKey(upload.ID)); !errors.Is(err, recorddata.ErrRecordNotFound) {
 		t.Fatalf("cleanup job was not retired after confirmed Core commit: %v", err)
 	}
 }
@@ -805,7 +806,7 @@ func TestCleanupCursorRotatesPastPendingCoreCommits(t *testing.T) {
 	if err := service.CleanupOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.Get(context.Background(), cleanupDataKey(readyID)); !errors.Is(err, core.ErrModuleDataNotFound) {
+	if _, err := data.Get(context.Background(), cleanupDataKey(readyID)); !errors.Is(err, recorddata.ErrRecordNotFound) {
 		t.Fatalf("a pending earlier commit starved a later cleanup job: %v", err)
 	}
 	if _, err := data.Get(context.Background(), cleanupDataKey(pendingID)); err != nil {
@@ -856,7 +857,7 @@ func TestCleanupToleratesJobRemovedByAnotherInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobKey := cleanupDataKey(upload.ID)
-	data.beforeDelete = func(key core.ModuleDataKey) {
+	data.beforeDelete = func(key recorddata.RecordKey) {
 		if key == jobKey {
 			delete(data.records, key)
 		}
