@@ -20,3 +20,6 @@ docs-site/.vitepress/cache/
 docs-site/node_modules/
 __pycache__/
 *.pyc
+.veai/
+/zubrium
+main/config.observability.yaml
