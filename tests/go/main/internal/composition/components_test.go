@@ -130,7 +130,7 @@ func TestWorkflowControlFailsClosedWithoutCoreRuntimeAndRegistrationStaysScoped(
 	if err := resolved.ValidateBuildPlan(plan); err != nil {
 		t.Fatalf("configured Coordinator profile is invalid: %v", err)
 	}
-	registry, core, loader, fileAPI, err := registerComponents(resolved, plan)
+	registry, core, loader, fileAPI, err := registerComponents(resolved, plan, nil)
 	if err != nil {
 		t.Fatalf("register compiled Coordinator composition: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestWorkflowControlFailsClosedWithoutCoreRuntimeAndRegistrationStaysScoped(
 		t.Fatalf("registered composition omitted a selected component: registry=%t core=%t loader=%t fileAPI=%t workflowControl=%t",
 			registry != nil, core != nil, loader != nil, fileAPI != nil, fileAPI != nil && fileAPI.workflowControl != nil)
 	}
-	if _, _, _, _, err := registerComponents(resolved, platform.BuildPlan{}); !errors.Is(err, platform.ErrCoordinatorInputInvalid) {
+	if _, _, _, _, err := registerComponents(resolved, platform.BuildPlan{}, nil); !errors.Is(err, platform.ErrCoordinatorInputInvalid) {
 		t.Fatalf("empty build plan was accepted by component registration: %v", err)
 	}
 	if err := (appconfig.Resolved{}).ValidateBuildPlan(plan); err == nil {
@@ -150,7 +150,7 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 	basePlan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files"}}
 	withIdentity := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "admin.identity"}}
 
-	baseRegistry, _, _, baseAPI, err := registerComponents(appconfig.Resolved{}, basePlan)
+	baseRegistry, _, _, baseAPI, err := registerComponents(appconfig.Resolved{}, basePlan, nil)
 	if err != nil {
 		t.Fatalf("register File API without identity API: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 		t.Fatal("unselected identity API was registered")
 	}
 
-	registry, _, _, api, err := registerComponents(appconfig.Resolved{}, withIdentity)
+	registry, _, _, api, err := registerComponents(appconfig.Resolved{}, withIdentity, nil)
 	if err != nil {
 		t.Fatalf("register identity API: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestIdentityAdminIsRegisteredOnlyWhenSelectedAndSharesTheAdminListener(t *t
 
 func TestComponentRegistrationFailsClosedForUnimplementedSelectedAPIs(t *testing.T) {
 	plan := platform.BuildPlan{Components: []string{"core", "engine.loader", "admin.files", "engine.unknown"}}
-	_, _, _, _, err := registerComponents(appconfig.Resolved{}, plan)
+	_, _, _, _, err := registerComponents(appconfig.Resolved{}, plan, nil)
 	if err == nil || !strings.Contains(err.Error(), "has no runtime implementation") {
 		t.Fatalf("unimplemented component was silently omitted instead of failing startup: %v", err)
 	}

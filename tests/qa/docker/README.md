@@ -63,7 +63,8 @@ tests/qa/docker/down.sh <run_id>   # иначе явно
 - `CORE_QA_POSTGRES_PASSWORD`, `CORE_QA_RUNTIME_PASSWORD`, `CORE_QA_MIGRATION_PASSWORD`, `CORE_QA_ELEVATED_PASSWORD`;
 - `QA_S3_ACCESS_KEY`, `QA_S3_SECRET_KEY`;
 - `WEBSITE_TEST_DISPOSABLE=1`, `WEBSITE_TEST_RUN_ID`, `COMPOSE_PROJECT_NAME`;
-- `WEBSITE_TEST_POSTGRES_DSN` (база `zubrium_core_qa_platform`, пользователь `core_qa_migrator`);
+- `WEBSITE_TEST_POSTGRES_DSN` (runtime-пользователь `core_qa_runtime`, база `zubrium_core_qa_platform`);
+- `WEBSITE_TEST_POSTGRES_MIGRATION_DSN` (отдельный migration-пользователь `core_qa_migrator` для той же базы);
 - `CORE_QA_OWNER_RESULT_DATABASE` (`zubrium_core_qa_owner_result_<run_id>`) и `TEST_CORE_OWNER_TASK_RESULT_DATABASE_URL` с тем же пользователем `core_qa_migrator`;
 - `WEBSITE_TEST_S3_ENDPOINT`, `WEBSITE_TEST_S3_BUCKET` (`zubrium-core-qa-<run_id>`), `WEBSITE_TEST_S3_ACCESS_KEY`, `WEBSITE_TEST_S3_SECRET_KEY`;
 - псевдонимы `TEST_CORE_PLATFORM_*`, `TEST_CORE_S3_*` и `CORE_QA_*_DATABASE_URL` для повторного использования стека Core QA.

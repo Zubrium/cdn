@@ -200,7 +200,7 @@ func (dispatcher *Dispatcher) Dispatch(ctx context.Context, request contracts.En
 					err = closeErr
 				}
 			}()
-			ctx = contracts.WithStreamCapability(ctx, streams)
+			dispatchCtx = contracts.WithStreamCapability(dispatchCtx, streams)
 		}
 	}
 	payload, err := handler(dispatchCtx, request.Payload)

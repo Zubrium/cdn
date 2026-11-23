@@ -77,13 +77,20 @@ func (c snapshotForkContentCopier) CopySnapshotContent(ctx context.Context, payl
 	if err != nil {
 		return err
 	}
+	workspace, err := c.engine.GetWorkspace(ctx, sourceSchema)
+	if err != nil {
+		return err
+	}
+	if workspace.Revision != payload.ExpectedSourceContentRevision {
+		return contentapi.ErrConflict
+	}
 	_, err = c.engine.CopySnapshotContent(ctx, contentapi.CopySnapshotContentRequest{
 		SourceSchema:                    sourceSchema,
 		TargetSchema:                    targetSchema,
 		SourceSnapshotID:                payload.SourceSnapshotID,
 		TargetSnapshotID:                payload.TargetSnapshotID,
-		ExpectedSourceRevision:          payload.ExpectedSourceContentRevision,
-		ExpectedSourceSelectionRevision: payload.ExpectedSourceContentRevision,
+		ExpectedSourceRevision:          workspace.Revision,
+		ExpectedSourceSelectionRevision: workspace.SelectionRevision,
 		SelectionPolicy:                 payload.SelectionPolicy,
 		IdempotencyKey:                  payload.ContentCopyIdempotencyKey,
 	})

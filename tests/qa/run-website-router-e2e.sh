@@ -26,6 +26,7 @@ case "$(uname -m)" in
 	*) fail "unsupported host architecture for the pinned prerender image" ;;
 esac
 
+
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
 [ -f "$root/go.work" ] || fail "repository root not found: $root"
@@ -33,6 +34,30 @@ root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
 tmp_root=${TMPDIR:-/tmp}
 [ -d "$tmp_root" ] || fail "TMPDIR does not exist: $tmp_root"
 tmp_root=$(CDPATH= cd -- "$tmp_root" && pwd -P) || fail "cannot resolve TMPDIR"
+
+# sanitized DOCKER_CONFIG for public image pulls in headless shells
+docker_config_dir=$(mktemp -d "$tmp_root/website-e2e-docker-config.XXXXXX") || fail "cannot create Docker config dir"
+chmod 700 "$docker_config_dir"
+python3 - "$docker_config_dir/config.json" <<'PY' || fail "cannot create sanitized Docker config"
+import json, os, pathlib, sys
+target = pathlib.Path(sys.argv[1])
+source = pathlib.Path(os.environ.get("DOCKER_CONFIG", pathlib.Path.home() / ".docker")) / "config.json"
+cfg = {}
+if source.is_file():
+    try:
+        cfg = json.loads(source.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+for key in ("credsStore", "credHelpers"):
+    cfg.pop(key, None)
+cfg["auths"] = {}
+target.write_text(json.dumps(cfg), encoding="utf-8")
+PY
+for link in cli-plugins contexts; do
+	src="$HOME/.docker/$link"
+	[ -e "$src" ] && ln -s "$src" "$docker_config_dir/$link"
+done
+export DOCKER_CONFIG="$docker_config_dir"
 
 run_id="e2e-$(date -u +%Y%m%dT%H%M%SZ)-$(python3 -c 'import secrets;print(secrets.token_hex(3))')"
 evidence_dir="$root/output/e2e/$run_id"
@@ -45,6 +70,7 @@ env_file=''
 docker_started=0
 server_pid=''
 proxy_pid=''
+docker_config_dir=''
 
 cleanup() {
 	status=$?
@@ -63,6 +89,9 @@ cleanup() {
 	if [ -n "$env_file" ] && [ -f "$env_file" ]; then
 		chmod 600 "$env_file" 2>/dev/null || true
 		rm -f "$env_file" || true
+	fi
+	if [ -n "$docker_config_dir" ] && [ -d "$docker_config_dir" ]; then
+		rm -rf "$docker_config_dir" || true
 	fi
 	rm -rf "$run_dir" || true
 	exit "$status"

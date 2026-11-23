@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/observability"
 )
 
 type nopWriteCloser struct{ io.Writer }
@@ -33,6 +34,12 @@ func TestDispatcherExposesScopedStreamCapabilityPerCall(t *testing.T) {
 	if err := dispatcher.EnableScopedStreams(); err != nil {
 		t.Fatal(err)
 	}
+	observer, err := observability.New(observability.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observer.Close(context.Background())
+	dispatcher.WithObserver(observer)
 	handler := func(ctx context.Context, _ streamProbeRequest) (streamProbeResponse, error) {
 		if _, ok := contracts.StreamCapabilityFromContext(ctx); !ok {
 			return streamProbeResponse{}, errors.New("stream capability is missing")
