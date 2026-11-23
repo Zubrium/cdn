@@ -27,6 +27,9 @@ LEDGER_PATHS = (
     ROOT / "tests/qa/obs-scenarios.json",
     ROOT / "tests/qa/cache-router-scenarios.json",
     ROOT / "tests/qa/concurrency-admission-scenarios.json",
+    ROOT / "tests/qa/content-scenarios.json",
+    ROOT / "tests/qa/forms-scenarios.json",
+    ROOT / "tests/qa/loader-scenarios.json",
 )
 DEFAULT_REPORT = ROOT / "output/test-report.json"
 LOG_DIR = ROOT / "output/test-logs"

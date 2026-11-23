@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "LOADER-001",
+      "source": "spec/core/SPEC-module-data.md §65, §67, §77; spec/engines/router/SPEC-router-engine.md §1, §5.1; tests/ACCEPTANCE-MATRIX.md Loader/File API",
+      "level": "contract",
+      "preconditions": [
+        "Loader session, idempotency and TTL state is held in one fake module-data store.",
+        "Every read compares the stored request fingerprint with the current input."
+      ],
+      "input": "Begin an upload, retry the same key, reuse the key for another destination, change the input fingerprint and advance time across the session/idempotency TTL.",
+      "action": "Call BeginUpload, ValidUpload and TTL-dependent reads through the Loader application service.",
+      "expected_result": "Idempotency is principal and key scoped; distinct keys never collapse; a changed fingerprint is rejected; session and idempotency records remain aligned across commit and result retention.",
+      "expected_state": "Only the original upload session is replayed for its key, and expired sessions are not returned by the user-facing API.",
+      "test_file": "tests/go/engines/loader/features/files/application/scenarios_test.go",
+      "test_symbol": "TestLoaderScenario/LOADER-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "LOADER-002",
+      "source": "spec/core/SPEC-module-data.md §65, §67, §69, §73, §77; spec/architecture/SPEC-concurrency.md §8, §10, §13",
+      "level": "contract",
+      "preconditions": [
+        "Parts are recorded with stable keys, exact staging references, size and SHA-256.",
+        "A Core final-file request can be pending, ready, failed or not found after an ambiguous response."
+      ],
+      "input": "Write all parts, commit, retry the commit, hold a session with a pending Core request, then recover pending, ready and failed Core commit states.",
+      "action": "Call part-write/commit/recovery operations on the Loader application service with a fake Core file API.",
+      "expected_result": "A successful commit is idempotent; pending preserves session and parts; ready records the returned file ID; failed/not found aborts; gaps, duplicates and checksum mismatches never publish a file.",
+      "expected_state": "No partially visible Core file is created; recovered sessions end in committed or aborted state with matching durable records.",
+      "test_file": "tests/go/engines/loader/features/files/application/scenarios_test.go",
+      "test_symbol": "TestLoaderScenario/LOADER-002",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "LOADER-003",
+      "source": "spec/core/SPEC-module-data.md §65, §67, §73, §77; tests/ACCEPTANCE-MATRIX.md Loader/File API",
+      "level": "contract",
+      "preconditions": [
+        "Cleanup jobs are durable and have no TTL; staging bytes and part records are removed only after a terminal Core state.",
+        "Cleanup identity and session/job state compatibility are verified before deletion."
+      ],
+      "input": "Abort a session, try to extend an expired session with a part write, rotate cleanup past a pending Core commit and present mismatched or already-removed cleanup jobs.",
+      "action": "Call cleanup and expired-upload operations with fake Core state and bounded cursors.",
+      "expected_result": "Abort schedules durable cleanup, expired uploads reject part writes, pending jobs do not block later jobs, identity mismatches stop cleanup and a job removed by another replica is an idempotent success.",
+      "expected_state": "Only exact staging references and part records for resolved uploads are deleted; no ambiguous Core request is cleaned prematurely.",
+      "test_file": "tests/go/engines/loader/features/files/application/scenarios_test.go",
+      "test_symbol": "TestLoaderScenario/LOADER-003",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "LOADER-004",
+      "source": "spec/core/SPEC-module-data.md §65, §69, §71, §73, §75, §77; spec/architecture/SPEC-concurrency.md §8, §10, §11, §13; CONC-009",
+      "level": "contract",
+      "preconditions": [
+        "loader.max_concurrent_commits bounds commit slots and commit_timeout bounds slot waiting.",
+        "Core session authentication and current group rights are checked again before commit; the local session cache is bounded by entries, bytes, TTL and revision."
+      ],
+      "input": "Exceed commit concurrency, observe admission metrics, revoke group access before commit, authenticate an inactive principal and evict a cache entry by count, bytes, TTL and revision.",
+      "action": "Call commit, admission, authentication and session-cache operations through the Loader application service.",
+      "expected_result": "Excess commits fail closed without session mutation, revoked rights block publication, inactive principals are rejected and stale/oversized cache entries are never reused.",
+      "expected_state": "Every admission and authorization decision is fail-closed and the cache remains a bounded hint validated against Core revision.",
+      "test_file": "tests/go/engines/loader/features/files/application/scenarios_test.go",
+      "test_symbol": "TestLoaderScenario/LOADER-004",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "LOADER-005",
+      "source": "spec/core/SPEC-module-data.md §65, §67, §69, §71-79; spec/engines/router/SPEC-router-engine.md §1, §5.1; tests/ACCEPTANCE-MATRIX.md Loader/File API",
+      "level": "e2e",
+      "preconditions": [
+        "A disposable PostgreSQL/S3 stack and a live Router/Core API built from this checkout are available.",
+        "The upload route is Loader-backed with server-owned destination, MIME allowlist, byte limits, staging path and idempotency key."
+      ],
+      "input": "Upload a multipart file through the exact public route, kill and restart the Loader, resume commit, verify checksum and group access and request the registered exact file GET.",
+      "action": "Run the tagged HTTP e2e flow with LOADER_TEST_DISPOSABLE=1 and the declared Core/uploader base URLs.",
+      "expected_result": "Bytes become visible only after verified Core finalization, restart/resume is safe, revoked access prevents file creation and FileSet membership never grants byte access.",
+      "expected_state": "Without the isolated disposable Core/PostgreSQL/S3 stack the scenario is not executed and is never reported as pass.",
+      "test_file": "tests/go/engines/loader/features/files/application/scenarios_test.go",
+      "test_symbol": "TestLoaderScenario/LOADER-005",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Disposable Loader/Core environment not provided: require LOADER_TEST_DISPOSABLE=1, LOADER_TEST_CORE_BASE_URL, LOADER_TEST_UPLOADER_BASE_URL and LOADER_TEST_TIMEOUT. No live working API is used."
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "FORMS-001",
+      "source": "spec/engines/forms/SPEC-forms-engine.md §5-7, §54, §66, §70; tests/ACCEPTANCE-MATRIX.md Forms",
+      "level": "contract",
+      "preconditions": [
+        "Forms schemas are global and persisted in global/global core-data scope.",
+        "Schema writes use a server-generated UUID, globally unique key, expected_revision and CAS over one fake Core store."
+      ],
+      "input": "Create a schema, replay the same create, create another schema with the same key and different fields, update with the correct and a stale revision, rename and reuse the old key.",
+      "action": "Call SaveSchema on the Forms engine with an authenticated write principal and inspect persisted global records.",
+      "expected_result": "Identical creates are idempotent; duplicate keys, changed content under an existing key and stale revisions conflict; valid update increments version/revision and atomically releases the old key.",
+      "expected_state": "One schema record and one key-index record remain in global scope after rename, and the old key can be reused only by another schema.",
+      "test_file": "tests/go/engines/forms/scenarios_test.go",
+      "test_symbol": "TestFormsScenario/FORMS-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "FORMS-002",
+      "source": "spec/engines/forms/SPEC-forms-engine.md §9-16, §68, §70; spec/presentation/openapi/forms.yaml",
+      "level": "contract",
+      "preconditions": [
+        "Field definitions are validated at schema save time independently of Router route validation.",
+        "Supported types and type-specific constraints are enumerated by the Forms contract."
+      ],
+      "input": "Save schemas with unknown fields, unsafe MIME types and invalid constraints, then save a schema using the supported text, email, number, boolean, select and file constraints.",
+      "action": "Call SaveSchema with typed field definitions and assert acceptance or rejection.",
+      "expected_result": "Unsafe or unknown field constraints are rejected; explicitly supported types, patterns, ranges, options and file limits are accepted and persisted unchanged.",
+      "expected_state": "No invalid schema is persisted; the accepted schema preserves its validated typed field definitions.",
+      "test_file": "tests/go/engines/forms/scenarios_test.go",
+      "test_symbol": "TestFormsScenario/FORMS-002",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "FORMS-003",
+      "source": "spec/engines/forms/SPEC-forms-engine.md §18-46, §70; spec/engines/router/SPEC-router-engine.md §5.2; tests/ACCEPTANCE-MATRIX.md Forms",
+      "level": "contract",
+      "preconditions": [
+        "A public form binding pins exactly one form ID and schema version; the visitor never supplies those values.",
+        "Visitor sessions, upload reservations and submissions are held in the Forms engine with fake Core/Loader boundaries."
+      ],
+      "input": "Create a visitor session, submit missing/invalid/unknown values, complete a valid submission, replay its idempotency key, retry a completed upload after submission and change the bound schema version.",
+      "action": "Call CreateVisitorSession, GetVisitorSession, upload/submit operations with the corresponding typed requests.",
+      "expected_result": "Invalid values are rejected, a valid accepted submission is immutable and idempotently replayed, completed upload retry is safe after submit, and a changed route version invalidates the old session.",
+      "expected_state": "The session ends in submitted state with verified values and attachment references; no session can cross a schema-version binding change.",
+      "test_file": "tests/go/engines/forms/scenarios_test.go",
+      "test_symbol": "TestFormsScenario/FORMS-003",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "FORMS-004",
+      "source": "spec/engines/forms/SPEC-forms-engine.md §48-52, §64, §68, §70; tests/ACCEPTANCE-MATRIX.md Forms",
+      "level": "contract",
+      "preconditions": [
+        "Schema and submission permissions are independent direct Core group levels.",
+        "Submissions require form_id filtering, immutable values, CAS status changes and final deletion with attachment cleanup."
+      ],
+      "input": "Exercise read/write principals from both groups, list with form/key/state selectors, change status with correct and stale revisions and delete after partial attachment cleanup.",
+      "action": "Call the Forms admin engine operations with the corresponding authenticated contexts and list/status/delete requests.",
+      "expected_result": "Each route enforces only its own group; lists return the filtered immutable submissions; stale status/delete CAS conflicts; resumed deletion removes all attachments and memberships.",
+      "expected_state": "No response is editable, no cross-group access is granted and a partially cleaned deletion reaches a terminal state without orphaned attachments.",
+      "test_file": "tests/go/engines/forms/scenarios_test.go",
+      "test_symbol": "TestFormsScenario/FORMS-004",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "FORMS-005",
+      "source": "spec/engines/forms/SPEC-forms-engine.md §18-52, §64, §70; spec/presentation/openapi/forms.yaml; spec/engines/router/SPEC-router-engine.md §5.2; tests/ACCEPTANCE-MATRIX.md Forms",
+      "level": "e2e",
+      "preconditions": [
+        "A disposable PostgreSQL/S3 stack and a live Router/Admin API built from this checkout are available.",
+        "Form-bound upload requires exact Router operation config, staging limits, a private destination and an external proxy for rate limiting."
+      ],
+      "input": "Drive public session, raw file upload, submit, resume after restart, CSV export and deletion through the real Router bindings using a disposable form and file set.",
+      "action": "Run the tagged HTTP/browser e2e flow with FORMS_TEST_DISPOSABLE=1 and the declared admin/public base URLs.",
+      "expected_result": "Cookies, exact routes, typed validation, upload idempotency, immutable submissions, CSV filtering/limits and final attachment cleanup match the OpenAPI and Forms contracts.",
+      "expected_state": "Without the isolated disposable stack the scenario is not executed and is never reported as pass.",
+      "test_file": "tests/go/engines/forms/scenarios_test.go",
+      "test_symbol": "TestFormsScenario/FORMS-005",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Disposable Forms environment not provided: require FORMS_TEST_DISPOSABLE=1, FORMS_TEST_ADMIN_BASE_URL, FORMS_TEST_PUBLIC_BASE_URL and FORMS_TEST_TIMEOUT. No live working API is used."
+    }
+  ]
+}

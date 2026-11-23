@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "CONTENT-001",
+      "source": "spec/engines/content/SPEC-content-engine.md §19-25, §70, §73; tests/ACCEPTANCE-MATRIX.md Content",
+      "level": "contract",
+      "preconditions": [
+        "Content locale catalog is owned by Content and exposed through the admin contract with a CAS revision.",
+        "The service under test uses an in-core fake repository with no external PostgreSQL or S3 dependency."
+      ],
+      "input": "Replace locale config with non-canonical tags, a duplicate after canonicalization, a missing default and then a valid catalog; repeat the valid write with the next expected revision.",
+      "action": "Call ReplaceLocaleConfig and GetLocaleConfig through the Content application service.",
+      "expected_result": "Locales are canonicalized and ordered, duplicates and an absent default are rejected, and a valid CAS write advances the catalog revision.",
+      "expected_state": "The stored catalog is the canonical revision returned by the successful write; invalid writes leave it unchanged.",
+      "test_file": "tests/go/engines/content/application/scenarios_test.go",
+      "test_symbol": "TestContentScenario/CONTENT-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONTENT-002",
+      "source": "spec/engines/content/SPEC-content-engine.md §27-37, §70, §75-77; spec/engines/content/SPEC-content-editor-acceptance.md §5, §11; tests/ACCEPTANCE-MATRIX.md Content",
+      "level": "contract",
+      "preconditions": [
+        "A ready trusted ContentModelProjection and PagePlacementProjection are supplied by the caller.",
+        "Draft mutations use expected_revision, expected_selection_revision and an Idempotency-Key."
+      ],
+      "input": "Save a draft with client-keyed records, replay the same idempotency key, reuse it with a changed payload and write with a stale revision.",
+      "action": "Call SaveWorkspaceDraft on the Content application service and compare the replies and revisions.",
+      "expected_result": "Server-generated record/translation IDs are replayed, the same key with a different payload conflicts, and stale CAS is rejected without partial application.",
+      "expected_state": "Exactly one successful draft mutation advances the workspace revision; the idempotent replay does not advance it again.",
+      "test_file": "tests/go/engines/content/application/scenarios_test.go",
+      "test_symbol": "TestContentScenario/CONTENT-002",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONTENT-003",
+      "source": "spec/engines/content/SPEC-content-engine.md §39-45, §70, §78; spec/engines/content/SPEC-content-editor-acceptance.md §5, §12; tests/ACCEPTANCE-MATRIX.md Content",
+      "level": "contract",
+      "preconditions": [
+        "A workspace has a valid saved draft for one locale and page snapshot.",
+        "Publication history is append-only and restore creates a new draft."
+      ],
+      "input": "Publish draft A, publish changed draft B, list history, restore A and read published content; repeat the publish and restore keys.",
+      "action": "Call PublishWorkspace, ListHistory, RestoreHistory and ReadPublishedContent on the Content application service.",
+      "expected_result": "Both publications are immutable history entries, idempotent retries replay their receipts, restore changes only the draft, and public content remains revision B until published again.",
+      "expected_state": "History contains both publications in order; the published pointer still identifies B after restore.",
+      "test_file": "tests/go/engines/content/application/scenarios_test.go",
+      "test_symbol": "TestContentScenario/CONTENT-003",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONTENT-004",
+      "source": "spec/engines/content/SPEC-content-engine.md §53-61, §70, §79; spec/engines/content/SPEC-content-editor-acceptance.md §10; tests/ACCEPTANCE-MATRIX.md Content",
+      "level": "contract",
+      "preconditions": [
+        "Source and target page snapshots have ready/provisioning trusted projections.",
+        "System-wide records and publication history are shared; only page-scoped selections may be copied or reset."
+      ],
+      "input": "Fork a source snapshot with draft-only records and ordered selections, replay the copy receipt, reuse its key with another policy and fork with a stale source revision.",
+      "action": "Call CopySnapshotContent through the Content application service and inspect the target workspace, publication and source history.",
+      "expected_result": "The copy is idempotent by key and policy, stale source revision conflicts before mutation, target page selections are copied or reset, and shared publication history is unchanged.",
+      "expected_state": "The target receives only page-scoped selection state; no source records, drafts or history are duplicated.",
+      "test_file": "tests/go/engines/content/application/scenarios_test.go",
+      "test_symbol": "TestContentScenario/CONTENT-004",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONTENT-005",
+      "source": "spec/engines/content/SPEC-content-engine.md §47-51, §64-68, §70, §74; spec/presentation/openapi/content.yaml; tests/ACCEPTANCE-MATRIX.md Content",
+      "level": "e2e",
+      "preconditions": [
+        "A disposable PostgreSQL/S3 stack and a live Router/Admin API built from this checkout are available.",
+        "Separate disposable admin and public base URLs and a bounded timeout are supplied through environment variables."
+      ],
+      "input": "Publish one locale through the real Admin API, observe per-route/per-locale fan-out outcomes, then request published content and media references through the configured public route.",
+      "action": "Run the tagged browser/HTTP e2e flow with CONTENT_TEST_DISPOSABLE=1 and the declared base URLs.",
+      "expected_result": "Only published records and selections for the requested locale are projected; each route/locale CAS result is reported independently; no draft content or private file bytes leak.",
+      "expected_state": "Without a disposable isolated stack the scenario is not executed and is never reported as pass.",
+      "test_file": "tests/go/engines/content/application/scenarios_test.go",
+      "test_symbol": "TestContentScenario/CONTENT-005",
+      "coverage_status": "blocked",
+      "execution_status": "blocked",
+      "blocker": "Disposable Content environment not provided: require CONTENT_TEST_DISPOSABLE=1, CONTENT_TEST_ADMIN_BASE_URL, CONTENT_TEST_PUBLIC_BASE_URL and CONTENT_TEST_TIMEOUT. No live working API is used."
+    }
+  ]
+}
