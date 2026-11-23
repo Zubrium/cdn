@@ -6,11 +6,11 @@ import (
 	"context"
 	"errors"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type snapshotForkWorkflowStarter struct{ core *coreComponent }
 
-func (s snapshotForkWorkflowStarter) Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error) {
-	return platform.WorkflowReceipt{}, errors.New("snapshot fork workflow is not available in this profile")
+func (s snapshotForkWorkflowStarter) Start(context.Context, contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
+	return contracts.WorkflowStartReceipt{}, errors.New("snapshot fork workflow is not available in this profile")
 }

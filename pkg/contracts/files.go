@@ -17,6 +17,7 @@ var (
 	ErrFileRequestConflict  = errors.New("file request conflict")
 	ErrFileRequestDeleted   = errors.New("file request references deleted file")
 	ErrFileUploadInProgress = errors.New("file upload in progress")
+	ErrFileInvalidSearch    = errors.New("invalid file search")
 )
 
 // FileCreateVerifiedRequest carries only a scoped stream reference. File bytes
@@ -117,6 +118,11 @@ type FileSetMutationRequest struct {
 
 type FileSetMutationResponse struct {
 	Set FileSet `json:"set"`
+}
+
+type UploadRequestStatus struct {
+	State  string `json:"state"`
+	FileID string `json:"file_id,omitempty"`
 }
 
 type FileCreateVerifiedInput struct {

@@ -12,19 +12,27 @@ import (
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type snapshotForkWorkflowStarter struct{ core *coreComponent }
 
-func (s snapshotForkWorkflowStarter) Start(ctx context.Context, request platform.WorkflowStartRequest) (platform.WorkflowReceipt, error) {
+func (s snapshotForkWorkflowStarter) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	if s.core == nil || s.core.runtime == nil {
-		return platform.WorkflowReceipt{}, platform.ErrCoordinatorNotReady
+		return contracts.WorkflowStartReceipt{}, platform.ErrCoordinatorNotReady
 	}
 	client, err := s.core.runtime.NewWorkflowClient(websiteworkflow.ComponentID)
 	if err != nil {
-		return platform.WorkflowReceipt{}, err
+		return contracts.WorkflowStartReceipt{}, err
 	}
-	return client.Start(ctx, request)
+	receipt, err := client.Start(ctx, platform.WorkflowStartRequest{
+		OperationID: request.OperationID, ContractVersion: request.ContractVersion,
+		IdempotencyKey: request.IdempotencyKey, Payload: request.Payload,
+	})
+	if err != nil {
+		return contracts.WorkflowStartReceipt{}, err
+	}
+	return contracts.WorkflowStartReceipt{WorkflowID: receipt.WorkflowID, RootTaskID: receipt.RootTaskID, State: receipt.State, Created: receipt.Created}, nil
 }
 
 type snapshotForkContentCopierHandle struct{ component *coreComponent }

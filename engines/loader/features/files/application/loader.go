@@ -1,7 +1,5 @@
 package application
 
-import recorddata "github.com/Zubrium/cdn/pkg/contracts"
-
 import (
 	"context"
 	"errors"
@@ -9,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
 	"github.com/Zubrium/cdn/engines/loader/features/files/model"
 	api "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
 	"github.com/Zubrium/cdn/engines/loader/features/files/repository"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const moduleID = "loader"
@@ -50,13 +48,12 @@ type ModuleData = repository.ModuleData
 type authKey struct{}
 
 type authenticated struct {
-	session     core.Session
+	subject     contracts.AuthorizationSubject
 	principalID string
 }
 
 type Service struct {
 	identity      Identity
-	sessions      core.SessionCapability
 	files         Files
 	data          ModuleData
 	cfg           Config
@@ -77,19 +74,16 @@ type cleanupRecord = model.CleanupRecord
 // RecordDescriptor is registered once by the composition root. Upload
 // sessions, individual parts, idempotency records and cleanup jobs share one
 // loader-owned namespace and one global scope so lifecycle changes can batch.
-func RecordDescriptor() recorddata.RecordDescriptor {
-	return recorddata.RecordDescriptor{OwnerID: moduleID, Namespaces: []recorddata.RecordNamespace{{
-		Name: "loader", ScopeTypes: []string{"global"}, Fields: map[string]recorddata.RecordSelectorField{
-			"kind": {Type: recorddata.RecordSelectorString}, "upload_id": {Type: recorddata.RecordSelectorString},
-			"principal_id": {Type: recorddata.RecordSelectorString}, "state": {Type: recorddata.RecordSelectorString},
+func RecordDescriptor() contracts.RecordDescriptor {
+	return contracts.RecordDescriptor{OwnerID: moduleID, Namespaces: []contracts.RecordNamespace{{
+		Name: "loader", ScopeTypes: []string{"global"}, Fields: map[string]contracts.RecordSelectorField{
+			"kind": {Type: contracts.RecordSelectorString}, "upload_id": {Type: contracts.RecordSelectorString},
+			"principal_id": {Type: contracts.RecordSelectorString}, "state": {Type: contracts.RecordSelectorString},
 		},
 	}}}
 }
 
-func New(identity Identity, files Files, data ModuleData, cfg Config, sessions ...core.SessionCapability) (*Service, error) {
-	if len(sessions) > 1 || (len(sessions) == 1 && sessions[0] == nil) {
-		return nil, errors.New("invalid Loader session capability")
-	}
+func New(identity Identity, files Files, data ModuleData, cfg Config) (*Service, error) {
 	if identity == nil || files == nil || data == nil || cfg.PartSize <= 0 || cfg.MaxFileBytes <= 0 || cfg.MaxPartBytes <= 0 || cfg.PartSize > cfg.MaxPartBytes || cfg.MaxParts <= 0 || cfg.MaxParts > 1000 || cfg.SessionTTL <= 0 || cfg.CommitTimeout <= 0 || cfg.SessionTTL > time.Duration(1<<63-1)-cfg.CommitTimeout ||
 		cfg.MaxConcurrentCommits <= 0 || cfg.MaxConcurrentCommits > 100 || cfg.BufferThreshold < 0 || cfg.MaxBufferedBytes < 0 || cfg.SessionCacheEntries <= 0 || cfg.SessionCacheEntries > 100000 ||
 		cfg.SessionCacheMaxBytes <= 0 || cfg.SessionCacheMaxBytes > 256<<20 || cfg.SessionCacheTTL <= 0 || cfg.CleanupInterval <= 0 || cfg.CleanupBatchSize <= 0 || data.MaxPageSize() <= 0 {
@@ -107,35 +101,32 @@ func New(identity Identity, files Files, data ModuleData, cfg Config, sessions .
 	}
 	service := &Service{identity: identity, files: files, data: data, cfg: cfg, now: time.Now, commitSlots: make(chan struct{}, cfg.MaxConcurrentCommits),
 		cache: newSessionCache(cfg.SessionCacheEntries, cfg.SessionCacheMaxBytes, cfg.SessionCacheTTL)}
-	if len(sessions) == 1 {
-		service.sessions = sessions[0]
-	}
 	return service, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, credential string) (context.Context, error) {
-	session, principal, err := s.identity.Authenticate(ctx, credential)
+	subject, principal, err := s.identity.Authenticate(ctx, credential)
 	if err != nil {
 		return nil, mapCoreError(err)
 	}
 	if !principal.Active || !validPrincipalID(principal.ID) {
 		return nil, api.ErrUnauthorized
 	}
-	return context.WithValue(ctx, authKey{}, authenticated{session: session, principalID: principal.ID}), nil
+	return context.WithValue(ctx, authKey{}, authenticated{subject: subject, principalID: principal.ID}), nil
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, token string) (context.Context, error) {
-	if s == nil || s.sessions == nil || ctx == nil || token == "" {
+	if s == nil || s.identity == nil || ctx == nil || token == "" {
 		return nil, api.ErrUnauthorized
 	}
-	session, principal, err := s.sessions.AuthenticateSession(ctx, token)
+	subject, principal, err := s.identity.AuthenticateSession(ctx, token)
 	if err != nil {
 		return nil, mapCoreError(err)
 	}
 	if !principal.Active || !validPrincipalID(principal.ID) {
 		return nil, api.ErrUnauthorized
 	}
-	return context.WithValue(ctx, authKey{}, authenticated{session: session, principalID: principal.ID}), nil
+	return context.WithValue(ctx, authKey{}, authenticated{subject: subject, principalID: principal.ID}), nil
 }
 
 type countingReader struct {

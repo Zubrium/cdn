@@ -8,13 +8,13 @@ import (
 	"hash"
 	"io"
 
-	core "github.com/Zubrium/cdn/core/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type stagedReader struct {
 	ctx      context.Context
 	files    Files
-	session  core.Session
+	subject  contracts.AuthorizationSubject
 	parts    []storedPart
 	index    int
 	current  io.ReadCloser
@@ -30,7 +30,7 @@ func (r *stagedReader) open() error {
 		return io.EOF
 	}
 	part := r.parts[r.index]
-	reader, size, checksum, err := r.files.ReadStagedObject(r.ctx, r.session, part.Stage)
+	reader, size, checksum, err := r.files.ReadStagedObject(r.ctx, r.subject, part.Stage)
 	if err != nil {
 		return err
 	}

@@ -475,7 +475,7 @@ func (c *loaderComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	service, err := loaderapp.New(c.core.runtime.GroupAuthorization(), c.core.runtime.StagedFiles(), moduleData, c.config.Loader, c.core.runtime.Sessions())
+	service, err := loaderapp.New(loaderIdentity{runtime: c.core.runtime}, loaderFiles{runtime: c.core.runtime}, moduleData, c.config.Loader)
 	if err != nil {
 		return err
 	}

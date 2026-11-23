@@ -4,8 +4,7 @@ import (
 	"context"
 	"errors"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
-	websiteengine "github.com/Zubrium/cdn/engines/website"
+		websiteengine "github.com/Zubrium/cdn/engines/website"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
@@ -44,16 +43,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	}
 	var buildWorkflow websiteapp.BuildWorkflowClient
 	if websiteBuildEnabled {
-		workflowClient, err := component.core.runtime.NewWorkflowClient(websiteworkflow.ComponentID)
-		if err != nil {
-			return err
-		}
-		workflowControl, err := component.core.runtime.NewWorkflowControl()
-		if err != nil {
-			return err
-		}
-		buildWorkflow = newWebsiteBuildWorkflowClient(workflowClient, workflowClient, workflowClient, workflowControl,
-			component.config.Coordinator.MaxWorkflowTasks)
+		buildWorkflow = newWebsiteBuildWorkflowClient(component.core, websiteworkflow.ComponentID)
 	}
 	if component.localeCatalog == nil {
 		component.localeCatalog = newWebsiteLocaleCatalog()
@@ -71,43 +61,30 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		BuildWorkflow:          buildWorkflow,
 		LocaleCatalog:          component.localeCatalog,
 		BuildInputResolver:     buildInputResolver,
-		BuildFiles:             component.core.runtime.Files(),
+		BuildFiles:             websiteFiles{runtime: component.core.runtime},
 		PrerenderImageDigest:   component.config.Prerender.SandboxImage,
 		BuildOperationID:       websiteworkflow.OperationID,
 		BuildContractVersion:   websiteworkflow.ContractVersion,
 		FeatureImportFileSetID: component.config.FeatureImport.TargetFileSetID,
 	}
 	if component.config.FeatureImport.Enabled {
-		workflow, err := component.core.runtime.NewWorkflowClient(archive.DataModuleID)
-		if err != nil {
-			return err
-		}
-		serviceConfig.Files = component.core.runtime.Files()
-		serviceConfig.Workflow = workflow
-		serviceConfig.Sessions = component.core.runtime.Sessions()
+		serviceConfig.Files = websiteFiles{runtime: component.core.runtime}
+		serviceConfig.Workflow = newWebsiteBuildWorkflowClient(component.core, archive.DataModuleID)
+		serviceConfig.Sessions = websiteSessions{runtime: component.core.runtime}
 	}
 	if component.config.Media.Enabled {
-		workflowClient, err := component.core.runtime.NewWorkflowClient(websiteworkflow.ComponentID)
-		if err != nil {
-			return err
-		}
 		state, err := component.core.MediaSandboxState()
 		if err != nil {
 			return err
 		}
-		workflowControl, err := component.core.runtime.NewWorkflowControl()
-		if err != nil {
-			return err
-		}
-		serviceConfig.MediaWorkflow = newWebsiteBuildWorkflowClient(workflowClient, workflowClient, workflowClient,
-			workflowControl, component.config.Coordinator.MaxWorkflowTasks)
-		serviceConfig.MediaFiles = component.core.runtime.Files()
+		serviceConfig.MediaWorkflow = newWebsiteBuildWorkflowClient(component.core, websiteworkflow.ComponentID)
+		serviceConfig.MediaFiles = websiteFiles{runtime: component.core.runtime}
 		serviceConfig.MediaOperationID = websiteworkflow.MediaOperationID
 		serviceConfig.MediaContractVersion = websiteworkflow.MediaContractVersion
 		serviceConfig.MediaProcessorVersion = component.config.Media.ProcessorVersion
 		serviceConfig.MediaSandbox = staticMediaSandboxProbe{state: state}
 	}
-	service, err := websiteapp.NewService(serviceConfig, data, component.core.runtime.GroupAuthorization(), component.core.runtime.Sessions())
+	service, err := websiteapp.NewService(serviceConfig, data, websiteAuthority{runtime: component.core.runtime}, websiteSessions{runtime: component.core.runtime})
 	if err != nil {
 		return err
 	}
@@ -147,4 +124,10 @@ func (component *websiteEngineComponent) Errors() <-chan error {
 	return idleFailureStream()
 }
 
-var _ platform.ManagedComponent = (*websiteEngineComponent)(nil)
+var _ interface {
+	Start(context.Context) error
+	Ready(context.Context) error
+	Stop(context.Context) error
+	IsReady() bool
+	Errors() <-chan error
+} = (*websiteEngineComponent)(nil)

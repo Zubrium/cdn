@@ -1,8 +1,7 @@
 package application
 
-import recorddata "github.com/Zubrium/cdn/pkg/contracts"
-
 import (
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,8 +11,7 @@ import (
 	"sync"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
-	api "github.com/Zubrium/cdn/engines/loader/presentation"
+		api "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/google/uuid"
 )
 
@@ -25,31 +23,31 @@ func (s *Service) request(ctx context.Context) (authenticated, error) {
 	return request, nil
 }
 
-func (s *Service) loadUpload(ctx context.Context, request authenticated, id string) (storedUpload, recorddata.Record, error) {
+func (s *Service) loadUpload(ctx context.Context, request authenticated, id string) (storedUpload, contracts.Record, error) {
 	if _, err := uuid.Parse(id); err != nil {
-		return storedUpload{}, recorddata.Record{}, api.ErrNotFound
+		return storedUpload{}, contracts.Record{}, api.ErrNotFound
 	}
 	record, err := s.data.Get(ctx, sessionDataKey(id))
 	if err != nil {
-		return storedUpload{}, recorddata.Record{}, mapDataError(err)
+		return storedUpload{}, contracts.Record{}, mapDataError(err)
 	}
 	if record.PayloadVersion != 1 {
-		return storedUpload{}, recorddata.Record{}, api.ErrUnavailable
+		return storedUpload{}, contracts.Record{}, api.ErrUnavailable
 	}
 	if cached, ok := s.cache.get(id, request.principalID, record.Revision, s.now()); ok {
 		if !s.now().Before(cached.ExpiresAt) {
 			s.cache.remove(id)
-			return storedUpload{}, recorddata.Record{}, api.ErrNotFound
+			return storedUpload{}, contracts.Record{}, api.ErrNotFound
 		}
 		return cached, record, nil
 	}
 	var upload storedUpload
 	if json.Unmarshal(record.Payload, &upload) != nil || !s.validUpload(upload, id, request.principalID) {
-		return storedUpload{}, recorddata.Record{}, api.ErrNotFound
+		return storedUpload{}, contracts.Record{}, api.ErrNotFound
 	}
 	if !s.now().Before(upload.ExpiresAt) {
 		s.cache.remove(id)
-		return storedUpload{}, recorddata.Record{}, api.ErrNotFound
+		return storedUpload{}, contracts.Record{}, api.ErrNotFound
 	}
 	s.cache.put(id, request.principalID, upload, record.Revision, int64(len(record.Payload)), s.now())
 	return upload, record, nil
@@ -114,10 +112,10 @@ func (s *Service) reserveBuffer(size int64) (func(), bool) {
 }
 
 func (s *Service) concatReader(ctx context.Context, request authenticated, parts []storedPart) *stagedReader {
-	return &stagedReader{ctx: ctx, files: s.files, session: request.session, parts: parts}
+	return &stagedReader{ctx: ctx, files: s.files, subject: request.subject, parts: parts}
 }
 
-func exposeFile(file core.File) api.File {
+func exposeFile(file contracts.File) api.File {
 	name := file.Metadata["name"]
 	attributes := clone(file.Metadata)
 	delete(attributes, "name")
@@ -128,36 +126,36 @@ func exposeFile(file core.File) api.File {
 		Revision: file.Revision, Groups: append([]string(nil), file.Groups...), Attributes: attributes}
 }
 
-func moduleKey(record string) recorddata.RecordKey {
-	return recorddata.RecordKey{Namespace: "loader", ScopeType: "global", ScopeID: "global", RecordKey: record}
+func moduleKey(record string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: "loader", ScopeType: "global", ScopeID: "global", RecordKey: record}
 }
 
-func sessionDataKey(id string) recorddata.RecordKey { return moduleKey("session:" + id) }
-func cleanupDataKey(id string) recorddata.RecordKey { return moduleKey("cleanup:" + id) }
-func partDataKey(id string, number int) recorddata.RecordKey {
+func sessionDataKey(id string) contracts.RecordKey { return moduleKey("session:" + id) }
+func cleanupDataKey(id string) contracts.RecordKey { return moduleKey("cleanup:" + id) }
+func partDataKey(id string, number int) contracts.RecordKey {
 	return moduleKey(fmt.Sprintf("part:%s:%06d", id, number))
 }
-func idempotencyDataKey(principalID, key string) recorddata.RecordKey {
+func idempotencyDataKey(principalID, key string) contracts.RecordKey {
 	return idempotencyDataKeyHash(principalID, sha256Hex(key))
 }
 
-func idempotencyDataKeyHash(principalID, keyHash string) recorddata.RecordKey {
+func idempotencyDataKeyHash(principalID, keyHash string) contracts.RecordKey {
 	return moduleKey("idempotency:" + sha256Hex(principalID) + ":" + keyHash)
 }
 
-func dataValue(value, index any, ttl time.Duration) (recorddata.RecordValue, error) {
+func dataValue(value, index any, ttl time.Duration) (contracts.RecordValue, error) {
 	if ttl < 0 {
-		return recorddata.RecordValue{}, errors.New("negative module data TTL")
+		return contracts.RecordValue{}, errors.New("negative module data TTL")
 	}
 	payload, err := json.Marshal(value)
 	if err != nil {
-		return recorddata.RecordValue{}, err
+		return contracts.RecordValue{}, err
 	}
 	indexData, err := json.Marshal(index)
 	if err != nil {
-		return recorddata.RecordValue{}, err
+		return contracts.RecordValue{}, err
 	}
-	return recorddata.RecordValue{Payload: payload, PayloadVersion: 1, IndexData: indexData, TTL: ttl}, nil
+	return contracts.RecordValue{Payload: payload, PayloadVersion: 1, IndexData: indexData, TTL: ttl}, nil
 }
 
 func sessionIndex(upload storedUpload) map[string]string {
@@ -186,7 +184,7 @@ func (s *Service) validUpload(upload storedUpload, id, principalID string) bool 
 		return false
 	}
 	for i, group := range upload.Input.Groups {
-		if !core.ValidAccessGroupKey(group) || (i > 0 && upload.Input.Groups[i-1] >= group) {
+		if !contracts.ValidAccessGroupKey(group) || (i > 0 && upload.Input.Groups[i-1] >= group) {
 			return false
 		}
 	}

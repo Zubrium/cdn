@@ -1,7 +1,5 @@
 package application
 
-import recorddata "github.com/Zubrium/cdn/pkg/contracts"
-
 import (
 	"context"
 	"crypto/sha256"
@@ -14,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	core "github.com/Zubrium/cdn/core/presentation"
-	api "github.com/Zubrium/cdn/engines/loader/presentation"
+	api "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -30,7 +28,7 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 	idempotencyKey := input.IdempotencyKey
 	seenGroups := make(map[string]struct{}, len(input.Groups))
 	for _, group := range input.Groups {
-		if !core.ValidAccessGroupKey(group) {
+		if !contracts.ValidAccessGroupKey(group) {
 			return api.UploadSession{}, api.ErrInvalid
 		}
 		if _, exists := seenGroups[group]; exists {
@@ -38,7 +36,7 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 		}
 		seenGroups[group] = struct{}{}
 	}
-	if err := s.identity.RequireGroupLevel(ctx, request.session, input.Groups, core.AccessLevelWrite); err != nil {
+	if err := s.identity.RequireGroupLevel(ctx, request.subject, input.Groups, contracts.AccessLevelWrite); err != nil {
 		return api.UploadSession{}, mapCoreError(err)
 	}
 	partCount := expectedPartCount(input.Size, s.cfg.PartSize)
@@ -61,7 +59,7 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 			return api.UploadSession{}, api.ErrConflict
 		}
 		return s.uploadStatus(ctx, request, stored.SessionID)
-	} else if !errors.Is(err, recorddata.ErrRecordNotFound) {
+	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
 		return api.UploadSession{}, mapDataError(err)
 	}
 	mode := s.chooseMode(input.Size)
@@ -87,12 +85,12 @@ func (s *Service) BeginUpload(ctx context.Context, input api.BeginUploadInput) (
 	if err != nil {
 		return api.UploadSession{}, api.ErrInvalid
 	}
-	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+	if err := s.data.Batch(ctx, []contracts.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: 0, Value: &sessionValue},
 		{Key: key, ExpectedRevision: 0, Value: &idemValue},
 		{Key: cleanupDataKey(upload.ID), ExpectedRevision: 0, Value: &cleanupValue},
 	}); err != nil {
-		if errors.Is(err, recorddata.ErrRecordConflict) {
+		if errors.Is(err, contracts.ErrRecordConflict) {
 			if old, readErr := s.data.Get(ctx, key); readErr == nil {
 				var saved idempotencyRecord
 				if json.Unmarshal(old.Payload, &saved) == nil && saved.InputHash == digest {
@@ -158,7 +156,7 @@ func (s *Service) PutUploadPart(ctx context.Context, id string, number int, size
 		if part.State != "staging" {
 			return api.UploadSession{}, api.ErrConflict
 		}
-	} else if !errors.Is(partErr, recorddata.ErrRecordNotFound) {
+	} else if !errors.Is(partErr, contracts.ErrRecordNotFound) {
 		return api.UploadSession{}, partErr
 	} else {
 		part = storedPart{Number: number, Size: size, SHA256: strings.ToLower(checksum), Stage: stageID(upload.ID, number), State: "staging"}
@@ -174,11 +172,11 @@ func (s *Service) PutUploadPart(ctx context.Context, id string, number int, size
 		if valueErr != nil {
 			return api.UploadSession{}, api.ErrConflict
 		}
-		if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+		if err := s.data.Batch(ctx, []contracts.RecordMutation{
 			{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &uploadRecord},
 			{Key: partKey, ExpectedRevision: 0, Value: &partValue},
 		}); err != nil {
-			if errors.Is(err, recorddata.ErrRecordConflict) {
+			if errors.Is(err, contracts.ErrRecordConflict) {
 				latest, latestRecord, loadErr := s.loadUpload(ctx, request, id)
 				if loadErr == nil {
 					part, _, partErr = s.getPart(ctx, latest.ID, number)
@@ -206,12 +204,12 @@ func (s *Service) PutUploadPart(ctx context.Context, id string, number int, size
 			}
 		}
 	}
-	if err := s.identity.RequireGroupLevel(ctx, request.session, upload.Input.Groups, core.AccessLevelWrite); err != nil {
+	if err := s.identity.RequireGroupLevel(ctx, request.subject, upload.Input.Groups, contracts.AccessLevelWrite); err != nil {
 		return api.UploadSession{}, mapCoreError(err)
 	}
 	hash := sha256.New()
 	counted := &countingReader{reader: io.LimitReader(body, size+1), hash: hash}
-	if err := s.files.PutStagedObject(ctx, request.session, part.Stage, upload.Input.Groups, size, part.SHA256, counted); err != nil {
+	if err := s.files.PutStagedObject(ctx, request.subject, part.Stage, upload.Input.Groups, size, part.SHA256, counted); err != nil {
 		return api.UploadSession{}, mapCoreError(err)
 	}
 	// Core's idempotent staging replay may return an existing verified handle
@@ -264,11 +262,11 @@ func (s *Service) markPartReady(ctx context.Context, request authenticated, uplo
 	if err != nil {
 		return storedUpload{}, api.ErrUnavailable
 	}
-	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+	if err := s.data.Batch(ctx, []contracts.RecordMutation{
 		{Key: sessionDataKey(uploadID), ExpectedRevision: sessionRecord.Revision, Value: &sessionValue},
 		{Key: partDataKey(uploadID, number), ExpectedRevision: partRecord.Revision, Value: &partValue},
 	}); err != nil {
-		if !errors.Is(err, recorddata.ErrRecordConflict) {
+		if !errors.Is(err, contracts.ErrRecordConflict) {
 			return storedUpload{}, mapDataError(err)
 		}
 		latestUpload, _, uploadErr := s.loadUpload(ctx, request, uploadID)
@@ -301,7 +299,7 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 		return api.File{}, err
 	}
 	if upload.State == "committed" {
-		file, err := s.files.StatFile(ctx, request.session, upload.FileID)
+		file, err := s.files.StatFile(ctx, request.subject, upload.FileID)
 		if err != nil {
 			return api.File{}, mapCoreError(err)
 		}
@@ -344,7 +342,7 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 		if valueErr != nil {
 			return api.File{}, valueErr
 		}
-		if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+		if err := s.data.Batch(ctx, []contracts.RecordMutation{
 			{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &sessionValue},
 			{Key: cleanupDataKey(upload.ID), ExpectedRevision: jobRecord.Revision, Value: &jobValue},
 			idempotencyMutation,
@@ -363,7 +361,7 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 	if err := validateParts(upload, parts, s.cfg.PartSize, s.cfg.MaxParts); err != nil {
 		return api.File{}, err
 	}
-	if err := s.identity.RequireGroupLevel(ctx, request.session, upload.Input.Groups, core.AccessLevelWrite); err != nil {
+	if err := s.identity.RequireGroupLevel(ctx, request.subject, upload.Input.Groups, contracts.AccessLevelWrite); err != nil {
 		return api.File{}, mapCoreError(err)
 	}
 	fileBody, release, err := s.commitReader(ctx, request, upload, parts)
@@ -376,11 +374,11 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 		metadata = map[string]string{}
 	}
 	metadata["name"] = upload.Input.Name
-	fileID, err := s.files.CreateFileVerified(ctx, request.session, upload.ID, upload.Input.Groups, metadata, upload.Input.ContentType, upload.Input.Size, upload.Input.SHA256, fileBody)
+	fileID, err := s.files.CreateFileVerified(ctx, request.subject, upload.ID, upload.Input.Groups, metadata, upload.Input.ContentType, upload.Input.Size, upload.Input.SHA256, fileBody)
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
-	file, err := s.files.StatFile(ctx, request.session, fileID)
+	file, err := s.files.StatFile(ctx, request.subject, fileID)
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
@@ -407,12 +405,12 @@ func (s *Service) CommitUpload(ctx context.Context, id string) (api.File, error)
 	if err != nil {
 		return api.File{}, err
 	}
-	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+	if err := s.data.Batch(ctx, []contracts.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &sessionValue},
 		{Key: cleanupDataKey(upload.ID), ExpectedRevision: jobRecord.Revision, Value: &jobValue},
 		idempotencyMutation,
 	}); err != nil {
-		if errors.Is(err, recorddata.ErrRecordConflict) {
+		if errors.Is(err, contracts.ErrRecordConflict) {
 			latest, _, readErr := s.loadUpload(ctx, request, id)
 			if readErr == nil && latest.State == "committed" && latest.FileID == fileID {
 				return exposeFile(file), nil
@@ -484,11 +482,11 @@ func (s *Service) AbortUpload(ctx context.Context, id string) error {
 	if err != nil {
 		return api.ErrConflict
 	}
-	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+	if err := s.data.Batch(ctx, []contracts.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: record.Revision, Value: &sessionValue},
 		{Key: cleanupDataKey(upload.ID), ExpectedRevision: jobRecord.Revision, Value: &jobValue},
 	}); err != nil {
-		if errors.Is(err, recorddata.ErrRecordConflict) {
+		if errors.Is(err, contracts.ErrRecordConflict) {
 			latest, _, loadErr := s.loadUpload(ctx, request, id)
 			if loadErr == nil && latest.State == "aborted" {
 				return nil

@@ -1,8 +1,7 @@
 package application
 
-import recorddata "github.com/Zubrium/cdn/pkg/contracts"
-
 import (
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,11 +26,11 @@ func (s *Service) persistRecoveredSession(ctx context.Context, upload storedUplo
 	if err != nil {
 		return err
 	}
-	if err := s.data.Batch(ctx, []recorddata.RecordMutation{
+	if err := s.data.Batch(ctx, []contracts.RecordMutation{
 		{Key: sessionDataKey(upload.ID), ExpectedRevision: expectedRevision, Value: &sessionValue},
 		idempotencyMutation,
 	}); err != nil {
-		if errors.Is(err, recorddata.ErrRecordConflict) {
+		if errors.Is(err, contracts.ErrRecordConflict) {
 			current, readErr := s.data.Get(ctx, sessionDataKey(upload.ID))
 			if readErr == nil {
 				var latest storedUpload
@@ -48,24 +47,24 @@ func (s *Service) persistRecoveredSession(ctx context.Context, upload storedUplo
 	return nil
 }
 
-func (s *Service) idempotencyMutation(ctx context.Context, upload storedUpload, ttl time.Duration) (recorddata.RecordMutation, error) {
+func (s *Service) idempotencyMutation(ctx context.Context, upload storedUpload, ttl time.Duration) (contracts.RecordMutation, error) {
 	key := idempotencyDataKeyHash(upload.PrincipalID, upload.IdempotencyKeyHash)
 	expectedRevision := int64(0)
 	if current, err := s.data.Get(ctx, key); err == nil {
 		var existing idempotencyRecord
 		if current.PayloadVersion != 1 || json.Unmarshal(current.Payload, &existing) != nil || existing.SessionID != upload.ID || existing.InputHash != upload.InputHash {
-			return recorddata.RecordMutation{}, api.ErrUnavailable
+			return contracts.RecordMutation{}, api.ErrUnavailable
 		}
 		expectedRevision = current.Revision
-	} else if !errors.Is(err, recorddata.ErrRecordNotFound) {
-		return recorddata.RecordMutation{}, mapDataError(err)
+	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
+		return contracts.RecordMutation{}, mapDataError(err)
 	}
 	value, err := dataValue(idempotencyRecord{InputHash: upload.InputHash, SessionID: upload.ID},
 		uploadIndex("idempotency", upload.ID, "active", upload.PrincipalID), ttl)
 	if err != nil {
-		return recorddata.RecordMutation{}, api.ErrUnavailable
+		return contracts.RecordMutation{}, api.ErrUnavailable
 	}
-	return recorddata.RecordMutation{Key: key, ExpectedRevision: expectedRevision, Value: &value}, nil
+	return contracts.RecordMutation{Key: key, ExpectedRevision: expectedRevision, Value: &value}, nil
 }
 
 func (s *Service) recoverCommittedSession(ctx context.Context, uploadID, fileID string) error {
@@ -75,7 +74,7 @@ func (s *Service) recoverCommittedSession(ctx context.Context, uploadID, fileID 
 	key := sessionDataKey(uploadID)
 	record, err := s.data.Get(ctx, key)
 	expectedRevision := int64(0)
-	if errors.Is(err, recorddata.ErrRecordNotFound) {
+	if errors.Is(err, contracts.ErrRecordNotFound) {
 		record, err = s.data.GetExpired(ctx, key)
 	} else if err == nil {
 		expectedRevision = record.Revision
@@ -108,7 +107,7 @@ func (s *Service) recoverAbortedSession(ctx context.Context, uploadID string) er
 	key := sessionDataKey(uploadID)
 	record, err := s.data.Get(ctx, key)
 	expectedRevision := int64(0)
-	if errors.Is(err, recorddata.ErrRecordNotFound) {
+	if errors.Is(err, contracts.ErrRecordNotFound) {
 		record, err = s.data.GetExpired(ctx, key)
 	} else if err == nil {
 		expectedRevision = record.Revision
@@ -134,15 +133,15 @@ func (s *Service) recoverAbortedSession(ctx context.Context, uploadID string) er
 	return s.persistRecoveredSession(ctx, upload, expectedRevision)
 }
 
-func (s *Service) getPart(ctx context.Context, uploadID string, number int) (storedPart, recorddata.Record, error) {
+func (s *Service) getPart(ctx context.Context, uploadID string, number int) (storedPart, contracts.Record, error) {
 	record, err := s.data.Get(ctx, partDataKey(uploadID, number))
 	if err != nil {
-		return storedPart{}, recorddata.Record{}, err
+		return storedPart{}, contracts.Record{}, err
 	}
 	var part storedPart
 	if record.PayloadVersion != 1 || json.Unmarshal(record.Payload, &part) != nil || part.Number != number || part.Number > s.cfg.MaxParts || part.Size <= 0 || part.Size > s.cfg.MaxPartBytes ||
 		part.Stage != stageID(uploadID, number) || !validDigest(part.SHA256) || (part.State != "staging" && part.State != "ready") {
-		return storedPart{}, recorddata.Record{}, api.ErrUnavailable
+		return storedPart{}, contracts.Record{}, api.ErrUnavailable
 	}
 	return part, record, nil
 }
@@ -152,8 +151,8 @@ func (s *Service) partsForUpload(ctx context.Context, uploadID string) ([]stored
 	if pageSize < 1 {
 		return nil, api.ErrUnavailable
 	}
-	selectors := []recorddata.RecordSelector{{Field: "kind", Operator: recorddata.RecordSelectorEqual, Values: []any{"part"}},
-		{Field: "upload_id", Operator: recorddata.RecordSelectorEqual, Values: []any{uploadID}}}
+	selectors := []contracts.RecordSelector{{Field: "kind", Operator: contracts.RecordSelectorEqual, Values: []any{"part"}},
+		{Field: "upload_id", Operator: contracts.RecordSelectorEqual, Values: []any{uploadID}}}
 	cursor := ""
 	parts := make([]storedPart, 0, s.cfg.MaxParts)
 	for len(parts) <= s.cfg.MaxParts {
@@ -216,31 +215,31 @@ func expectedPartCount(size, partSize int64) int {
 	return int(count)
 }
 
-func (s *Service) getCleanup(ctx context.Context, uploadID string) (cleanupRecord, recorddata.Record, error) {
+func (s *Service) getCleanup(ctx context.Context, uploadID string) (cleanupRecord, contracts.Record, error) {
 	record, err := s.data.Get(ctx, cleanupDataKey(uploadID))
 	if err != nil {
-		return cleanupRecord{}, recorddata.Record{}, mapDataError(err)
+		return cleanupRecord{}, contracts.Record{}, mapDataError(err)
 	}
 	var job cleanupRecord
 	if record.PayloadVersion != 1 || json.Unmarshal(record.Payload, &job) != nil || job.UploadID != uploadID || job.ExpectedParts < 0 || job.ExpectedParts > s.cfg.MaxParts ||
 		!validPrincipalID(job.PrincipalID) || (job.State != "waiting" && job.State != "pending") {
-		return cleanupRecord{}, recorddata.Record{}, api.ErrUnavailable
+		return cleanupRecord{}, contracts.Record{}, api.ErrUnavailable
 	}
 	return job, record, nil
 }
 
-func (s *Service) loadCleanupUpload(ctx context.Context, uploadID string) (storedUpload, recorddata.Record, error) {
+func (s *Service) loadCleanupUpload(ctx context.Context, uploadID string) (storedUpload, contracts.Record, error) {
 	key := sessionDataKey(uploadID)
 	record, err := s.data.Get(ctx, key)
-	if errors.Is(err, recorddata.ErrRecordNotFound) {
+	if errors.Is(err, contracts.ErrRecordNotFound) {
 		record, err = s.data.GetExpired(ctx, key)
 	}
 	if err != nil {
-		return storedUpload{}, recorddata.Record{}, mapDataError(err)
+		return storedUpload{}, contracts.Record{}, mapDataError(err)
 	}
 	var upload storedUpload
 	if record.PayloadVersion != 1 || json.Unmarshal(record.Payload, &upload) != nil || !s.validUpload(upload, uploadID, upload.PrincipalID) {
-		return storedUpload{}, recorddata.Record{}, api.ErrUnavailable
+		return storedUpload{}, contracts.Record{}, api.ErrUnavailable
 	}
 	return upload, record, nil
 }

@@ -1,7 +1,5 @@
 package application
 
-import recorddata "github.com/Zubrium/cdn/pkg/contracts"
-
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,8 +8,8 @@ import (
 	"fmt"
 	"sort"
 
-	core "github.com/Zubrium/cdn/core/presentation"
-	api "github.com/Zubrium/cdn/engines/loader/presentation"
+	api "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
@@ -84,17 +82,17 @@ func mapCoreError(err error) error {
 		return nil
 	case errors.Is(err, api.ErrInvalid), errors.Is(err, api.ErrTooLarge), errors.Is(err, api.ErrConflict), errors.Is(err, api.ErrNotFound):
 		return err
-	case errors.Is(err, core.ErrUnauthorized):
+	case errors.Is(err, contracts.ErrAccessUnauthorized):
 		return api.ErrUnauthorized
-	case errors.Is(err, core.ErrForbidden):
+	case errors.Is(err, contracts.ErrAccessForbidden):
 		return api.ErrForbidden
-	case errors.Is(err, core.ErrFileNotFound):
+	case errors.Is(err, contracts.ErrFileNotFound):
 		return api.ErrNotFound
-	case errors.Is(err, core.ErrRevisionConflict), errors.Is(err, core.ErrFileSetConflict), errors.Is(err, core.ErrRequestConflict), errors.Is(err, core.ErrUploadInProgress), errors.Is(err, core.ErrRequestDeleted):
+	case errors.Is(err, contracts.ErrFileRevisionConflict), errors.Is(err, contracts.ErrFileSetConflict), errors.Is(err, contracts.ErrFileRequestConflict), errors.Is(err, contracts.ErrFileUploadInProgress), errors.Is(err, contracts.ErrFileRequestDeleted):
 		return api.ErrConflict
-	case errors.Is(err, core.ErrChecksumMismatch):
+	case errors.Is(err, contracts.ErrFileChecksumMismatch):
 		return api.ErrInvalid
-	case errors.Is(err, core.ErrInvalidSearch):
+	case errors.Is(err, contracts.ErrFileInvalidSearch):
 		return api.ErrInvalid
 	default:
 		return fmt.Errorf("%w: Core operation failed", api.ErrUnavailable)
@@ -103,9 +101,9 @@ func mapCoreError(err error) error {
 
 func mapDataError(err error) error {
 	switch {
-	case errors.Is(err, recorddata.ErrRecordNotFound):
+	case errors.Is(err, contracts.ErrRecordNotFound):
 		return api.ErrNotFound
-	case errors.Is(err, recorddata.ErrRecordConflict):
+	case errors.Is(err, contracts.ErrRecordConflict):
 		return api.ErrConflict
 	default:
 		return fmt.Errorf("%w: Loader state operation failed", api.ErrUnavailable)

@@ -1,16 +1,14 @@
 package application
 
-import recorddata "github.com/Zubrium/cdn/pkg/contracts"
-
 import (
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
-	api "github.com/Zubrium/cdn/engines/loader/presentation"
+		api "github.com/Zubrium/cdn/engines/loader/presentation"
 )
 
 // CleanupOnce is bounded and safe to run concurrently on multiple Loader
@@ -78,7 +76,7 @@ func (s *Service) markExpiredSessions(ctx context.Context, limit int) error {
 				if upload.State == "committing" {
 					job.CommitAttempt = true
 				}
-				jobRecord = recorddata.Record{}
+				jobRecord = contracts.Record{}
 			} else if jobErr != nil {
 				return jobErr
 			}
@@ -105,7 +103,7 @@ func (s *Service) markExpiredSessions(ctx context.Context, limit int) error {
 					if err := s.persistRecoveredSession(ctx, upload, 0); err != nil {
 						return err
 					}
-				case errors.Is(statusErr, core.ErrFileNotFound), statusErr == nil && (status.State == "failed" || status.State == "deleted"):
+				case errors.Is(statusErr, contracts.ErrFileNotFound), statusErr == nil && (status.State == "failed" || status.State == "deleted"):
 					upload.State = "aborted"
 					upload.ExpiresAt = s.now().UTC().Add(s.cfg.SessionTTL)
 					if err := s.persistRecoveredSession(ctx, upload, 0); err != nil {
@@ -123,7 +121,7 @@ func (s *Service) markExpiredSessions(ctx context.Context, limit int) error {
 				if valueErr != nil {
 					return api.ErrUnavailable
 				}
-				if _, err := s.data.Put(ctx, cleanupDataKey(upload.ID), value, jobRecord.Revision); err != nil && !errors.Is(err, recorddata.ErrRecordConflict) {
+				if _, err := s.data.Put(ctx, cleanupDataKey(upload.ID), value, jobRecord.Revision); err != nil && !errors.Is(err, contracts.ErrRecordConflict) {
 					return mapDataError(err)
 				}
 			}
@@ -142,8 +140,8 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 	defer s.cleanupMu.Unlock()
 	cursor := s.cleanupCursor
 	remaining := limit
-	selectors := []recorddata.RecordSelector{{Field: "kind", Operator: recorddata.RecordSelectorEqual, Values: []any{"cleanup"}},
-		{Field: "state", Operator: recorddata.RecordSelectorEqual, Values: []any{"pending"}}}
+	selectors := []contracts.RecordSelector{{Field: "kind", Operator: contracts.RecordSelectorEqual, Values: []any{"cleanup"}},
+		{Field: "state", Operator: contracts.RecordSelectorEqual, Values: []any{"pending"}}}
 	for remaining > 0 {
 		pageSize := min(remaining, s.data.MaxPageSize())
 		keys, records, next, err := s.data.List(ctx, "loader", "global", "global", cursor, selectors, pageSize)
@@ -168,7 +166,7 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 			}
 			if job.CommitAttempt {
 				status, statusErr := s.files.ResolveUploadRequest(ctx, job.PrincipalID, job.UploadID)
-				if statusErr != nil && !errors.Is(statusErr, core.ErrFileNotFound) {
+				if statusErr != nil && !errors.Is(statusErr, contracts.ErrFileNotFound) {
 					return mapCoreError(statusErr)
 				}
 				if statusErr == nil && status.State == "pending" {
@@ -182,7 +180,7 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 						return err
 					}
 				}
-				if errors.Is(statusErr, core.ErrFileNotFound) || statusErr == nil && (status.State == "failed" || status.State == "deleted") {
+				if errors.Is(statusErr, contracts.ErrFileNotFound) || statusErr == nil && (status.State == "failed" || status.State == "deleted") {
 					if err := s.recoverAbortedSession(ctx, job.UploadID); err != nil {
 						return err
 					}
@@ -197,11 +195,11 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 				return err
 			}
 			if err := s.data.Delete(ctx, cleanupDataKey(job.UploadID), record.Revision); err != nil {
-				if errors.Is(err, recorddata.ErrRecordNotFound) {
+				if errors.Is(err, contracts.ErrRecordNotFound) {
 					continue
 				}
-				if errors.Is(err, recorddata.ErrRecordConflict) {
-					if _, readErr := s.data.Get(ctx, cleanupDataKey(job.UploadID)); errors.Is(readErr, recorddata.ErrRecordNotFound) {
+				if errors.Is(err, contracts.ErrRecordConflict) {
+					if _, readErr := s.data.Get(ctx, cleanupDataKey(job.UploadID)); errors.Is(readErr, contracts.ErrRecordNotFound) {
 						continue
 					} else if readErr != nil {
 						return mapDataError(readErr)
@@ -222,8 +220,8 @@ func (s *Service) processCleanupJobs(ctx context.Context, limit int) error {
 }
 
 func (s *Service) deleteUploadParts(ctx context.Context, uploadID string, limit int) error {
-	selectors := []recorddata.RecordSelector{{Field: "kind", Operator: recorddata.RecordSelectorEqual, Values: []any{"part"}},
-		{Field: "upload_id", Operator: recorddata.RecordSelectorEqual, Values: []any{uploadID}}}
+	selectors := []contracts.RecordSelector{{Field: "kind", Operator: contracts.RecordSelectorEqual, Values: []any{"part"}},
+		{Field: "upload_id", Operator: contracts.RecordSelectorEqual, Values: []any{uploadID}}}
 	cursor := ""
 	for {
 		keys, records, next, err := s.data.List(ctx, "loader", "global", "global", cursor, selectors, min(limit, s.data.MaxPageSize()))
@@ -231,7 +229,7 @@ func (s *Service) deleteUploadParts(ctx context.Context, uploadID string, limit 
 			return mapDataError(err)
 		}
 		for i := range keys {
-			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, recorddata.ErrRecordConflict) && !errors.Is(err, recorddata.ErrRecordNotFound) {
+			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, contracts.ErrRecordConflict) && !errors.Is(err, contracts.ErrRecordNotFound) {
 				return mapDataError(err)
 			}
 		}
@@ -252,7 +250,7 @@ func (s *Service) deleteExpiredRecords(ctx context.Context, limit int) error {
 			return mapDataError(err)
 		}
 		for i := range keys {
-			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, recorddata.ErrRecordConflict) && !errors.Is(err, recorddata.ErrRecordNotFound) {
+			if err := s.data.Delete(ctx, keys[i], records[i].Revision); err != nil && !errors.Is(err, contracts.ErrRecordConflict) && !errors.Is(err, contracts.ErrRecordNotFound) {
 				return mapDataError(err)
 			}
 		}

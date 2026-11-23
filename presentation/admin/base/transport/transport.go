@@ -11,7 +11,6 @@ import (
 	"time"
 
 	core "github.com/Zubrium/cdn/core/presentation"
-	platform "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content/presentation"
 	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
 	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
@@ -70,15 +69,13 @@ type AdminDependencies struct {
 	WorkflowControl      coordinatoradmin.WorkflowControl
 	Website              websiteengine.API
 	Retirement           sitesapi.PageRetirementAPI
-	SnapshotForkWorkflow interface {
-		Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
-	}
-	Content          contentengine.API
-	ContentSchemas   contentadmin.SchemaSnapshots
-	Forms            formsengine.API
-	Router           *routerenginepresentation.APIAdapter
-	RouterOperations *routerhttp.PublicOperationRegistry
-	Notifications    *adminapi.NotificationHub
+	SnapshotForkWorkflow sitesapi.SnapshotForkWorkflowStarter
+	Content              contentengine.API
+	ContentSchemas       contentadmin.SchemaSnapshots
+	Forms                formsengine.API
+	Router               *routerenginepresentation.APIAdapter
+	RouterOperations     *routerhttp.PublicOperationRegistry
+	Notifications        *adminapi.NotificationHub
 }
 
 type Readiness interface {

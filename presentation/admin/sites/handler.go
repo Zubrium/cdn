@@ -15,7 +15,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
 	website "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
@@ -33,15 +32,17 @@ type PageRetirementAPI interface {
 	GetPageRetirement(context.Context, contracts.PageRetirementQuery) (contracts.PageRetirement, error)
 }
 
+type SnapshotForkWorkflowStarter interface {
+	Start(context.Context, contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error)
+}
+
 type Config struct {
 	MaxJSONBytes         int64
 	DefaultPageSize      int
 	MaxPageSize          int
 	AllowedOrigins       []string
 	Retirement           PageRetirementAPI
-	SnapshotForkWorkflow interface {
-		Start(context.Context, platform.WorkflowStartRequest) (platform.WorkflowReceipt, error)
-	}
+	SnapshotForkWorkflow SnapshotForkWorkflowStarter
 }
 
 type Handler struct {
@@ -653,7 +654,7 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
-	_, err = h.cfg.SnapshotForkWorkflow.Start(r.Context(), platform.WorkflowStartRequest{
+	_, err = h.cfg.SnapshotForkWorkflow.Start(r.Context(), contracts.WorkflowStartInput{
 		OperationID: "snapshot.fork.start", ContractVersion: 1,
 		IdempotencyKey: "snapshot-template-apply:" + digestText(key), Payload: payload,
 	})
@@ -873,7 +874,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "unavailable")
 			return
 		}
-		_, err := h.cfg.SnapshotForkWorkflow.Start(r.Context(), platform.WorkflowStartRequest{
+		_, err := h.cfg.SnapshotForkWorkflow.Start(r.Context(), contracts.WorkflowStartInput{
 			OperationID: "snapshot.fork.start", ContractVersion: 1,
 			IdempotencyKey: "snapshot-fork:" + digestText(key), Payload: payload,
 		})

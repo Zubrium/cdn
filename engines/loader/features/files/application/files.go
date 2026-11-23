@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
-	core "github.com/Zubrium/cdn/core/presentation"
-	api "github.com/Zubrium/cdn/engines/loader/presentation"
+	api "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 func (s *Service) ListFiles(ctx context.Context, query api.ListQuery) (api.FilePage, error) {
@@ -13,7 +13,7 @@ func (s *Service) ListFiles(ctx context.Context, query api.ListQuery) (api.FileP
 	if err != nil {
 		return api.FilePage{}, err
 	}
-	files, next, err := s.files.SearchFiles(ctx, request.session, query.Query, query.Group, query.Cursor, "", query.Limit)
+	files, next, err := s.files.SearchFiles(ctx, request.subject, query.Query, query.Group, query.Cursor, "", query.Limit)
 	if err != nil {
 		return api.FilePage{}, mapCoreError(err)
 	}
@@ -25,7 +25,7 @@ func (s *Service) StatFile(ctx context.Context, id string) (api.File, error) {
 	if err != nil {
 		return api.File{}, err
 	}
-	file, err := s.files.StatFile(ctx, request.session, id)
+	file, err := s.files.StatFile(ctx, request.subject, id)
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
@@ -37,7 +37,7 @@ func (s *Service) ReadFile(ctx context.Context, id string) (io.ReadCloser, api.F
 	if err != nil {
 		return nil, api.File{}, err
 	}
-	body, file, err := s.files.ReadFile(ctx, request.session, id)
+	body, file, err := s.files.ReadFile(ctx, request.subject, id)
 	if err != nil {
 		return nil, api.File{}, mapCoreError(err)
 	}
@@ -49,7 +49,7 @@ func (s *Service) ReadFileRange(ctx context.Context, id string, start, end int64
 	if err != nil {
 		return nil, api.File{}, err
 	}
-	body, file, err := s.files.ReadFileRange(ctx, request.session, id, start, end)
+	body, file, err := s.files.ReadFileRange(ctx, request.subject, id, start, end)
 	if err != nil {
 		return nil, api.File{}, mapCoreError(err)
 	}
@@ -61,7 +61,7 @@ func (s *Service) UpdateFile(ctx context.Context, id string, revision int64, pat
 	if err != nil {
 		return api.File{}, err
 	}
-	current, err := s.files.StatFile(ctx, request.session, id)
+	current, err := s.files.StatFile(ctx, request.subject, id)
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
@@ -87,10 +87,10 @@ func (s *Service) UpdateFile(ctx context.Context, id string, revision int64, pat
 	if patch.ContentType != nil {
 		contentType = *patch.ContentType
 	}
-	if err := s.files.UpdateFileWithContentType(ctx, request.session, id, revision, metadata, contentType); err != nil {
+	if err := s.files.UpdateFileWithContentType(ctx, request.subject, id, revision, metadata, contentType); err != nil {
 		return api.File{}, mapCoreError(err)
 	}
-	updated, err := s.files.StatFile(ctx, request.session, id)
+	updated, err := s.files.StatFile(ctx, request.subject, id)
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
@@ -102,7 +102,7 @@ func (s *Service) DeleteFile(ctx context.Context, id string, revision int64) err
 	if err != nil {
 		return err
 	}
-	return mapCoreError(s.files.DeleteFile(ctx, request.session, id, revision))
+	return mapCoreError(s.files.DeleteFile(ctx, request.subject, id, revision))
 }
 
 func (s *Service) AddFileToGroup(ctx context.Context, id, group string, revision int64) (api.File, error) {
@@ -119,14 +119,14 @@ func (s *Service) changeFileGroup(ctx context.Context, id, group string, revisio
 		return api.File{}, err
 	}
 	if add {
-		err = s.files.AddFileToGroup(ctx, request.session, id, group, revision)
+		err = s.files.AddFileToGroup(ctx, request.subject, id, group, revision)
 	} else {
-		err = s.files.RemoveFileFromGroup(ctx, request.session, id, group, revision)
+		err = s.files.RemoveFileFromGroup(ctx, request.subject, id, group, revision)
 	}
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
-	file, err := s.files.StatFile(ctx, request.session, id)
+	file, err := s.files.StatFile(ctx, request.subject, id)
 	if err != nil {
 		return api.File{}, mapCoreError(err)
 	}
@@ -138,7 +138,7 @@ func (s *Service) ListFileSets(ctx context.Context, query api.SetListQuery) (api
 	if err != nil {
 		return api.FileSetPage{}, err
 	}
-	sets, next, err := s.files.ListManagedFileSets(ctx, request.session, query.Namespace, query.Query, query.Cursor, query.Limit)
+	sets, next, err := s.files.ListManagedFileSets(ctx, request.subject, query.Namespace, query.Query, query.Cursor, query.Limit)
 	if err != nil {
 		return api.FileSetPage{}, mapCoreError(err)
 	}
@@ -154,7 +154,7 @@ func (s *Service) CreateFileSet(ctx context.Context, input api.CreateFileSetInpu
 	if err != nil {
 		return api.FileSet{}, err
 	}
-	set, err := s.files.CreateManagedFileSet(ctx, request.session, input.Namespace, input.Name, input.ManagementGroup)
+	set, err := s.files.CreateManagedFileSet(ctx, request.subject, input.Namespace, input.Name, input.ManagementGroup)
 	if err != nil {
 		return api.FileSet{}, mapCoreError(err)
 	}
@@ -166,7 +166,7 @@ func (s *Service) GetFileSet(ctx context.Context, id string) (api.FileSet, error
 	if err != nil {
 		return api.FileSet{}, err
 	}
-	set, err := s.files.GetManagedFileSet(ctx, request.session, id)
+	set, err := s.files.GetManagedFileSet(ctx, request.subject, id)
 	if err != nil {
 		return api.FileSet{}, mapCoreError(err)
 	}
@@ -181,7 +181,7 @@ func (s *Service) UpdateFileSet(ctx context.Context, id string, revision int64, 
 	if patch.Name == nil {
 		return api.FileSet{}, api.ErrInvalid
 	}
-	set, err := s.files.UpdateManagedFileSet(ctx, request.session, id, revision, *patch.Name)
+	set, err := s.files.UpdateManagedFileSet(ctx, request.subject, id, revision, *patch.Name)
 	if err != nil {
 		return api.FileSet{}, mapCoreError(err)
 	}
@@ -193,7 +193,7 @@ func (s *Service) DeleteFileSet(ctx context.Context, id string, revision int64) 
 	if err != nil {
 		return err
 	}
-	return mapCoreError(s.files.DeleteManagedFileSet(ctx, request.session, id, revision))
+	return mapCoreError(s.files.DeleteManagedFileSet(ctx, request.subject, id, revision))
 }
 
 func (s *Service) ListSetFiles(ctx context.Context, setID string, query api.ListQuery) (api.FilePage, error) {
@@ -201,15 +201,15 @@ func (s *Service) ListSetFiles(ctx context.Context, setID string, query api.List
 	if err != nil {
 		return api.FilePage{}, err
 	}
-	if _, err := s.files.GetManagedFileSet(ctx, request.session, setID); err != nil {
+	if _, err := s.files.GetManagedFileSet(ctx, request.subject, setID); err != nil {
 		return api.FilePage{}, mapCoreError(err)
 	}
-	var files []core.File
+	var files []contracts.File
 	var next string
 	if query.Query == "" && query.Group == "" {
-		files, next, err = s.files.ListFileSet(ctx, request.session, setID, query.Cursor, query.Limit)
+		files, next, err = s.files.ListFileSet(ctx, request.subject, setID, query.Cursor, query.Limit)
 	} else {
-		files, next, err = s.files.SearchFiles(ctx, request.session, query.Query, query.Group, query.Cursor, setID, query.Limit)
+		files, next, err = s.files.SearchFiles(ctx, request.subject, query.Query, query.Group, query.Cursor, setID, query.Limit)
 	}
 	if err != nil {
 		return api.FilePage{}, mapCoreError(err)
@@ -230,11 +230,11 @@ func (s *Service) changeSetMember(ctx context.Context, setID, fileID string, rev
 	if err != nil {
 		return api.FileSet{}, err
 	}
-	var set core.FileSet
+	var set contracts.FileSet
 	if add {
-		set, err = s.files.AddFileToManagedSet(ctx, request.session, setID, fileID, revision)
+		set, err = s.files.AddFileToManagedSet(ctx, request.subject, setID, fileID, revision)
 	} else {
-		set, err = s.files.RemoveFileFromManagedSet(ctx, request.session, setID, fileID, revision)
+		set, err = s.files.RemoveFileFromManagedSet(ctx, request.subject, setID, fileID, revision)
 	}
 	if err != nil {
 		return api.FileSet{}, mapCoreError(err)
@@ -242,11 +242,11 @@ func (s *Service) changeSetMember(ctx context.Context, setID, fileID string, rev
 	return exposeSet(set), nil
 }
 
-func exposeSet(set core.FileSet) api.FileSet {
-	return api.FileSet{ID: set.ID, Namespace: set.Namespace, Name: set.Name, ManagementGroup: set.ManagementGroup, Revision: set.Revision, CreatedAt: set.CreatedAt, UpdatedAt: set.UpdatedAt}
+func exposeSet(set contracts.FileSet) api.FileSet {
+	return api.FileSet{ID: set.ID, Namespace: set.Namespace, Name: set.Name, ManagementGroup: set.ManagementGroup, Revision: set.Revision}
 }
 
-func mapFilePage(files []core.File, next string) api.FilePage {
+func mapFilePage(files []contracts.File, next string) api.FilePage {
 	page := api.FilePage{Items: make([]api.File, 0, len(files)), NextCursor: next}
 	for _, file := range files {
 		page.Items = append(page.Items, exposeFile(file))
