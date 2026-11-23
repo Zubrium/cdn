@@ -69,10 +69,29 @@ type Dispatcher struct {
 // WithObserver attaches the process observer to the bus dispatcher. It must
 // be called before Seal and is safe to call with nil.
 func (dispatcher *Dispatcher) WithObserver(observer *observability.Observer) *Dispatcher {
-	if dispatcher != nil {
-		dispatcher.observer = observer
+	if dispatcher == nil {
+		return nil
+	}
+	dispatcher.observer = observer
+	if observer != nil {
+		dispatcher.publishConcurrencyContract(observer)
 	}
 	return dispatcher
+}
+
+// publishConcurrencyContract exposes the canonical BUS series before the first
+// dispatch, so disabled or not-yet-exercised admission paths are visible as
+// zero-valued series with low-cardinality labels only.
+func (dispatcher *Dispatcher) publishConcurrencyContract(observer *observability.Observer) {
+	ctx := dispatcher.concurrencyContext()
+	observer.SetGauge(ctx, "zubrium_concurrency_in_flight", 0,
+		observability.String("scope", "BUS"))
+	observer.SetGauge(ctx, "zubrium_bus_in_flight", 0,
+		observability.String("scope", "BUS"))
+	for _, reason := range []string{"GLOBAL", "PER_ROUTE", "PER_OPERATION", "DB_RESERVE"} {
+		observer.IncCounter(ctx, "zubrium_concurrency_rejected_total", 0,
+			observability.String("scope", "BUS"), observability.String("reason", reason))
+	}
 }
 
 func NewAllowlisted(limits ConcurrencyLimits, keys ...contracts.Key) (*Dispatcher, error) {
@@ -335,7 +354,11 @@ func (dispatcher *Dispatcher) setInFlight(delta int64) {
 		return
 	}
 	current := dispatcher.inFlight.Add(delta)
+	// SPEC-concurrency.md §5.6 names the bus-specific gauge, while §12 requires
+	// the canonical scope-based gauge. Both describe the same admission load and
+	// must stay in sync; neither carries operation or caller identity.
 	observer.SetGauge(dispatcher.concurrencyContext(), "zubrium_bus_in_flight", float64(current), observability.String("scope", "BUS"))
+	observer.SetGauge(dispatcher.concurrencyContext(), "zubrium_concurrency_in_flight", float64(current), observability.String("scope", "BUS"))
 }
 
 func (dispatcher *Dispatcher) recordRejected(reason string) {

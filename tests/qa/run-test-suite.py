@@ -27,6 +27,7 @@ LEDGER_PATHS = (
     ROOT / "tests/qa/obs-scenarios.json",
     ROOT / "tests/qa/cache-router-scenarios.json",
     ROOT / "tests/qa/concurrency-admission-scenarios.json",
+    ROOT / "tests/qa/conc-limits-scenarios.json",
     ROOT / "tests/qa/content-scenarios.json",
     ROOT / "tests/qa/forms-scenarios.json",
     ROOT / "tests/qa/loader-scenarios.json",

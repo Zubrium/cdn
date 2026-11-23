@@ -187,9 +187,35 @@ type publicRouterComponent struct {
 	server   *transport.PublicServer
 }
 
+func resolvePerRouteAdmission(ctx context.Context, component *publicRouterComponent) (transport.PerRouteAdmission, error) {
+	setting := component.config.Scales.RouterHTTP.PerRoute
+	if !setting.Enabled {
+		return transport.PerRouteAdmission{}, nil
+	}
+	admission := transport.PerRouteAdmission{
+		Enabled:            true,
+		DefaultMaxInFlight: setting.DefaultMaxInFlight,
+		Overrides:          make([]transport.RouteAdmissionOverride, 0, len(setting.Overrides)),
+	}
+	for _, override := range setting.Overrides {
+		route, err := component.engine.api.GetRoute(ctx, override.ID)
+		if err != nil {
+			return transport.PerRouteAdmission{}, fmt.Errorf("resolve per-route admission override %q: %w", override.ID, err)
+		}
+		admission.Overrides = append(admission.Overrides, transport.RouteAdmissionOverride{
+			ID: override.ID, Path: route.Path, MaxInFlight: override.MaxInFlight,
+		})
+	}
+	return admission, nil
+}
+
 func (component *publicRouterComponent) Start(ctx context.Context) error {
 	if component == nil || component.core == nil || component.core.runtime == nil || component.engine == nil || component.engine.api == nil {
 		return errors.New("public Router dependencies are not initialized")
+	}
+	perRoute, err := resolvePerRouteAdmission(ctx, component)
+	if err != nil {
+		return err
 	}
 	settings := component.config.RouterAPI
 	server, err := transport.NewPublicServer(transport.PublicConfig{
@@ -202,7 +228,8 @@ func (component *publicRouterComponent) Start(ctx context.Context) error {
 			RequestTimeout:  component.config.Scales.RouterHTTP.RequestDuration(),
 			ShutdownTimeout: component.config.HTTP.ShutdownTimeout,
 		},
-		Router: routerPresentationConfig(component.config, component.engine.registry),
+		Router:   routerPresentationConfig(component.config, component.engine.registry),
+		PerRoute: perRoute,
 	}, component.engine.api, component.core.IsReady)
 	if err != nil {
 		return err

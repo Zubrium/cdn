@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "CONC-002",
+      "source": "spec/architecture/SPEC-concurrency.md §4.3-4.4, §10; main/internal/config/scales.go NamedAdmission",
+      "level": "unit",
+      "preconditions": [
+        "Публичный ingress создан с явным global max_in_flight=2 и request_timeout/shutdown_timeout.",
+        "Per-route таблица задана только в startup-конфигурации transport.PublicConfig.PerRoute и содержит статический ID и точный путь."
+      ],
+      "input": "Override с лимитом больше global, неполный/дублирующийся статический ключ, валидный override на один путь и попытка выбрать route через query/header.",
+      "action": "Создать PublicServer до Start, затем применить admission к запросам на статический и другой путь.",
+      "expected_result": "Некорректная конфигурация отвергается ErrInvalidRouteAdmission до старта; валидный override уменьшает конкуренцию только на своём пути и даёт rejected{reason=PER_ROUTE}; посетитель не влияет на выбор ключа.",
+      "expected_state": "Активные запросы завершаются, in-flight gauge возвращается к нулю, в метках метрик нет route ID, operation ID и caller identity.",
+      "test_file": "tests/go/presentation/admin/base/transport/route_admission_test.go",
+      "test_symbol": "TestConcurrencyLimitsScenario/CONC-002",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-010",
+      "source": "spec/architecture/SPEC-concurrency.md §12; spec/observability/SPEC-observability.md §4",
+      "level": "unit",
+      "preconditions": [
+        "Observer создан через публичный API pkg/observability без изменения пакета.",
+        "Транспорт инициирует полный контракт метрик, а bus обновляет канонический gauge zubrium_concurrency_in_flight{scope=\"BUS\"}."
+      ],
+      "input": "СNAPSHOT /metrics после создания ingress и одного успешного bus dispatch.",
+      "action": "Проверить наличие всех семи метрик раздела 12, разрешённые значения scope/reason/result/pool/outcome, метки и HTTP-заголовки /metrics.",
+      "expected_result": "Все метрики присутствуют с низкокардинальными метками; /metrics отдаёт no-store и корректный content type; BUS gauge после dispatch равен нулю.",
+      "expected_state": "Observer не содержит меток route ID, operation ID, file ID, principal ID, URL, query, locale или User-Agent; повторный snapshot не создаёт дубликаты.",
+      "test_file": "tests/go/main/internal/bus/concurrency_metrics_scenario_test.go",
+      "test_symbol": "TestConcurrencyLimitsScenario/CONC-010",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
+      "id": "CONC-012",
+      "source": "spec/architecture/SPEC-concurrency.md §1, §2.12, §13; SPEC-router-engine topology",
+      "level": "contract",
+      "preconditions": [
+        "Собран профиль router: ровно одна публичная компонента public.router на процесс.",
+        "Статические контракты OpenAPI и исходники transport/router доступны для проверки."
+      ],
+      "input": "Build plan профиля router, пример конфигурации и зафиксированные публичные пути OpenAPI/Router.",
+      "action": "Проверить количество public.router, одну branch в resolved config, отсутствие версионных префиксов и неизменность публичных Core-путей.",
+      "expected_result": "В профиле ровно одна публичная Router-компонента, конфигурация проходит WithBuildPlan, новых публичных путей и /api/vN нет, контракт /api/files не изменён.",
+      "expected_state": "Топология остаётся статической; живое разворачивание за внешним proxy не требуется для этого статического сценария.",
+      "test_file": "tests/go/main/internal/bus/topology_scenario_test.go",
+      "test_symbol": "TestRouterTopologyScenario/CONC-012",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    }
+  ]
+}

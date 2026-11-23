@@ -114,6 +114,7 @@ func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, e
 	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
 		return nil, errors.New("Admin coordinator dependencies are incomplete")
 	}
+	publishConcurrencyContract(config.Observer, "admin")
 	return &AdminServer{config: config, deps: deps, ingress: ingress}, nil
 }
 
@@ -410,6 +411,9 @@ type PublicConfig struct {
 	Server   ServerConfig
 	Router   routerhttp.Config
 	Observer *observability.Observer
+	// PerRoute is supplied by composition from router.concurrency.http.per_route.
+	// Its keys are static startup configuration, never visitor input.
+	PerRoute PerRouteAdmission
 }
 
 type PublicServer struct {
@@ -429,10 +433,15 @@ func NewPublicServer(config PublicConfig, api *routerenginepresentation.APIAdapt
 	if config.Server.Address == "" || api == nil || ready == nil {
 		return nil, errors.New("public Router transport dependencies are incomplete")
 	}
-	ingress, err := newIngressLimiter(config.Server, config.Observer, "public-router")
+	routes, err := buildRouteAdmission(config.PerRoute, config.Server.MaxInFlight)
 	if err != nil {
 		return nil, err
 	}
+	ingress, err := newIngressLimiterWithRoutes(config.Server, config.Observer, "public-router", routes)
+	if err != nil {
+		return nil, err
+	}
+	publishConcurrencyContract(config.Observer, "public-router")
 	return &PublicServer{config: config, api: api, readyFn: ready, ingress: ingress}, nil
 }
 

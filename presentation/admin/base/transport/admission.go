@@ -20,6 +20,7 @@ type ingressLimiter struct {
 	observer *observability.Observer
 	pool     string
 	slots    chan struct{}
+	routes   *routeAdmissionTable
 
 	mu      sync.RWMutex
 	closed  bool
@@ -31,11 +32,15 @@ type ingressLimiter struct {
 }
 
 func newIngressLimiter(config ServerConfig, observer *observability.Observer, pool string) (*ingressLimiter, error) {
+	return newIngressLimiterWithRoutes(config, observer, pool, nil)
+}
+
+func newIngressLimiterWithRoutes(config ServerConfig, observer *observability.Observer, pool string, routes *routeAdmissionTable) (*ingressLimiter, error) {
 	if config.MaxInFlight <= 0 || config.RequestTimeout <= 0 || config.ShutdownTimeout <= 0 || config.ShutdownTimeout < config.RequestTimeout {
 		return nil, ErrInvalidIngressConcurrency
 	}
 	return &ingressLimiter{
-		config: config, observer: observer, pool: pool,
+		config: config, observer: observer, pool: pool, routes: routes,
 		slots: make(chan struct{}, config.MaxInFlight), drained: make(chan struct{}),
 	}, nil
 }
@@ -73,6 +78,19 @@ func (limiter *ingressLimiter) Wrap(next http.Handler) http.Handler {
 			writeIngressOverload(w)
 			return
 		}
+		var routeSlots chan struct{}
+		if limiter.routes != nil {
+			routeSlots = limiter.routes.slotsFor(r)
+			select {
+			case routeSlots <- struct{}{}:
+			default:
+				<-limiter.slots
+				limiter.mu.RUnlock()
+				limiter.reject("PER_ROUTE")
+				writeIngressOverload(w)
+				return
+			}
+		}
 		limiter.active.Add(1)
 		limiter.mu.RUnlock()
 
@@ -81,6 +99,9 @@ func (limiter *ingressLimiter) Wrap(next http.Handler) http.Handler {
 		release := func() {
 			released.Do(func() {
 				limiter.setInFlight(-1)
+				if routeSlots != nil {
+					<-routeSlots
+				}
 				<-limiter.slots
 				limiter.active.Done()
 			})

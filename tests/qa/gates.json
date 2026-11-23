@@ -41,6 +41,12 @@
       "cwd": "."
     },
     {
+      "id": "conc-limits-ledger",
+      "label": "Concurrency limits, metrics and topology scenario ledger validation",
+      "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/conc-limits-scenarios.json"],
+      "cwd": "."
+    },
+    {
       "id": "content-ledger",
       "label": "Content scenario ledger validation",
       "command": ["python3", "tests/qa/scenario-ledger.py", "tests/qa/content-scenarios.json"],
@@ -74,6 +80,12 @@
       "id": "concurrency-admission-scenarios",
       "label": "Concurrency admission executable scenarios",
       "command": ["tests/qa/run-concurrency-admission-red.sh", "unit"],
+      "cwd": "."
+    },
+    {
+      "id": "conc-limits-scenarios",
+      "label": "Concurrency limits, metrics and topology executable scenarios",
+      "command": ["tests/qa/run-conc-limits-red.sh", "all"],
       "cwd": "."
     },
     {
