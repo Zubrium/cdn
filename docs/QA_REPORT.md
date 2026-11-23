@@ -1,5 +1,16 @@
 # QA-отчёт
 
+## Текущий acceptance/release статус
+
+Полный release **не принят**: обязательные E2E-сценарии не дошли до браузерной части. Реальные Website/Core integration-сценарии и статические проверки прошли, но это не компенсирует E2E-провал.
+
+- Полная команда: `tests/qa/run-release-checks.sh --integration-env /var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T//website-qa-qa-full-e-20261123.env --with-e2e --report-prefix output/test-report-goal-20261123-e`. Окружение `qa-full-e-20261123` — свежие disposable PostgreSQL/S3; для Docker использовался временный config без пользовательского credential helper. Команда завершилась с ошибкой на E2E.
+- До E2E: `make lint-core-boundary`, Go test/vet/build для профилей workspace, product smoke build, Admin typecheck/lint/test/build, QA-runner unit tests и Website contract acceptance прошли. Unified report `output/test-report-goal-20261123-e.json`: `67 pass, 0 fail, 0 blocked`; в этом статическом проходе оставались 7 integration-сценариев blocked и 2 E2E not_run.
+- Integration-команда внутри полного прогона получила только `website-integration` и `core-integration` disposable credentials. `output/test-report-goal-20261123-e-integration.json`: `2 pass, 0 fail, 0 blocked`; 32/32 исполняемых сценария pass. Точные результаты: `PASS TestWebsiteFeatureImportAcceptance/WEB-012`, `PASS TestWebsiteIntegrationPersistenceBoundary/WEB-018`, `PASS TestWebsiteMediaDerivativeAcceptance/WEB-019`, `PASS TestWebsitePrerenderAcceptance/WEB-020`, `PASS TestWebsitePublicationFanoutAcceptance/WEB-021`, `PASS TestWebsitePageRetirementAcceptance/WEB-022`, `PASS TestDisposableOwnerScopedTaskResult/CORE-001`.
+- E2E run `e2e-20261123T010410Z-7f7584`, evidence `output/e2e/e2e-20261123T010410Z-7f7584/`: fixture setup ожидал 180 секунд, но созданный child snapshot оставался `provisioning`; `tests/e2e/setup.mjs` завершился `snapshot timed out`. Browser publication/retirement и точные `PASS E2E-...` строки не получены; `E2E-PUB-001` и `E2E-RET-001` остаются незапущенными. Причину незавершения snapshot нужно устранить и повторить полный release sweep на fresh disposable ресурсах.
+- В локальном `server-bootstrap.log` этого run начальный disposable administrator secret был выведен приложением; строка очищена из сохранённого evidence. Остальные E2E logs проверены на bootstrap-secret/Bearer markers без вывода значений. Это дефект обработки логов QA harness, который нужно устранить, чтобы последующие артефакты не содержали секрет.
+- Core boundary lint проходит, однако текущее дерево ещё не удовлетворяет пользовательскому инварианту «Core не знает abstractions engines/workers и используется только через DataBus»: engine/worker packages импортируют `core/presentation`, а `main/internal/composition` напрямую инжектирует Core capabilities; в Core также есть worker-specific Coordinator types. Соответствие этой границе остаётся открытым архитектурным блокером до выравнивания контракта и реализации.
+
 ## Admin UI/UX polish и browser QA (2026-11-23)
 
 ### Целевая среда
