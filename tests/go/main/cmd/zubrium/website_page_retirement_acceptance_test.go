@@ -191,8 +191,10 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		}, 0); err != nil {
 			t.Fatalf("seed Content history: %v", err)
 		}
-		formsKey := core.ModuleDataKey{Namespace: "forms/schemas", ScopeType: "snapshot", ScopeID: child.ID, RecordKey: "form/contact"}
-		submissionKey := core.ModuleDataKey{Namespace: "forms/submissions", ScopeType: "submission", ScopeID: scenarioID, RecordKey: "submission/1"}
+		// Forms namespaces use global/global scope; unique record keys keep this
+		// acceptance run isolated without inventing unsupported scope types.
+		formsKey := core.ModuleDataKey{Namespace: "forms/schemas", ScopeType: "global", ScopeID: "global", RecordKey: "schema-id:retirement/" + scenarioID}
+		submissionKey := core.ModuleDataKey{Namespace: "forms/submissions", ScopeType: "global", ScopeID: "global", RecordKey: "retirement/" + scenarioID + "/submission/1"}
 		formsOwned.add(formsKey, submissionKey)
 		if _, err := formsData.Put(ctx, formsKey, core.ModuleDataValue{Payload: web020JSON(map[string]any{
 			"record_type": "form_schema", "form_key": "contact", "revision": 2,

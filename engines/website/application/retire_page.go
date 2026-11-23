@@ -32,6 +32,10 @@ func (s *Service) RetirePage(ctx context.Context, request websiteapi.RetirePageR
 		}
 		return websiteapi.Page{}, websiteapi.ErrConflict
 	}
+	if page.LifecycleState == "retiring" && request.LifecycleState == "retiring" &&
+		page.RetirementJobID == request.RetirementJobID {
+		return page, nil
+	}
 	if page.RetirementJobID != "" && page.RetirementJobID != request.RetirementJobID {
 		return websiteapi.Page{}, websiteapi.ErrConflict
 	}
