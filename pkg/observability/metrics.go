@@ -71,7 +71,9 @@ func (s *metricStore) entry(key metricKey) *metricSeries {
 func (s *metricStore) inc(name string, attrs []Attribute, value float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entry(metricKeyFor(name, attrs)).counter += value
+	series := s.entry(metricKeyFor(name, attrs))
+	series.counter += value
+	series.counterSet = true
 }
 
 func (s *metricStore) observe(name string, attrs []Attribute, value float64) {
