@@ -232,6 +232,10 @@ router_api:
     - image/jpeg
     - image/png
   form_session_cookie_secure: false
+  locale_preference:
+    enabled: true
+    secure: false
+    max_age: 86400s
 
 forms_api:
   file_service_credential_env: ZUBRIUM_FORMS_FILE_SERVICE_CREDENTIAL

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Zubrium/cdn/main/internal/composition"
 )
 
 func TestRequiresConfiguration(t *testing.T) {
@@ -247,6 +250,9 @@ coordinator:
   max_children_per_task: 16
   workflow_retention: 48h
 `
+	if slices.Contains(composition.BuildPlan().Components, "public.locale-preference") {
+		data = strings.Replace(data, "forms_api:\n", "  locale_preference:\n    enabled: true\n    secure: false\n    max_age: 86400s\nforms_api:\n", 1)
+	}
 	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}

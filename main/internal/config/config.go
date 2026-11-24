@@ -115,18 +115,28 @@ type AdminAPI struct {
 // the single branch served by this process. BranchID and PublicListenAddress
 // are intentionally excluded from the shared Coordinator fingerprint.
 type RouterAPI struct {
-	MaxJSONBytes              int64    `yaml:"max_json_bytes"`
-	DefaultPageSize           int      `yaml:"default_page_size"`
-	MaxPageSize               int      `yaml:"max_page_size"`
-	BranchID                  string   `yaml:"branch_id"`
-	ServiceCredentialEnv      string   `yaml:"service_credential_env"`
-	PublicListenAddress       string   `yaml:"public_listen_address"`
-	UploadStagingDirectory    string   `yaml:"upload_staging_directory"`
-	UploadMaxFileBytes        int64    `yaml:"upload_max_file_bytes"`
-	UploadMaxConcurrent       int      `yaml:"upload_max_concurrent"`
-	UploadMaxStagedBytes      int64    `yaml:"upload_max_staged_bytes"`
-	UploadAllowedContentTypes []string `yaml:"upload_allowed_content_types"`
-	FormSessionCookieSecure   *bool    `yaml:"form_session_cookie_secure"`
+	MaxJSONBytes              int64                  `yaml:"max_json_bytes"`
+	DefaultPageSize           int                    `yaml:"default_page_size"`
+	MaxPageSize               int                    `yaml:"max_page_size"`
+	BranchID                  string                 `yaml:"branch_id"`
+	ServiceCredentialEnv      string                 `yaml:"service_credential_env"`
+	PublicListenAddress       string                 `yaml:"public_listen_address"`
+	UploadStagingDirectory    string                 `yaml:"upload_staging_directory"`
+	UploadMaxFileBytes        int64                  `yaml:"upload_max_file_bytes"`
+	UploadMaxConcurrent       int                    `yaml:"upload_max_concurrent"`
+	UploadMaxStagedBytes      int64                  `yaml:"upload_max_staged_bytes"`
+	UploadAllowedContentTypes []string               `yaml:"upload_allowed_content_types"`
+	FormSessionCookieSecure   *bool                  `yaml:"form_session_cookie_secure"`
+	LocalePreference          RouterLocalePreference `yaml:"locale_preference"`
+}
+
+// RouterLocalePreference is the explicit startup contract for the compiled
+// public.locale-preference operation. No lifetime or cookie transport value is
+// inferred when the operation is enabled.
+type RouterLocalePreference struct {
+	Enabled bool   `yaml:"enabled"`
+	Secure  *bool  `yaml:"secure"`
+	MaxAge  string `yaml:"max_age"`
 }
 
 type FormsAPI struct {
@@ -298,6 +308,9 @@ type RouterAPISettings struct {
 	UploadAllowedContentTypes  []string
 	FormSessionCookieSecure    bool
 	FormSessionCookieSecureSet bool
+	LocalePreferenceEnabled    bool
+	LocalePreferenceSecure     bool
+	LocalePreferenceMaxAge     time.Duration
 }
 
 type FormsAPISettings struct {
@@ -509,6 +522,18 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 	_, hasPublicFormSubmit := selected["public.form-submit"]
 	if hasPublicFormSession != hasPublicFormSubmit {
 		return errors.New("public.form-session and public.form-submit must be selected together")
+	}
+	_, hasLocalePreference := selected["public.locale-preference"]
+	if hasLocalePreference != r.RouterAPI.LocalePreferenceEnabled {
+		return errors.New("public.locale-preference must be compiled exactly when it is enabled in startup configuration")
+	}
+	if hasLocalePreference {
+		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
+			return errors.New("public.locale-preference requires public.router")
+		}
+		if r.RouterAPI.LocalePreferenceMaxAge <= 0 || r.RouterAPI.LocalePreferenceMaxAge%time.Second != 0 {
+			return errors.New("public.locale-preference requires a positive whole-second max_age")
+		}
 	}
 	if _, hasPublicUpload := selected["public.form-upload"]; hasPublicUpload {
 		if _, hasPublicRouter := selected["public.router"]; !hasPublicRouter {
@@ -886,6 +911,17 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			return Resolved{}, errors.New("configured FeatureImport service credential is empty or invalid")
 		}
 	}
+	var localePreferenceMaxAge time.Duration
+	if c.RouterAPI.LocalePreference.Enabled {
+		if c.RouterAPI.LocalePreference.Secure == nil {
+			return Resolved{}, errors.New("router_api.locale_preference.secure must be set explicitly when enabled")
+		}
+		parsed, err := time.ParseDuration(c.RouterAPI.LocalePreference.MaxAge)
+		if err != nil || parsed <= 0 || parsed%time.Second != 0 {
+			return Resolved{}, errors.New("router_api.locale_preference.max_age must be a positive whole-second duration")
+		}
+		localePreferenceMaxAge = parsed
+	}
 	var prerenderTimeout time.Duration
 	if prerenderConfigured {
 		parsed, err := time.ParseDuration(c.Prerender.Timeout)
@@ -1054,7 +1090,10 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			UploadMaxConcurrent: c.RouterAPI.UploadMaxConcurrent, UploadMaxStagedBytes: c.RouterAPI.UploadMaxStagedBytes,
 			UploadAllowedContentTypes:  append([]string(nil), c.RouterAPI.UploadAllowedContentTypes...),
 			FormSessionCookieSecure:    c.RouterAPI.FormSessionCookieSecure != nil && *c.RouterAPI.FormSessionCookieSecure,
-			FormSessionCookieSecureSet: c.RouterAPI.FormSessionCookieSecure != nil},
+			FormSessionCookieSecureSet: c.RouterAPI.FormSessionCookieSecure != nil,
+			LocalePreferenceEnabled:    c.RouterAPI.LocalePreference.Enabled,
+			LocalePreferenceSecure:     c.RouterAPI.LocalePreference.Secure != nil && *c.RouterAPI.LocalePreference.Secure,
+			LocalePreferenceMaxAge:     localePreferenceMaxAge},
 		FormsAPI: FormsAPISettings{FileServiceCredential: formsFileServiceCredential, VisitorSessionTTL: formsSessionTTL,
 			VisitorSessionCleanupEvery: formsCleanupInterval, ExportMaxConcurrent: c.FormsAPI.ExportMaxConcurrent,
 			ExportMaxRows: c.FormsAPI.ExportMaxRows, ExportMaxBytes: c.FormsAPI.ExportMaxBytes},

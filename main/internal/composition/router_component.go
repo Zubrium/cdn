@@ -31,6 +31,7 @@ type routerEngineComponent struct {
 	dispatcher contracts.Dispatcher
 	api        *routerenginepresentation.APIAdapter
 	registry   *router.PublicOperationRegistry
+	routes     router.RouteResolver
 }
 
 func (component *routerEngineComponent) Start(ctx context.Context) error {
@@ -150,7 +151,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	component.registry, component.api = registry, api
+	component.registry, component.api, component.routes = registry, api, routeService
 	return nil
 }
 
@@ -228,7 +229,7 @@ func (component *publicRouterComponent) Start(ctx context.Context) error {
 			RequestTimeout:  component.config.Scales.RouterHTTP.RequestDuration(),
 			ShutdownTimeout: component.config.HTTP.ShutdownTimeout,
 		},
-		Router:   routerPresentationConfig(component.config, component.engine.registry),
+		Router:   routerPublicPresentationConfig(component.config, component.engine.registry, component.engine.routes),
 		PerRoute: perRoute,
 	}, component.engine.api, component.core.IsReady)
 	if err != nil {
@@ -278,6 +279,21 @@ func routerPresentationConfig(config appconfig.Resolved, operations *router.Publ
 			MediaTypes:           append([]string(nil), config.Scales.RouterCache.HTTP.Compression.MediaTypes...),
 		},
 	}
+}
+
+// routerPublicPresentationConfig adds the explicitly compiled locale
+// preference operation to the anonymous listener only. The Admin listener
+// keeps the plain configuration and never registers a public preference path.
+func routerPublicPresentationConfig(config appconfig.Resolved, operations *router.PublicOperationRegistry, routes router.RouteResolver) router.Config {
+	cfg := routerPresentationConfig(config, operations)
+	settings := config.RouterAPI
+	cfg.LocalePreference = router.LocalePreferenceConfig{
+		Enabled: settings.LocalePreferenceEnabled,
+		Secure:  settings.LocalePreferenceSecure,
+		MaxAge:  settings.LocalePreferenceMaxAge,
+	}
+	cfg.LocaleResolver = routes
+	return cfg
 }
 
 type publicUploadComponent struct {

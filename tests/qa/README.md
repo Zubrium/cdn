@@ -41,7 +41,9 @@ tests/qa/run-release-checks.sh --integration-env /path/to/private-disposable.env
   Он создаёт отдельную копию чекаута, собирает в ней Admin и `bin/zubrium`,
   поднимает run-specific PostgreSQL/MinIO, проверяет target через
   `browser/verify-target.sh`, выполняет Playwright-сценарии через Go-ledger shim
-  (`tests/e2e`) и требует точные строки `PASS E2E-PUB-001` и `PASS E2E-RET-001`.
+  (`tests/e2e`) и требует точные строки `PASS E2E-PUB-001`, `PASS E2E-LOC-001` и
+  `PASS E2E-RET-001`; locale-preference выполняется до retirement, пока route
+  targets ещё активны.
   Логи и артефакты прогона остаются в `output/e2e/<run-id>/`; Docker-стек,
   приватный env-файл и временная копия удаляются только для этого run ID.
   MinIO не реализует S3 public access block, поэтому runner поднимает

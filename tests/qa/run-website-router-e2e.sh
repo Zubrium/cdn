@@ -626,7 +626,7 @@ set +e
 test_status=$?
 set -e
 
-for scenario in E2E-PUB-001 E2E-RET-001; do
+for scenario in E2E-PUB-001 E2E-RET-001 E2E-LOC-001; do
 	# Go's t.Logf indents the Playwright reporter's output; require the exact
 	# PASS line apart from that harness indentation.
 	if ! grep -Eq "^[[:space:]]*PASS $scenario[[:space:]]*$" "$evidence_dir/playwright.log"; then

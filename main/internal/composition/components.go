@@ -1086,6 +1086,16 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			return nil, nil, nil, nil, err
 		}
 	}
+	if _, enabled := selected["public.locale-preference"]; enabled {
+		if routerEngine == nil {
+			return nil, nil, nil, nil, platform.ErrComponentUnavailable
+		}
+		if err := register(platform.RuntimeComponent{ID: "public.locale-preference", Requires: []string{"core", "engine.router", "public.router"}, New: func(context.Context) (platform.ManagedComponent, error) {
+			return &readyComponent{id: "public.locale-preference"}, nil
+		}}); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	if _, enabled := selected["public.form-upload"]; enabled {
 		if routerEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
@@ -1130,7 +1140,7 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 	}
 	available := map[string]struct{}{
 		"core": {}, "engine.loader": {}, "admin.files": {}, "admin.coordinator": {}, "admin.identity": {}, "admin.notifications": {},
-		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "engine.publication": {}, "composition.retirement": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {},
+		"engine.router": {}, "engine.forms": {}, "engine.website": {}, "engine.content": {}, "engine.publication": {}, "composition.retirement": {}, "admin.website": {}, "admin.content": {}, "admin.forms": {}, "admin.router": {}, "admin.ui": {}, "public.router": {}, "public.form-upload": {}, "public.content-runtime": {}, "public.locale-preference": {},
 		"public.form-session": {}, "public.form-submit": {},
 		"worker.archive": {}, "worker.media": {}, "worker.prerender": {},
 	}

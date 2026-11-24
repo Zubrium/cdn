@@ -17,6 +17,7 @@ const (
 	TargetCoreFile                = routemodel.TargetCoreFile
 	TargetStaticSiteArtifact      = routemodel.TargetStaticSiteArtifact
 	TargetRegisteredOperation     = routemodel.TargetRegisteredOperation
+	RouteStateActive              = routemodel.StateActive
 	maxPublicOperationConfigBytes = 64 << 10
 )
 
@@ -57,6 +58,19 @@ type RouteTarget = routemodel.Target
 
 func ValidPublicOperationID(value string) bool {
 	return routemodel.ValidPublicOperationID(value)
+}
+
+// CanonicalLocale is the facade form of the route locale validator. Outer
+// Presentation uses it for preference cookies without importing engine
+// internals.
+func CanonicalLocale(value string) (string, error) {
+	return routemodel.CanonicalLocale(value)
+}
+
+// NormalizePath is the facade form of the route path validator. It keeps the
+// preference return path bound to the same canonical form used by matching.
+func NormalizePath(value string) (string, error) {
+	return routemodel.NormalizePath(value)
 }
 
 type Route = routemodel.Route

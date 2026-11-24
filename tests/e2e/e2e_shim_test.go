@@ -13,6 +13,15 @@ func TestPublication(t *testing.T) {
 	})
 }
 
+// Locale preference must be exercised while the publication routes still
+// have their static targets; retirement removes those targets and is the last
+// write scenario in this run.
+func TestLocalePreference(t *testing.T) {
+	t.Run("E2E-LOC-001", func(t *testing.T) {
+		runPlaywrightScenario(t, "E2E-LOC-001", "specs/locale-preference.spec.ts")
+	})
+}
+
 func TestRetirement(t *testing.T) {
 	t.Run("E2E-RET-001", func(t *testing.T) {
 		runPlaywrightScenario(t, "E2E-RET-001", "specs/retirement.spec.ts")

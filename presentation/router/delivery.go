@@ -35,7 +35,7 @@ var (
 )
 
 type RouteResolver interface {
-	ResolveRoute(context.Context, string, string) (model.Route, error)
+	ResolveRoute(context.Context, string, string) (engine.Route, error)
 }
 
 type CoreFiles interface {

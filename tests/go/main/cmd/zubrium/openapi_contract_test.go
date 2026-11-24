@@ -132,12 +132,6 @@ func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 	}
 }
 
-// Spec-required endpoints that are documented but not yet wired in this
-// checkout. Keep the list explicit so new drift still fails this check.
-var pendingOperations = map[string]string{
-	"POST /api/locale-preference": "Router locale preference operation is not compiled into the profile",
-}
-
 func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 	contracts := []struct {
 		name string
@@ -193,9 +187,6 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 						continue
 					}
 					operationID := method + " " + path
-					if _, pending := pendingOperations[operationID]; pending {
-						continue
-					}
 					if !matchesRegisteredOperation(operationID, registered) {
 						t.Errorf("OpenAPI declares %s but no matching ServeMux handler is registered", operationID)
 					}

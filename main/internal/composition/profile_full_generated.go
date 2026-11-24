@@ -89,6 +89,7 @@ func GeneratedBuildPlan() platform.BuildPlan {
 		"public.form-session",
 		"public.form-submit",
 		"public.form-upload",
+		"public.locale-preference",
 		"worker.archive",
 		"worker.media",
 		"worker.prerender",

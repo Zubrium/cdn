@@ -50,6 +50,9 @@ func TestRouterTopologyScenario(t *testing.T) {
 		}
 
 		configSource := topologyRead(t, "main/config.example.yaml")
+		// The router-only profile intentionally omits public.locale-preference;
+		// the example config targets the full profile where it is compiled.
+		configSource = strings.Replace(configSource, "  locale_preference:\n    enabled: true", "  locale_preference:\n    enabled: false", 1)
 		cfg, err := appconfig.Load(strings.NewReader(configSource))
 		if err != nil {
 			t.Fatalf("load example config: %v", err)
@@ -89,18 +92,21 @@ func TestRouterTopologyScenario(t *testing.T) {
 		}
 
 		routerSource := topologyRead(t, "presentation/router/handler.go")
+		// The compiled locale-preference operation is a documented public path.
+		// Expand its constant pattern so the topology check stays source-driven.
+		routerSource = strings.Replace(routerSource, `"POST "+localePreferencePath`, `"POST /api/locale-preference"`, 1)
 		publicMux := regexp.MustCompile(`publicMux\.HandleFunc\("([^"]+)"`).FindAllStringSubmatch(routerSource, -1)
 		registered := map[string]bool{}
 		for _, match := range publicMux {
 			registered[match[1]] = true
 		}
-		for _, path := range []string{"/{$}", "/{path...}"} {
+		for _, path := range []string{"/{$}", "/{path...}", "POST /api/locale-preference"} {
 			if !registered[path] {
 				t.Errorf("public Router mux no longer registers %s: %v", path, registered)
 			}
 		}
 		for path := range registered {
-			if path != "/{$}" && path != "/{path...}" {
+			if path != "/{$}" && path != "/{path...}" && path != "POST /api/locale-preference" {
 				t.Errorf("new public Router path %s was registered", path)
 			}
 			if versionPrefix.MatchString(path) || strings.HasPrefix(path, "/api/admin") {

@@ -21,6 +21,27 @@
       "blocker": null
     },
     {
+      "id": "E2E-LOC-001",
+      "source": "spec/engines/router/SPEC-router-engine.md, spec/presentation/openapi/router.yaml; Playwright: tests/e2e/specs/locale-preference.spec.ts",
+      "level": "e2e",
+      "preconditions": [
+        "Изолированный separate checkout собран из того же HEAD, что и проверяемые артефакты",
+        "verify-target.sh подтвердил admin/public listener и их build identity",
+        "Disposable PostgreSQL и S3 пространство созданы только для этого run ID",
+        "Публикация создала активные route targets с locale_targets en-US и de-DE",
+        "Сценарий выполняется до retirement, пока targets ещё активны"
+      ],
+      "input": "POST /api/locale-preference с валидным locale и return_path, внешним return_path, неподдерживаемым locale и последующий GET страницы",
+      "action": "Отклонить небезопасные варианты, установить предпочтение и запросить страницу с полученной cookie",
+      "expected_result": "Внешний путь и неподдерживаемый locale дают 400 без Set-Cookie; валидный запрос даёт 303, Location равен return_path и host-only HttpOnly SameSite=Lax cookie с явно настроенным lifetime; GET с cookie отдаёт разметку выбранного locale",
+      "expected_state": "Только валидный запрос меняет preference cookie; активные route targets и опубликованные артефакты остаются без изменений",
+      "test_file": "tests/e2e/e2e_shim_test.go",
+      "test_symbol": "TestLocalePreference/E2E-LOC-001",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
       "id": "E2E-RET-001",
       "source": "spec/presentation/openapi/website.yaml#/paths/~1api~1admin~1pages~1{pageID}/delete; Playwright: tests/e2e/specs/retirement.spec.ts",
       "level": "e2e",

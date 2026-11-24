@@ -200,9 +200,10 @@ Runner сам выбирает уникальный run ID и нерабочие
 из артефактов копии и вызывает `verify-target.sh` перед записью. Playwright
 установлен отдельно в `tests/e2e` (`npm ci`, не в основной pnpm workspace).
 Сценарии исполняются через Go-обвязку `tests/e2e/e2e_shim_test.go` с
-`GOWORK=off`; runner требует точные строки `PASS E2E-PUB-001` и
-`PASS E2E-RET-001`, а также нулевой exit code. `t.Skip`, fake-only и zero-test
-success не принимаются.
+`GOWORK=off`; runner требует точные строки `PASS E2E-PUB-001`,
+`PASS E2E-LOC-001` и `PASS E2E-RET-001`, а также нулевой exit code.
+Locale-preference выполняется до retirement, пока route targets активны.
+`t.Skip`, fake-only и zero-test success не принимаются.
 
 Логи хранятся в `output/e2e/<run-id>/`. При завершении удаляются только
 созданный Docker compose-стек, его приватный env-файл и временный run directory.

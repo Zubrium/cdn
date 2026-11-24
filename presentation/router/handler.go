@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	routesPath     = "/api/admin/router/routes"
-	operationsPath = "/api/admin/router/operations"
+	routesPath           = "/api/admin/router/routes"
+	operationsPath       = "/api/admin/router/operations"
+	localePreferencePath = "/api/locale-preference"
 )
 
 // CompressionConfig is explicit: enabling compression requires every bound.
@@ -40,6 +41,14 @@ type CompressionConfig struct {
 	MediaTypes           []string
 }
 
+// LocalePreferenceConfig is explicit: no cookie lifetime or transport policy
+// is inferred at runtime. Both values come from the startup configuration.
+type LocalePreferenceConfig struct {
+	Enabled bool
+	Secure  bool
+	MaxAge  time.Duration
+}
+
 type Config struct {
 	BranchID                string
 	MaxJSONBytes            int64
@@ -48,6 +57,8 @@ type Config struct {
 	AllowedOrigins          []string
 	PublicOperations        engine.PublicOperationCatalog
 	FormSessionCookieSecure bool
+	LocalePreference        LocalePreferenceConfig
+	LocaleResolver          RouteResolver
 	Compression             CompressionConfig
 }
 
@@ -78,6 +89,9 @@ func NewHandler(api API, cfg Config) (*Handler, error) {
 	if !validCompressionConfig(cfg.Compression) {
 		return nil, errors.New("invalid Router HTTP compression configuration")
 	}
+	if cfg.LocalePreference.Enabled && (cfg.LocalePreference.MaxAge <= 0 || cfg.LocalePreference.MaxAge%time.Second != 0 || isNilAPI(cfg.LocaleResolver)) {
+		return nil, errors.New("invalid Router locale preference configuration")
+	}
 	var auth *adminhttpauth.Transport
 	if len(cfg.AllowedOrigins) > 0 {
 		var err error
@@ -94,12 +108,66 @@ func NewHandler(api API, cfg Config) (*Handler, error) {
 	h.adminMux.HandleFunc("PUT "+routesPath+"/{id}/target", h.replaceTarget)
 	h.adminMux.HandleFunc("DELETE "+routesPath+"/{id}", h.deleteRoute)
 	h.adminMux.HandleFunc("/api/admin/{path...}", h.adminNotFound)
+	h.publicMux.HandleFunc("POST "+localePreferencePath, h.setLocalePreference)
+	h.mux.HandleFunc("POST "+localePreferencePath, h.setLocalePreference)
 	h.publicMux.HandleFunc("/{$}", h.deliver)
 	h.publicMux.HandleFunc("/{path...}", h.deliver)
 	h.mux.Handle("/api/admin/", h.adminMux)
 	h.mux.HandleFunc("/{$}", h.deliver)
 	h.mux.HandleFunc("/{path...}", h.deliver)
 	return h, nil
+}
+
+// setLocalePreference implements the explicitly compiled public.locale-preference
+// operation. It only sets a host-only preference cookie after checking that the
+// requested locale is configured on the route resolved from return_path.
+func (h *Handler) setLocalePreference(w http.ResponseWriter, r *http.Request) {
+	if !h.cfg.LocalePreference.Enabled {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	var request struct {
+		Locale     string `json:"locale"`
+		ReturnPath string `json:"return_path"`
+	}
+	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	locale, err := engine.CanonicalLocale(request.Locale)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_locale")
+		return
+	}
+	path, err := engine.NormalizePath(request.ReturnPath)
+	if err != nil || path != request.ReturnPath {
+		writeError(w, http.StatusBadRequest, "invalid_return_path")
+		return
+	}
+	route, err := h.cfg.LocaleResolver.ResolveRoute(r.Context(), r.Host, path)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if route.BranchID != h.cfg.BranchID || route.State != engine.RouteStateActive {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if _, supported := route.Target.LocaleTarget(locale); !supported && route.Target.DefaultLocale != locale {
+		writeError(w, http.StatusBadRequest, "unsupported_locale")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "zubrium_locale",
+		Value:    locale,
+		Path:     "/",
+		MaxAge:   int(h.cfg.LocalePreference.MaxAge / time.Second),
+		HttpOnly: true,
+		Secure:   h.cfg.LocalePreference.Secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	w.Header().Set("Location", path)
+	w.WriteHeader(http.StatusSeeOther)
 }
 
 func (h *Handler) listOperations(w http.ResponseWriter, r *http.Request) {
