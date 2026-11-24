@@ -154,7 +154,7 @@ Router ставит host-only cookie с `Path=/`, без `Domain`, `HttpOnly`, `
 ### 5.3 HTTP-ответ и безопасность
 
 - `Content-Type` берётся из проверенного allowlisted значения/manifest, а не из произвольного запроса; применяются безопасный charset и `X-Content-Type-Options: nosniff`.
-- Content-Disposition по умолчанию `inline` только для разрешённых web types; иные файлы скачиваются как attachment с безопасным именем.
+- Content-Disposition для `core-file` target управляется серверным полем `target.disposition` (`inline` или `attachment`) и не принимается от посетителя. Без поля значение `inline` применяется только к разрешённым web types (`image/jpeg`, `image/png`, `image/webp`, `image/avif`, `image/gif`, `video/mp4`, `video/webm`, `audio/mpeg`, `application/pdf`); иные типы, включая HTML и SVG, всегда скачиваются как attachment. Явное `attachment` перекрывает безопасный MIME.
 - ETag строится из checksum immutable file/manifest; conditional GET проверяется после разрешения route и актуальной Core авторизации. Validators, weak comparison и 304 подчиняются [SPEC-caching.md](../../architecture/SPEC-caching.md).
 - Range поддерживается только если Core streaming contract его безопасно реализует; в противном случае route отвечает без Range, не буферизуя неограниченный файл в памяти.
 - Cache-Control по умолчанию — `no-store`. Допустимы только `no-store` и `public, max-age=<uint>[, immutable]` из allowlist [SPEC-caching.md](../../architecture/SPEC-caching.md) при `<uint> > 0`; приватные данные и authorization responses не попадают в shared CDN cache. Locale из cookie остаётся `no-store`, locale из `Accept-Language` получает `Vary: Accept-Language`; сжатие добавляет `Vary: Accept-Encoding`.

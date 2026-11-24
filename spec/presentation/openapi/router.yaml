@@ -324,15 +324,18 @@ components:
       required: [kind]
       allOf:
         - if: { properties: { kind: { const: static-page-artifact } } }
-          then: { required: [default_locale, locale_targets] }
+          then: { required: [default_locale, locale_targets], properties: { disposition: false } }
         - if: { properties: { kind: { const: core-file } } }
-          then: { required: [file_id] }
+          then:
+            required: [file_id]
+            properties: { disposition: { type: string, enum: [inline, attachment] } }
         - if: { properties: { kind: { const: registered-operation } } }
-          then: { required: [operation_id] }
+          then: { required: [operation_id], properties: { disposition: false } }
       description: >-
         A core-file target serves exactly the configured file_id at an exact
         route path via GET/HEAD. It never accepts a visitor-selected ID or
-        resolves files through FileSets. A static-site-artifact target binds
+        resolves files through FileSets. Its optional disposition is stored on
+        the target, never taken from a visitor query. A static-site-artifact target binds
         one ready manifest per configured locale plus a default_locale included
         in that map. Router negotiates locale from its preference cookie,
         Accept-Language and default locale; neither path nor query selects it.
@@ -344,6 +347,13 @@ components:
       properties:
         kind: { type: string, enum: [core-file, static-site-artifact, registered-operation] }
         file_id: { type: string, format: uuid }
+        disposition:
+          type: string
+          enum: [inline, attachment]
+          description: >-
+            core-file only. Defaults to inline when Core reports an allowlisted
+            web media type; any other media type is always attachment. An
+            explicit attachment overrides an otherwise inline-safe type.
         default_locale: { type: string, minLength: 2, maxLength: 64 }
         locale_targets:
           type: array

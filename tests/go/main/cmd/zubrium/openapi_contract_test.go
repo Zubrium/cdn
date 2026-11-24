@@ -348,6 +348,28 @@ func TestRouterOpenAPIRegistersUploadAndReservesPublicDeliveryBoundary(t *testin
 	}
 }
 
+func TestRouterOpenAPIRouteTargetDeclaresDisposition(t *testing.T) {
+	contract := loadOpenAPIContract(t, "router.yaml")
+	routeTarget, ok := contract.Components.Schemas["RouteTarget"]
+	if !ok {
+		t.Fatal("Router contract is missing RouteTarget")
+	}
+	node, ok := routeTarget.Properties["disposition"]
+	if !ok {
+		t.Fatal("RouteTarget must declare disposition")
+	}
+	var schema struct {
+		Type string   `yaml:"type"`
+		Enum []string `yaml:"enum"`
+	}
+	if err := node.Decode(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Type != "string" || !reflect.DeepEqual(schema.Enum, []string{"inline", "attachment"}) {
+		t.Fatalf("disposition schema = %+v, want string enum [inline attachment]", schema)
+	}
+}
+
 func TestAdminIdentityOpenAPIHasNoRoleOrPrincipalKindFields(t *testing.T) {
 	contract := loadOpenAPIContract(t, "admin-identity.yaml")
 	principal, ok := contract.Components.Schemas["Principal"]
