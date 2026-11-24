@@ -353,3 +353,14 @@ class-isolated pools **Not implemented** (`CONC-008`).
 `Blocked` и `Not implemented` требованиями. `coverage 100%` относится только к
 исполняемым ledger-сценариям и не должен использоваться как функциональный
 показатель SPEC.
+
+### Запись цикла: `POST /api/locale-preference`
+
+- SPEC ID: `POST /api/locale-preference` в `spec/presentation/openapi/router.yaml`, locale resolution и preference cookie в `spec/engines/router/SPEC-router-engine.md`, публичная топология `CONC-012`.
+- Изменённые файлы: полный состав зафиксирован коммитом `107bbde`, Evidence/HEAD/проверки — в [QA report](QA_REPORT.md) и [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md).
+- Новая возможность: скомпилированная в full profile публичная операция с явной startup-конфигурацией, валидацией locale/return_path/route/branch/state, cookie `zubrium_locale` (`HttpOnly`, `SameSite=Lax`, host-only, явный lifetime) и `303` на return_path; Admin listener не регистрирует путь.
+- Тесты: `tests/go/presentation/router/locale_preference_test.go`, `tests/go/main/internal/config/locale_preference_test.go`, topology/OpenAPI regression, ledger `E2E-LOC-001` и live Playwright.
+- Результат: PASS. Живой proof — `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-locale-preference-evidence-final/`; исходный run `e2e-20261124T121627Z-bab896` в `output/e2e/`, точные строки `PASS E2E-PUB-001`, `PASS E2E-LOC-001`, `PASS E2E-RET-001` без `FAIL`. Завершающие статические проверки перечислены в QA report и прошли exit 0.
+- HEAD после коммита и пуша: `107bbde` (ветка `readiness-20261123`).
+- Счётчики статусов в этом документе: до цикла `49 Verified / 53 Implemented / 19 Blocked / 13 Not implemented`; после `51 Verified / 53 Implemented / 19 Blocked / 11 Not implemented`.
+- Оставшиеся блокеры цикла: внешний proxy/CDN и rate limiting (`CACHE-009`), отдельные live environment для `CONTENT-005`, `FORMS-005`, `LOADER-005`, `UI-POL-011`, а также `OBS-006/008`; они не затронуты этой реализацией.
