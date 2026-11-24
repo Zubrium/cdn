@@ -51,6 +51,8 @@ describe("pages workspace", () => {
     expect(markup).toContain('href="/site/pages/catalog"');
     expect(markup).toContain('href="/site/pages/files/file-route"');
     expect(markup).toContain("Публичный файл");
+    expect(markup).not.toContain("открытие в браузере");
+    expect(markup).not.toContain("скачивание");
     expect(markup).not.toContain("Инспектор страницы");
     expect(markup).not.toContain(">Канвас<");
   });

@@ -568,7 +568,6 @@ export interface RouteTreeNode {
   pattern?: string;
   pageId?: string;
   fileId?: string;
-  fileDisposition?: "inline" | "attachment";
   children?: RouteTreeNode[];
 }
 

@@ -57,7 +57,6 @@ const config: SiteConfig = {
         type: "path",
         path: "/downloads/price-list.pdf",
         fileId: fileID,
-        fileDisposition: "attachment",
       },
     ],
   },
@@ -200,7 +199,7 @@ describe("deep-link pages workflow", () => {
     expect(markup).not.toContain("home-hero");
   });
 
-  it("renders an attachment file route with its public file and fixed-path contract", () => {
+  it("renders a file route with its public file and fixed-path contract", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(["media", fileID], file);
 
@@ -213,7 +212,8 @@ describe("deep-link pages workflow", () => {
     expect(markup).toContain("Прайс-лист.pdf");
     expect(markup).toContain("/downloads/price-list.pdf");
     expect(markup).toContain("Параметры маршрута для файлов недоступны");
-    expect(markup).toMatch(/<option value="attachment" selected="">Скачивать файлом<\/option>/);
+    expect(markup).not.toContain("Скачивать файлом");
+    expect(markup).not.toContain("Открывать в браузере");
     expect(markup).toContain('href="/site/pages?snapshot=snapshot-42"');
     expect(markup).not.toContain(fileID);
     expect(markup).not.toContain("price-route");

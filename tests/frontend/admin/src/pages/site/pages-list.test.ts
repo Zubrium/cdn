@@ -49,7 +49,7 @@ const tree: RouteTreeNode = {
       ],
     },
     { id: "catalog-alias", type: "path", path: "/products", pageId: "catalog" },
-    { id: "price-file", type: "path", path: "/files/price.pdf", fileId: "11111111-1111-4111-8111-111111111111", fileDisposition: "attachment" },
+    { id: "price-file", type: "path", path: "/files/price.pdf", fileId: "11111111-1111-4111-8111-111111111111" },
   ],
 };
 

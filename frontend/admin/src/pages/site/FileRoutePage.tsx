@@ -117,7 +117,7 @@ export default function FileRoutePage() {
         <Button type="button" variant="ghost" className="min-h-11 text-destructive" onClick={() => void remove()}><Trash2 />Удалить маршрут</Button>
       </header>
 
-      <section className="grid gap-5 border-b border-border py-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <section className="grid gap-5 border-b border-border py-6">
         <div className="space-y-2">
           <Label htmlFor="file-route-page-path">Маршрут</Label>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -127,20 +127,6 @@ export default function FileRoutePage() {
           {pathError
             ? <p id="file-route-page-path-error" role="alert" className="text-xs text-destructive">{pathError}</p>
             : <p className="text-xs text-muted-foreground">Используйте абсолютный фиксированный путь. Параметры маршрута для файлов недоступны.</p>}
-        </div>
-        <div className="space-y-2">
-          <span className="block text-sm font-medium">Режим</span>
-          <select className="h-11 w-full rounded-md border border-input bg-background px-3" value={route.node.fileDisposition ?? "inline"} onChange={(event) => {
-            const fileDisposition = event.currentTarget.value === "attachment" ? "attachment" : "inline";
-            update((current) => ({
-              ...current,
-              routeTree: updateRouteNode(current.routeTree, route.id, (node) => ({ ...node, fileDisposition })),
-              formatVersion: 3,
-            }));
-          }}>
-            <option value="inline">Открывать в браузере</option>
-            <option value="attachment">Скачивать файлом</option>
-          </select>
         </div>
       </section>
 

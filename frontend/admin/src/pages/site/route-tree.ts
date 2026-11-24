@@ -212,7 +212,7 @@ function pathToSegments(path: string, route: RouteTreeNode): RouteTreeNode | nul
   parts.forEach((part, index) => {
     const last = index === parts.length - 1;
     let segment: RouteTreeNode;
-    const target = last ? { ...(route.pageId ? { pageId: route.pageId } : {}), ...(route.fileId ? { fileId: route.fileId, fileDisposition: route.fileDisposition } : {}) } : {};
+    const target = last ? { ...(route.pageId ? { pageId: route.pageId } : {}), ...(route.fileId ? { fileId: route.fileId } : {}) } : {};
     if (part.startsWith(":")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "param", name: part.slice(1), ...target, children: [] };
     else if (part.startsWith("*")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "catchAll", name: part.slice(1), ...target, children: [] };
     else if (part.startsWith("~")) segment = { id: last ? route.id : `route-${crypto.randomUUID().slice(0, 8)}`, type: "regex", pattern: part.slice(1), ...target, children: [] };
@@ -239,7 +239,7 @@ function asRootRoute(node: RouteTreeNode): RouteTreeNode | null {
     type: "path",
     path,
     ...(node.pageId ? { pageId: node.pageId } : {}),
-    ...(node.fileId ? { fileId: node.fileId, fileDisposition: node.fileDisposition } : {}),
+    ...(node.fileId ? { fileId: node.fileId } : {}),
     children: node.children ?? [],
   };
 }

@@ -56,7 +56,7 @@ export default function RouterPage() {
     if (page) navigate(`/site/pages/${page.id}${suffix}`);
   };
 
-  const createFileRoute = ({ path, file, disposition }: NewFileRoute) => {
+  const createFileRoute = ({ path, file }: NewFileRoute) => {
     const id = crypto.randomUUID();
     update((current) => ({
       ...current,
@@ -65,7 +65,6 @@ export default function RouterPage() {
         type: "path",
         path,
         fileId: file.id,
-        fileDisposition: disposition,
         children: [],
       }),
       formatVersion: 3,
@@ -108,7 +107,7 @@ export default function RouterPage() {
               return <li key={entry.kind === "page" ? entry.page.id : entry.route.id}>
                 <Link to={href} className="group flex min-h-16 min-w-0 items-center gap-3 px-1 py-3 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">{entry.kind === "file" ? <FilePlus2 className="size-4" /> : <span className="text-sm font-semibold">{entry.name.slice(0, 1).toLocaleUpperCase("ru")}</span>}</span>
-                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{entry.name}</span><span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">{entry.primaryRoute?.path ?? "Без маршрута"}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{entry.kind === "page" ? `${entry.kindLabel} · ${entry.page.placements.length} ${entry.page.placements.length === 1 ? "фича" : "фич"}${entry.routes.length > 1 ? ` · маршрутов ${entry.routes.length}` : ""}` : `Файл · ${entry.route.node.fileDisposition === "attachment" ? "скачивание" : "открытие в браузере"}`}</span></span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{entry.name}</span><span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">{entry.primaryRoute?.path ?? "Без маршрута"}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{entry.kind === "page" ? `${entry.kindLabel} · ${entry.page.placements.length} ${entry.page.placements.length === 1 ? "фича" : "фич"}${entry.routes.length > 1 ? ` · маршрутов ${entry.routes.length}` : ""}` : "Файл"}</span></span>
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                 </Link>
               </li>;

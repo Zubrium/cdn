@@ -11,7 +11,6 @@ import { comparableRootPath, parseStaticFilePath } from "./route-utils";
 export interface NewFileRoute {
   path: string;
   file: Media;
-  disposition: "inline" | "attachment";
 }
 
 export function FileRouteDialog({
@@ -27,7 +26,6 @@ export function FileRouteDialog({
 }) {
   const [path, setPath] = useState("/file");
   const [file, setFile] = useState<Media | null>(null);
-  const [disposition, setDisposition] = useState<"inline" | "attachment">("inline");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState("");
 
@@ -35,7 +33,6 @@ export function FileRouteDialog({
     if (!open) return;
     setPath("/file");
     setFile(null);
-    setDisposition("inline");
     setError("");
     setPickerOpen(false);
   }, [open]);
@@ -54,7 +51,7 @@ export function FileRouteDialog({
       setError("Такой маршрут уже используется.");
       return;
     }
-    onCreate({ path: parsed.path, file, disposition });
+    onCreate({ path: parsed.path, file });
   };
 
   return <>
@@ -77,13 +74,6 @@ export function FileRouteDialog({
               {file ? `${file.original_filename} · ${formatBytes(file.size_bytes)}` : "Выбрать публичный файл"}
             </Button>
           </div>
-          <label className="space-y-1.5 text-sm">
-            <span className="font-medium">Поведение</span>
-            <select className="h-11 w-full rounded-md border border-input bg-background px-3" value={disposition} onChange={(event) => setDisposition(event.currentTarget.value as typeof disposition)}>
-              <option value="inline">Открывать, если браузер поддерживает формат</option>
-              <option value="attachment">Скачивать файлом</option>
-            </select>
-          </label>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>

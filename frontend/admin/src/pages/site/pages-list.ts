@@ -81,7 +81,7 @@ export function pageListEntries(
         kindLabel: "Файл",
         routes: [route],
         primaryRoute: route,
-        searchText: `${name} файл публичный файл ${route.path} ${route.node.fileDisposition ?? "inline"}`,
+        searchText: `${name} файл публичный файл ${route.path}`,
         groupKey: group.key,
         groupLabel: group.label,
       };

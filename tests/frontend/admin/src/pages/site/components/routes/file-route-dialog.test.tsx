@@ -17,7 +17,7 @@ import { FileRouteDialog } from "../../../../../../../../frontend/admin/src/page
 import { parseStaticFilePath } from "../../../../../../../../frontend/admin/src/pages/site/components/routes/route-utils";
 
 describe("file route dialog", () => {
-  it("shows fixed-path, public-file, and delivery-mode choices", () => {
+  it("shows fixed-path and public-file choices without a delivery-mode control", () => {
     const markup = renderToStaticMarkup(
       <FileRouteDialog
         open
@@ -31,8 +31,9 @@ describe("file route dialog", () => {
     expect(markup).toContain('value="/file"');
     expect(markup).toContain("Только фиксированный путь");
     expect(markup).toContain("Выбрать публичный файл");
-    expect(markup).toContain('<option value="inline" selected="">Открывать, если браузер поддерживает формат</option>');
-    expect(markup).toContain('<option value="attachment">Скачивать файлом</option>');
+    expect(markup).not.toContain("Поведение");
+    expect(markup).not.toContain("Открывать, если браузер поддерживает формат");
+    expect(markup).not.toContain("Скачивать файлом");
     expect(markup).toContain("Создать маршрут");
   });
 
