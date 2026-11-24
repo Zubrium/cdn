@@ -2,7 +2,7 @@
 
 Изолированный стек для проверки контракта из [SPEC-observability](../../spec/observability/SPEC-observability.md): `zubrium-obs` → OTel Collector → OpenObserve, плюс одноразовые PostgreSQL и S3-эмулятор Moto. Стек использует `profiles: [observability]` в корневом [compose.yaml](../../compose.yaml); сервис `core-qa-postgres` и рабочие API не затрагиваются.
 
-> Все проверки этого стека пока ожидают реального прогона: статусы `OBS-001..OBS-010` в [acceptance matrix](../../tests/ACCEPTANCE-MATRIX.md) не выставлены в `pass`, результаты не записаны в [QA report](../../docs/QA_REPORT.md).
+> Статусы сценариев и результаты прогона смотрите в [acceptance matrix](../../tests/ACCEPTANCE-MATRIX.md) и [QA report](../../docs/QA_REPORT.md). `pass` выставляется только после исполняемой проверки.
 
 ## 1. Предусловия
 
@@ -18,7 +18,8 @@
 
 ```sh
 export OBS_POSTGRES_PASSWORD='<random-password>'
-export OBS_POSTGRES_MIGRATION_PASSWORD='<different-random-password>'
+export OBS_POSTGRES_RUNTIME_PASSWORD='<different-random-password>'
+export OBS_POSTGRES_MIGRATION_PASSWORD='<another-random-password>'
 export OBS_S3_ACCESS_KEY='<random-access-key>'
 export OBS_S3_SECRET_KEY='<random-secret-key>'
 export OBS_OPENOBSERVE_EMAIL='<local-admin@example.test>'
@@ -29,7 +30,7 @@ export OBS_CONTENT_CREDENTIAL='<random-service-credential>'
 export OBS_BOOTSTRAP_SECRET='<random-bootstrap-secret>'
 ```
 
-Необязательные несекретные переопределения: `OBS_POSTGRES_USER` (по умолчанию `obs_admin`), `OBS_POSTGRES_DB` (по умолчанию `zubrium_obs`).
+Необязательные несекретные переопределения: `OBS_POSTGRES_USER` (по умолчанию `obs_admin`), `OBS_POSTGRES_DB` (по умолчанию `zubrium_obs`). Init-скрипт создаёт три роли: `obs_runtime` (DML Core через `zubrium_core_runtime`), `obs_migrator` (Atlas) и групповую роль `zubrium_core_runtime`; `OBS_POSTGRES_PASSWORD` принадлежит административной роли и не используется приложением.
 
 Base64 для Basic auth Collector получаем из уже экспортированных email/password, **не записывая секрет в файл и не печатая его**:
 
@@ -52,7 +53,7 @@ docker compose --profile observability run --rm --no-deps --entrypoint /usr/loca
 docker compose --profile observability up -d --build
 ```
 
-Локальный `main/config.observability.yaml` — несекретный (только `*_env` и адреса внутри docker network), но является артефактом конкретного прогона; не коммитьте его. Compose монтирует его только для чтения в `/etc/zubrium/config.yaml`. Сборка использует корневой context и `main/Dockerfile` с `BUILD_TAGS=full`: пример конфига включает компоненты, которые есть только в full-профиле.
+Локальный `main/config.observability.yaml` — несекретный (только `*_env` и адреса внутри docker network), но является артефактом конкретного прогона; не коммитьте его. Compose монтирует его только для чтения в `/etc/zubrium/config.yaml`. Сборка использует корневой context и `main/Dockerfile` с `BUILD_TAGS=full`: пример конфига включает компоненты, которые есть только в full-профиле. Top-level блок `prerender` обязателен для full-профиля; при запуске на хосте создайте указанный `staging_directory` с режимом `0700`, иначе preflight sandbox отклонит конфигурацию.
 
 ## 4. Что где смотреть
 
@@ -66,30 +67,38 @@ docker compose --profile observability up -d --build
 
 ## 5. Примеры запросов в OpenObserve
 
-Имена полей в SQL зависят от фактического OTLP-маппинга; после первого реального прогона сверьте их с записями в UI и поправьте примеры. Фильтры по `module.id`, `component.id`, `operation.id` и `trace_id` должны оставаться обязательными для расследования.
+После реального OTLP-прогона потоки логов и трейсов называются `default`, а метрики попадают в отдельные потоки по имени серии (`zubrium_operation_total`, `zubrium_http_server_requests_total` и т.д.). Фильтры по `module_id`, `component_id`, `operation_id` и `trace_id` остаются обязательными для расследования.
 
 Logs (SQL):
 
 ```sql
-SELECT timestamp, trace_id, module_id, component_id, operation_id,
-       http_status_code, outcome, message
-FROM logs
-WHERE module_id = 'engine.forms'
-  AND operation_id LIKE '%status%'
-ORDER BY timestamp DESC
+SELECT _timestamp, trace_id, module_id, component_id, operation_id,
+       http_status_code, outcome, body
+FROM "default"
+WHERE module_id = 'admin'
+  AND http_route LIKE '/api/admin/%'
+ORDER BY _timestamp DESC
 LIMIT 50;
 ```
 
 ```sql
--- Конфликт revision: ожидается http_status_code = 409 и outcome = error.
-SELECT timestamp, trace_id, operation_id, error_type, http_status_code
-FROM logs
-WHERE http_status_code = 409 AND outcome = 'error'
-ORDER BY timestamp DESC
+-- Ошибочный HTTP-ответ: ожидается outcome = 'error'.
+SELECT _timestamp, trace_id, operation_id, http_status_code, body
+FROM "default"
+WHERE http_status_code >= 400 AND outcome = 'error'
+ORDER BY _timestamp DESC
 LIMIT 20;
 ```
 
-Traces: откройте раздел Traces и выполните поиск по `trace_id` (32 hex) из заголовка ответа `X-Trace-ID`; проверьте порядок span'ов `http.server` → `bus.dispatch` → `worker.task` и фильтры `module.kind = worker`, `operation.id = <stable operation ID>`.
+Traces: откройте раздел Traces и выполните поиск по `trace_id` (32 hex) из заголовка ответа `X-Trace-ID`; проверьте порядок span'ов `http.server` → `bus.dispatch` → `worker.task` и фильтры `module.kind = worker`, `operation.id = <stable operation ID>`. Тот же `trace_id` доступен в `exemplars` метрик:
+
+```sql
+SELECT _timestamp, operation_id, module_id, component_id, exemplars
+FROM "zubrium_operation_total"
+WHERE exemplars LIKE '%6f0b0e1a2c3d4e5f60718293a4b5c6d7%'
+ORDER BY _timestamp DESC
+LIMIT 20;
+```
 
 PromQL (метрики):
 
@@ -114,6 +123,26 @@ sum by (module_id, component_id, operation_id, outcome) (
 ```
 
 Метрики `zubrium_cache_*` описаны в [SPEC-caching](../../spec/architecture/SPEC-caching.md) и [SPEC-observability](../../spec/observability/SPEC-observability.md), но кэши пока не испускают их: запросы к этим сериям вернут пустой результат до волны реализации кэширования и прогрева.
+
+Исполняемые сценарии `OBS-001..OBS-010` запускаются из корня checkout:
+
+```sh
+sh tests/qa/run-obs-red.sh
+```
+
+Без live-стек сценарии `OBS-006`/`OBS-008` честно `SKIP`. Для полного прогона
+дополнительно задайте (значения — только в env, не в файлах репозитория):
+
+```sh
+export OBS_TEST_OTEL_ENDPOINT=http://127.0.0.1:14318
+export OBS_TEST_OTEL_FAILURE_ENDPOINT=http://127.0.0.1:14319  # закрытый порт
+export OBS_TEST_OQ_SEARCH_URL=http://127.0.0.1:15080/api/default/_search
+export OBS_TEST_OQ_AUTH="$(printf '%s:%s' "$OBS_OPENOBSERVE_EMAIL" "$OBS_OPENOBSERVE_PASSWORD" | base64 | tr -d '\n')"
+```
+
+`OBS_TEST_OQ_AUTH` — base64 от `email:password` для аутентифицированного
+`POST /api/default/_search`; harness сам формирует SQL-окно и отдельно опрашивает
+метрические потоки OpenObserve v1.1.2.
 
 ## 6. Переключение в file-режим
 

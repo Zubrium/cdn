@@ -24,6 +24,44 @@ func TestSanitisationAndSensitiveKeys(t *testing.T) {
 	}
 }
 
+func TestIdentityAttributesOmitEmptyValues(t *testing.T) {
+	attrs := identityAttributes(Identity{ModuleKind: ModuleKindBus, ModuleID: "bus", ComponentID: "dispatcher", OperationID: "core.foo"})
+	for _, attr := range attrs {
+		if attr.Key == "" || attr.Text == "" {
+			t.Fatalf("empty identity attribute was emitted: %#v", attr)
+		}
+	}
+	if _, found := attributesMap(attrs)["service.name"]; found {
+		t.Fatal("empty service.name shadows the process resource attribute")
+	}
+
+	dir := t.TempDir()
+	observer, err := New(Config{Mode: ModeFile, Directory: dir, MinLevel: LevelDebug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observer.Close(context.Background())
+	identity := Identity{ModuleKind: ModuleKindBus, ModuleID: "bus", ComponentID: "dispatcher", OperationID: "core.foo"}
+	if err := observer.Operation(context.Background(), identity, "bus.dispatch", nil, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := os.ReadFile(filepath.Join(dir, "metrics.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(metrics)), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"service.name", "deployment.profile", "router.branch"} {
+			if value, found := record[key]; found && value == "" {
+				t.Fatalf("empty %s shadows the resource attribute in metric: %s", key, line)
+			}
+		}
+	}
+}
+
 func TestTracePropagation(t *testing.T) {
 	incoming := http.Header{}
 	TraceContext{TraceID: strings.Repeat("a", 32), SpanID: strings.Repeat("b", 16), Sampled: true}.Inject(incoming)

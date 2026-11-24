@@ -200,6 +200,23 @@ worker:
       task_timeout: 30m
       lease_duration: 30s
 
+# Full profile registers the prerender worker; its sandbox must be configured
+# explicitly. Adjust sandbox_platform to the host architecture if needed.
+prerender:
+  sandbox_image: zenika/alpine-chrome@sha256:1727e672844c93a15b5f32991febcf67d2d4f23ac4dbc2dec2f310c582aa36a2
+  sandbox_platform: "linux/arm64"
+  docker_binary: "/usr/local/bin/docker"
+  staging_directory: "/var/lib/zubrium/prerender"
+  cpus: "1"
+  memory_limit_bytes: 268435456
+  pids_limit: 64
+  max_document_bytes: 1048576
+  max_plan_bytes: 1048576
+  max_artifacts: 4
+  max_artifact_bytes: 2097152
+  max_total_bytes: 8388608
+  timeout: 90s
+
 file_api:
   max_json_bytes: 1048576
   max_attribute_bytes: 65536

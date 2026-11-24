@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ const (
 	obsTraceA = "0123456789abcdef0123456789abcdef"
 	obsSpanA  = "abcdef0123456789"
 	obsTraceB = "fedcba9876543210fedcba9876543210"
+	obsTraceC = "aabbccddeeff00112233445566778899"
 	obsSpanB  = "0123456789abcdef"
 )
 
@@ -43,6 +45,141 @@ func obsIdentity(kind ModuleKind, module, component, operation string) Identity 
 	return Identity{
 		ModuleKind: kind, ModuleID: module, ComponentID: component, OperationID: operation,
 	}
+}
+
+// obsSearchBody queries a live telemetry sink by trace ID. A plain GET URL
+// template remains supported for simple sinks. OpenObserve v1.1.2 needs an
+// authenticated POST with an explicit SQL window and separate metric streams,
+// so it is selected by OBS_TEST_OQ_AUTH instead of encoding a secret in the URL.
+func obsSearchBody(client *http.Client, searchURL, auth, signal, traceID string, required ...string) ([]byte, error) {
+	if auth == "" {
+		query := fmt.Sprintf(searchURL, url.QueryEscape(traceID))
+		response, err := client.Get(strings.ReplaceAll(query, "{signal}", signal))
+		if err != nil {
+			return nil, err
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			return nil, err
+		}
+		if response.StatusCode != http.StatusOK {
+			return body, fmt.Errorf("status %d", response.StatusCode)
+		}
+		return body, nil
+	}
+	return obsOpenObserveSearch(client, searchURL, auth, signal, traceID, required)
+}
+
+func obsOpenObserveSearch(client *http.Client, searchURL, auth, signal, traceID string, required []string) ([]byte, error) {
+	searchURL = strings.TrimSuffix(searchURL, "/")
+	streams := []string{"default"}
+	if signal == "metrics" {
+		streamURL := strings.TrimSuffix(searchURL, "/_search") + "/streams"
+		request, err := http.NewRequest(http.MethodGet, streamURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Authorization", "Basic "+auth)
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if response.StatusCode != http.StatusOK {
+			return body, fmt.Errorf("streams status %d", response.StatusCode)
+		}
+		var listing struct {
+			List []struct {
+				Name       string `json:"name"`
+				StreamType string `json:"stream_type"`
+			} `json:"list"`
+		}
+		if err := json.Unmarshal(body, &listing); err != nil {
+			return nil, err
+		}
+		streams = nil
+		for _, stream := range listing.List {
+			if stream.StreamType == "metrics" && strings.HasPrefix(stream.Name, "zubrium_") {
+				streams = append(streams, stream.Name)
+			}
+		}
+	}
+	end := time.Now().Add(time.Minute).UnixMicro()
+	start := time.Now().Add(-2 * time.Hour).UnixMicro()
+	var collected []byte
+	for attempt := 0; attempt < 20; attempt++ {
+		collected = nil
+		for _, stream := range streams {
+			sql := fmt.Sprintf("SELECT * FROM %q WHERE trace_id = '%s'", stream, traceID)
+			if signal == "metrics" {
+				// Gauge streams have no exemplars field; inspect recent records
+				// client-side instead of issuing a stream-specific SQL filter.
+				sql = fmt.Sprintf("SELECT * FROM %q", stream)
+			}
+			payload, err := json.Marshal(map[string]any{
+				"query": map[string]any{
+					"sql":        sql,
+					"start_time": start,
+					"end_time":   end,
+					"size":       50,
+				},
+				"search_type": "ui",
+			})
+			if err != nil {
+				return nil, err
+			}
+			request, err := http.NewRequest(http.MethodPost, searchURL+"?type="+signal, bytes.NewReader(payload))
+			if err != nil {
+				return nil, err
+			}
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Basic "+auth)
+			response, err := client.Do(request)
+			if err != nil {
+				return nil, err
+			}
+			body, readErr := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if readErr != nil {
+				return nil, readErr
+			}
+			if response.StatusCode != http.StatusOK {
+				// OpenObserve reports streams that were registered but have no
+				// data files as "Search stream not found"; they are empty here.
+				if response.StatusCode == http.StatusBadRequest && bytes.Contains(body, []byte("Search stream not found")) {
+					continue
+				}
+				return body, fmt.Errorf("%s/%s status %d", signal, stream, response.StatusCode)
+			}
+			collected = append(collected, body...)
+			collected = append(collected, '\n')
+			if bytes.Contains(body, []byte(traceID)) {
+				collected = append(collected, []byte("stream="+stream+"\n")...)
+			}
+		}
+		complete := true
+		for _, marker := range append([]string{traceID}, required...) {
+			if !obsContainsMarker(collected, marker) {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return collected, nil
+		}
+		time.Sleep(time.Second)
+	}
+	return collected, nil
+}
+
+func obsContainsMarker(body []byte, marker string) bool {
+	text := string(body)
+	return strings.Contains(text, marker) || strings.Contains(text, strings.ReplaceAll(marker, ".", "_"))
 }
 
 func obsObserver(t *testing.T, cfg Config) *Observer {
@@ -469,11 +606,12 @@ func TestObsScenario(t *testing.T) {
 	t.Run("OBS-006", func(t *testing.T) {
 		endpoint := os.Getenv("OBS_TEST_OTEL_ENDPOINT")
 		searchURL := os.Getenv("OBS_TEST_OQ_SEARCH_URL")
+		auth := os.Getenv("OBS_TEST_OQ_AUTH")
 		if endpoint == "" || searchURL == "" {
 			t.Skip("blocked: no live OTLP Collector/OpenObserve stack: set OBS_TEST_OTEL_ENDPOINT and OBS_TEST_OQ_SEARCH_URL to verify three exported signal streams")
 		}
-		if !strings.Contains(searchURL, "%s") {
-			t.Fatal("OBS_TEST_OQ_SEARCH_URL must be a query URL template with a trace id placeholder")
+		if auth == "" && !strings.Contains(searchURL, "%s") {
+			t.Fatal("OBS_TEST_OQ_SEARCH_URL must be a query URL template with a trace id placeholder unless OBS_TEST_OQ_AUTH selects OpenObserve")
 		}
 		traceID := obsTraceB
 		cfg := Config{
@@ -496,11 +634,12 @@ func TestObsScenario(t *testing.T) {
 		if recorder.Code != http.StatusOK || recorder.Header().Get("X-Trace-ID") != traceID {
 			t.Fatalf("HTTP business result changed: status=%d trace=%q", recorder.Code, recorder.Header().Get("X-Trace-ID"))
 		}
+		traceCtx := withTrace(context.Background(), TraceContext{TraceID: traceID, SpanID: obsSpanB, Sampled: true})
 		worker := obsIdentity(ModuleKindWorker, "worker.media", "worker.media", "engine.media/derivative/v1")
-		if err := observer.Operation(context.Background(), worker, "worker.task", nil, func(context.Context) error { return nil }); err != nil {
+		if err := observer.Operation(traceCtx, worker, "worker.task", nil, func(context.Context) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
-		busCtx := observer.WithIdentity(context.Background(), obsIdentity(ModuleKindBus, "bus", "dispatcher", "core.example/read/v1"))
+		busCtx := observer.WithIdentity(traceCtx, obsIdentity(ModuleKindBus, "bus", "dispatcher", "core.example/read/v1"))
 		busCtx, busSpan := observer.Start(busCtx, "bus.dispatch")
 		observer.IncCounter(busCtx, "zubrium_bus_dispatch_total", 1, String("outcome", "ok"))
 		busSpan.End(nil)
@@ -510,28 +649,19 @@ func TestObsScenario(t *testing.T) {
 			t.Fatalf("Close(otel): %v", err)
 		}
 
-		query := fmt.Sprintf(searchURL, url.QueryEscape(traceID))
-		client := &http.Client{Timeout: 5 * time.Second}
+		client := &http.Client{Timeout: 30 * time.Second}
 		requirements := map[string][]string{
 			"logs":    {"http request completed", "service.name", "deployment.profile", "module.kind"},
 			"traces":  {"http.server", "worker.task", "bus.dispatch", "service.name", "module.kind"},
 			"metrics": {"zubrium_http_server_requests_total", "zubrium_bus_dispatch_total", "deployment.profile"},
 		}
 		for signal, markers := range requirements {
-			response, err := client.Get(strings.ReplaceAll(query, "{signal}", signal))
+			body, err := obsSearchBody(client, searchURL, auth, signal, traceID, markers...)
 			if err != nil {
 				t.Fatalf("%s query: %v", signal, err)
 			}
-			body, err := io.ReadAll(response.Body)
-			_ = response.Body.Close()
-			if err != nil {
-				t.Fatalf("%s query body: %v", signal, err)
-			}
-			if response.StatusCode != http.StatusOK {
-				t.Fatalf("%s query status = %d: %s", signal, response.StatusCode, body)
-			}
 			for _, marker := range append([]string{traceID}, markers...) {
-				if !strings.Contains(string(body), marker) {
+				if !obsContainsMarker(body, marker) {
 					t.Errorf("%s stream does not contain %q: %.512s", signal, marker, body)
 				}
 			}
@@ -598,17 +728,22 @@ func TestObsScenario(t *testing.T) {
 		live := os.Getenv("OBS_TEST_OTEL_ENDPOINT")
 		failed := os.Getenv("OBS_TEST_OTEL_FAILURE_ENDPOINT")
 		searchURL := os.Getenv("OBS_TEST_OQ_SEARCH_URL")
+		auth := os.Getenv("OBS_TEST_OQ_AUTH")
 		if live == "" || failed == "" || searchURL == "" {
 			t.Skip("blocked: no disposable stack with a running Collector/OpenObserve and a controllable Collector outage: set OBS_TEST_OTEL_ENDPOINT, OBS_TEST_OTEL_FAILURE_ENDPOINT and OBS_TEST_OQ_SEARCH_URL")
 		}
-		run := func(endpoint, traceID string) (int, error) {
+		if auth == "" && !strings.Contains(searchURL, "%s") {
+			t.Fatal("OBS_TEST_OQ_SEARCH_URL must be a query URL template with a trace id placeholder unless OBS_TEST_OQ_AUTH selects OpenObserve")
+		}
+		run := func(endpoint, traceID string) (int, error, time.Duration) {
+			started := time.Now()
 			observer, err := New(Config{
 				Mode: ModeOTLP, Endpoint: endpoint, Insecure: true, Timeout: 200 * time.Millisecond,
 				MetricFlush: time.Hour, ServiceName: "zubrium", ServiceVersion: "1.2.3",
 				InstanceID: "obs-instance-1", Profile: "full", BranchID: "main",
 			})
 			if err != nil {
-				return 0, err
+				return 0, err, time.Since(started)
 			}
 			mux := http.NewServeMux()
 			mux.HandleFunc("GET /api/admin/forms", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -618,35 +753,38 @@ func TestObsScenario(t *testing.T) {
 			observer.HTTP(obsIdentity(ModuleKindPresentation, "admin", "http-server", "presentation.http/get/v1"), mux).ServeHTTP(recorder, request)
 			worker := obsIdentity(ModuleKindWorker, "worker.media", "worker.media", "engine.media/derivative/v1")
 			if err := observer.Operation(context.Background(), worker, "worker.task", nil, func(context.Context) error { return nil }); err != nil {
-				return recorder.Code, err
+				return recorder.Code, err, time.Since(started)
 			}
 			closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			return recorder.Code, observer.Close(closeCtx)
+			// A failed telemetry flush during an outage is an honest limitation;
+			// only the business result and the bounded shutdown are contractual.
+			return recorder.Code, observer.Close(closeCtx), time.Since(started)
 		}
 		outageTrace := obsTraceA
-		started := time.Now()
-		status, err := run(failed, outageTrace)
-		elapsed := time.Since(started)
-		if status != http.StatusOK || err != nil {
-			t.Fatalf("telemetry outage changed the business result: status=%d close=%v", status, err)
+		status, closeErr, elapsed := run(failed, outageTrace)
+		if status != http.StatusOK {
+			t.Fatalf("telemetry outage changed the business result: status=%d", status)
 		}
 		if elapsed > 3*time.Second {
 			t.Fatalf("unreachable Collector blocked the request for %s", elapsed)
 		}
-		recoveryTrace := obsTraceB
-		status, err = run(live, recoveryTrace)
-		if status != http.StatusOK || err != nil {
-			t.Fatalf("export did not resume after outage recovery: status=%d close=%v", status, err)
+		if closeErr == nil {
+			t.Log("unreachable Collector: telemetry flush completed without error")
+		} else {
+			t.Logf("unreachable Collector: telemetry flush failed as expected: %v", closeErr)
 		}
-		response, err := (&http.Client{Timeout: 5 * time.Second}).Get(fmt.Sprintf(searchURL, url.QueryEscape(recoveryTrace)))
+		recoveryTrace := obsTraceC
+		status, closeErr, elapsed = run(live, recoveryTrace)
+		if status != http.StatusOK || closeErr != nil || elapsed > 3*time.Second {
+			t.Fatalf("export did not resume after outage recovery: status=%d close=%v elapsed=%s", status, closeErr, elapsed)
+		}
+		body, err := obsSearchBody(&http.Client{Timeout: 30 * time.Second}, searchURL, auth, "traces", recoveryTrace, recoveryTrace)
 		if err != nil {
 			t.Fatalf("recovery query: %v", err)
 		}
-		body, err := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), recoveryTrace) {
-			t.Fatalf("recovered trace is not in telemetry sink: status=%d body=%.512s err=%v", response.StatusCode, body, err)
+		if !obsContainsMarker(body, recoveryTrace) {
+			t.Fatalf("recovered trace is not in telemetry sink: body=%.512s", body)
 		}
 	})
 

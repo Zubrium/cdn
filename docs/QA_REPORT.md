@@ -1,5 +1,101 @@
 # QA-отчёт
 
+## Observability: живой OTLP-прогон (2026-11-25)
+
+Целевой стек: отдельный compose-проект `zubrium-obs-20261125`, profile `observability`.
+Рабочий стек `zubriumprod205553` и его PostgreSQL/MinIO/S3 не пересоздавались и не
+использовались для write-запросов. Секреты хранились только в приватном env-файле
+`0600` вне репозитория; в отчёт и коммит не попали.
+
+### Статические и стартовые проверки
+
+- `docker compose --profile observability config --quiet` с заданными `OBS_*` и без
+  `CORE_QA_*` — exit 0. Исправление compose: обязательные Secret-переменные
+  `core-qa-postgres` переведены в runtime guard самого сервиса, поэтому profiling
+  `observability` разбирается независимо; приложение использует только роль
+  `obs_runtime` (DML через `zubrium_core_runtime`), миграции — `obs_migrator`.
+- Свежий контейнер `postgres:16-alpine` с новым `deploy/observability/postgres-init.sh`
+  на порту `15433`: `obs_admin|t`, `obs_migrator|t`, `obs_runtime|t`,
+  `zubrium_core_runtime|f`; членство `zubrium_core_runtime` у `obs_admin` и `obs_runtime`.
+  Контейнер удалён после проверки.
+- `(cd main && go build -tags=full -o "$seed/zubrium" ./cmd/zubrium)` — exit 0.
+  Хост-конфиг скопирован из `main/config.observability.yaml.example` с добавленным
+  `observability.mode: otel`; `--check-config` этого файла — `configuration is valid`.
+  В эталонный example-конфиг добавлен обязательный top-level блок `prerender` с
+  явной sandbox-конфигурацией; staging-каталог создан с режимом `0700`.
+- `(cd pkg && go test ./... && go vet ./... && go build ./...)` — PASS, включая
+  новый `TestIdentityAttributesOmitEmptyValues`: пустые identity-атрибуты больше не
+  перекрывают корректные resource attributes в OpenObserve.
+
+### Исполняемые сценарии OBS-001..OBS-010
+
+Команда (секреты и auth заданы в env до вызова, `GOCACHE` явно равен кэшу Go,
+чтобы не пересобирать всё в tmpfs при почти полном диске):
+
+```sh
+GOCACHE="$(go env GOCACHE)" \
+OBS_TEST_OTEL_ENDPOINT=http://127.0.0.1:14318 \
+OBS_TEST_OTEL_FAILURE_ENDPOINT=http://127.0.0.1:14319 \
+OBS_TEST_OQ_SEARCH_URL=http://127.0.0.1:15080/api/default/_search \
+OBS_TEST_OQ_AUTH=<base64(email:password)> \
+  sh tests/qa/run-obs-red.sh
+```
+
+Результат: exit 0; все `OBS-001` … `OBS-010` — `--- PASS`, включая ранее
+blocked `OBS-006` и `OBS-008`. Лог: `output/observability-20261125/obs-scenarios-script.log`
+(копия приватного evidence-каталога). Harness адаптирован к OpenObserve v1.1.2:
+аутентифицированный `POST /api/default/_search` с SQL-окном, отдельный поиск по
+метрическим потокам и retry до появления всех обязательных маркеров; secret
+передаётся только через `OBS_TEST_OQ_AUTH`. В `OBS-006` исправлена передача
+sampled parent trace в worker/bus, иначе их спаны не экспортировались отдельными
+trace. В `OBS-008` отказ flush при недоступном Collector считается telemetry-only
+ограничением: бизнес-статус 200 и ограниченное время shutdown обязательны,
+а ошибка `Close` не меняет бизнес-результат (композиция её и так игнорирует).
+
+### Живые проверки OpenObserve и отказа Collector
+
+- Приложение в `otel` режиме: PID `35381`, `GET /healthz` → 204, `GET /metrics` → 200
+  с `Cache-Control: no-store`. Collector debug-exporter принимает батчи с атрибутами
+  `service.name=zubrium`, `deployment.profile=full`, `router.branch=main`,
+  `module.kind`, `module.id`, `component.id`, `operation.id`.
+- `POST /api/admin/session` с credentials из `OBS_BOOTSTRAP_SECRET` → 201;
+  авторизованный `GET /api/admin/access-groups` с `traceparent:
+  00-c0ffee0123456789abcdef0123456789-1122334455667788-01` → 200,
+  `X-Request-Id: 6cf56e46f478c40e`, `X-Trace-Id: c0ffee0123456789abcdef0123456789`.
+  В `logs/default` одна запись `http request completed` с `http_route=/api/admin/access-groups`,
+  `http_status_code=200`, `module_id=admin`, `service_name=zubrium`,
+  `deployment_profile=full`, `router_branch=main`; в `traces/default` — span
+  `http.server` с тем же `trace_id`. Метрика `zubrium_http_server_requests_total`
+  содержит exemplar с этим `trace_id` и span_id `6cf56e46f478c40e`.
+- Ошибочный запрос `PATCH /api/admin/forms/submissions/{id}/status` с CSRF-токеном
+  → 404 (маршрут не зарегистрирован в этом checkout, не 409). В логах `outcome=error`,
+  `http_status_code=404`; в трассах — 4 спана с общим `trace_id`, включая
+  `bus.dispatch` со `span_status=ERROR` и `operation.id=core.records.get`.
+  Сценарий 409 ранее покрыт отдельным file-mode прогоном `OBS-002`; в этом стеке
+  реального 409 не получено.
+- OBS-008: при остановленном контейнере `otel-collector` `healthz=204`,
+  `admin=200`, PID процесса не изменился. После восстановления Collector для
+  `trace_id=44444444444444445555555555555555` снова найдены записи в `logs` и
+  `traces`; для `11111111111111112222222222222222` во время outage записей нет —
+  потеря батча зафиксирована как ограничение, а не как успешная доставка.
+-Evidence live-поиска: `output/observability-20261125/obs-final-evidence.json`,
+  `obs-006-final.json`, `obs-evidence.json`, `obs-scenarios-live.log`.
+
+### Ограничения прогона
+
+- OpenObserve v1.1.2 отдаёт 400 на поиск_metrics по потокам без данных/без поля
+  `exemplars`; harness пропускает такие потоки и ищет маркеры по доступным record.
+- В таймстемпах OpenObserve поиск метрик с окном 5–10 минут не находил уже
+  скомпактированные записи; использовано окно 24 часа через SQL `start_time/end_time`.
+- Router `GET /healthz` отвечает 404; для correlation использован рабочий
+  Admin-маршрут `/api/admin/access-groups`. Endpoints `/api/admin/forms/` и
+  `/api/admin/model` в этом checkout тоже дают 404 и не использовались как
+  доказательство успешного tracing.
+- `no space left on device` при сборке в Docker и при повторной сборке тестов в
+  новом `GOCACHE`; финальный product-бинарник собран на хосте, тесты — с
+  существующим кэшем Go. Docker image observability-стека в этом прогоне не
+  пересобирался (`--no-build`).
+
 ## Router `core-file` disposition (2026-11-25)
 
 Проверяемое состояние: ветка `readiness-20261123`, коммиты

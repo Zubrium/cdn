@@ -26,7 +26,7 @@ python3 "$checker" "$ledger" || exit $?
 python3 "$root/tests/go-overlay.py" > "$overlay" || exit $?
 
 printf '%s\n' "==> running observability scenarios: TestObsScenario in pkg"
-if ! (cd "$root/pkg" && GOCACHE="$work_dir/go-build" go test -count=1 -v -overlay="$overlay" \
+if ! (cd "$root/pkg" && GOCACHE="${GOCACHE:-$work_dir/go-build}" go test -count=1 -v -overlay="$overlay" \
 	-run '^TestObsScenario$' ./...) > "$log" 2>&1; then
 	cat "$log" >&2
 	exit 1
@@ -38,9 +38,18 @@ for id in OBS-001 OBS-002 OBS-003 OBS-004 OBS-005 OBS-007 OBS-009 OBS-010; do
 		exit 1
 	fi
 done
+if [ -n "${OBS_TEST_OTEL_ENDPOINT:-}" ] && [ -n "${OBS_TEST_OQ_SEARCH_URL:-}" ]; then
+	# OpenObserve v1.1.2 requires OBS_TEST_OQ_AUTH (base64 email:password).
+	integration_result='PASS'
+else
+	integration_result='SKIP'
+fi
 for id in OBS-006 OBS-008; do
-	if ! grep -q -- "--- SKIP: TestObsScenario/$id" "$log"; then
-		printf '%s\n' "integration scenario $id must be honestly skipped without its env prerequisites" >&2
+	if [ "$id" = 'OBS-008' ] && [ -z "${OBS_TEST_OTEL_FAILURE_ENDPOINT:-}" ]; then
+		integration_result='SKIP'
+	fi
+	if ! grep -q -- "--- $integration_result: TestObsScenario/$id" "$log"; then
+		printf '%s\n' "integration scenario $id must report $integration_result for the configured environment" >&2
 		exit 1
 	fi
 done

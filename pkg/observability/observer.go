@@ -117,7 +117,16 @@ func identityAttributes(identity Identity) []Attribute {
 		String("component.id", identity.ComponentID),
 		String("operation.id", identity.OperationID),
 	}
-	return nonEmpty(attrs)
+	// OpenObserve and other OTLP backends may flatten resource attributes into
+	// a record. An explicitly exported empty value would then shadow the valid
+	// resource value, so identity attributes with an empty value are omitted.
+	result := make([]Attribute, 0, len(attrs))
+	for _, attr := range attrs {
+		if attr.Key != "" && attr.Text != "" {
+			result = append(result, attr)
+		}
+	}
+	return result
 }
 
 func traceAttributes(trace TraceContext) []Attribute {

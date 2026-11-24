@@ -4,16 +4,31 @@ services:
     restart: "no"
     environment:
       POSTGRES_USER: core_qa_admin
-      POSTGRES_PASSWORD: ${CORE_QA_POSTGRES_PASSWORD:?set CORE_QA_POSTGRES_PASSWORD}
-      CORE_QA_RUNTIME_PASSWORD: ${CORE_QA_RUNTIME_PASSWORD:?set CORE_QA_RUNTIME_PASSWORD}
-      CORE_QA_MIGRATION_PASSWORD: ${CORE_QA_MIGRATION_PASSWORD:?set CORE_QA_MIGRATION_PASSWORD}
-      CORE_QA_ELEVATED_PASSWORD: ${CORE_QA_ELEVATED_PASSWORD:?set CORE_QA_ELEVATED_PASSWORD}
+      # Defaults keep unrelated profiles parseable; the guard below still
+      # requires real secrets before this service can start.
+      POSTGRES_PASSWORD: ${CORE_QA_POSTGRES_PASSWORD:-}
+      CORE_QA_RUNTIME_PASSWORD: ${CORE_QA_RUNTIME_PASSWORD:-}
+      CORE_QA_MIGRATION_PASSWORD: ${CORE_QA_MIGRATION_PASSWORD:-}
+      CORE_QA_ELEVATED_PASSWORD: ${CORE_QA_ELEVATED_PASSWORD:-}
     ports:
       - "127.0.0.1:55432:5432"
     tmpfs:
       - /var/lib/postgresql/data
     volumes:
       - ./tests/qa/postgres-init.sh:/docker-entrypoint-initdb.d/10-core-qa.sh:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ -z "$${CORE_QA_POSTGRES_PASSWORD:-}" ] ||
+           [ -z "$${CORE_QA_RUNTIME_PASSWORD:-}" ] ||
+           [ -z "$${CORE_QA_MIGRATION_PASSWORD:-}" ] ||
+           [ -z "$${CORE_QA_ELEVATED_PASSWORD:-}" ]; then
+          echo "CORE_QA_* secrets are required to start the core-qa profile" >&2
+          exit 1
+        fi
+        exec docker-entrypoint.sh postgres
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U core_qa_admin -d postgres"]
       interval: 2s
@@ -30,6 +45,7 @@ services:
       POSTGRES_PASSWORD: ${OBS_POSTGRES_PASSWORD:?set OBS_POSTGRES_PASSWORD}
       POSTGRES_DB: ${OBS_POSTGRES_DB:-zubrium_obs}
       OBS_POSTGRES_MIGRATION_PASSWORD: ${OBS_POSTGRES_MIGRATION_PASSWORD:?set OBS_POSTGRES_MIGRATION_PASSWORD}
+      OBS_POSTGRES_RUNTIME_PASSWORD: ${OBS_POSTGRES_RUNTIME_PASSWORD:?set OBS_POSTGRES_RUNTIME_PASSWORD}
     ports:
       - "127.0.0.1:15432:5432"
     tmpfs:
@@ -135,7 +151,7 @@ services:
         condition: service_started
     environment:
       # Одноразовый демо-стек: раздельные роли для runtime и Atlas обязательны.
-      ZUBRIUM_DATABASE_URL: "postgres://${OBS_POSTGRES_USER:-obs_admin}:${OBS_POSTGRES_PASSWORD:?set OBS_POSTGRES_PASSWORD}@obs-postgres:5432/${OBS_POSTGRES_DB:-zubrium_obs}?sslmode=disable"
+      ZUBRIUM_DATABASE_URL: "postgres://obs_runtime:${OBS_POSTGRES_RUNTIME_PASSWORD:?set OBS_POSTGRES_RUNTIME_PASSWORD}@obs-postgres:5432/${OBS_POSTGRES_DB:-zubrium_obs}?sslmode=disable"
       ZUBRIUM_MIGRATION_DATABASE_URL: "postgres://obs_migrator:${OBS_POSTGRES_MIGRATION_PASSWORD:?set OBS_POSTGRES_MIGRATION_PASSWORD}@obs-postgres:5432/${OBS_POSTGRES_DB:-zubrium_obs}?sslmode=disable"
       ZUBRIUM_S3_ACCESS_KEY: ${OBS_S3_ACCESS_KEY:?set OBS_S3_ACCESS_KEY}
       ZUBRIUM_S3_SECRET_KEY: ${OBS_S3_SECRET_KEY:?set OBS_S3_SECRET_KEY}
