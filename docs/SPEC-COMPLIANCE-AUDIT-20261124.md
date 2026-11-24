@@ -5,8 +5,10 @@
 Проверяемое состояние: ветка `readiness-20261123`, HEAD
 `c662e380a5936558610df261f0996154a9a5f7fd`, чистый checkout
 `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-final-c662e38`.
-Все нижеследующие результаты относятся к этому коммиту; более ранние логи
-учитываются только как исторический контекст.
+Все нижеследующие baseline-результаты относятся к этому коммиту; более ранние логи
+учитываются только как исторический контекст. Требования, затронутые последующими
+циклами (`POST /api/locale-preference`, `CONC-008`), обновлены в записях циклов ниже
+и ссылаются на более поздние HEAD; baseline-доказательства при этом не переопределяются.
 
 Статусы используются в четырех значениях:
 
@@ -72,7 +74,7 @@ identity и функциональных сценариев не была осл
 | DB budget и fail-fast до API | Verified | `CONC-004` pass; `main/internal/config/scales.go`; бюджет считает все class limits |
 | Sharded LRU, RWMutex, coalescing, zero-copy `cache.View`, invalidation batch | Verified | `CONC-005..007` pass, включая `-race` вCore-cache runner |
 | Метрики с точными низкокардинальными label sets | Verified | `CONC-010` pass; regression на точные метки |
-| Изолированные class pools `media`/`prerender`/`publication` | Not implemented | `CONC-008 blocked`: Core `Claim` принимает `TaskClasses`, но production стартует одним `TaskExecutor` со всеми классами; `worker.<class>.concurrency` участвует только в расчёте бюджета |
+| Изолированные class pools `media`/`prerender`/`publication` | Verified | `CONC-008` pass: отдельный `TaskExecutor` на каждый включённый класс, class-scoped `Claim`, непересекающиеся dispatchable handler-карты; отключённые классы сохраняют fail-closed bindings для cross-class детей, но не получают pool; integration с насыщенным `media` и работающими `prerender`/`publication` на disposable PostgreSQL, бюджет проверен `CONC-004` |
 | Реальная нагрузка с живым pgxpool и активными пулами | Blocked | ledger-сценарии `CONC-001..004`, `009..011` имеют уровень unit, не load-test |
 
 ### `spec/architecture/SPEC-coordinator-platform.md`
@@ -83,7 +85,7 @@ identity и функциональных сценариев не была осл
 | Core не имеет engine/worker kinds, registry и DTO | Verified | `make lint-core-boundary`, `TestCoreDoesNotModelEngineOrWorkerComponents`, `TestRuntimeModulesUseDataBusInsteadOfImportingCore` |
 | Generic OperationExecutor и static DataBus allowlist в `main` | Implemented | `main/internal/composition`, `pkg/contracts`; полный independent acceptance не исполнен |
 | Class-scoped Claim внутри Core | Implemented | `core/application/coordination/workers.go` передаёт `TaskClasses` в `Claim`; SQL regression проходил на disposable PostgreSQL |
-| Изоляция production пулов по class | Not implemented | `CONC-008 blocked`, один executor с общим списком классов |
+| Изоляция production пулов по class | Verified | `CONC-008` pass; `Service.Pools` и `workerTaskPools` создают независимые executor'ы с общим owner/config epoch, но с собственными `limit`/`poll_interval`/`task_timeout`/`lease_duration` |
 | Все durable recovery/cancellation/retention сценарии | Implemented | код Coordinator есть; только `CORE-001` имеет integration evidence в финальном sweep |
 
 ### `spec/architecture/SPEC-engine-apis.md`
@@ -148,7 +150,7 @@ identity и функциональных сценариев не была осл
 | Media: manifest-pinned profile, processor version, groups/FileSet, sandbox | Verified | `WEB-019` integration pass с Docker/Linux sandbox |
 | Prerender: strict plan, trusted digest, network deny, stale rejection | Verified | `WEB-020` integration pass с headless Chromium |
 | Production component registration | Implemented | `main/internal/composition` регистрирует `worker.archive`, `worker.media`, `worker.prerender`; SPEC-заголовок об отсутствии registration расходится с кодом |
-| Изолированные class pools и полный lifecycle приёмки | Not implemented | `CONC-008 blocked`, нет class-scoped pool activation |
+| Изолированные class pools и полный lifecycle приёмки | Verified | `CONC-008` pass: активация после Ready engine'ов, class-scoped claim/execute/complete, shutdown; durable failure/recovery сценарии остаются отдельной волной `CORE-001` |
 
 ## 2. Core SPEC
 
@@ -298,7 +300,7 @@ identity и функциональных сценариев не была осл
 ### `spec/workers/SPEC-workers.md`
 
 См. раздел 1: handlers и registration **Implemented/Verified** по `WEB-012/019/020`,
-class-isolated pools **Not implemented** (`CONC-008`).
+class-isolated pools **Verified** (`CONC-008`, integration evidence на disposable PostgreSQL).
 
 ### Loader / File API
 
@@ -317,6 +319,7 @@ class-isolated pools **Not implemented** (`CONC-008`).
 - Integration-срез `website-integration` и `core-integration`: `2/2` gates, `74/74` executable scenario pass.
 - Executable ledger'ы OBS/CACHE/CONC/Core-cache в объёме, зафиксированном unified report.
 - `CORE-001`, `WEB-012`, `WEB-018..022` на disposable PostgreSQL/S3.
+- `CONC-008` на отдельном disposable PostgreSQL: насыщенный `media` не блокирует `prerender`/`publication`; budget/конфигурация классов проверены fail-fast тестами.
 - `E2E-PUB-001`, `E2E-RET-001` с точными PASS-строками и проверкой target ownership/build identity.
 
 ### Что Implemented, но не полностью принято
@@ -331,7 +334,6 @@ class-isolated pools **Not implemented** (`CONC-008`).
 
 - `CACHE-009`: изолированный caching proxy/CDN.
 - `OBS-006`, `OBS-008`: harness OpenObserve v1.1.2 и управляемый отказ Collector.
-- `CONC-008`: активация class-scoped изолированных пулов (одновременно **Not implemented** в runtime).
 - `CONTENT-005`, `FORMS-005`, `LOADER-005`: отдельные live e2e environment.
 - Полный independent browser/real-feature sweep и runtime CSS acceptance.
 - Deployer-owned proxy, rate limiting и cache policy enforcement.
@@ -339,7 +341,6 @@ class-isolated pools **Not implemented** (`CONC-008`).
 ### Что Not implemented
 
 - Resolver `sources.published_artifacts` и реальный warm-up targets `router_manifests`/`router_routes` в Core runner.
-- Активация изолированных `worker.<class>` пулов.
 - Router `UpdatePolicy`.
 - Forms statuses/CSV/expiry/cancel/cleanup.
 - Route-level 403/503 system page overrides.
@@ -364,3 +365,15 @@ class-isolated pools **Not implemented** (`CONC-008`).
 - HEAD после коммита и пуша: `107bbde` (ветка `readiness-20261123`).
 - Счётчики статусов в этом документе: до цикла `49 Verified / 53 Implemented / 19 Blocked / 13 Not implemented`; после `51 Verified / 53 Implemented / 19 Blocked / 11 Not implemented`.
 - Оставшиеся блокеры цикла: внешний proxy/CDN и rate limiting (`CACHE-009`), отдельные live environment для `CONTENT-005`, `FORMS-005`, `LOADER-005`, `UI-POL-011`, а также `OBS-006/008`; они не затронуты этой реализацией.
+
+### Запись цикла: `CONC-008`
+
+- SPEC ID: `CONC-008` в `spec/architecture/SPEC-concurrency.md` и разделы 9–11 того же документа; смежные проверки `CONC-004` (бюджет соединений) и `CONC-012` (топология без динамических handlers).
+- Изменённые файлы: код активных пулов — `core/application/coordination/service.go`, `core/presentation/coordinator.go`, `main/internal/composition/{components.go,task_executor.go,worker_handlers_full.go,worker_handlers_disabled.go}`, `main/internal/config/{config.go,scales.go}`, example YAML; regression-тесты — `tests/go/core/application/coordination/{service_test.go,workers_test.go}`, `tests/go/core/infrastructure/postgres/coordinator_test.go`, `tests/go/main/internal/composition/{task_executor_test.go,profile_full_test.go}`, `tests/go/main/internal/config/concurrency_budget_scenario_test.go` и обновлённые acceptance call sites.
+- Новая возможность: каждый включённый worker class получает отдельный `TaskExecutor` с собственными `limit`, `poll_interval`, `task_timeout` и `lease_duration`, общим owner/config epoch и class-scoped `Claim`; dispatched handler-карты непересекаются. Отключённый класс не создаёт pool и не может claim/complete чужую задачу, но сохраняет fail-closed registry binding, поэтому cross-class ребёнок остаётся в durable store до явного включения пула. Legacy `coordinator.task_lease/task_timeout/poll_interval` и `executor_concurrency` удалены; невалидные параметры любого пула отвергаются до старта, включая отключённые пулы и не-worker профили.
+- Тесты: RED/GREEN `TestCoordinatorServiceActivatesIsolatedClassPools`, `TestCoordinatorServiceIsolatesSaturatedWorkerPool`, `TestCoordinatorServiceFailedActivationIsTerminal`; composition `TestClassScopedDataBusTaskExecutorRejectsForeignClass`, `TestClassScopedDataBusTaskExecutorResolvesCrossClassChildren`, `TestFullProfileDisabledClassKeepsResolvableFailClosedBinding`; config `TestConcurrencyClassPoolScenario/CONC-008`; live integration `TestDisposableIsolatedWorkerPoolsRunIndependently`.
+- Результат: PASS. Integration на отдельном disposable PostgreSQL (`conc008-final2`, БД `zubrium_core_qa_isolated_pools_conc008_final2`) подтвердил, что насыщенный `media` с `Concurrency=1` не блокирует два `prerender` и один `publication`; соседние пулы не превышают лимиты; `media` дренируется после снятия блокировки; стек, сеть и private env удалены. Статические проверки: `git diff --check`, `python3 -m unittest tests/qa/test_scenario_ledger.py`, `bash -n tests/qa/run-website-router-e2e.sh`, `make lint-core-boundary`, `make test`, `make test-full`, `make test-router`, `make test-dev-fixtures`, `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures`, compile-only `full website_acceptance`, `go test -race` в `core/application/coordination`, Admin `typecheck/test/build/lint` — exit 0. Логи: `output/conc008-20261124-final/`.
+- Evidence: `output/conc008-20261124-final/integration.log` содержит точные строки `=== RUN TestDisposableIsolatedWorkerPoolsRunIndependently` и `--- PASS`; `coordination-race.log`, `test-full.log`, `admin.log` и остальные логи зафиксированы там же. Секреты в логи не попали: DSN в логе заменён на redacted.
+- HEAD кода после amending: `ed3ec076d8ba59d72113df93170e13ae0f2071f1` (ветка `readiness-20261123`); этот документ и матрица фиксируются отдельным evidence-коммитом.
+- Счётчики статусов в этом документе: до цикла `51 Verified / 53 Implemented / 19 Blocked / 11 Not implemented`; после `54 Verified / 53 Implemented / 19 Blocked / 8 Not implemented`.
+- Оставшиеся ограничения: `CONC-001..004` и `CONC-009..011` остаются unit/contract-level проверками без нагрузочного p99-прогона; `CACHE-009`, `OBS-006/008`, live environment для `CONTENT-005`, `FORMS-005`, `LOADER-005`, `UI-POL-011` и deployer-owned proxy не затронуты этим циклом.

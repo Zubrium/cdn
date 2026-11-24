@@ -88,7 +88,7 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 
 ## Конкуренция и устойчивость к нагрузке
 
-Контракт: [SPEC-concurrency](../spec/architecture/SPEC-concurrency.md). Сценарии `CONC-001..CONC-012` — целевые input/result проверки отдельной волны реализации. `CONC-008` дополнительно зависит от отдельного согласования class-scoped `Claim` в замороженном Core и остается blocked до активации изолированных пулов. `pass` выставляется только после записи команд и результатов в [QA report](../docs/QA_REPORT.md). Статические проверки и старый evidence не заменяют эти сценарии.
+Контракт: [SPEC-concurrency](../spec/architecture/SPEC-concurrency.md). Сценарии `CONC-001..CONC-012` — целевые input/result проверки отдельной волны реализации. `CONC-008` исполнен на отдельном disposable PostgreSQL с тремя активными class pool'ами; точные команды и результаты зафиксированы в [QA report](../docs/QA_REPORT.md). `pass` выставляется только после этой записи. Статические проверки и старый evidence не заменяют остальные сценарии.
 
 | ID | Вход и предусловия | Ожидаемый результат | Статус |
 | -- | ------------------ | ------------------- | ------ |
@@ -99,11 +99,20 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 | CONC-005 | Много параллельных read-запросов к одному холодному ключу `core.bytes` или `router.manifests`. | Источник прочитан один раз; метрика coalescing показывает одного `LEADER` и `JOINED` waiters; при ошибке leader'а все получают ошибку, stale не отдаётся. | pass |
 | CONC-006 | `-race` прогон внутреннего zero-copy path и benchmark hit по объектам разного размера. | Аллокации на hit не растут линейно от размера объекта; мутация `cache.View` или удержание после запроса детектируется как дефект; публичный HTTP-контракт не меняется. | pass |
 | CONC-007 | Поток `pg_notify` превышает `batch_size`; отдельно проверен reconnect LISTEN. | Пачка применяется не позже `batch_window`; overflow/reconnect вызывает полный clear; stale запись недоступна; растёт `zubrium_cache_invalidation_batch_total`. | pass |
-| CONC-008 | После согласования class-scoped `Claim`: насыщен пул `media`, одновременно активны `prerender` и `publication`. | Только задачи `media` ожидают lease; соседние пулы работают в своих лимитах; суммарные соединения не превышают бюджет; задачи чужого класса не завершаются `handler_unavailable`. | blocked (class-scoped claim not activated) |
+| CONC-008 | Насыщен пул `media` (`Concurrency=1`), одновременно активны `prerender` (`2`) и `publication` (`1`); конфигурация проверяет бюджет соединений и fail-fast для всех классов. | Только задачи `media` ожидают lease; соседние пулы завершают работы в своих лимитах; суммарные соединения не превышают бюджет; задачи чужого класса не завершаются `handler_unavailable`; после снятия блокировки `media` дренируется. | pass |
 | CONC-009 | Loader получает больше `max_concurrent_commits` и `max_concurrent_session_lookups`. | Избыточные операции получают `503`; состояние upload session и Core не меняется; лимиты upload staging и `commit_timeout` продолжают действовать. | pass |
 | CONC-010 | Снятие `/metrics` после нагрузки на HTTP, bus, core storage, loader и worker пулы. | Присутствуют все метрики раздела 12 спецификации; метки только из разрешённого набора; `/metrics` отдаёт `no-store`. | pass |
 | CONC-011 | Shutdown во время параллельной нагрузки с отменёнными и успешными операциями. | Admission закрывается, активные операции завершаются или отменяются по deadline, повторный `End`/release не создаёт дубликаты метрик и не роняет процесс. | pass |
 | CONC-012 | Проверка topology: один Router process на branch и внешний proxy без создания дополнительных инстансов той же branch. | Число listener'ов и branch-конфигураций совпадает; новых публичных HTTP-путей и версионных префиксов нет; публичный Core-контракт не изменён. | pass |
+
+`CONC-008` исполнен тестом `TestDisposableIsolatedWorkerPoolsRunIndependently`
+(`tests/go/core/infrastructure/postgres/coordinator_test.go`) на свежей disposable
+БД `zubrium_core_qa_isolated_pools_conc008_final2` в прогоне `conc008-final2`.
+Лог с точной PASS-строкой: `output/conc008-20261124-final/integration.log`;
+статические, race- и Admin-проверки того же HEAD — в остальных файлах этого
+каталога. Конфигурационный контур сценария закреплён
+`TestConcurrencyClassPoolScenario/CONC-008`, а изоляция dispatch — тестами
+`TestClassScopedDataBusTaskExecutor*`.
 
 ## Website scenario ledger
 

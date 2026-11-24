@@ -16,9 +16,53 @@
 - Цикл `POST /api/locale-preference` на HEAD после `c662e38`: операция скомпилирована в full-профиле и включается явной startup-конфигурацией; unit-, config-, topology- и OpenAPI-контрактные тесты прошли в составе `make test`, `make vet`, `make build` и `make lint-core-boundary`. Живой E2E: `QA_BROWSER_WORKING_PORTS=8080,55432 tests/qa/run-website-router-e2e.sh`, финальный proof скопирован в `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-locale-preference-evidence-final/`; `playwright.log` содержит `PASS E2E-PUB-001`, `PASS E2E-LOC-001`, `PASS E2E-RET-001` без `FAIL`. Переменная портов задана явно: порт `5173` занят Vite другого проекта, чужой процесс не останавливался. Два промежуточных run'а (`e2e-20261124T121131Z-cfa517`, `e2e-20261124T121317Z-59377e`) не учитываются: первый остановлен preflight из-за чужого listener'а, второй выявил порядок сценариев — locale preference нельзя проверять после retirement, когда route targets уже сняты. После E2E исправлен boundary: внешний Router handler использует facade `engines/router/presentation` вместо engine internals; `TestCheckConfig` стал зависеть от скомпилированного build plan, поэтому проходит во всех профилях. Финальные проверки на изменившемся дереве: `git diff --check`, `python3 -m unittest tests/qa/test_scenario_ledger.py`, `make lint-core-boundary`, `make test`, `make test-full`, `make test-router`, `make test-dev-fixtures`, `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures`, Admin `typecheck/test/build` и `pnpm lint` — exit 0 (ESLint запущен через штатный `frontend/package.json` script; прямой `pnpm exec eslint admin/` не является поддерживаемой командой репозитория).
 - Integration-прогон на свежем disposable PostgreSQL/S3 `final-integr-c662e38`: `tests/qa/docker/up.sh` → полный sweep с `--integration-env` → `tests/qa/docker/down.sh final-integr-c662e38`. Логи: `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-release-final-integr-c662e38.log` и `zubrium-final-integr-down.log`. Отчёт `output/test-report-release-final-integr-c662e38-integration.json`: `2 pass, 0 fail, 0 blocked` gates; `74 pass, 0 fail, 0 not_run, 7 blocked`, coverage `74/74 executable = 100.00%`. Реально исполнены `WEB-012`, `WEB-018`, `WEB-019`, `WEB-020`, `WEB-021`, `WEB-022`, `CORE-001`, без `t.Skip`. Disposable контейнеры, сеть и private env удалены.
 - Живой E2E внутри integration sweep: run `e2e-20261123T234350Z-cdaf0b`; подтверждены те же две PASS-строки, target ownership и build identity. Bootstrap secret в сохранённый evidence не попал.
-- Оставшиеся blocked в integration report: `OBS-006`, `OBS-008`, `CACHE-009`, `CONC-008`, `CONTENT-005`, `FORMS-005`, `LOADER-005`. Не переданные в integration static-прогон `WEB-012/018-022` и `CORE-001` исполнены отдельным integration gate и не считаются пропущенными.
+- Оставшиеся blocked в baseline integration report `c662e38`: `OBS-006`, `OBS-008`, `CACHE-009`, `CONC-008`, `CONTENT-005`, `FORMS-005`, `LOADER-005`. Не переданные в integration static-прогон `WEB-012/018-022` и `CORE-001` исполнены отдельным integration gate и не считаются пропущенными. `CONC-008` снят последующим циклом ниже.
 - Финальные исправления, которые сделали возможным чистый прогон: `62f7c10` (Admin assets до embedded UI tests), `723b5f6` (deployed observer в store config), `493473f` (bounds validation до внутренних cache dependencies), `5209027` (устранён typed-nil legacy byte cache при reconnect), `c662e38` (явный, валидируемый override рабочих портов).
 - Полный аудит каждого requirements-раздела `spec/` со статусами `Implemented`, `Verified`, `Blocked` и `Not implemented` — в [SPEC compliance audit](SPEC-COMPLIANCE-AUDIT-20261124.md). Итог: release/E2E PASS получен, но 100% соответствие всему `spec/` **не заявляется**: есть незавершённые runtime-требования и blockers.
+- Перечисленные blocked включали `CONC-008` только для baseline `c662e38`; после отдельного цикла он снят и подтверждён ниже.
+
+## Цикл `CONC-008`: изолированные class-scoped worker pools (2026-11-24)
+
+Проверяемое состояние: ветка `readiness-20261123`, HEAD кода
+`ed3ec076d8ba59d72113df93170e13ae0f2071f1`. Код зафиксирован коммитом
+`Implement isolated class-scoped worker pools`; статусы документов фиксируются
+следующим evidence-коммитом. Baseline `c662e38` и locale-цикл `107bbde` остаются прежними.
+
+### RED → GREEN
+
+- RED-тест `TestCoordinatorServiceActivatesIsolatedClassPools` показал, что один общий executor не даёт независимой активации классов. GREEN: `ServiceConfig.Pools []TaskPoolConfig`, отдельный `TaskExecutor` на каждый включённый класс, общий owner/config epoch и class-scoped `Claim`.
+- RED-тест `TestCoordinatorServiceIsolatesSaturatedWorkerPool` насыщал `media` при `Concurrency=1` и требовал завершения `prerender`/`publication`. GREEN: соседние пулы не заимствуют чужую ёмкость; `media` дренируется после release.
+- На ревью найдены и исправлены три дефекта до финального прогона: отключённый класс терял registry binding и давал терминальный `operation_unavailable` для cross-class ребёнка; неудачный `Activate` разрешал повтор и мог перейти в Ready с нулём пулов; границы pool-параметров не проверялись для disabled/no-worker профилей. Соответствующие regression-тесты: `TestFullProfileDisabledClassKeepsResolvableFailClosedBinding`, `TestCoordinatorServiceFailedActivationIsTerminal`, `TestConcurrencyClassPoolScenario/CONC-008`.
+- Расовая гонка в тестовом `fakeTaskStore` (`claimedScope`/`completeCalls`) устранена мьютексом; `go test -race` в `core/application/coordination` после этого прошёл.
+
+### Статические проверки
+
+Все команды запускались из корня checkout, если не указано иначе; логи — в
+`output/conc008-20261124-final/`:
+
+- `git diff --check` → `diff-check.log`, exit 0.
+- `python3 -m unittest tests/qa/test_scenario_ledger.py` → `scenario-ledger-unit.log`, exit 0.
+- `bash -n tests/qa/run-website-router-e2e.sh` → `shell-syntax.log`, exit 0.
+- `make lint-core-boundary` → `lint-core-boundary.log`, exit 0; `Architecture boundaries OK` для 20 repository-local модулей.
+- `make test`, `make test-full`, `make test-router`, `make test-dev-fixtures` → `test.log`, `test-full.log`, `test-router.log`, `test-devfixtures.log`, exit 0; последний skipped `CONC-008` в `concurrency_budget_scenario_test.go` заменён исполняемым сценарием.
+- `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures` → `vet.log`, `build*.log`, exit 0.
+- `(cd core/application/coordination && go test -race -count=1 -overlay=<generated> ./...)` → `coordination-race.log`, `ok ... 1.290s`.
+- `(cd main && go test -count=1 -tags='full website_acceptance' -overlay=<generated> -run '^$' ./cmd/zubrium)` → `acceptance-compile.log`, exit 0.
+- Из `frontend/`: `pnpm --filter @website-engine/admin typecheck`, `test`, `build` и `pnpm lint` → `admin.log`, exit 0.
+- Overlay сгенерирован `python3 tests/go-overlay.py`; его SHA-256 сохранён в `overlay.sha256`.
+
+### Integration
+
+- Свежий изолированный стек `tests/qa/docker/up.sh` с run ID `conc008-final2`, PostgreSQL/MinIO на loopback-портах `56432/59990/59991`; приватный env-файл создан с режимом `0600` под `TMPDIR`, значения в отчёт и логи не попали.
+- Отдельная свежая БД `zubrium_core_qa_isolated_pools_conc008_final2`; переменная `TEST_COORDINATOR_ISOLATED_POOLS_DATABASE_URL` задана только для тестового процесса, в логе заменена на redacted.
+- `(cd core/infrastructure/postgres && go test -count=1 -v -overlay=<generated> -run TestDisposableIsolatedWorkerPoolsRunIndependently ./...)` → `integration.log`, точные строки `=== RUN TestDisposableIsolatedWorkerPoolsRunIndependently` и `--- PASS`. Проверено: насыщенный `media` не блокирует `prerender`/`publication`, соседние пулы не превышают лимиты, `media` удерживает ровно один lease и дренируется после release; workflow'ы всех трёх классов завершаются `succeeded`.
+- `tests/qa/docker/down.sh conc008-final2` → `integration-stack-down.log`; контейнеры, сеть и приватный env удалены, повторной проверкой `docker ps` активных ресурсов запущено не осталось.
+
+### Ограничения
+
+- `CONC-008` подтверждён как функциональная изоляция классов с настоящим PostgreSQL, но не как нагрузочный p99-прогон; `CONC-001..004` и `CONC-009..011` остаются unit/contract-level сценариями.
+- `CACHE-009`, `OBS-006/008`, `CONTENT-005`, `FORMS-005`, `LOADER-005`, `UI-POL-011` и deployer-owned proxy этим циклом не затронуты.
+- 100% соответствие всему `spec/` по-прежнему не заявляется.
 
 ## Историческая Core-cache / concurrency / security wave (2026-11-24, intermediate checkout)
 
@@ -104,9 +148,9 @@
 
 Целевой контракт: [SPEC-caching](../spec/architecture/SPEC-caching.md). Исполняемые сценарии `CACHE-001..CACHE-012` определены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md). Все они находятся в статусе «планируется/ожидает проверки»: в этом отчёте нет evidence реализации кэша, Vary/сжатия, метрик кэша и прогрева до Ready. Метрики кэша перенесены в [SPEC-observability](../spec/observability/SPEC-observability.md), а наблюдатель получил поддержку gauge и redaction ключей кэша; сами кэши эти серии ещё не испускают. Старые проходы ниже к новой функциональности не применяются. Статус `pass` будет выставлен только после реального прогона с зафиксированными командами, целевым стеком и ограничениями.
 
-## Конкуренция и устойчивость к нагрузке (2026-11-23)
+## Конкуренция и устойчивость к нагрузке (2026-11-23, исторический проход)
 
-Целевой контракт: [SPEC-concurrency](../spec/architecture/SPEC-concurrency.md). Исполняемые сценарии `CONC-001..CONC-012` определены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md). Все они находятся в статусе «планируется/ожидает проверки»: в этом отчёте нет evidence нагрузочного прогона, backpressure, шардирования, zero-copy, coalescing, изоляции worker-пулов или метрик конкуренции. Изоляция пулов (`CONC-008`) дополнительно зависит от отдельного согласования class-scoped `Claim` в замороженном Core. Текущий `main/config.example.yaml` описывает текущий код; целевая YAML-схема из спецификации не внедрена. Статус `pass` будет выставлен только после реального прогона с зафиксированными командами, целевым стеком и ограничениями.
+Целевой контракт: [SPEC-concurrency](../spec/architecture/SPEC-concurrency.md). Исполняемые сценарии `CONC-001..CONC-012` определены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md). В этом историческом проходе не было evidence нагрузочного прогона, backpressure, шардирования, zero-copy, coalescing, изоляции worker-пулов или метрик конкуренции; `CONC-008` оставался blocked до отдельного согласования class-scoped `Claim`. Актуальный результат по `CONC-008` — в разделе «Цикл CONC-008» выше; остальные сценарии по-прежнему имеют уровень unit/contract без нагрузочного p99-прогона.
 
 ## Observability (2026-11-23)
 
