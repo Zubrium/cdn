@@ -18,6 +18,8 @@ const (
 	TargetCoreFile             = "core-file"
 	TargetStaticSiteArtifact   = "static-site-artifact"
 	TargetRegisteredOperation  = "registered-operation"
+	DispositionInline          = "inline"
+	DispositionAttachment      = "attachment"
 	MatchExact                 = "exact"
 	MatchPrefix                = "prefix"
 	StateActive                = "active"
@@ -54,6 +56,7 @@ type LocaleSlot struct {
 type Target struct {
 	Kind            string                 `json:"kind"`
 	FileID          string                 `json:"file_id,omitempty"`
+	Disposition     string                 `json:"disposition,omitempty"`
 	DefaultLocale   string                 `json:"default_locale,omitempty"`
 	LocaleTargets   []LocaleArtifactTarget `json:"locale_targets,omitempty"`
 	OperationID     string                 `json:"operation_id,omitempty"`
@@ -272,12 +275,13 @@ func (target Target) Validate() error {
 	case TargetCoreFile:
 		id, err := uuid.Parse(target.FileID)
 		if err != nil || id == uuid.Nil || id.String() != target.FileID || target.OperationID != "" || len(target.OperationConfig) != 0 ||
-			target.FallbackEnabled || target.DefaultLocale != "" || len(target.LocaleTargets) != 0 {
+			target.FallbackEnabled || target.DefaultLocale != "" || len(target.LocaleTargets) != 0 ||
+			(target.Disposition != "" && target.Disposition != DispositionInline && target.Disposition != DispositionAttachment) {
 			return ErrInvalidRoute
 		}
 	case TargetStaticSiteArtifact:
 		defaultLocale, err := CanonicalLocale(target.DefaultLocale)
-		if err != nil || target.FileID != "" || target.OperationID != "" || len(target.OperationConfig) != 0 || target.FallbackEnabled ||
+		if err != nil || target.FileID != "" || target.Disposition != "" || target.OperationID != "" || len(target.OperationConfig) != 0 || target.FallbackEnabled ||
 			len(target.LocaleTargets) < 1 || len(target.LocaleTargets) > 256 {
 			return ErrInvalidRoute
 		}
@@ -304,7 +308,7 @@ func (target Target) Validate() error {
 			return ErrInvalidRoute
 		}
 	case TargetRegisteredOperation:
-		if !operationID.MatchString(target.OperationID) || target.FileID != "" || len(target.OperationConfig) == 0 ||
+		if !operationID.MatchString(target.OperationID) || target.FileID != "" || target.Disposition != "" || len(target.OperationConfig) == 0 ||
 			target.FallbackEnabled || len(target.OperationConfig) > MaxOperationConfigBytes || !json.Valid(target.OperationConfig) ||
 			target.DefaultLocale != "" || len(target.LocaleTargets) != 0 {
 			return ErrInvalidRoute

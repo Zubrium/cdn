@@ -32,6 +32,20 @@ var (
 	artifactSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// An omitted cache_class is equivalent to "none" (no-store) in both modules.
 	allowedArtifactCacheClasses = map[string]bool{"": true, "none": true, "short": true, "immutable": true}
+	// Only these Core file media types may be served inline. HTML, SVG and
+	// unknown types stay attachment so a configured value cannot turn a file
+	// route into an executable document.
+	allowedInlineFileMediaTypes = map[string]bool{
+		"image/jpeg":      true,
+		"image/png":       true,
+		"image/webp":      true,
+		"image/avif":      true,
+		"image/gif":       true,
+		"video/mp4":       true,
+		"video/webm":      true,
+		"audio/mpeg":      true,
+		"application/pdf": true,
+	}
 )
 
 type RouteResolver interface {
@@ -185,7 +199,7 @@ func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.Delive
 		if route.Match != model.MatchExact || request.Method != http.MethodGet && request.Method != http.MethodHead || request.ContentLength != 0 {
 			return engine.DeliveryResponse{}, engine.ErrNotFound
 		}
-		return delivery.deliverCoreFile(ctx, route.Target.FileID, request)
+		return delivery.deliverCoreFile(ctx, route.Target.FileID, route.Target.Disposition, request)
 	case model.TargetStaticSiteArtifact:
 		if request.Method != http.MethodGet && request.Method != http.MethodHead || request.ContentLength != 0 {
 			return engine.DeliveryResponse{}, engine.ErrNotFound
@@ -225,7 +239,20 @@ func cloneFormSessionTokens(source map[string]string) map[string]string {
 	return clone
 }
 
-func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
+// dispositionForFile is fail-closed: only an allowlisted Core media type can
+// become inline, and an explicit attachment always wins.
+func dispositionForFile(contentType, configured string) string {
+	if configured == model.DispositionAttachment {
+		return "attachment"
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !allowedInlineFileMediaTypes[strings.ToLower(mediaType)] {
+		return "attachment"
+	}
+	return "inline"
+}
+
+func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID, disposition string, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
 	var file contracts.File
 	var body io.ReadCloser
 	var err error
@@ -239,7 +266,8 @@ func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string
 			return engine.DeliveryResponse{}, engine.ErrUnavailable
 		}
 		if request.IfNoneMatch != "" && matchesIfNoneMatch(request.IfNoneMatch, etag) {
-			return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: "no-store"}, nil
+			return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: "no-store",
+				ContentDisposition: dispositionForFile(file.ContentType, disposition)}, nil
 		}
 		if request.Method == http.MethodHead {
 			contentType, typeErr := normalizedContentType(file.ContentType)
@@ -247,7 +275,7 @@ func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string
 				return engine.DeliveryResponse{}, engine.ErrUnavailable
 			}
 			return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: contentType, ContentLength: file.Size,
-				ETag: etag, CacheControl: "no-store", ContentDisposition: "attachment"}, nil
+				ETag: etag, CacheControl: "no-store", ContentDisposition: dispositionForFile(file.ContentType, disposition)}, nil
 		}
 	}
 	if body == nil {
@@ -270,7 +298,7 @@ func (delivery *CoreDelivery) deliverCoreFile(ctx context.Context, fileID string
 		return engine.DeliveryResponse{}, engine.ErrUnavailable
 	}
 	return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: contentType, ContentLength: file.Size,
-		ETag: etag, CacheControl: "no-store", ContentDisposition: "attachment", Body: body}, nil
+		ETag: etag, CacheControl: "no-store", ContentDisposition: dispositionForFile(file.ContentType, disposition), Body: body}, nil
 }
 
 type languageRange struct {

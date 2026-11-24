@@ -150,3 +150,36 @@ func TestNewRouteAssignsInitialRevisionToLocaleArtifactTargets(t *testing.T) {
 		t.Fatalf("initial locale target revision = %d, want 1", got)
 	}
 }
+func TestCoreFileTargetDispositionIsOptionalAndStrictlyValidated(t *testing.T) {
+	for _, disposition := range []string{"inline", "attachment"} {
+		var target Target
+		raw := `{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301","disposition":"` + disposition + `"}`
+		if err := json.Unmarshal([]byte(raw), &target); err != nil {
+			t.Fatalf("unmarshal %s target: %v", disposition, err)
+		}
+		if err := target.Validate(); err != nil {
+			t.Errorf("core-file target rejected disposition %q: %v", disposition, err)
+		}
+	}
+
+	var legacy Target
+	if err := json.Unmarshal([]byte(`{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("legacy core-file target without disposition rejected: %v", err)
+	}
+
+	for name, raw := range map[string]string{
+		"unknown value": `{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125301","disposition":"download"}`,
+		"artifact":      `{"kind":"static-site-artifact","default_locale":"en-US","locale_targets":[{"locale":"en-US","artifact_manifest_file_id":"01938f7a-68af-7c10-a51d-78b6ca125302"}],"disposition":"inline"}`,
+	} {
+		var target Target
+		if err := json.Unmarshal([]byte(raw), &target); err != nil {
+			t.Fatalf("%s: unmarshal: %v", name, err)
+		}
+		if err := target.Validate(); err == nil {
+			t.Errorf("%s target accepted invalid disposition", name)
+		}
+	}
+}
