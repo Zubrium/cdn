@@ -27,6 +27,7 @@ type RouteDraft = {
   fileSetID: string;
   maxBytes: string;
   allowedContentTypes: string[];
+  disposition?: "inline" | "attachment";
   bindForm: boolean;
   formID: string;
   schemaVersion: number;
@@ -42,6 +43,7 @@ const emptyDraft = (): RouteDraft => ({
   fileSetID: "",
   maxBytes: "",
   allowedContentTypes: [],
+  disposition: undefined,
   bindForm: false,
   formID: "",
   schemaVersion: 0,
@@ -162,6 +164,7 @@ export function RouteDialog({
       if (route.target.kind === "core-file" || route.target.kind === "static-site-artifact") {
         base.targetKind = route.target.kind;
         base.file = { id: route.target.file_id };
+        if (route.target.kind === "core-file") base.disposition = route.target.disposition;
       } else if (route.target.kind === "registered-operation" && publicFormOperations.has(route.target.operation_id)) {
         const config = route.target.operation_config;
         base.targetKind = route.target.operation_id as RouteDraft["targetKind"];
@@ -224,6 +227,15 @@ export function RouteDialog({
             {(!uploadOperation || !uploadOperation.methods.includes("POST") || !draft.accessGroup || !Number.isSafeInteger(Number(draft.maxBytes)) || Number(draft.maxBytes) < 1 || Number(draft.maxBytes) > uploadOperation.max_request_bytes || draft.allowedContentTypes.length === 0 || draft.allowedContentTypes.some((type) => !uploadOperation.allowed_content_types.includes(type))) && <p role="alert" className="text-xs text-destructive">Выберите группу, допустимый лимит и хотя бы один тип из списка операции.</p>}
           </div> : requiresFormBinding ? formBindingEditor : <div className="space-y-2">
             {draft.targetKind === "static-site-artifact" ? <p role="status" className="text-xs leading-5 text-muted-foreground">Выберите файл manifest артефакта статической страницы. Router проверяет manifest и обслуживает только объявленный документ и его assets; это не делает остальные файлы или FileSet публичными.</p> : <p className="text-xs leading-5 text-muted-foreground">Exact GET-маршрут открывает один выбранный файл посетителям. ID файла задаётся здесь и не выбирается посетителем; проверка права чтения Router выполняется сервером.</p>}
+            {draft.targetKind === "core-file" && <label className="block space-y-1.5 text-sm" htmlFor="router-file-disposition">
+              <span className="text-muted-foreground">Режим отдачи файла</span>
+              <select id="router-file-disposition" className="h-11 w-full rounded-md border border-input bg-background px-3" value={draft.disposition ?? ""} onChange={(event) => setDraft((current) => ({ ...current, disposition: event.currentTarget.value ? event.currentTarget.value as "inline" | "attachment" : undefined }))}>
+                <option value="">По умолчанию (inline для безопасных типов)</option>
+                <option value="inline">inline — показывать в браузере</option>
+                <option value="attachment">attachment — скачивать файл</option>
+              </select>
+              <span className="block text-xs leading-5 text-muted-foreground">inline применяется только к изображениям, видео, аудио и PDF. HTML, SVG и неизвестные типы всегда скачиваются.</span>
+            </label>}
             {draft.targetKind === "core-file" || draft.targetKind === "static-site-artifact" ? (draft.file ? <div className="flex items-center gap-3 rounded-md border border-border p-3"><span className="min-w-0 flex-1 truncate text-sm">{draft.file.original_filename || draft.file.id}</span><Button type="button" variant="outline" onClick={openFilePicker}>Выбрать файл</Button></div> : <Button type="button" variant="outline" className="min-h-11" onClick={openFilePicker}>{draft.targetKind === "static-site-artifact" ? "Выбрать manifest артефакта" : "Выбрать файл из Core"}</Button>) : null}
           </div>}
         </div>

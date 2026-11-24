@@ -86,6 +86,24 @@ describe("Router target builder", () => {
     expect(buildRouterTarget({ ...formDraft, formID: formDraft.formID.toUpperCase() }, [operation])).toBeNull();
   });
 
+  it("emits an explicit disposition only for a Core file target", () => {
+    const fileDraft = { ...draft, targetKind: "core-file" as const, file: { id: "file-id" } };
+    const attachment = Object.assign({}, fileDraft, { disposition: "attachment" });
+    const inline = Object.assign({}, fileDraft, { disposition: "inline" });
+    const artifact = Object.assign({}, draft, { targetKind: "static-site-artifact" as const, file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" }, disposition: "attachment" });
+
+    expect(buildRouterTarget(attachment, [uploadOperation])).toEqual({
+      kind: "core-file", file_id: "file-id", disposition: "attachment",
+    });
+    expect(buildRouterTarget(inline, [uploadOperation])).toEqual({
+      kind: "core-file", file_id: "file-id", disposition: "inline",
+    });
+    expect(buildRouterTarget(fileDraft, [uploadOperation])).toEqual({ kind: "core-file", file_id: "file-id" });
+    expect(buildRouterTarget(artifact, [uploadOperation])).toEqual({
+      kind: "static-site-artifact", file_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
+    });
+  });
+
   it("binds a static artifact without a fallback policy", () => {
     expect(buildRouterTarget({ ...draft, targetKind: "static-site-artifact", file: { id: "01938f7a-68af-7c10-a51d-78b6ca125399" } }, [uploadOperation])).toEqual({
       kind: "static-site-artifact",

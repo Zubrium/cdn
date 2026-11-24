@@ -8,6 +8,7 @@ export interface RouterTargetDraft {
   fileSetID: string;
   maxBytes: string;
   allowedContentTypes: string[];
+  disposition?: "inline" | "attachment";
   bindForm?: boolean;
   formID?: string;
   schemaVersion?: number;
@@ -23,7 +24,11 @@ function formBinding(draft: RouterTargetDraft): Record<string, unknown> | null {
 export function buildRouterTarget(draft: RouterTargetDraft, operations: RouterPublicOperation[] = []): RouterRouteTarget | null {
   if (draft.targetKind === "core-file") {
     if (draft.match !== "exact" || !draft.file) return null;
-    return { kind: "core-file", file_id: draft.file.id };
+    return {
+      kind: "core-file",
+      file_id: draft.file.id,
+      ...(draft.disposition ? { disposition: draft.disposition } : {}),
+    };
   }
   if (draft.targetKind === "static-site-artifact") {
     if (!draft.file) return null;

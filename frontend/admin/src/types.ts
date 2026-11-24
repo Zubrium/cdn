@@ -220,6 +220,7 @@ export interface FormSubmission {
 export interface RouterCoreFileRouteTarget {
   kind: "core-file";
   file_id: string;
+  disposition?: "inline" | "attachment";
 }
 
 export interface RouterStaticSiteArtifactRouteTarget {
