@@ -69,7 +69,7 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 
 ## Кэширование
 
-Контракт: [SPEC-caching](../spec/architecture/SPEC-caching.md). Сценарии `CACHE-001..CACHE-012` — целевые input/result проверки отдельной волны реализации. `pass` выставляется только после записи команд и результатов в [QA report](../docs/QA_REPORT.md); `CACHE-009` остается blocked без изолированного caching proxy/CDN. Сценарии не считаются пройденными на основании статических проверок или старого evidence.
+Контракт: [SPEC-caching](../spec/architecture/SPEC-caching.md). Сценарии `CACHE-001..CACHE-012` — целевые input/result проверки отдельной волны реализации; `CACHE-013` и `CACHE-014` добавляют исполняемое покрытие источника `sources.published_artifacts` и Router-целей из §5.3–5.6. `pass` выставляется только после записи команд и результатов в [QA report](../docs/QA_REPORT.md); `CACHE-009` остается blocked без изолированного caching proxy/CDN. Сценарии не считаются пройденными на основании статических проверок или старого evidence.
 
 | ID | Вход и предусловия | Ожидаемый результат | Статус |
 | -- | ------------------ | ------------------- | ------ |
@@ -85,6 +85,8 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 | CACHE-010 | Снятие `/metrics` после операций со всеми включёнными кэшами. | Присутствуют все метрики из раздела 8 спецификации; метки только из разрешённого набора без file ID, principal ID, URL, query, locale и User-Agent; `/metrics` отдаёт `no-store`. | pass |
 | CACHE-011 | Конфиг с `refresh_interval > 0`, фоновый цикл прогрева и параллельные запросы во время повтора. | Цикл повторяет тот же bounded pipeline без перекрытия, число записей не растёт сверхлинейно, обязательные ошибки повтора не снимают Ready, но видны в метриках. | pass |
 | CACHE-012 | Сбор логов и diagnostics во время прогрева, инвалидации и отказов. | В логах и метриках нет ключей, file ID, principal ID, URL, query, locale и пользовательских данных. | pass |
+| CACHE-013 | Включённый источник `sources.published_artifacts` с явными слотами, пересечение с inline-ключом, конфликтующие дубли, отсутствующий список, дубли principals/actions и число ключей/paths больше `max_keys`. | Core-ключи выводятся только из server-owned published artifacts, объединяются по file ID, сортируются детерминированно и обрезаются до `max_keys`; неоднозначные слоты, неявный список, дубли авторизаций и списки, превышающие `max_keys`, отвергаются до старта. | pass |
+| CACHE-014 | Router warm-up до Ready из сконфигурированных published artifact target-ов; отдельно отключённые цели, фоновый refresh и расхождение route/locale/file identity. | Оба кэша прогреты до первой выдачи, отключённые цели дают `SKIPPED`, refresh не перекрывается, несовпадение identity закрывает выдачу; операции `HIT`/`MISS` и gauge `entries`/`bytes` публикуются для обоих кэшей, метрики содержат только метки `cache`, `tier`, `result`. | pass |
 
 ## Конкуренция и устойчивость к нагрузке
 

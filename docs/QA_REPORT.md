@@ -64,6 +64,40 @@
 - `CACHE-009`, `OBS-006/008`, `CONTENT-005`, `FORMS-005`, `LOADER-005`, `UI-POL-011` и deployer-owned proxy этим циклом не затронуты.
 - 100% соответствие всему `spec/` по-прежнему не заявляется.
 
+## Цикл `published_artifacts` и Router warm-up (2026-11-24)
+
+Проверяемое состояние: ветка `readiness-20261123`; код и документы цикла фиксируются отдельными коммитами. Baseline `c662e38`, locale-цикл `107bbde`/`153f0d3` и `CONC-008` `ed3ec07`/`ae2b41a` остаются прежними.
+
+### RED → GREEN
+
+- RED-тесты до production-кода: `TestResolveDerivesPublishedArtifactWarmupKeys`, `TestResolveRejectsInvalidPublishedArtifactSources`, `TestRouterWarmupContractFromResolvedConfig`, `TestRouterCacheObserverUsesExactLowCardinalityLabels` и расширенный `TestCacheRouterScenario/CACHE-014`. Наблюдаемые ошибки: undefined symbols для нового config/router API, `merged warm-up configuration rejected: duplicate published artifact route/locale slot`, `fixture does not enable the published artifact source`, `optional failure counter = 0, want 1`.
+- GREEN: `resolveWarmupKeys` выводит file ID из явных server-owned published artifact slot-ов, мержит с inline по file ID, сортирует и обрезает до `max_keys`; `validateScales` отвергает неявный список, дубли `(route_id, locale)`, конфликтующие identity, дубли principals/actions и списки, превышающие `max_keys`. Router warm-up выполняется внутри `routerEngineComponent.Start` до Ready через проверенные `manifestCache.read` и `routeCache.resolve`, с gating по startup-флагам, fail-closed по route/locale/file и разделением required/optional ошибок. Router cache публикует `zubrium_cache_operations_total`, `zubrium_cache_entries`, `zubrium_cache_bytes` и `zubrium_cache_invalidation_lag_seconds` для `router.manifests`/`router.routes`, включая нулевые series для выключенных целей; адаптер `routerCacheObserver` публикует только низкокардинальные метки `cache`, `tier`, `result`.
+- RED для операционных метрик: `TestCacheRouterScenario/CACHE-014/primed_before_first_delivery` наблюдал `router.manifests MISS operations = 0, want 1`; RED для валидации — четыре кейса `TestResolveRejectsInvalidPublishedArtifactSources` принимали дубли principals/actions и чрезмерные `paths`/artifacts. После GREEN все перечисленные тесты прошли.
+- На ревью до финального прогона исправлены: нарушение границы модуля (`presentation/router/warmup.go` импортировал engine internals — добавлены facade-функции `PathMatches`/`ValidateRoute` в `engines/router/presentation/contract.go`), нестартуемый пример `main/config.observability.yaml.example` (`inline: true` при пустых `keys` отвергается замороженным Core), optional-ошибка, ошибочно блокировавшая strict Ready, и отсутствие проверки отменённого `context` в цикле прогрева.
+
+### Статические проверки
+
+Все команды запускались из корня checkout, если не указано иначе; логи — в `output/cache-20261124-final/`:
+
+- `git diff --check`, `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/qa/test_scenario_ledger.py`, `python3 tests/qa/scenario-ledger.py tests/qa/core-cache-scenarios.json`, `python3 tests/qa/scenario-ledger.py tests/qa/cache-router-scenarios.json`, `make lint-core-boundary` — exit 0. Core-cache ledger: `11 covered, coverage 100.00%, execution_pass 11`. Cache-router ledger: `6 covered, coverage 83.33%, execution_pass 5, execution_blocked 1` (только `CACHE-009`).
+- `make test`, `make test-full`, `make test-router`, `make test-dev-fixtures`, `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures` — exit 0; `static-sweep-final.log` заканчивается `ALL_STATIC_PASS`.
+- `go test -race -count=1 -overlay=<generated> ./...` в `presentation/router` и `go test -race -count=1 -overlay=<generated> ./internal/config ./internal/composition` из `main/`, а также compile-only `(cd main && go test -count=1 -tags='full website_acceptance' -overlay=<generated> -run '^$' ./cmd/zubrium)` — exit 0; `race-compile.log` заканчивается `ALL_RACE_COMPILE_PASS`.
+- Overlay сгенерирован `python3 tests/go-overlay.py`, SHA-256 сохранён в `overlay.sha256`. Точные targeted-прогоны: `TestWarmupSourceScenarios/CACHE-013`, `TestRouterWarmupContractFromResolvedConfig`, `TestRouterCacheObserverUsesExactLowCardinalityLabels`, `TestCacheRouterScenario/CACHE-014`.
+
+### Integration
+
+Disposable-прогон с PostgreSQL и временно patchированным `motoserver/moto:5.0.28` выполнялся через `bash output/cache-20261124-final/run-integration-moto.sh` (лог `integration-moto-runner.log`, полный sweep — `integration-moto-sweep.log`, private env не попадает в логи). Для S3-совместимости тестового окружения использован QA-обход: в moto добавлен обработчик `GetBucketPolicyStatus`, а через `configure-moto-bucket.py` включён public access block; продукт и его конфигурация не менялись.
+
+- Основной unified-прогон: `python3 tests/qa/run-test-suite.py ci --with-build --report output/test-report-cache-final3-integration.json` — **83 gates pass, 0 fail, 0 blocked**; `70 pass, 0 fail, 0 not_run, 14 blocked`, `coverage 70/70 executable = 100.00%`. В число прошедших входят `core-cache-scenarios` (включая `TestWarmupSourceScenarios/CACHE-013` как unit и race) и `cache-router-scenarios` (`TestCacheRouterScenario/CACHE-014`). Гейт `core-cache-scenarios` расширен до второго легального расположения теста: `tests/qa/run-core-cache-red.sh` теперь отображает `tests/go/main/internal/config/*` в модуль `main`, пакет `./internal/config` и принимает symbol `TestWarmupSourceScenarios/*`.
+- Core listener: `TestDisposableCoreV2FileGroupSetAndCacheAcceptance` прошёл на том же disposable стеке. Для детерминизма тестовая конфигурация задаёт явные `InvalidationBatchSize=1` и `InvalidationBatchWindow=20ms` (без них `listenInvalidations` отвергает границы и не поднимает LISTEN), а повторная инвалидация публикует `pg_notify(..., probeKey)` вместо широкого `'*'`: точечный ключ проверяет именно тот путь, который используется продуктом. Reconnect и targeted invalidation оба подтверждены.
+- Дополнительная integration-фаза `run-test-suite.py ci --integration --only website-integration --only core-integration` **не пройдена по причинам окружения**: `website-integration` упёрся в `link: mapping output file failed: no space left on device` (на диске данных оставалось ~1 ГБ), а `core-integration` отказал в `TestDisposableOwnerScopedTaskResult/CORE-001`, потому что `TEST_CORE_OWNER_TASK_RESULT_DATABASE_URL` указывал на БД, уже содержащую Core-схему после первого прогона. Оба отказа к кеш-циклу отношения не имеют и не могут считаться PASS; для полного integration-свипа нужны свободное место на диске и отдельная свежая disposable БД на каждый integration-гейт. Итоговый `runner exit=1` означает именно эту фазу, а не основной unified-прогон.
+
+### Ограничения
+
+- `targets.authorization` остаётся `false`: включение требует отдельного согласования `access_epoch` в замороженном Core и живой epoch-проверки.
+- Router-таргеты используют явные `timeout`, `per_key_timeout`, `max_keys`, tier/gating и refresh без перекрытия циклов; параллелизм и retry базового Core-пайплайна остаются покрытыми `CACHE-003` на уровне Core runner. Операционные метрики `router.manifests`/`router.routes` добавлены и проверены на уровне контракта с observer; в живом прогоне с production-observability их значения не снимались.
+- `CACHE-009`, `OBS-006/008`, live environment для `CONTENT-005`, `FORMS-005`, `LOADER-005`, `UI-POL-011` и deployer-owned proxy не затронуты; 100% соответствие всему `spec/` не заявляется.
+
 ## Историческая Core-cache / concurrency / security wave (2026-11-24, intermediate checkout)
 
 Эти записи описывают промежуточный checkout `3e920f7` с незакоммиченными правками и сохранены для прослеживаемости; актуальный результат — в первом разделе.
