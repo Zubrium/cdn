@@ -402,6 +402,18 @@ type ObservabilityConfig struct {
 	OTLP           ObservabilityOTLP `yaml:"otlp"`
 }
 
+// ResolvedPublishedArtifact is one validated Router publication slot that
+// survived the bounded warm-up key set. Composition uses it only to prime
+// Router caches before the engine declares readiness.
+type ResolvedPublishedArtifact struct {
+	RouteID        string
+	Locale         string
+	FileID         string
+	Tier           platform.CacheTier
+	Paths          []string
+	Authorizations []platform.CachePrincipalAction
+}
+
 type Resolved struct {
 	Core                   platform.RuntimeConfig
 	Loader                 loaderapp.Config
@@ -420,6 +432,7 @@ type Resolved struct {
 	CoordinatorFingerprint string
 	Observability          observability.Config
 	Scales                 ResolvedScales
+	PublishedArtifacts     []ResolvedPublishedArtifact
 }
 
 var ErrCoordinatorProfileMismatch = errors.New("Coordinator settings do not match the compiled profile")
@@ -946,16 +959,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, fmt.Errorf("invalid core.cache.access_cache.ttl: %w", err)
 	}
-	warmupKeys := make([]platform.CacheKey, 0, len(c.Core.Cache.Warmup.Keys))
-	for _, key := range c.Core.Cache.Warmup.Keys {
-		entry := platform.CacheKey{FileID: key.FileID, Tier: platform.CacheTier(strings.ToUpper(key.Tier))}
-		for _, principalID := range key.Authorization.Principals {
-			for _, action := range key.Authorization.Actions {
-				entry.Authorizations = append(entry.Authorizations, platform.CachePrincipalAction{PrincipalID: principalID, Action: action})
-			}
-		}
-		warmupKeys = append(warmupKeys, entry)
-	}
+	warmupKeys, publishedArtifacts := resolveWarmupKeys(c)
 	warmup := c.Core.Cache.Warmup
 	coreCacheStore := platform.CacheStoreConfig{
 		BytesMaxBytes:           int(c.Core.Cache.MaxBytes),
@@ -1119,7 +1123,77 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[4],
 		}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
 			ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
-			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}, Observability: observabilityConfig, Scales: scales}, nil
+			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}, Observability: observabilityConfig, Scales: scales,
+		PublishedArtifacts: publishedArtifacts}, nil
+}
+
+// resolveWarmupKeys merges the independently enabled sources into the single
+// bounded Core key set. Validation has already rejected ambiguous duplicates,
+// so this function only applies the deterministic merge, sort and trim.
+func resolveWarmupKeys(c Config) ([]platform.CacheKey, []ResolvedPublishedArtifact) {
+	type mergedKey struct {
+		key       platform.CacheKey
+		artifacts []ResolvedPublishedArtifact
+	}
+	merged := make(map[string]*mergedKey)
+	authorizations := func(authorization WarmupKeyAuthorization) []platform.CachePrincipalAction {
+		result := make([]platform.CachePrincipalAction, 0, len(authorization.Principals)*len(authorization.Actions))
+		for _, principalID := range authorization.Principals {
+			for _, action := range authorization.Actions {
+				result = append(result, platform.CachePrincipalAction{PrincipalID: principalID, Action: action})
+			}
+		}
+		return result
+	}
+	warmup := c.Core.Cache.Warmup
+	if warmup.Sources.Inline {
+		for _, key := range warmup.Keys {
+			if _, exists := merged[key.FileID]; exists {
+				continue
+			}
+			merged[key.FileID] = &mergedKey{key: platform.CacheKey{
+				FileID: key.FileID, Tier: platform.CacheTier(strings.ToUpper(key.Tier)),
+				Authorizations: authorizations(key.Authorization),
+			}}
+		}
+	}
+	if warmup.Sources.PublishedArtifacts {
+		for _, artifact := range warmup.PublishedArtifacts {
+			entry, exists := merged[artifact.FileID]
+			if !exists {
+				entry = &mergedKey{key: platform.CacheKey{
+					FileID: artifact.FileID, Tier: platform.CacheTier(strings.ToUpper(artifact.Tier)),
+					Authorizations: authorizations(artifact.Authorization),
+				}}
+				merged[artifact.FileID] = entry
+			}
+			locale, _ := routermodel.CanonicalLocale(artifact.Locale)
+			entry.artifacts = append(entry.artifacts, ResolvedPublishedArtifact{
+				RouteID: artifact.RouteID, Locale: locale, FileID: artifact.FileID,
+				Tier: platform.CacheTier(strings.ToUpper(artifact.Tier)),
+				Paths: append([]string(nil), artifact.Paths...),
+				Authorizations: authorizations(artifact.Authorization),
+			})
+		}
+	}
+	fileIDs := make([]string, 0, len(merged))
+	for fileID := range merged {
+		fileIDs = append(fileIDs, fileID)
+	}
+	sort.Strings(fileIDs)
+	if warmup.MaxKeys > 0 && len(fileIDs) > warmup.MaxKeys {
+		fileIDs = fileIDs[:warmup.MaxKeys]
+	}
+	keys := make([]platform.CacheKey, 0, len(fileIDs))
+	artifacts := make([]ResolvedPublishedArtifact, 0)
+	for _, fileID := range fileIDs {
+		entry := merged[fileID]
+		keys = append(keys, entry.key)
+		for _, artifact := range entry.artifacts {
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	return keys, artifacts
 }
 
 type Config struct {

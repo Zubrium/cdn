@@ -73,6 +73,19 @@ func NormalizePath(value string) (string, error) {
 	return routemodel.NormalizePath(value)
 }
 
+// PathMatches is the facade form of route/request path matching. Outer
+// Presentation validates server-configured warm-up paths without importing
+// engine internals.
+func PathMatches(routePath, requestPath, match string) bool {
+	return routemodel.PathMatches(routePath, requestPath, match)
+}
+
+// ValidateRoute is the facade form of persisted-route validation. Warm-up
+// rechecks the authoritative route before priming a cache entry.
+func ValidateRoute(route Route) error {
+	return route.ValidateForStorage()
+}
+
 type Route = routemodel.Route
 
 type ListRoutesRequest struct {

@@ -113,17 +113,18 @@ type CoreDelivery struct {
 	operations engine.PublicOperationCatalog
 	manifests  *manifestCache
 	routeCache *routeCache
+	observer   CacheObserver
 }
 
 func NewCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, operations engine.PublicOperationCatalog) (*CoreDelivery, error) {
-	return newCoreDelivery(branchID, files, routes, operations, nil, nil)
+	return newCoreDelivery(branchID, files, routes, operations, nil, nil, nil)
 }
 
 // NewCoreDeliveryWithCache enables both bounded Router caches. Every bound is
 // mandatory: composition must pass explicit startup configuration, and an
 // unavailable revision source never falls back to a stale cached match.
 func NewCoreDeliveryWithCache(branchID string, files CoreFiles, routes RouteResolver, operations engine.PublicOperationCatalog, config RouterCacheConfig) (*CoreDelivery, error) {
-	if !validCacheSettings(config.Manifests) || !validCacheSettings(config.Routes) {
+	if !validCacheSettings(config.Manifests) || !validCacheSettings(config.Routes) || config.Observer == nil {
 		return nil, engine.ErrInvalid
 	}
 	fingerprints, ok := routes.(RouteFingerprintSource)
@@ -131,12 +132,12 @@ func NewCoreDeliveryWithCache(branchID string, files CoreFiles, routes RouteReso
 		return nil, engine.ErrInvalid
 	}
 	return newCoreDelivery(branchID, files, routes, operations,
-		newManifestCache(files, config.Manifests),
-		newRouteCache(branchID, routes, fingerprints, config.Routes))
+		newManifestCache(files, config.Manifests, config.Observer),
+		newRouteCache(branchID, routes, fingerprints, config.Routes, config.Observer), config.Observer)
 }
 
 func newCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, operations engine.PublicOperationCatalog,
-	manifests *manifestCache, routeCache *routeCache) (*CoreDelivery, error) {
+	manifests *manifestCache, routeCache *routeCache, observer CacheObserver) (*CoreDelivery, error) {
 	if branchID == "" || len(branchID) > 128 || strings.TrimSpace(branchID) != branchID ||
 		isNilAPI(files) || isNilAPI(routes) {
 		return nil, engine.ErrInvalid
@@ -146,10 +147,14 @@ func newCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, ope
 			return nil, engine.ErrInvalid
 		}
 	}
-	return &CoreDelivery{
+	delivery := &CoreDelivery{
 		branchID: branchID, files: files, routes: routes, operations: operations,
-		manifests: manifests, routeCache: routeCache,
-	}, nil
+		manifests: manifests, routeCache: routeCache, observer: observer,
+	}
+	if observer != nil {
+		delivery.initCacheMetrics()
+	}
+	return delivery, nil
 }
 
 func (delivery *CoreDelivery) Deliver(ctx context.Context, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {

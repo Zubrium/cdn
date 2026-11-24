@@ -22,6 +22,7 @@ type CacheSettings struct {
 type RouterCacheConfig struct {
 	Manifests CacheSettings
 	Routes    CacheSettings
+	Observer  CacheObserver
 }
 
 func validCacheSettings(settings CacheSettings) bool {
@@ -39,6 +40,8 @@ type cacheRecord[K comparable, V any] struct {
 type boundedCache[K comparable, V any] struct {
 	mu            sync.Mutex
 	settings      CacheSettings
+	name          string
+	observer      CacheObserver
 	entries       map[K]*cacheRecord[K, V]
 	order         *list.List
 	bytes         int64
@@ -48,8 +51,29 @@ type boundedCache[K comparable, V any] struct {
 	evictions     uint64
 }
 
-func newBoundedCache[K comparable, V any](settings CacheSettings) *boundedCache[K, V] {
-	return &boundedCache[K, V]{settings: settings, entries: make(map[K]*cacheRecord[K, V]), order: list.New()}
+func newBoundedCache[K comparable, V any](settings CacheSettings, name string, observer CacheObserver) *boundedCache[K, V] {
+	return &boundedCache[K, V]{
+		settings: settings, name: name, observer: observer,
+		entries: make(map[K]*cacheRecord[K, V]), order: list.New(),
+	}
+}
+
+func (cache *boundedCache[K, V]) operation(result string) {
+	if cache.observer == nil {
+		return
+	}
+	cache.observer.IncCounterExact(context.Background(), metricCacheOperations, 1,
+		StringCacheLabel("cache", cache.name), StringCacheLabel("result", result))
+}
+
+func (cache *boundedCache[K, V]) refreshGaugesLocked() {
+	if cache.observer == nil {
+		return
+	}
+	ctx := context.Background()
+	label := StringCacheLabel("cache", cache.name)
+	cache.observer.SetGaugeExact(ctx, metricCacheEntries, float64(cache.order.Len()), label)
+	cache.observer.SetGaugeExact(ctx, metricCacheBytes, float64(cache.bytes), label)
 }
 
 func (cache *boundedCache[K, V]) get(key K) (V, bool) {
@@ -59,16 +83,21 @@ func (cache *boundedCache[K, V]) get(key K) (V, bool) {
 	record, found := cache.entries[key]
 	if !found {
 		cache.misses++
+		cache.operation("MISS")
 		return zero, false
 	}
 	if !time.Now().Before(record.expires) {
 		cache.remove(record)
 		cache.invalidations++
 		cache.misses++
+		cache.operation("INVALIDATED")
+		cache.operation("MISS")
+		cache.refreshGaugesLocked()
 		return zero, false
 	}
 	cache.order.MoveToFront(record.element)
 	cache.hits++
+	cache.operation("HIT")
 	return record.value, true
 }
 
@@ -81,14 +110,17 @@ func (cache *boundedCache[K, V]) put(key K, value V, size int64) {
 	for (cache.order.Len() >= cache.settings.MaxEntries || cache.bytes+size > cache.settings.MaxBytes) && cache.order.Len() > 0 {
 		cache.remove(cache.order.Back().Value.(*cacheRecord[K, V]))
 		cache.evictions++
+		cache.operation("EVICTION")
 	}
 	if size > cache.settings.MaxBytes {
+		cache.refreshGaugesLocked()
 		return
 	}
 	record := &cacheRecord[K, V]{key: key, value: value, size: size, expires: time.Now().Add(cache.settings.TTL)}
 	record.element = cache.order.PushFront(record)
 	cache.entries[key] = record
 	cache.bytes += size
+	cache.refreshGaugesLocked()
 }
 
 func (cache *boundedCache[K, V]) invalidate(key K) {
@@ -97,6 +129,8 @@ func (cache *boundedCache[K, V]) invalidate(key K) {
 	if record, found := cache.entries[key]; found {
 		cache.remove(record)
 		cache.invalidations++
+		cache.operation("INVALIDATED")
+		cache.refreshGaugesLocked()
 	}
 }
 
@@ -107,6 +141,8 @@ func (cache *boundedCache[K, V]) clear() {
 		cache.remove(cache.entries[key])
 	}
 	cache.invalidations++
+	cache.operation("INVALIDATED")
+	cache.refreshGaugesLocked()
 }
 
 func (cache *boundedCache[K, V]) remove(record *cacheRecord[K, V]) {
@@ -165,8 +201,11 @@ type routeCache struct {
 	cache        *boundedCache[routeCacheKey, cachedRoute]
 }
 
-func newManifestCache(files CoreFiles, settings CacheSettings) *manifestCache {
-	return &manifestCache{files: files, cache: newBoundedCache[manifestCacheKey, cachedManifest](settings)}
+func newManifestCache(files CoreFiles, settings CacheSettings, observer CacheObserver) *manifestCache {
+	return &manifestCache{
+		files: files,
+		cache: newBoundedCache[manifestCacheKey, cachedManifest](settings, cacheRouterManifests, observer),
+	}
 }
 
 // read validates Core file identity on every hit. A mismatch is a plain miss;
@@ -204,10 +243,10 @@ func manifestCacheSize(key manifestCacheKey, parsed parsedArtifact) int64 {
 	return size
 }
 
-func newRouteCache(branch string, routes RouteResolver, fingerprints RouteFingerprintSource, settings CacheSettings) *routeCache {
+func newRouteCache(branch string, routes RouteResolver, fingerprints RouteFingerprintSource, settings CacheSettings, observer CacheObserver) *routeCache {
 	return &routeCache{
 		branch: branch, routes: routes, fingerprints: fingerprints,
-		cache: newBoundedCache[routeCacheKey, cachedRoute](settings),
+		cache: newBoundedCache[routeCacheKey, cachedRoute](settings, cacheRouterRoutes, observer),
 	}
 }
 

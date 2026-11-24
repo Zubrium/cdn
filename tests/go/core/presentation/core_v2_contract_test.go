@@ -1634,19 +1634,21 @@ func newCoreV2TestConfig(t *testing.T, dsn, migrationDSN, endpoint, bucket, acce
 		cfg.AtlasBinary = "atlas"
 	}
 	values := map[string]any{
-		"AccessGroups":         map[string]access.Level{"assets": access.LevelWrite, "features": access.LevelWrite, "private": access.LevelWrite, "restricted": access.LevelWrite, "content": access.LevelWrite},
-		"CacheMaxBytes":        int64(1 << 20),
-		"CacheTTL":             time.Minute,
-		"MaxCachedObjectBytes": int64(8),
-		"MaxMetadataBytes":     int64(64 << 10),
-		"MaxObjectBytes":       int64(16 << 20),
-		"MaintenanceInterval":  time.Hour,
-		"MaintenanceTimeout":   10 * time.Second,
-		"PendingTTL":           time.Hour,
-		"MaintenanceBatchSize": 100,
-		"SessionIdleTTL":       8 * time.Hour,
-		"SessionAbsoluteTTL":   7 * 24 * time.Hour,
-		"ModuleData":           ModuleDataLimits{MaxPayloadBytes: 1 << 20, MaxIndexBytes: 1 << 16, MaxBatchBytes: 8 << 20, MaxPageBytes: 3 << 20, MaxSelectors: 16, MaxSelectorValues: 64, MaxPageSize: 100, MaxBatchOperations: 64},
+		"AccessGroups":            map[string]access.Level{"assets": access.LevelWrite, "features": access.LevelWrite, "private": access.LevelWrite, "restricted": access.LevelWrite, "content": access.LevelWrite},
+		"CacheMaxBytes":           int64(1 << 20),
+		"CacheTTL":                time.Minute,
+		"MaxCachedObjectBytes":    int64(8),
+		"MaxMetadataBytes":        int64(64 << 10),
+		"MaxObjectBytes":          int64(16 << 20),
+		"MaintenanceInterval":     time.Hour,
+		"MaintenanceTimeout":      10 * time.Second,
+		"PendingTTL":              time.Hour,
+		"MaintenanceBatchSize":    100,
+		"InvalidationBatchSize":   1,
+		"InvalidationBatchWindow": 20 * time.Millisecond,
+		"SessionIdleTTL":          8 * time.Hour,
+		"SessionAbsoluteTTL":      7 * 24 * time.Hour,
+		"ModuleData":              ModuleDataLimits{MaxPayloadBytes: 1 << 20, MaxIndexBytes: 1 << 16, MaxBatchBytes: 8 << 20, MaxPageBytes: 3 << 20, MaxSelectors: 16, MaxSelectorValues: 64, MaxPageSize: 100, MaxBatchOperations: 64},
 	}
 	for name, data := range values {
 		setRuntimeConfigField(t, &cfg, name, data)
@@ -1700,10 +1702,11 @@ func testCacheListenerReconnect(t *testing.T, ctx context.Context, runtime *Runt
 		t.Fatalf("terminate cache-listener connection %d: terminated=%v err=%v", listenerPID, terminated, err)
 	}
 	waitForCacheProbe(t, ctx, runtime, probeKey, true)
+	t.Log("reconnect callback cleared the local cache")
 	waitForCacheListener(t, ctx, adminPool, "core-v2-primary", listenerPID)
 
 	runtime.byteCache.Put(probeKey, []byte("cached after reconnect"), time.Minute)
-	if _, err := adminPool.Exec(ctx, `SELECT pg_notify('core_cache_invalidation','*')`); err != nil {
+	if _, err := adminPool.Exec(ctx, `SELECT pg_notify('core_cache_invalidation', $1)`, probeKey); err != nil {
 		t.Fatalf("publish invalidation after listener reconnect: %v", err)
 	}
 	waitForCacheProbe(t, ctx, runtime, probeKey, true)

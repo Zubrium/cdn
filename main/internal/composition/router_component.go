@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	platform "github.com/Zubrium/cdn/core/presentation"
 	routerengine "github.com/Zubrium/cdn/engines/router"
 	routesapp "github.com/Zubrium/cdn/engines/router/features/routes/application"
 	routesrepo "github.com/Zubrium/cdn/engines/router/features/routes/repository"
@@ -22,16 +23,21 @@ import (
 )
 
 type routerEngineComponent struct {
-	core       *coreComponent
-	loader     *loaderComponent
-	forms      *formsEngineComponent
-	content    *contentEngineComponent
-	config     appconfig.Resolved
-	selected   map[string]struct{}
-	dispatcher contracts.Dispatcher
-	api        *routerenginepresentation.APIAdapter
-	registry   *router.PublicOperationRegistry
-	routes     router.RouteResolver
+	core         *coreComponent
+	loader       *loaderComponent
+	forms        *formsEngineComponent
+	content      *contentEngineComponent
+	config       appconfig.Resolved
+	selected     map[string]struct{}
+	dispatcher   contracts.Dispatcher
+	observer     *observability.Observer
+	api          *routerenginepresentation.APIAdapter
+	registry     *router.PublicOperationRegistry
+	routes       router.RouteResolver
+	delivery     *router.CoreDelivery
+	warmupReady  bool
+	warmupCancel context.CancelFunc
+	warmupDone   chan struct{}
 }
 
 func (component *routerEngineComponent) Start(ctx context.Context) error {
@@ -140,9 +146,23 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	delivery, err := router.NewCoreDeliveryWithCache(settings.BranchID, files, routeService, registry, router.RouterCacheConfig{
 		Manifests: router.CacheSettings{Enabled: scales.Manifests.Enabled, MaxEntries: scales.Manifests.MaxEntries, MaxBytes: scales.Manifests.MaxBytes, TTL: manifestTTL},
 		Routes:    router.CacheSettings{Enabled: scales.Routes.Enabled, MaxEntries: scales.Routes.MaxEntries, MaxBytes: scales.Routes.MaxBytes, TTL: routeTTL},
+		Observer:  routerCacheObserver{observer: component.observer},
 	})
 	if err != nil {
 		return err
+	}
+	warmupConfig := routerWarmupConfig(component.config)
+	warmupTargets := routerWarmupTargets(component.config)
+	if len(warmupTargets) > 0 && (warmupConfig.Manifests || warmupConfig.Routes) {
+		result, err := delivery.Warmup(ctx, warmupTargets, warmupConfig)
+		if err != nil && component.config.Core.Warmup.Mode == platform.CacheModeStrict {
+			return fmt.Errorf("warm Router caches before readiness: %w", err)
+		}
+		if err != nil && component.observer != nil {
+			component.observer.Log(ctx, observability.LevelWarn, "Router cache warm-up completed with failures",
+				observability.String("component.id", "engine.router"),
+				observability.Int("warmup.failed", int64(result.Failed)))
+		}
 	}
 	api, err := routerenginepresentation.NewAPIAdapter(routeService, delivery, settings.BranchID)
 	if err != nil {
@@ -151,27 +171,52 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	component.registry, component.api, component.routes = registry, api, routeService
+	if warmupConfig.RefreshInterval > 0 && len(warmupTargets) > 0 {
+		refreshCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		component.warmupCancel, component.warmupDone = cancel, done
+		go func() {
+			defer close(done)
+			_ = delivery.WarmupRefreshLoop(refreshCtx, warmupTargets, warmupConfig)
+		}()
+	}
+	component.registry, component.api, component.routes, component.delivery = registry, api, routeService, delivery
+	component.warmupReady = true
 	return nil
 }
 
 func (component *routerEngineComponent) Ready(context.Context) error {
-	if component == nil || component.api == nil || component.registry == nil {
+	if component == nil || component.api == nil || component.registry == nil || !component.warmupReady {
 		return errors.New("Router Engine is not initialized")
 	}
 	return nil
 }
 
-func (component *routerEngineComponent) Stop(context.Context) error {
-	if component != nil {
-		component.api = nil
-		component.registry = nil
+func (component *routerEngineComponent) Stop(ctx context.Context) error {
+	if component == nil {
+		return nil
 	}
+	if component.warmupCancel != nil {
+		component.warmupCancel()
+	}
+	if component.warmupDone != nil {
+		select {
+		case <-component.warmupDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	component.warmupCancel = nil
+	component.warmupDone = nil
+	component.api = nil
+	component.registry = nil
+	component.delivery = nil
+	component.warmupReady = false
 	return nil
 }
 
 func (component *routerEngineComponent) IsReady() bool {
-	return component != nil && component.api != nil && component.registry != nil
+	return component != nil && component.api != nil && component.registry != nil && component.warmupReady
 }
 
 type routerAdminComponent struct{}

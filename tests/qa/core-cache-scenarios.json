@@ -128,6 +128,24 @@
       "blocker": null
     },
     {
+      "id": "CACHE-013",
+      "source": "spec/architecture/SPEC-caching.md §5.3, §5.5; tests/ACCEPTANCE-MATRIX.md CACHE-013",
+      "level": "unit",
+      "preconditions": [
+        "Sources.inline и Sources.published_artifacts включаются независимо startup-конфигурацией.",
+        "Published artifact slot задаёт route_id, locale, file_id, tier, paths и authorization явно; отдельного latest-указателя нет."
+      ],
+      "input": "Включить published_artifacts с двумя слотами, пересечь один file ID с inline-ключом, задать конфликтующие дубли, опустить явный список и превысить max_keys.",
+      "action": "Разрешить конфиг и проверить производный набор Core-ключей и список ResolvedPublishedArtifact.",
+      "expected_result": "Источник выводит file ID только из server-owned артефактов; ключи объединяются по file ID, сортируются детерминированно и обрезаются до max_keys; неоднозначные слоты, отсутствующий список, дубли principals/actions, списки, превышающие max_keys, и неизвестные идентификаторы отвергаются до старта.",
+      "expected_state": "Идентификаторы не попадают в метрики и логи; удаление ключа из конфига убирает его из набора прогрева без инвалидации уже загруженных записей.",
+      "test_file": "tests/go/main/internal/config/cache_warmup_source_test.go",
+      "test_symbol": "TestWarmupSourceScenarios/CACHE-013",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
       "id": "CONC-005",
       "source": "spec/architecture/SPEC-concurrency.md §6; tests/ACCEPTANCE-MATRIX.md CONC-005",
       "level": "unit",

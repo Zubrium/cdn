@@ -3,8 +3,11 @@ package appconfig
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
+	routermodel "github.com/Zubrium/cdn/engines/router/features/routes/model"
 	"github.com/google/uuid"
 )
 
@@ -28,17 +31,30 @@ type CacheAccessTarget struct {
 }
 
 type WarmupTarget struct {
-	Enabled         bool                `yaml:"enabled"`
-	Mode            string              `yaml:"mode"`
-	Timeout         string              `yaml:"timeout"`
-	PerKeyTimeout   string              `yaml:"per_key_timeout"`
-	Concurrency     int                 `yaml:"concurrency"`
-	MaxKeys         int                 `yaml:"max_keys"`
-	Retry           WarmupRetryTarget   `yaml:"retry"`
-	RefreshInterval string              `yaml:"refresh_interval"`
-	Sources         WarmupSourcesTarget `yaml:"sources"`
-	Targets         WarmupTargetsTarget `yaml:"targets"`
-	Keys            []WarmupKeyTarget   `yaml:"keys"`
+	Enabled            bool                      `yaml:"enabled"`
+	Mode               string                    `yaml:"mode"`
+	Timeout            string                    `yaml:"timeout"`
+	PerKeyTimeout      string                    `yaml:"per_key_timeout"`
+	Concurrency        int                       `yaml:"concurrency"`
+	MaxKeys            int                       `yaml:"max_keys"`
+	Retry              WarmupRetryTarget         `yaml:"retry"`
+	RefreshInterval    string                    `yaml:"refresh_interval"`
+	Sources            WarmupSourcesTarget       `yaml:"sources"`
+	Targets            WarmupTargetsTarget       `yaml:"targets"`
+	Keys               []WarmupKeyTarget         `yaml:"keys"`
+	PublishedArtifacts []PublishedArtifactTarget `yaml:"published_artifacts"`
+}
+
+// PublishedArtifactTarget is a server-owned Router publication slot. It is
+// distinct from an inline Core key because composition also needs the route
+// and locale identities to validate Router caches during warm-up.
+type PublishedArtifactTarget struct {
+	RouteID       string                 `yaml:"route_id"`
+	Locale        string                 `yaml:"locale"`
+	FileID        string                 `yaml:"file_id"`
+	Tier          string                 `yaml:"tier"`
+	Paths         []string               `yaml:"paths"`
+	Authorization WarmupKeyAuthorization `yaml:"authorization"`
 }
 
 type WarmupRetryTarget struct {
@@ -286,15 +302,78 @@ func validateScales(c Config) (ResolvedScales, error) {
 		}
 		seenKeys[key.FileID] = struct{}{}
 	}
-	if !warmup.Sources.Inline && !warmup.Sources.PublishedArtifacts && len(warmup.Keys) > 0 {
+	if !warmup.Sources.Inline && !warmup.Sources.PublishedArtifacts && len(warmup.Keys)+len(warmup.PublishedArtifacts) > 0 {
 		return ResolvedScales{}, errors.New("warmup keys require at least one enabled source")
 	}
+	if len(warmup.Keys) > 0 && !warmup.Sources.Inline {
+		return ResolvedScales{}, errors.New("inline warmup source is disabled but keys are configured")
+	}
+	if warmup.Sources.PublishedArtifacts && warmup.PublishedArtifacts == nil {
+		return ResolvedScales{}, errors.New("published artifact warmup source requires an explicit list")
+	}
+	if len(warmup.PublishedArtifacts) > 0 && !warmup.Sources.PublishedArtifacts {
+		return ResolvedScales{}, errors.New("published artifact warmup source is disabled but artifacts are configured")
+	}
+	identities := make(map[string]string, len(warmup.Keys)+len(warmup.PublishedArtifacts))
 	for _, key := range warmup.Keys {
-		for _, action := range key.Authorization.Actions {
-			if action != "read" {
-				return ResolvedScales{}, errors.New("invalid warmup authorization action")
-			}
+		if err := validateOptionalWarmupAuthorization(key.Authorization); err != nil {
+			return ResolvedScales{}, err
 		}
+		signature := warmupIdentitySignature(strings.ToUpper(key.Tier), key.Authorization)
+		if prior, exists := identities[key.FileID]; exists && prior != signature {
+			return ResolvedScales{}, errors.New("conflicting warmup key identity")
+		}
+		identities[key.FileID] = signature
+	}
+	if len(warmup.PublishedArtifacts) > warmup.MaxKeys {
+		return ResolvedScales{}, errors.New("published artifact warm-up list exceeds max_keys")
+	}
+	slots := make(map[string]struct{}, len(warmup.PublishedArtifacts))
+	for _, artifact := range warmup.PublishedArtifacts {
+		routeID, err := uuid.Parse(artifact.RouteID)
+		if err != nil || routeID == uuid.Nil {
+			return ResolvedScales{}, errors.New("invalid published artifact route_id")
+		}
+		fileID, err := uuid.Parse(artifact.FileID)
+		if err != nil || fileID == uuid.Nil {
+			return ResolvedScales{}, errors.New("invalid published artifact file_id")
+		}
+		if _, err := routermodel.CanonicalLocale(artifact.Locale); err != nil {
+			return ResolvedScales{}, errors.New("invalid published artifact locale")
+		}
+		if artifact.Tier != "required" && artifact.Tier != "optional" {
+			return ResolvedScales{}, errors.New("invalid published artifact tier")
+		}
+		if err := validateWarmupAuthorization(artifact.Authorization); err != nil {
+			return ResolvedScales{}, err
+		}
+		if len(artifact.Paths) == 0 {
+			return ResolvedScales{}, errors.New("published artifact requires explicit warm-up paths")
+		}
+		if len(artifact.Paths) > warmup.MaxKeys {
+			return ResolvedScales{}, errors.New("published artifact warm-up paths exceed max_keys")
+		}
+		seenPaths := make(map[string]struct{}, len(artifact.Paths))
+		for _, path := range artifact.Paths {
+			normalized, err := routermodel.NormalizePath(path)
+			if err != nil || normalized != path {
+				return ResolvedScales{}, errors.New("invalid published artifact path")
+			}
+			if _, duplicate := seenPaths[path]; duplicate {
+				return ResolvedScales{}, errors.New("duplicate published artifact path")
+			}
+			seenPaths[path] = struct{}{}
+		}
+		slot := artifact.RouteID + "|" + artifact.Locale
+		if _, duplicate := slots[slot]; duplicate {
+			return ResolvedScales{}, errors.New("duplicate published artifact route/locale slot")
+		}
+		slots[slot] = struct{}{}
+		signature := warmupIdentitySignature(strings.ToUpper(artifact.Tier), artifact.Authorization)
+		if prior, exists := identities[artifact.FileID]; exists && prior != signature {
+			return ResolvedScales{}, errors.New("conflicting warmup key identity")
+		}
+		identities[artifact.FileID] = signature
 	}
 
 	if _, err := time.ParseDuration(c.Admin.Concurrency.HTTP.RequestTimeout); err != nil {
@@ -439,6 +518,61 @@ func validateCacheTarget(cache CacheTarget, name string) error {
 		return fmt.Errorf("invalid %s.access_cache.ttl", name)
 	}
 	return nil
+}
+
+func validateOptionalWarmupAuthorization(authorization WarmupKeyAuthorization) error {
+	if len(authorization.Principals) == 0 && len(authorization.Actions) == 0 {
+		return nil
+	}
+	return validateWarmupAuthorization(authorization)
+}
+
+func validateWarmupAuthorization(authorization WarmupKeyAuthorization) error {
+	if len(authorization.Principals) == 0 || len(authorization.Actions) == 0 {
+		return errors.New("warmup authorization requires at least one principal and action")
+	}
+	seenActions := make(map[string]struct{}, len(authorization.Actions))
+	for _, action := range authorization.Actions {
+		if action != "read" {
+			return errors.New("invalid warmup authorization action")
+		}
+		if _, duplicate := seenActions[action]; duplicate {
+			return errors.New("duplicate warmup authorization action")
+		}
+		seenActions[action] = struct{}{}
+	}
+	seenPrincipals := make(map[string]struct{}, len(authorization.Principals))
+	for _, principal := range authorization.Principals {
+		id, err := uuid.Parse(principal)
+		if err != nil || id == uuid.Nil {
+			return errors.New("invalid warmup principal ID")
+		}
+		if _, duplicate := seenPrincipals[principal]; duplicate {
+			return errors.New("duplicate warmup principal ID")
+		}
+		seenPrincipals[principal] = struct{}{}
+	}
+	return nil
+}
+
+func warmupIdentitySignature(tier string, authorization WarmupKeyAuthorization) string {
+	return tier + "|" + strings.Join(uniqueSorted(authorization.Principals), ",") + "|" +
+		strings.Join(uniqueSorted(authorization.Actions), ",")
+}
+
+func uniqueSorted(values []string) []string {
+	sorted := append([]string(nil), values...)
+	sort.Strings(sorted)
+	if len(sorted) < 2 {
+		return sorted
+	}
+	unique := sorted[:1]
+	for _, value := range sorted[1:] {
+		if value != unique[len(unique)-1] {
+			unique = append(unique, value)
+		}
+	}
+	return unique
 }
 
 func validateNamedAdmission(setting NamedAdmission, global int, name string) error {

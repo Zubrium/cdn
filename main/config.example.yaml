@@ -61,7 +61,12 @@ core:
         bytes: true
         router_manifests: true
         router_routes: true
-      # Operator-supplied IDs only; the empty list is valid for a fresh system.
+      # Server-owned Router publication slots. Each entry contributes its
+      # file_id to the Core key set and primes router.manifests/router.routes
+      # before engine.router becomes Ready. The empty list is valid for a fresh
+      # system with no published artifacts yet.
+      published_artifacts: []
+      # Operator-supplied Core file IDs, selected only by sources.inline.
       keys: []
   concurrency:
     storage:

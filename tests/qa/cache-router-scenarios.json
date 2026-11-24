@@ -74,6 +74,24 @@
       "blocker": "Disposable caching proxy/CDN не предоставлен: требуются CACHE_ROUTER_TEST_DISPOSABLE=1, CACHE_ROUTER_TEST_PROXY_BASE_URL, CACHE_ROUTER_TEST_NO_STORE_PATH, CACHE_ROUTER_TEST_SSE_PATH, CACHE_ROUTER_TEST_FORM_PATH, CACHE_ROUTER_TEST_ADMIN_PATH и CACHE_ROUTER_TEST_TIMEOUT. Без них e2e-тест пропускается."
     },
     {
+      "id": "CACHE-014",
+      "source": "spec/architecture/SPEC-caching.md §5.3–5.6, §8; tests/ACCEPTANCE-MATRIX.md CACHE-014",
+      "level": "contract",
+      "preconditions": [
+        "Router warm-up target-ы выводятся только из явно сконфигурированных published artifact slot-ов.",
+        "Авторитетные route record и метаданные Core file доступны внутри Router до объявления Ready."
+      ],
+      "input": "Strict warm-up одного артефакта и маршрута; отдельно отключённая цель; фоновый refresh loop;locale, не сконфигурированный на маршруте.",
+      "action": "Вызвать CoreDelivery.Warmup и WarmupRefreshLoop, затем доставить публичный asset и проверить счётчики, чтения кэша и метрики observer.",
+      "expected_result": "Оба кэша прогреты до первой выдачи; отключённые цели дают SKIPPED и не читают источник; циклы refresh не перекрываются; расхождение route/locale/file закрывает выдачу; операции HIT/MISS и gauge entries/bytes публикуются для обоих кэшей, а метрики используют только метки cache/tier/result.",
+      "expected_state": "В strict warm-up блокирует Ready Router, в best_effort не блокирует, а отмена контекста останавливает loop без частично сохранённых записей.",
+      "test_file": "tests/go/presentation/router/cache_scenarios_test.go",
+      "test_symbol": "TestCacheRouterScenario/CACHE-014",
+      "coverage_status": "covered",
+      "execution_status": "pass",
+      "blocker": null
+    },
+    {
       "id": "CACHE-012",
       "source": "spec/architecture/SPEC-caching.md §9; tests/ACCEPTANCE-MATRIX.md Кэширование CACHE-012",
       "level": "unit",

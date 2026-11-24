@@ -37,19 +37,30 @@ python3 "$root/tests/go-overlay.py" > "$overlay" || exit $?
 printf '%s\n' "==> validating Core cache scenario ledger"
 python3 "$checker" "$ledger" || exit $?
 
+module_and_package_for_test_file() {
+	case "$1" in
+		tests/go/core/infrastructure/cache/*)
+			printf 'core|./infrastructure/cache\n'
+			;;
+		tests/go/main/internal/config/*)
+			printf 'main|./internal/config\n'
+			;;
+		*)
+			printf '%s\n' "unsupported Core cache test file: $1" >&2
+			return 1
+			;;
+	esac
+}
+
 run_target() {
 	test_file=$1
 	test_symbol=$2
 	test_level=$3
-	case "$test_file" in
-		tests/go/core/infrastructure/cache/*) ;;
-		*)
-			printf '%s\n' "unsupported Core cache test file: $test_file" >&2
-			return 1
-			;;
-	esac
+	module_and_package=$(module_and_package_for_test_file "$test_file") || return 1
+	module=${module_and_package%%|*}
+	package=${module_and_package#*|}
 	case "$test_symbol" in
-		TestCoreCacheScenarios/*) ;;
+		TestCoreCacheScenarios/* | TestWarmupSourceScenarios/*) ;;
 		*)
 			printf '%s\n' "Core cache symbol must name an exact scenario subtest: $test_symbol" >&2
 			return 1
@@ -69,10 +80,10 @@ run_target() {
 	else
 		race_arg=""
 	fi
-	printf '%s\n' "==> running $test_symbol in core ./infrastructure/cache (race=${race_arg:-off})"
+	printf '%s\n' "==> running $test_symbol in $module $package (race=${race_arg:-off})"
 	log="$work_dir/$(printf '%s' "$test_symbol" | tr '/' '_').log"
-	if ! (cd "$root/core" && GOTMPDIR="$gotmp" go test $race_arg -count=1 -v -overlay="$overlay" \
-		-run "^${top_level}\$/^${subtest}\$" ./infrastructure/cache) > "$log" 2>&1; then
+	if ! (cd "$root/$module" && GOTMPDIR="$gotmp" go test $race_arg -count=1 -v -overlay="$overlay" \
+		-run "^${top_level}\$/^${subtest}\$" "$package") > "$log" 2>&1; then
 		cat "$log" >&2
 		return 1
 	fi

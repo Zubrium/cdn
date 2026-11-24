@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -195,6 +196,15 @@ func (routes *cacheScenarioRoutes) ResolveRouteFingerprint(_ context.Context, _,
 	return routes.fingerprint, nil
 }
 
+func (routes *cacheScenarioRoutes) GetRoute(_ context.Context, branchID, routeID string) (model.Route, error) {
+	routes.mu.Lock()
+	defer routes.mu.Unlock()
+	if branchID != cacheScenarioBranch || routeID != routes.route.ID {
+		return model.Route{}, engine.ErrNotFound
+	}
+	return routes.route, nil
+}
+
 func (routes *cacheScenarioRoutes) counters() (int, int) {
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
@@ -214,7 +224,117 @@ func cacheScenarioCaches() RouterCacheConfig {
 	return RouterCacheConfig{
 		Manifests: CacheSettings{Enabled: true, MaxEntries: 8, MaxBytes: 1 << 20, TTL: time.Minute},
 		Routes:    CacheSettings{Enabled: true, MaxEntries: 8, MaxBytes: 1 << 20, TTL: time.Minute},
+		Observer:  newCacheScenarioObserver(),
 	}
+}
+
+type cacheScenarioObserver struct {
+	mu        sync.Mutex
+	counters  map[string]float64
+	gauges    map[string]float64
+	histogram map[string]int
+}
+
+func newCacheScenarioObserver() *cacheScenarioObserver {
+	return &cacheScenarioObserver{
+		counters: make(map[string]float64), gauges: make(map[string]float64), histogram: make(map[string]int),
+	}
+}
+
+func cacheScenarioLabels(labels []CacheLabel) string {
+	parts := make([]string, 0, len(labels))
+	for _, label := range labels {
+		parts = append(parts, label.Key+"="+label.Value)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+func (o *cacheScenarioObserver) IncCounterExact(_ context.Context, name string, value float64, labels ...CacheLabel) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.counters[name+"|"+cacheScenarioLabels(labels)] += value
+}
+
+func (o *cacheScenarioObserver) SetGaugeExact(_ context.Context, name string, value float64, labels ...CacheLabel) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.gauges[name+"|"+cacheScenarioLabels(labels)] = value
+}
+
+func (o *cacheScenarioObserver) ObserveHistogramExact(_ context.Context, name string, _ float64, labels ...CacheLabel) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.histogram[name+"|"+cacheScenarioLabels(labels)]++
+}
+
+func (o *cacheScenarioObserver) counter(name, cache, result string) float64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	total := 0.0
+	for key, count := range o.counters {
+		if strings.HasPrefix(key, name+"|cache="+cache+",") && strings.Contains(key, ",result="+result) {
+			total += count
+		}
+	}
+	return total
+}
+
+func (o *cacheScenarioObserver) observations(name, cache string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	total := 0
+	for key, count := range o.histogram {
+		if strings.HasPrefix(key, name+"|cache="+cache+",") || key == name+"|cache="+cache {
+			total += count
+		}
+	}
+	return total
+}
+
+func (o *cacheScenarioObserver) gauge(name, cache string) (float64, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	value, found := o.gauges[name+"|cache="+cache]
+	return value, found
+}
+
+type cacheScenarioTimedFiles struct {
+	*cacheScenarioFiles
+	delay     time.Duration
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	stats     int
+}
+
+func (files *cacheScenarioTimedFiles) StatFile(ctx context.Context, id string) (contracts.File, error) {
+	files.mu.Lock()
+	files.active++
+	if files.active > files.maxActive {
+		files.maxActive = files.active
+	}
+	files.stats++
+	files.mu.Unlock()
+	defer func() {
+		files.mu.Lock()
+		files.active--
+		files.mu.Unlock()
+	}()
+	if files.delay > 0 {
+		time.Sleep(files.delay)
+	}
+	return files.cacheScenarioFiles.StatFile(ctx, id)
+}
+
+func (files *cacheScenarioTimedFiles) counters() (int, int) {
+	files.mu.Lock()
+	defer files.mu.Unlock()
+	return files.stats, files.maxActive
+}
+
+func cacheScenarioWarmupConfig() RouterWarmupConfig {
+	return RouterWarmupConfig{Manifests: true, Routes: true, RefreshInterval: 10 * time.Millisecond}
 }
 
 func cacheScenarioBody(t *testing.T, response engine.DeliveryResponse) string {
@@ -568,6 +688,188 @@ func TestCacheRouterScenario(t *testing.T) {
 				t.Errorf("proxy response %s Cache-Control = %q, want no-store", path, got)
 			}
 		}
+	})
+
+	t.Run("CACHE-014", func(t *testing.T) {
+		const (
+			manifestID = "01938f7a-68af-7c10-a51d-78b6ca125301"
+			documentID = "01938f7a-68af-7c10-a51d-78b6ca125302"
+			assetID    = "01938f7a-68af-7c10-a51d-78b6ca125304"
+		)
+		newScenario := func(t *testing.T, files interface {
+			StatFile(context.Context, string) (contracts.File, error)
+			ReadFile(context.Context, string) (io.ReadCloser, contracts.File, error)
+		}) (*CoreDelivery, *cacheScenarioRoutes, *cacheScenarioObserver, []RouterWarmupTarget) {
+			t.Helper()
+			routes := &cacheScenarioRoutes{route: cacheScenarioRoute(cacheScenarioTarget(manifestID), 1), fingerprint: cacheScenarioFingerprint}
+			observer := newCacheScenarioObserver()
+			cacheConfig := cacheScenarioCaches()
+			cacheConfig.Observer = observer
+			delivery, err := NewCoreDeliveryWithCache(cacheScenarioBranch, files, routes, nil, cacheConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			targets := []RouterWarmupTarget{{
+				RouteID: routes.route.ID, Locale: "en-US", FileID: manifestID, Tier: CacheTierRequired,
+				Paths: []string{cacheScenarioPath + "assets/app.js"},
+			}}
+			return delivery, routes, observer, targets
+		}
+
+		t.Run("primed_before_first_delivery", func(t *testing.T) {
+			files := newCacheScenarioFiles()
+			cacheScenarioArtifact(t, files, manifestID, documentID, assetID, "warm", 1)
+			delivery, routes, observer, targets := newScenario(t, files)
+			result, err := delivery.Warmup(context.Background(), targets, cacheScenarioWarmupConfig())
+			if err != nil {
+				t.Fatalf("strict Router warm-up failed: %v", err)
+			}
+			if result.Artifacts != 1 || result.Routes != 1 || result.Failed != 0 {
+				t.Fatalf("Router warm-up result = %+v, want one artifact and one route", result)
+			}
+			if reads := files.readCount(manifestID); reads != 1 {
+				t.Fatalf("warmed manifest reads = %d, want 1", reads)
+			}
+			resolveCount, _ := routes.counters()
+			if resolveCount != 1 {
+				t.Fatalf("warmed route resolutions = %d, want 1", resolveCount)
+			}
+			if got := observer.counter("zubrium_cache_warmup_keys_total", "router.manifests", "WARMED"); got != 1 {
+				t.Fatalf("manifest warm-up counter = %v, want 1", got)
+			}
+			if got := observer.counter("zubrium_cache_warmup_keys_total", "router.routes", "WARMED"); got != 1 {
+				t.Fatalf("route warm-up counter = %v, want 1", got)
+			}
+			if observer.observations("zubrium_cache_warmup_duration_seconds", "router.manifests") != 1 ||
+				observer.observations("zubrium_cache_warmup_duration_seconds", "router.routes") != 1 {
+				t.Fatal("Router warm-up histogram was not emitted for both caches")
+			}
+
+			response, err := delivery.Deliver(context.Background(), cacheScenarioDeliveryRequest(cacheScenarioPath+"assets/app.js"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body := cacheScenarioBody(t, response); !strings.Contains(body, "warm") {
+				t.Fatalf("delivery after warm-up = %q", body)
+			}
+			if reads := files.readCount(manifestID); reads != 1 {
+				t.Fatalf("warmed manifest was reread: %d reads", reads)
+			}
+			if resolveCount, _ := routes.counters(); resolveCount != 1 {
+				t.Fatalf("warmed route match was reresolved: %d resolutions", resolveCount)
+			}
+			for _, cache := range []string{"router.manifests", "router.routes"} {
+				if got := observer.counter("zubrium_cache_operations_total", cache, "MISS"); got != 1 {
+					t.Fatalf("%s MISS operations = %v, want 1", cache, got)
+				}
+				if got := observer.counter("zubrium_cache_operations_total", cache, "HIT"); got != 1 {
+					t.Fatalf("%s HIT operations = %v, want 1", cache, got)
+				}
+				entries, found := observer.gauge("zubrium_cache_entries", cache)
+				if !found || entries < 1 {
+					t.Fatalf("%s entries gauge = %v (found %t), want at least 1", cache, entries, found)
+				}
+				bytes, found := observer.gauge("zubrium_cache_bytes", cache)
+				if !found || bytes < 1 {
+					t.Fatalf("%s bytes gauge = %v (found %t), want at least 1", cache, bytes, found)
+				}
+			}
+		})
+
+		t.Run("disabled_targets_are_skipped", func(t *testing.T) {
+			files := newCacheScenarioFiles()
+			cacheScenarioArtifact(t, files, manifestID, documentID, assetID, "warm", 1)
+			delivery, routes, observer, targets := newScenario(t, files)
+			cfg := cacheScenarioWarmupConfig()
+			cfg.Routes = false
+			result, err := delivery.Warmup(context.Background(), targets, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Artifacts != 1 || result.Routes != 0 || result.Skipped != 1 {
+				t.Fatalf("warm-up without router.routes = %+v", result)
+			}
+			if resolveCount, _ := routes.counters(); resolveCount != 0 {
+				t.Fatalf("disabled router.routes resolved %d times", resolveCount)
+			}
+			if got := observer.counter("zubrium_cache_warmup_keys_total", "router.routes", "SKIPPED"); got != 1 {
+				t.Fatalf("router.routes skipped counter = %v, want 1", got)
+			}
+
+			manifestOnly := newCacheScenarioFiles()
+			cacheScenarioArtifact(t, manifestOnly, manifestID, documentID, assetID, "warm", 1)
+			manifestDelivery, manifestRoutes, manifestObserver, manifestTargets := newScenario(t, manifestOnly)
+			cfg = cacheScenarioWarmupConfig()
+			cfg.Manifests = false
+			result, err = manifestDelivery.Warmup(context.Background(), manifestTargets, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Artifacts != 0 || result.Routes != 1 || result.Skipped != 1 {
+				t.Fatalf("warm-up without router.manifests = %+v", result)
+			}
+			if reads := manifestOnly.readCount(manifestID); reads != 0 {
+				t.Fatalf("disabled router.manifests read the artifact %d times", reads)
+			}
+			if resolveCount, _ := manifestRoutes.counters(); resolveCount != 1 {
+				t.Fatalf("router.routes resolutions = %d, want 1", resolveCount)
+			}
+			if got := manifestObserver.counter("zubrium_cache_warmup_keys_total", "router.manifests", "SKIPPED"); got != 1 {
+				t.Fatalf("router.manifests skipped counter = %v, want 1", got)
+			}
+		})
+
+		t.Run("refresh_does_not_overlap", func(t *testing.T) {
+			files := &cacheScenarioTimedFiles{cacheScenarioFiles: newCacheScenarioFiles(), delay: time.Millisecond}
+			cacheScenarioArtifact(t, files.cacheScenarioFiles, manifestID, documentID, assetID, "warm", 1)
+			delivery, _, _, targets := newScenario(t, files)
+			cfg := cacheScenarioWarmupConfig()
+			if _, err := delivery.Warmup(context.Background(), targets, cfg); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+			defer cancel()
+			if err := delivery.WarmupRefreshLoop(ctx, targets, cfg); err != nil {
+				t.Fatal(err)
+			}
+			stats, maxActive := files.counters()
+			if stats < 3 {
+				t.Fatalf("refresh loop made %d revision checks, want at least three", stats)
+			}
+			if maxActive != 1 {
+				t.Fatalf("overlapping refresh cycles: max in-flight revision checks = %d", maxActive)
+			}
+		})
+
+		t.Run("identity_mismatch_fails_closed", func(t *testing.T) {
+			files := newCacheScenarioFiles()
+			cacheScenarioArtifact(t, files, manifestID, documentID, assetID, "warm", 1)
+			delivery, _, observer, _ := newScenario(t, files)
+			mismatch := []RouterWarmupTarget{{
+				RouteID: cacheScenarioRoute(cacheScenarioTarget(manifestID), 1).ID,
+				Locale:  "de-DE", FileID: manifestID, Tier: CacheTierOptional,
+				Paths: []string{cacheScenarioPath + "assets/app.js"},
+			}}
+			result, err := delivery.Warmup(context.Background(), mismatch, cacheScenarioWarmupConfig())
+			if err != nil {
+				t.Fatalf("optional identity mismatch must not block readiness: %v", err)
+			}
+			if result.Failed != 1 || result.Routes != 0 {
+				t.Fatalf("optional identity mismatch result = %+v", result)
+			}
+			if got := observer.counter("zubrium_cache_warmup_keys_total", "router.routes", "FAILED"); got != 1 {
+				t.Fatalf("optional failure counter = %v, want 1", got)
+			}
+
+			required := append([]RouterWarmupTarget(nil), mismatch...)
+			required[0].Tier = CacheTierRequired
+			if _, err := delivery.Warmup(context.Background(), required, cacheScenarioWarmupConfig()); err == nil {
+				t.Fatal("required identity mismatch must block strict readiness")
+			}
+			if got := observer.counter("zubrium_cache_warmup_keys_total", "router.routes", "FAILED"); got != 2 {
+				t.Fatalf("required + optional failure counter = %v, want 2", got)
+			}
+		})
 	})
 
 	t.Run("CACHE-012", func(t *testing.T) {

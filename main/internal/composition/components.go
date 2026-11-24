@@ -1018,7 +1018,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		if contentEngine != nil {
 			requires = append(requires, "engine.content")
 		}
-		routerEngine = &routerEngineComponent{core: core, loader: loader, forms: formsEngine, content: contentEngine, config: resolved, selected: selected, dispatcher: dispatcher}
+		routerEngine = &routerEngineComponent{core: core, loader: loader, forms: formsEngine, content: contentEngine, config: resolved, selected: selected, dispatcher: dispatcher, observer: observer}
 		fileAPI.routerEngine = routerEngine
 		if err := register(platform.RuntimeComponent{ID: "engine.router", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err

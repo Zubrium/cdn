@@ -407,7 +407,8 @@ func validRuntimeConfig() Config {
 				AccessCache: CacheAccessTarget{MaxEntries: 100, MaxBytes: 1 << 16, TTL: "1m"},
 				Warmup: WarmupTarget{Enabled: true, Mode: "strict", Timeout: "30s", PerKeyTimeout: "5s", Concurrency: 1, MaxKeys: 10,
 					Retry: WarmupRetryTarget{Attempts: 1, Backoff: "10ms"}, RefreshInterval: "0s",
-					Sources: WarmupSourcesTarget{PublishedArtifacts: true}, Targets: WarmupTargetsTarget{Metadata: true, Bytes: true}}},
+					Sources: WarmupSourcesTarget{PublishedArtifacts: true}, Targets: WarmupTargetsTarget{Metadata: true, Bytes: true},
+					PublishedArtifacts: []PublishedArtifactTarget{}}},
 			Concurrency: CoreConcurrency{
 				Storage:      StorageConcurrency{MaxConcurrentReads: 2, MaxConcurrentAuthorizations: 2, OperationTimeout: "5s", ReadReserve: 1},
 				Cache:        CacheConcurrency{Shards: 2, LRUPromotionInterval: 1, Coalesce: CacheCoalesce{Enabled: true, MaxWaiters: 4, Timeout: "1s"}},
