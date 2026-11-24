@@ -142,12 +142,13 @@ func TestWebsiteFeatureImportAcceptance(t *testing.T) {
 		fingerprint := sha256.Sum256([]byte("web012-" + env.runID))
 		if err := runtime.StartCoordinator(ctx, core.CoordinatorRuntimeConfig{
 			Fingerprint: hex.EncodeToString(fingerprint[:]), InstanceLease: 30 * time.Second,
-			HeartbeatInterval: 5 * time.Second, ExecutorConcurrency: 2, TaskLease: 10 * time.Second,
-			TaskTimeout: 30 * time.Second, PollInterval: 50 * time.Millisecond,
-			RetryBase: 50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
+			HeartbeatInterval: 5 * time.Second,
+			RetryBase:         50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
 			MaxAttempts: 2, MaxWorkflowTasks: 16, MaxChildrenPerTask: 4,
 			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second,
-			TaskClasses: []string{archive.DataModuleID}, OperationExecutor: composition.NewDataBusTaskExecutor(dispatcher, bindings),
+			TaskClasses: []string{archive.DataModuleID},
+			Pools: websiteAcceptancePools(t, dispatcher, bindings,
+				composition.TaskPoolSpec{ClassID: archive.DataModuleID, Concurrency: 2, LeaseDuration: 10 * time.Second, TaskTimeout: 30 * time.Second, PollInterval: 50 * time.Millisecond}),
 		}); err != nil {
 			t.Fatalf("start disposable Coordinator: %v", err)
 		}

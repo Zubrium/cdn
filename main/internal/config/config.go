@@ -256,10 +256,6 @@ type CoordinatorConfig struct {
 	WorkflowsPageMaximum int    `yaml:"workflows_page_maximum"`
 	InstanceLease        string `yaml:"instance_lease"`
 	HeartbeatInterval    string `yaml:"heartbeat_interval"`
-	ExecutorConcurrency  int    `yaml:"-"`
-	TaskLease            string `yaml:"task_lease"`
-	TaskTimeout          string `yaml:"task_timeout"`
-	PollInterval         string `yaml:"poll_interval"`
 	RetryBase            string `yaml:"retry_base"`
 	RetryMaximum         string `yaml:"retry_maximum"`
 	MaxAttempts          int    `yaml:"max_attempts"`
@@ -274,10 +270,6 @@ type CoordinatorSettings struct {
 	WorkflowsPageMaximum int
 	InstanceLease        time.Duration
 	HeartbeatInterval    time.Duration
-	ExecutorConcurrency  int
-	TaskLease            time.Duration
-	TaskTimeout          time.Duration
-	PollInterval         time.Duration
 	RetryBase            time.Duration
 	RetryMaximum         time.Duration
 	MaxAttempts          int
@@ -597,7 +589,6 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	c.Core.CacheTTL = scales.CoreCache.TTL
 	c.Core.MaxCachedObjectBytes = scales.CoreCache.MaxObjectBytes
 	c.Loader.MaxConcurrentCommits = scales.LoaderConcurrency.MaxConcurrentCommits
-	c.Coordinator.ExecutorConcurrency = configuredWorkerLimit(c.Worker)
 	durations := []string{c.Core.ConnectTimeout, c.Core.MaxLifetime, c.Core.MaxIdleTime, c.Core.HealthInterval, c.Core.MigrationLockTimeout, c.Core.CacheTTL, c.Core.MaintenanceInterval, c.Core.MaintenanceTimeout, c.Core.PendingTTL, c.Core.SessionIdleTTL, c.Core.SessionAbsoluteTTL}
 	var parsed [11]time.Duration
 	for i, value := range durations {
@@ -622,10 +613,9 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 	if loaderDurations[0] > time.Duration(1<<63-1)-loaderDurations[1] {
 		return Resolved{}, errors.New("Loader session and commit timeouts overflow")
 	}
-	coordinatorDurationValues := []string{c.Coordinator.InstanceLease, c.Coordinator.HeartbeatInterval, c.Coordinator.TaskLease,
-		c.Coordinator.TaskTimeout, c.Coordinator.PollInterval, c.Coordinator.RetryBase, c.Coordinator.RetryMaximum,
-		c.Coordinator.WorkflowRetention}
-	var coordinatorDurations [8]time.Duration
+	coordinatorDurationValues := []string{c.Coordinator.InstanceLease, c.Coordinator.HeartbeatInterval,
+		c.Coordinator.RetryBase, c.Coordinator.RetryMaximum, c.Coordinator.WorkflowRetention}
+	var coordinatorDurations [5]time.Duration
 	for i, value := range coordinatorDurationValues {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration <= 0 {
@@ -634,13 +624,12 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 		coordinatorDurations[i] = duration
 	}
 	if coordinatorDurations[0] < 3*time.Second || coordinatorDurations[0] > time.Hour ||
-		coordinatorDurations[1] >= coordinatorDurations[0]/3 || coordinatorDurations[2] < 3*time.Second || coordinatorDurations[2] > time.Hour ||
-		coordinatorDurations[3] > 24*time.Hour || coordinatorDurations[4] >= coordinatorDurations[2] ||
-		coordinatorDurations[5] > coordinatorDurations[6] || coordinatorDurations[6] > 24*time.Hour ||
-		c.Coordinator.ExecutorConcurrency < 1 || c.Coordinator.ExecutorConcurrency > 256 || c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 ||
+		coordinatorDurations[1] >= coordinatorDurations[0]/3 ||
+		coordinatorDurations[2] > coordinatorDurations[3] || coordinatorDurations[3] > 24*time.Hour ||
+		c.Coordinator.MaxAttempts < 1 || c.Coordinator.MaxAttempts > 100 ||
 		c.Coordinator.MaxWorkflowTasks < 1 || c.Coordinator.MaxWorkflowTasks > 100000 ||
 		c.Coordinator.MaxChildrenPerTask < 0 || c.Coordinator.MaxChildrenPerTask > 256 ||
-		coordinatorDurations[7] > 365*24*time.Hour ||
+		coordinatorDurations[4] > 365*24*time.Hour ||
 		c.Coordinator.WorkflowsPageDefault < 1 || c.Coordinator.WorkflowsPageMaximum < c.Coordinator.WorkflowsPageDefault || c.Coordinator.WorkflowsPageMaximum > 200 ||
 		(c.Coordinator.WorkflowAccessGroup != "" && !platform.ValidAccessGroupKey(c.Coordinator.WorkflowAccessGroup)) {
 		return Resolved{}, errors.New("invalid Coordinator configuration")
@@ -1125,10 +1114,9 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			WorkflowAccessGroup:  c.Coordinator.WorkflowAccessGroup,
 			WorkflowsPageDefault: c.Coordinator.WorkflowsPageDefault, WorkflowsPageMaximum: c.Coordinator.WorkflowsPageMaximum,
 			InstanceLease: coordinatorDurations[0], HeartbeatInterval: coordinatorDurations[1],
-			ExecutorConcurrency: c.Coordinator.ExecutorConcurrency, TaskLease: coordinatorDurations[2], TaskTimeout: coordinatorDurations[3],
-			PollInterval: coordinatorDurations[4], RetryBase: coordinatorDurations[5], RetryMaximum: coordinatorDurations[6],
+			RetryBase: coordinatorDurations[2], RetryMaximum: coordinatorDurations[3],
 			MaxAttempts: c.Coordinator.MaxAttempts, MaxWorkflowTasks: c.Coordinator.MaxWorkflowTasks,
-			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[7],
+			MaxChildrenPerTask: c.Coordinator.MaxChildrenPerTask, WorkflowRetention: coordinatorDurations[4],
 		}, CoordinatorFingerprint: coordinatorFingerprint, HTTP: HTTPServerConfig{ListenAddress: c.HTTP.ListenAddress,
 			ReadHeaderTimeout: httpDurations[0], ReadTimeout: httpDurations[1], WriteTimeout: httpDurations[2], IdleTimeout: httpDurations[3],
 			ShutdownTimeout: httpDurations[4], MaxHeaderBytes: c.HTTP.MaxHeaderBytes}, Observability: observabilityConfig, Scales: scales}, nil

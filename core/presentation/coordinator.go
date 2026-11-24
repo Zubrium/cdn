@@ -27,27 +27,24 @@ type WorkflowReceipt = appcoord.WorkflowReceipt
 type WorkflowClient = appcoord.WorkflowClient
 type WorkflowControl = appcoord.WorkflowControl
 type TaskResult = corecoord.TaskResult
+type TaskPoolConfig = appcoord.TaskPoolConfig
 
 // CoordinatorRuntimeConfig contains explicit operational limits. Component
 // contracts and task handlers are collected from the selected composition;
 // Core passes only their neutral descriptors into the workflow service.
 type CoordinatorRuntimeConfig struct {
-	Fingerprint         string
-	InstanceLease       time.Duration
-	HeartbeatInterval   time.Duration
-	ExecutorConcurrency int
-	TaskLease           time.Duration
-	TaskTimeout         time.Duration
-	PollInterval        time.Duration
-	RetryBase           time.Duration
-	RetryMaximum        time.Duration
-	MaxAttempts         int
-	MaxWorkflowTasks    int
-	MaxChildrenPerTask  int
-	WorkflowRetention   time.Duration
-	ShutdownTimeout     time.Duration
-	TaskClasses         []string
-	OperationExecutor   appcoord.OperationExecutor
+	Fingerprint        string
+	InstanceLease      time.Duration
+	HeartbeatInterval  time.Duration
+	RetryBase          time.Duration
+	RetryMaximum       time.Duration
+	MaxAttempts        int
+	MaxWorkflowTasks   int
+	MaxChildrenPerTask int
+	WorkflowRetention  time.Duration
+	ShutdownTimeout    time.Duration
+	TaskClasses        []string
+	Pools              []TaskPoolConfig
 }
 
 // StartCoordinator is called once during Core startup after component
@@ -78,12 +75,10 @@ func (r *Runtime) StartCoordinator(ctx context.Context, cfg CoordinatorRuntimeCo
 	service, err := appcoord.NewService(appcoord.ServiceConfig{
 		Store: store, Fingerprint: cfg.Fingerprint,
 		InstanceLease: cfg.InstanceLease, HeartbeatInterval: cfg.HeartbeatInterval,
-		ExecutorConcurrency: cfg.ExecutorConcurrency, TaskLease: cfg.TaskLease,
-		TaskTimeout: cfg.TaskTimeout, PollInterval: cfg.PollInterval,
 		RetryBase: cfg.RetryBase, RetryMaximum: cfg.RetryMaximum,
 		MaxAttempts: cfg.MaxAttempts, MaxWorkflowTasks: cfg.MaxWorkflowTasks,
 		MaxChildrenPerTask: cfg.MaxChildrenPerTask, WorkflowRetention: cfg.WorkflowRetention,
-		TaskClasses: cfg.TaskClasses, Executor: cfg.OperationExecutor,
+		TaskClasses: cfg.TaskClasses, Pools: cfg.Pools,
 	})
 	if err != nil {
 		r.coordinatorMu.Lock()

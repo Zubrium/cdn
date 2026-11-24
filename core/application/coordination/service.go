@@ -18,32 +18,43 @@ type ServiceStore interface {
 	WorkflowStore
 }
 
+// TaskPoolConfig is one class-isolated worker pool. Every enabled pool shares
+// the Coordinator instance owner and config epoch, but owns its own executor,
+// handler map and admission limits. A disabled pool registers no handlers and
+// must never claim durable work.
+type TaskPoolConfig struct {
+	ClassID       string
+	Enabled       bool
+	Concurrency   int
+	LeaseDuration time.Duration
+	TaskTimeout   time.Duration
+	PollInterval  time.Duration
+	Executor      OperationExecutor
+}
+
 type ServiceConfig struct {
-	Store               ServiceStore
-	Fingerprint         string
-	InstanceLease       time.Duration
-	HeartbeatInterval   time.Duration
-	ExecutorConcurrency int
-	TaskLease           time.Duration
-	TaskTimeout         time.Duration
-	PollInterval        time.Duration
-	RetryBase           time.Duration
-	RetryMaximum        time.Duration
-	MaxAttempts         int
-	MaxWorkflowTasks    int
-	MaxChildrenPerTask  int
-	WorkflowRetention   time.Duration
-	TaskClasses         []string
-	Executor            OperationExecutor
+	Store              ServiceStore
+	Fingerprint        string
+	InstanceLease      time.Duration
+	HeartbeatInterval  time.Duration
+	RetryBase          time.Duration
+	RetryMaximum       time.Duration
+	MaxAttempts        int
+	MaxWorkflowTasks   int
+	MaxChildrenPerTask int
+	WorkflowRetention  time.Duration
+	TaskClasses        []string
+	Pools              []TaskPoolConfig
 }
 
 // Service owns the live Coordinator instance, scoped workflow clients, safe
-// task control and the single system-wide worker pool.
+// task control and the explicitly configured class-isolated worker pools.
 type Service struct {
 	mu           sync.RWMutex
 	cfg          ServiceConfig
 	instance     *Instance
-	executor     *TaskExecutor
+	executors    []*TaskExecutor
+	poolClasses  []string
 	ready        bool
 	failed       bool
 	closing      bool
@@ -61,17 +72,48 @@ type Service struct {
 func NewService(config ServiceConfig) (*Service, error) {
 	if isNilInterface(config.Store) || !validFingerprint(config.Fingerprint) ||
 		config.InstanceLease < 3*time.Second || config.InstanceLease > time.Hour || config.HeartbeatInterval <= 0 || config.HeartbeatInterval >= config.InstanceLease/3 ||
-		config.ExecutorConcurrency < 1 || config.ExecutorConcurrency > 256 || config.TaskLease < 3*time.Second || config.TaskLease > time.Hour ||
-		config.TaskTimeout <= 0 || config.TaskTimeout > 24*time.Hour || config.PollInterval <= 0 || config.PollInterval >= config.TaskLease ||
 		config.RetryBase <= 0 || config.RetryMaximum < config.RetryBase || config.RetryMaximum > 24*time.Hour ||
 		config.MaxAttempts < 1 || config.MaxAttempts > 100 || config.MaxWorkflowTasks < 1 || config.MaxWorkflowTasks > 100000 ||
 		config.MaxChildrenPerTask < 0 || config.MaxChildrenPerTask > 256 || config.WorkflowRetention <= 0 || config.WorkflowRetention > 365*24*time.Hour {
 		return nil, ErrInvalid
 	}
-	if len(config.TaskClasses) > 0 && isNilInterface(config.Executor) {
-		return nil, ErrInvalid
-	}
 	config.TaskClasses = append([]string(nil), config.TaskClasses...)
+	seenClasses := make(map[string]struct{}, len(config.TaskClasses))
+	for _, class := range config.TaskClasses {
+		if !taskClassPattern.MatchString(class) {
+			return nil, ErrInvalid
+		}
+		if _, duplicate := seenClasses[class]; duplicate {
+			return nil, ErrInvalid
+		}
+		seenClasses[class] = struct{}{}
+	}
+	seenPools := make(map[string]struct{}, len(config.Pools))
+	for _, pool := range config.Pools {
+		if !taskClassPattern.MatchString(pool.ClassID) {
+			return nil, ErrInvalid
+		}
+		if _, duplicate := seenPools[pool.ClassID]; duplicate {
+			return nil, ErrInvalid
+		}
+		if _, compiled := seenClasses[pool.ClassID]; !compiled {
+			return nil, ErrInvalid
+		}
+		seenPools[pool.ClassID] = struct{}{}
+		if !pool.Enabled {
+			if !isNilInterface(pool.Executor) {
+				return nil, ErrInvalid
+			}
+			continue
+		}
+		if isNilInterface(pool.Executor) || pool.Concurrency < 1 || pool.Concurrency > 256 ||
+			pool.LeaseDuration < 3*time.Second || pool.LeaseDuration > time.Hour ||
+			pool.TaskTimeout <= 0 || pool.TaskTimeout > 24*time.Hour ||
+			pool.PollInterval <= 0 || pool.PollInterval >= pool.LeaseDuration {
+			return nil, ErrInvalid
+		}
+	}
+	config.Pools = append([]TaskPoolConfig(nil), config.Pools...)
 	return &Service{cfg: config, closeDone: make(chan struct{}), errors: make(chan error, 1)}, nil
 }
 
@@ -98,25 +140,34 @@ func (s *Service) Start(ctx context.Context) error {
 		s.abortStart()
 		return err
 	}
-	var executor *TaskExecutor
-	if len(s.cfg.TaskClasses) > 0 {
-		executor, err = NewTaskExecutor(s.cfg.Store, TaskExecutorConfig{
+	executors := make([]*TaskExecutor, 0, len(s.cfg.Pools))
+	poolClasses := make([]string, 0, len(s.cfg.Pools))
+	for _, pool := range s.cfg.Pools {
+		if !pool.Enabled {
+			continue
+		}
+		executor, err := NewTaskExecutor(s.cfg.Store, TaskExecutorConfig{
 			Owner: instance.ID(), ConfigEpoch: instance.Epoch(),
-			TaskClasses: s.cfg.TaskClasses,
-			Concurrency: s.cfg.ExecutorConcurrency, LeaseDuration: s.cfg.TaskLease,
-			TaskTimeout: s.cfg.TaskTimeout, PollInterval: s.cfg.PollInterval,
+			TaskClasses: []string{pool.ClassID},
+			Concurrency: pool.Concurrency, LeaseDuration: pool.LeaseDuration,
+			TaskTimeout: pool.TaskTimeout, PollInterval: pool.PollInterval,
 			RetryBase: s.cfg.RetryBase, RetryMaximum: s.cfg.RetryMaximum,
 			MaxWorkflowTasks: s.cfg.MaxWorkflowTasks, MaxChildrenPerTask: s.cfg.MaxChildrenPerTask,
 			WorkflowRetention: s.cfg.WorkflowRetention,
-		}, s.cfg.Executor)
+		}, pool.Executor)
 		if err != nil {
+			for _, started := range executors {
+				_ = started.Close(context.Background())
+			}
 			s.abortStart()
 			return errors.Join(err, closeInstanceAfterStartFailure(instance, s.cfg.InstanceLease))
 		}
+		executors = append(executors, executor)
+		poolClasses = append(poolClasses, pool.ClassID)
 	}
 	monitorCtx, monitorStop := context.WithCancel(context.Background())
 	s.mu.Lock()
-	s.instance, s.executor = instance, executor
+	s.instance, s.executors, s.poolClasses = instance, executors, poolClasses
 	s.monitorCtx, s.monitorStop = monitorCtx, monitorStop
 	s.ready = true
 	s.mu.Unlock()
@@ -142,8 +193,9 @@ func (s *Service) CheckStartup(ctx context.Context) error {
 	return nil
 }
 
-// Activate starts the single system-wide task pool only after engines and
-// presentation components are initialized and ready.
+// Activate starts every enabled class pool only after engines and presentation
+// components are initialized and ready. Pools are independent: one saturated
+// class must not change another class's admission or handler map.
 func (s *Service) Activate(ctx context.Context) error {
 	if s == nil || ctx == nil {
 		return ErrInvalid
@@ -160,13 +212,16 @@ func (s *Service) Activate(ctx context.Context) error {
 		s.mu.Unlock()
 		return ErrTaskExecutorAlreadyStarted
 	}
-	executor := s.executor
+	executors := append([]*TaskExecutor(nil), s.executors...)
+	poolClasses := append([]string(nil), s.poolClasses...)
 	s.mu.Unlock()
-	if executor != nil {
+	for index, executor := range executors {
 		if err := executor.Start(ctx); err != nil {
+			s.forgetExecutors(executors[:index])
 			return err
 		}
 		if !executor.Healthy() {
+			s.forgetExecutors(executors[:index+1])
 			return ErrTaskExecutorNotReady
 		}
 	}
@@ -177,8 +232,8 @@ func (s *Service) Activate(ctx context.Context) error {
 	}
 	s.activated = true
 	s.mu.Unlock()
-	if executor != nil {
-		s.monitor("task executor", executor.Errors())
+	for index, executor := range executors {
+		s.monitor(fmt.Sprintf("task pool %s", poolClasses[index]), executor.Errors())
 	}
 	return nil
 }
@@ -191,6 +246,25 @@ func (s *Service) abortStart() {
 	s.mu.Lock()
 	s.started = false
 	s.mu.Unlock()
+}
+
+// forgetExecutors drops pools that were already closed during a failed
+// activation so shutdown never closes the same executor twice. A failed
+// activation is terminal: retrying it would see an empty executor set and could
+// make the service Ready while no worker pool can claim work.
+func (s *Service) forgetExecutors(closed []*TaskExecutor) {
+	for _, executor := range closed {
+		_ = executor.Close(context.Background())
+	}
+	s.mu.Lock()
+	s.executors = nil
+	s.poolClasses = nil
+	s.failed, s.ready = true, false
+	s.mu.Unlock()
+	select {
+	case s.errors <- errors.New("Coordinator task pool activation failed"):
+	default:
+	}
 }
 
 func closeInstanceAfterStartFailure(instance *Instance, timeout time.Duration) error {
@@ -248,9 +322,17 @@ func (s *Service) Ready() bool {
 	}
 	s.mu.RLock()
 	ready, activated, closing, failed := s.ready, s.activated, s.closing, s.failed
-	instance, executor := s.instance, s.executor
+	instance, executors := s.instance, s.executors
 	s.mu.RUnlock()
-	return ready && activated && !closing && !failed && instance != nil && instance.Ready() && (executor == nil || executor.Healthy())
+	if !ready || !activated || closing || failed || instance == nil || !instance.Ready() {
+		return false
+	}
+	for _, executor := range executors {
+		if !executor.Healthy() {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) IsReady() bool { return s.Ready() }
@@ -269,7 +351,7 @@ func (s *Service) NewWorkflowClient(taskClass string) (*WorkflowClient, error) {
 		return nil, ErrTaskClassUnavailable
 	}
 	// Engines construct their scoped workflow clients during composition,
-	// before the shared executor is activated. The instance lease already
+	// before isolated task pools are activated. The instance lease already
 	// fixes the owner and config epoch at this point; full readiness is only
 	// required once the outer runtime starts dispatching work.
 	s.mu.RLock()
@@ -342,10 +424,10 @@ func (s *Service) Close(ctx context.Context) error {
 		return nil
 	}
 	s.closing, s.ready = true, false
-	executor, instance, monitorStop := s.executor, s.instance, s.monitorStop
+	executors, instance, monitorStop := s.executors, s.instance, s.monitorStop
 	s.mu.Unlock()
 	s.shutdownOnce.Do(func() {
-		go s.shutdown(executor, instance, monitorStop)
+		go s.shutdown(executors, instance, monitorStop)
 	})
 	select {
 	case <-s.closeDone:
@@ -360,12 +442,12 @@ func (s *Service) Close(ctx context.Context) error {
 // shutdown continues after the caller's deadline. Core must keep its database
 // open until cooperative handlers have stopped and the instance lease is
 // released; later Close calls can wait for this same shutdown.
-func (s *Service) shutdown(executor *TaskExecutor, instance *Instance, monitorStop context.CancelFunc) {
+func (s *Service) shutdown(executors []*TaskExecutor, instance *Instance, monitorStop context.CancelFunc) {
 	if monitorStop != nil {
 		monitorStop()
 	}
 	var closeErr error
-	if executor != nil {
+	for _, executor := range executors {
 		closeErr = errors.Join(closeErr, executor.Close(context.Background()))
 	}
 	if instance != nil {
@@ -373,7 +455,7 @@ func (s *Service) shutdown(executor *TaskExecutor, instance *Instance, monitorSt
 	}
 	s.monitorWG.Wait()
 	s.mu.Lock()
-	s.instance, s.executor = nil, nil
+	s.instance, s.executors, s.poolClasses = nil, nil, nil
 	s.closeErr = closeErr
 	close(s.errors)
 	close(s.closeDone)

@@ -240,9 +240,6 @@ coordinator:
   workflows_page_maximum: 100
   instance_lease: 30s
   heartbeat_interval: 5s
-  task_lease: 20s
-  task_timeout: 15m
-  poll_interval: 1s
   retry_base: 2s
   retry_maximum: 1m
   max_attempts: 3

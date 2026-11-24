@@ -348,13 +348,14 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 		fingerprint := sha256.Sum256([]byte("web020-" + scenarioID))
 		if err := runtime.StartCoordinator(ctx, core.CoordinatorRuntimeConfig{
 			Fingerprint: hex.EncodeToString(fingerprint[:]), InstanceLease: 30 * time.Second,
-			HeartbeatInterval: 5 * time.Second, ExecutorConcurrency: 2, TaskLease: 20 * time.Second,
-			TaskTimeout: 90 * time.Second, PollInterval: 25 * time.Millisecond,
-			RetryBase: 50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
+			HeartbeatInterval: 5 * time.Second,
+			RetryBase:         50 * time.Millisecond, RetryMaximum: 250 * time.Millisecond,
 			MaxAttempts: 3, MaxWorkflowTasks: 32, MaxChildrenPerTask: 8,
 			WorkflowRetention: 24 * time.Hour, ShutdownTimeout: 15 * time.Second,
-			TaskClasses:       []string{websiteworkflow.ComponentID, prerender.DataModuleID},
-			OperationExecutor: composition.NewDataBusTaskExecutor(dispatcher, bindings),
+			TaskClasses: []string{websiteworkflow.ComponentID, prerender.DataModuleID},
+			Pools: websiteAcceptancePools(t, dispatcher, bindings,
+				composition.TaskPoolSpec{ClassID: websiteworkflow.ComponentID, Concurrency: 2, LeaseDuration: 20 * time.Second, TaskTimeout: 90 * time.Second, PollInterval: 25 * time.Millisecond},
+				composition.TaskPoolSpec{ClassID: prerender.DataModuleID, Concurrency: 2, LeaseDuration: 20 * time.Second, TaskTimeout: 90 * time.Second, PollInterval: 25 * time.Millisecond}),
 		}); err != nil {
 			t.Fatalf("start disposable Coordinator: %v", err)
 		}

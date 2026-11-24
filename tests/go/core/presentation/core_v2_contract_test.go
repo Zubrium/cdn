@@ -1556,11 +1556,11 @@ func TestDisposableCoreV2FileGroupSetAndCacheAcceptance(t *testing.T) {
 	})
 	if err := first.StartCoordinator(ctx, CoordinatorRuntimeConfig{
 		Fingerprint: strings.Repeat("c", 64), InstanceLease: 6 * time.Second, HeartbeatInterval: time.Second,
-		ExecutorConcurrency: 1, TaskLease: 4 * time.Second, TaskTimeout: 15 * time.Second,
-		PollInterval: 100 * time.Millisecond, RetryBase: time.Second, RetryMaximum: 5 * time.Second,
+		RetryBase: time.Second, RetryMaximum: 5 * time.Second,
 		MaxAttempts: 2, MaxWorkflowTasks: 10, MaxChildrenPerTask: 2,
 		WorkflowRetention: time.Hour, ShutdownTimeout: 10 * time.Second, TaskClasses: []string{"engine.example"},
-		OperationExecutor: executor,
+		Pools: []TaskPoolConfig{{ClassID: "engine.example", Enabled: true, Concurrency: 1,
+			LeaseDuration: 4 * time.Second, TaskTimeout: 15 * time.Second, PollInterval: 100 * time.Millisecond, Executor: executor}},
 	}); err != nil {
 		t.Fatalf("start Core-owned Coordinator: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,15 +14,29 @@ import (
 )
 
 type fakeTaskStore struct {
-	task          Task
+	task        Task
+	claimErr    error
+	completeCh  chan corecoord.TaskOutcome
+	failCh      chan TaskFailure
+	completeErr error
+	extendErr   error
+
+	mu            sync.Mutex
 	claimedScope  []string
 	claimOnce     bool
-	claimErr      error
-	completeCh    chan corecoord.TaskOutcome
-	failCh        chan TaskFailure
 	completeCalls int
-	completeErr   error
-	extendErr     error
+}
+
+func (s *fakeTaskStore) claimScopeSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.claimedScope...)
+}
+
+func (s *fakeTaskStore) completeCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.completeCalls
 }
 
 type TestTaskHandler func(context.Context, Task) (corecoord.TaskOutcome, error)
@@ -73,11 +88,14 @@ func (s *fakeTaskStore) Claim(ctx context.Context, owner uuid.UUID, epoch int64,
 	if owner != s.task.LeaseOwner || epoch != s.task.ConfigEpoch || limit != 1 || lease <= 0 || retention <= 0 {
 		return nil, ErrInvalid
 	}
+	s.mu.Lock()
 	s.claimedScope = append([]string(nil), componentIDs...)
-	if s.claimOnce {
+	claimOnce := s.claimOnce
+	s.claimOnce = true
+	s.mu.Unlock()
+	if claimOnce {
 		return nil, nil
 	}
-	s.claimOnce = true
 	return []Task{s.task}, nil
 }
 
@@ -90,7 +108,9 @@ func (s *fakeTaskStore) Extend(ctx context.Context, _ uuid.UUID, _ uuid.UUID, _ 
 
 func (s *fakeTaskStore) Complete(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int64, _ int64,
 	_, _ int, _ time.Duration, outcome corecoord.TaskOutcome) error {
+	s.mu.Lock()
 	s.completeCalls++
+	s.mu.Unlock()
 	if s.completeCh != nil {
 		s.completeCh <- outcome
 	}
@@ -169,8 +189,8 @@ func TestTaskExecutorCopiesClaimScopeAtConstruction(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("task executor did not complete its claimed task")
 	}
-	if len(store.claimedScope) != 1 || store.claimedScope[0] != "media-pool" {
-		t.Fatalf("task executor claim scope changed after construction: %v", store.claimedScope)
+	if scope := store.claimScopeSnapshot(); len(scope) != 1 || scope[0] != "media-pool" {
+		t.Fatalf("task executor claim scope changed after construction: %v", scope)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -203,7 +223,7 @@ func TestTaskExecutorRejectsUnregisteredDynamicChildBeforePersistence(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("worker did not reject unregistered child")
 	}
-	if store.completeCalls != 0 {
+	if store.completeCallCount() != 0 {
 		t.Fatal("worker unexpectedly persisted an unregistered child")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

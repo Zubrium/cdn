@@ -7,9 +7,11 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	appcoord "github.com/Zubrium/cdn/core/application/coordination"
 	corecoord "github.com/Zubrium/cdn/core/domain/coordination"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -873,4 +875,151 @@ func claimWorkflowRoot(ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID,
 		return Task{}, errors.New("expected one queued workflow root task")
 	}
 	return tasks[0], nil
+}
+
+func TestDisposableIsolatedWorkerPoolsRunIndependently(t *testing.T) {
+	pool := openDisposablePool(t, "TEST_COORDINATOR_ISOLATED_POOLS_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := migrateForTest(t, ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		mediaClass = "worker.media"
+		prerClass  = "worker.prerender"
+		pubClass   = "engine.website"
+	)
+	var mu sync.Mutex
+	activeMedia, peakMedia := 0, 0
+	mediaStarted := make(chan struct{}, 1)
+	releaseMedia := make(chan struct{})
+	mediaExecutor := appcoord.OperationExecutorFunc(func(taskCtx context.Context, _ corecoord.Task) (corecoord.TaskOutcome, error) {
+		mu.Lock()
+		activeMedia++
+		if activeMedia > peakMedia {
+			peakMedia = activeMedia
+		}
+		mu.Unlock()
+		select {
+		case mediaStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseMedia:
+			mu.Lock()
+			activeMedia--
+			mu.Unlock()
+			return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
+		case <-taskCtx.Done():
+			mu.Lock()
+			activeMedia--
+			mu.Unlock()
+			return corecoord.TaskOutcome{}, taskCtx.Err()
+		}
+	})
+	fastExecutor := appcoord.OperationExecutorFunc(func(context.Context, corecoord.Task) (corecoord.TaskOutcome, error) {
+		return corecoord.TaskOutcome{Result: json.RawMessage(`{}`)}, nil
+	})
+	service, err := appcoord.NewService(appcoord.ServiceConfig{
+		Store: CoordinatorStore{Pool: pool}, Fingerprint: strings.Repeat("b", 64),
+		InstanceLease: time.Minute, HeartbeatInterval: 5 * time.Second,
+		RetryBase: 50 * time.Millisecond, RetryMaximum: time.Second,
+		MaxAttempts: 3, MaxWorkflowTasks: 100, MaxChildrenPerTask: 8, WorkflowRetention: time.Hour,
+		TaskClasses: []string{mediaClass, prerClass, pubClass},
+		Pools: []appcoord.TaskPoolConfig{
+			{ClassID: mediaClass, Enabled: true, Concurrency: 1, LeaseDuration: 10 * time.Second, TaskTimeout: 30 * time.Second, PollInterval: 25 * time.Millisecond, Executor: mediaExecutor},
+			{ClassID: prerClass, Enabled: true, Concurrency: 2, LeaseDuration: 10 * time.Second, TaskTimeout: 30 * time.Second, PollInterval: 25 * time.Millisecond, Executor: fastExecutor},
+			{ClassID: pubClass, Enabled: true, Concurrency: 1, LeaseDuration: 10 * time.Second, TaskTimeout: 30 * time.Second, PollInterval: 25 * time.Millisecond, Executor: fastExecutor},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stopCancel()
+		if err := service.Close(stopCtx); err != nil {
+			t.Errorf("stop isolated Coordinator: %v", err)
+		}
+		pool.Close()
+	})
+	if err := service.Activate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	startWorkflows := func(class string, count int) []uuid.UUID {
+		t.Helper()
+		client, err := service.NewWorkflowClient(class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]uuid.UUID, 0, count)
+		for index := range count {
+			receipt, err := client.Start(ctx, appcoord.WorkflowStartRequest{
+				OperationID: "process", ContractVersion: 1,
+				IdempotencyKey: class + "-" + strconv.Itoa(index), Payload: json.RawMessage(`{}`),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, receipt.WorkflowID)
+		}
+		return ids
+	}
+	waitSucceeded := func(class string, ids []uuid.UUID) {
+		t.Helper()
+		client, err := service.NewWorkflowClient(class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids {
+			deadline := time.Now().Add(20 * time.Second)
+			for {
+				workflow, err := client.Get(ctx, id)
+				if err != nil {
+					t.Fatalf("read %s workflow %s: %v", class, id, err)
+				}
+				if workflow.State == "succeeded" {
+					break
+				}
+				if workflow.State == "failed" || time.Now().After(deadline) {
+					t.Fatalf("%s workflow %s did not succeed: state=%s", class, id, workflow.State)
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+		}
+	}
+	mediaIDs := startWorkflows(mediaClass, 2)
+	prerenderIDs := startWorkflows(prerClass, 2)
+	publicationIDs := startWorkflows(pubClass, 1)
+	select {
+	case <-mediaStarted:
+	case <-time.After(15 * time.Second):
+		t.Fatal("saturated media pool did not claim its first task")
+	}
+	waitSucceeded(prerClass, prerenderIDs)
+	waitSucceeded(pubClass, publicationIDs)
+	mu.Lock()
+	peak := peakMedia
+	mu.Unlock()
+	if peak != 1 {
+		t.Fatalf("media pool borrowed sibling capacity: peak=%d", peak)
+	}
+	mediaClient, err := service.NewWorkflowClient(mediaClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range mediaIDs {
+		workflow, err := mediaClient.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if workflow.State == "succeeded" {
+			t.Fatal("blocked media task completed while its pool was saturated")
+		}
+	}
+	close(releaseMedia)
+	waitSucceeded(mediaClass, mediaIDs)
 }

@@ -274,9 +274,9 @@ func TestServiceStartFailureIsRetryableAndDoesNotLeakLease(t *testing.T) {
 
 func TestServiceRejectsMissingOperationExecutor(t *testing.T) {
 	config := serviceTestConfig(&serviceStore{})
-	config.Executor = nil
+	config.Pools[0].Executor = nil
 	if _, err := NewService(config); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("service accepted a missing DataBus operation executor: %v", err)
+		t.Fatalf("service accepted an enabled pool without an operation executor: %v", err)
 	}
 }
 

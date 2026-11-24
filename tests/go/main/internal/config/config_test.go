@@ -440,8 +440,7 @@ func validRuntimeConfig() Config {
 		RouterAPI: RouterAPI{MaxJSONBytes: 1 << 20, DefaultPageSize: 25, MaxPageSize: 100},
 		HTTP:      HTTP{ListenAddress: "127.0.0.1:8080", ReadHeaderTimeout: "5s", ReadTimeout: "5m", WriteTimeout: "0s", IdleTimeout: "1m", ShutdownTimeout: "30s", MaxHeaderBytes: 1 << 16},
 		Coordinator: CoordinatorConfig{WorkflowAccessGroup: "coordinator_jobs", WorkflowsPageDefault: 25, WorkflowsPageMaximum: 100,
-			InstanceLease: "30s", HeartbeatInterval: "5s", ExecutorConcurrency: 2,
-			TaskLease: "20s", TaskTimeout: "15m", PollInterval: "1s", RetryBase: "2s", RetryMaximum: "1m",
+			InstanceLease: "30s", HeartbeatInterval: "5s", RetryBase: "2s", RetryMaximum: "1m",
 			MaxAttempts: 3, MaxWorkflowTasks: 1000, MaxChildrenPerTask: 16, WorkflowRetention: "48h"},
 	}
 }

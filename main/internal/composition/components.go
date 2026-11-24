@@ -147,24 +147,27 @@ func (c *coreComponent) Start(ctx context.Context) error {
 			return fmt.Errorf("configure prerender worker: %w", err)
 		}
 	}
+	if c.dispatcher == nil {
+		_ = runtime.Close()
+		return errors.New("runtime bus is not configured")
+	}
+	pools, err := workerTaskPools(c.config, c.dispatcher, c.operations)
+	if err != nil {
+		_ = runtime.Close()
+		return fmt.Errorf("configure isolated worker pools: %w", err)
+	}
 	settings := c.config.Coordinator
 	if err := runtime.StartCoordinator(ctx, platform.CoordinatorRuntimeConfig{
 		Fingerprint:   c.config.CoordinatorFingerprint,
 		InstanceLease: settings.InstanceLease, HeartbeatInterval: settings.HeartbeatInterval,
-		ExecutorConcurrency: settings.ExecutorConcurrency, TaskLease: settings.TaskLease,
-		TaskTimeout: settings.TaskTimeout, PollInterval: settings.PollInterval,
 		RetryBase: settings.RetryBase, RetryMaximum: settings.RetryMaximum,
 		MaxAttempts: settings.MaxAttempts, MaxWorkflowTasks: settings.MaxWorkflowTasks,
 		MaxChildrenPerTask: settings.MaxChildrenPerTask, WorkflowRetention: settings.WorkflowRetention,
-		ShutdownTimeout: c.config.HTTP.ShutdownTimeout, TaskClasses: taskClasses(c.operations),
-		OperationExecutor: NewDataBusTaskExecutor(c.dispatcher, c.operations),
+		ShutdownTimeout: c.config.HTTP.ShutdownTimeout,
+		TaskClasses:     compiledWorkerClasses(c.selected), Pools: pools,
 	}); err != nil {
 		_ = runtime.Close()
 		return fmt.Errorf("start Core Coordinator: %w", err)
-	}
-	if c.dispatcher == nil {
-		_ = runtime.Close()
-		return errors.New("runtime bus is not configured")
 	}
 	if err := bus.RegisterCoreReadiness(c.dispatcher, runtime.CoordinatorStartupReady); err != nil {
 		_ = runtime.Close()
@@ -1155,20 +1158,6 @@ func validateRunnableComposition(selected map[string]struct{}) error {
 		}
 	}
 	return nil
-}
-
-func taskClasses(operations map[contracts.Key]TaskOperationBinding) []string {
-	seen := make(map[string]struct{}, len(operations))
-	classes := make([]string, 0, len(operations))
-	for _, binding := range operations {
-		if _, exists := seen[binding.TaskClass]; exists {
-			continue
-		}
-		seen[binding.TaskClass] = struct{}{}
-		classes = append(classes, binding.TaskClass)
-	}
-	sort.Strings(classes)
-	return classes
 }
 
 type readyComponent struct {

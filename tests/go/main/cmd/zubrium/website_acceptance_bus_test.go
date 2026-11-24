@@ -25,6 +25,15 @@ func websiteCoreRecordDescriptor(descriptor contracts.RecordDescriptor) core.Mod
 	return result
 }
 
+func websiteAcceptancePools(t *testing.T, dispatcher *bus.Dispatcher, bindings map[contracts.Key]composition.TaskOperationBinding, specs ...composition.TaskPoolSpec) []core.TaskPoolConfig {
+	t.Helper()
+	pools, err := composition.NewDataBusTaskPools(dispatcher, bindings, specs)
+	if err != nil {
+		t.Fatalf("build isolated DataBus worker pools: %v", err)
+	}
+	return pools
+}
+
 func websiteAcceptanceRecordStore(t *testing.T, runtime *core.Runtime, descriptor contracts.RecordDescriptor) (contracts.RecordDataStore, error) {
 	t.Helper()
 	coreStore, err := runtime.RegisterDataModule(websiteCoreRecordDescriptor(descriptor))

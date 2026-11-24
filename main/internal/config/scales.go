@@ -208,6 +208,21 @@ type WorkerPoolConcurrency struct {
 	LeaseDuration string `yaml:"lease_duration"`
 }
 
+type ResolvedWorkerPool struct {
+	Enabled       bool
+	Limit         int
+	PollInterval  time.Duration
+	TaskTimeout   time.Duration
+	LeaseDuration time.Duration
+}
+
+type ResolvedWorkers struct {
+	Archive     ResolvedWorkerPool
+	Media       ResolvedWorkerPool
+	Prerender   ResolvedWorkerPool
+	Publication ResolvedWorkerPool
+}
+
 // ResolvedScales carries parsed target values for runtime wiring.
 type ResolvedScales struct {
 	CoreCache         CacheTarget
@@ -219,6 +234,7 @@ type ResolvedScales struct {
 	CoreConcurrency   CoreConcurrency
 	LoaderConcurrency LoaderConcurrency
 	Workers           WorkerConfig
+	WorkerPools       ResolvedWorkers
 	WarmupTimeouts    WarmupResolvedTimeouts
 }
 
@@ -365,19 +381,45 @@ func validateScales(c Config) (ResolvedScales, error) {
 		return ResolvedScales{}, errors.New("invalid loader concurrency limits")
 	}
 	workerSum := 0
-	for _, pool := range []WorkerPoolConfig{c.Worker.Archive, c.Worker.Media, c.Worker.Prerender, c.Worker.Publication} {
-		p := pool.Concurrency
-		if p.Limit <= 0 {
-			return ResolvedScales{}, errors.New("invalid worker pool limit")
+	resolvePool := func(p WorkerPoolConcurrency) (ResolvedWorkerPool, error) {
+		if p.Limit <= 0 || p.Limit > 256 {
+			return ResolvedWorkerPool{}, errors.New("invalid worker pool limit")
 		}
-		for _, value := range []string{p.PollInterval, p.TaskTimeout, p.LeaseDuration} {
-			duration, err := time.ParseDuration(value)
-			if err != nil || duration <= 0 {
-				return ResolvedScales{}, errors.New("invalid worker pool duration")
-			}
+		poll, err := time.ParseDuration(p.PollInterval)
+		if err != nil || poll <= 0 {
+			return ResolvedWorkerPool{}, errors.New("invalid worker pool poll interval")
+		}
+		timeout, err := time.ParseDuration(p.TaskTimeout)
+		if err != nil || timeout <= 0 || timeout > 24*time.Hour {
+			return ResolvedWorkerPool{}, errors.New("invalid worker pool task timeout")
+		}
+		lease, err := time.ParseDuration(p.LeaseDuration)
+		if err != nil || lease < 3*time.Second || lease > time.Hour {
+			return ResolvedWorkerPool{}, errors.New("invalid worker pool lease duration")
+		}
+		if poll >= lease {
+			return ResolvedWorkerPool{}, errors.New("worker pool poll interval must be shorter than lease duration")
 		}
 		workerSum += p.Limit
+		return ResolvedWorkerPool{Enabled: p.Enabled, Limit: p.Limit, PollInterval: poll, TaskTimeout: timeout, LeaseDuration: lease}, nil
 	}
+	archive, err := resolvePool(c.Worker.Archive.Concurrency)
+	if err != nil {
+		return ResolvedScales{}, err
+	}
+	media, err := resolvePool(c.Worker.Media.Concurrency)
+	if err != nil {
+		return ResolvedScales{}, err
+	}
+	prerender, err := resolvePool(c.Worker.Prerender.Concurrency)
+	if err != nil {
+		return ResolvedScales{}, err
+	}
+	publication, err := resolvePool(c.Worker.Publication.Concurrency)
+	if err != nil {
+		return ResolvedScales{}, err
+	}
+	resolved.WorkerPools = ResolvedWorkers{Archive: archive, Media: media, Prerender: prerender, Publication: publication}
 	requiredConnections := int64(1 + 2*c.Loader.Concurrency.MaxConcurrentCommits + 2*workerSum + cc.Storage.ReadReserve)
 	if int64(c.Core.MaxConnections) < requiredConnections {
 		return ResolvedScales{}, fmt.Errorf("core.max_connections %d is below required budget %d", c.Core.MaxConnections, requiredConnections)
@@ -421,17 +463,6 @@ func resolvedScalesTimeout(scales ResolvedScales, kind string) time.Duration {
 		return scales.WarmupTimeouts.CoalesceTimeout
 	}
 	return scales.WarmupTimeouts.BatchWindow
-}
-
-// configuredWorkerLimit is the DB budget term from SPEC-concurrency.md §7:
-// every configured class is counted, even when its pool is not activated yet.
-func configuredWorkerLimit(workers WorkerConfig) int {
-	pools := []WorkerPoolConfig{workers.Archive, workers.Media, workers.Prerender, workers.Publication}
-	total := 0
-	for _, pool := range pools {
-		total += pool.Concurrency.Limit
-	}
-	return total
 }
 
 func (a HTTPAdmission) RequestDuration() time.Duration {
