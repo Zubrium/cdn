@@ -1,5 +1,52 @@
 # QA-отчёт
 
+## Router `core-file` disposition (2026-11-25)
+
+Проверяемое состояние: ветка `readiness-20261123`, коммиты
+`7e7c95a` (model/delivery), `50c6a58` (OpenAPI/SPEC), `f802436`
+(Admin Router), `b7a6ef7` (удаление переключателя `/site`). Секреты и
+приватные env-файлы в evidence не попали.
+
+### RED → GREEN
+
+- RED до production-кода: `TestCoreFileTargetDispositionIsOptionalAndStrictlyValidated` падал на неизвестном значении и disposition для artifact target; `TestCoreFileDispositionHonorsSafeMIMEDefaultAndExplicitOverride` и `TestCoreFileDispositionMatchesHEADAndNotModified` падали на `attachment` вместо `inline` и на пустом disposition при 304; `TestRouterOpenAPIRouteTargetDeclaresDisposition` падал с `RouteTarget must declare disposition`; Admin `route-target.test.ts` падал на потере `disposition: "attachment"`; Site-тесты падали на наличии контролов «Поведение»/«Скачивать файлом» и подписи режима в списке.
+- GREEN: строгая валидация `inline|attachment` только для `core-file`, legacy JSON без поля принимается; fail-closed allowlist MIME в `presentation/router/delivery.go`; disposition сохраняется для GET/HEAD/304; OpenAPI и SPEC синхронизированы; Admin builder/UI передают поле только для `core-file`; `/site` больше не хранит `fileDisposition`.
+
+### Статические проверки
+
+Все команды запускались из корня checkout, если не указано иначе; логи в
+`/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-disposition-20261125/`:
+
+- `git diff --check`, `python3 -m unittest tests/qa/test_scenario_ledger.py`, `make lint-core-boundary` — exit 0.
+- `make test`, `make test-full`, `make test-router`, `make test-dev-fixtures` — exit 0.
+- `make vet`, `make build`, `make build-full`, `make build-router`, `make build-dev-fixtures` — exit 0.
+- Из `frontend/`: `pnpm --filter @website-engine/admin typecheck`, `test` (61 файл / 283 теста), `build`, `pnpm lint` — exit 0.
+- Итог логов: `ALL_STATIC_PASS`.
+
+### Живая проверка в disposable-стеке
+
+- Стек `zubriumprod205553` не пересоздавался: PostgreSQL `127.0.0.1:54693`, MinIO API `127.0.0.1:54694`, S3 boundary proxy `127.0.0.1:55268` (PID `16937`) остались без изменений.
+- Пересобран full-бинарник: `(cd main && go build -tags=full -o "$run_dir/zubrium.new" ./cmd/zubrium)`. Процесс продукта `17340` остановлен по проверенному PID, бинарник заменён, продукт перезапущен из `$run_dir` с `set -a; . ./runtime.env; set +a; ./zubrium --config ./config.yaml`; новый PID `24587`. `/readyz` Admin → `204`, `/admin/` → `200`.
+- Существующий роут `host=localhost path=/` без поля disposition подтвердил дефолт. Рабочий URL: **`http://localhost:54692/`**.
+- Через Admin API создан контрастный роут `id=bb5abde1-7e02-4009-aeaa-341a25b03ebe`, `host=localhost`, `path=/download`, `target.disposition=attachment` (idempotency key `disposition-attachment-20261125-001`, `201`). Роут с опечаткой `loacalhost` оставлен без изменений.
+
+Точные наблюдаемые HTTP-заголовки (curl `-D - -o /dev/null`):
+
+| Проверка | Результат |
+| -------- | --------- |
+| `GET /` | `200`, `Content-Type: image/webp`, `Content-Disposition: inline`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` |
+| `GET /download` | `200`, тот же `Content-Type`, `Content-Disposition: attachment` |
+| `HEAD /` | `200`, `Content-Disposition: inline` |
+| `GET /` с `If-None-Match: "sha256-382050…c4f"` | `304`, `Content-Disposition: inline`, тот же `ETag` |
+| `GET /?download=true` | `200`, `Content-Disposition: inline` — query не влияет на режим |
+| `POST /api/admin/router/routes` с `disposition: "download"` | `400 {"error":"invalid_request"}` |
+
+### Ограничения
+
+- Небезопасные MIME (`text/html`, `image/svg+xml`, unknown) проверены исполняемым Go-тестом `TestCoreFileDispositionHonorsSafeMIMEDefaultAndExplicitOverride`, но не отдельным live-файлом в disposable Core: соответствующий scenario помечен `pass (unit)`.
+- Range/206 и кэширование ответа не входили в волну: `Cache-Control` остаётся `no-store`.
+- Полный release/E2E sweep для этого коммита не запускался; baseline от `c662e38` сохранён ниже и не переопределён. Browser-скриншот отображения картинки не снимался: live-доказательство — HTTP-заголовки и body того же Core file.
+
 ## Финальный чистый checkout: release/E2E PASS и SPEC-audit (2026-11-24)
 
 Проверяемое состояние: ветка `readiness-20261123`, HEAD

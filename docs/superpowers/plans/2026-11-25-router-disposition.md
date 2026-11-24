@@ -44,11 +44,11 @@
 - Consumes: `model.Target`, `engine.DeliveryResponse`, `CoreFiles`.
 - Produces: `Target.Disposition` (`"inline" | "attachment" | ""`), `dispositionForFile(string, string) string`.
 
-- [ ] **Step 1: Write RED tests** for: valid enum accepted on core-file; invalid enum rejected; disposition absent → `inline` only for safe MIME; explicit `attachment` always wins; unsafe MIME → `attachment`; legacy JSON without field unmarshals to `""`; GET/HEAD/304 use the same disposition.
-- [ ] **Step 2: Run the tests and verify they fail** because the field/helper do not exist.
-- [ ] **Step 3: Implement minimal code**: add `Disposition string \`json:"disposition,omitempty"\`` to `model.Target`; validate only for `TargetCoreFile`; add server-side MIME allowlist helper in `presentation/router/delivery.go`; use it in both `deliverCoreFile` returns.
-- [ ] **Step 4: Run the tests and verify they pass**.
-- [ ] **Step 5: Commit** the model + delivery change.
+- [x] **Step 1: Write RED tests** for: valid enum accepted on core-file; invalid enum rejected; disposition absent → `inline` only for safe MIME; explicit `attachment` always wins; unsafe MIME → `attachment`; legacy JSON without field unmarshals to `""`; GET/HEAD/304 use the same disposition.
+- [x] **Step 2: Run the tests and verify they fail** because the field/helper do not exist.
+- [x] **Step 3: Implement minimal code**: add `Disposition string \`json:"disposition,omitempty"\`` to `model.Target`; validate only for `TargetCoreFile`; add server-side MIME allowlist helper in `presentation/router/delivery.go`; use it in both `deliverCoreFile` returns.
+- [x] **Step 4: Run the tests and verify they pass**.
+- [x] **Step 5: Commit** the model + delivery change.
 
 ### Task 2: Router HTTP/OpenAPI contract
 
@@ -61,11 +61,11 @@
 - Consumes: `target.disposition`.
 - Produces: documented enum and header policy.
 
-- [ ] **Step 1: Write/Update RED contract test** asserting `RouteTarget` accepts `disposition` only for `core-file`, enum `inline|attachment`, and rejects unknown values.
-- [ ] **Step 2: Run it and verify it fails** against current spec.
-- [ ] **Step 3: Update OpenAPI schema and SPEC-router-engine §5.3** so documented default is `inline` for the safe MIME list and explicit `attachment` overrides it.
-- [ ] **Step 4: Run contract test and verify it passes**.
-- [ ] **Step 5: Commit** the contract update.
+- [x] **Step 1: Write/Update RED contract test** asserting `RouteTarget` accepts `disposition` only for `core-file`, enum `inline|attachment`, and rejects unknown values.
+- [x] **Step 2: Run it and verify it fails** against current spec.
+- [x] **Step 3: Update OpenAPI schema and SPEC-router-engine §5.3** so documented default is `inline` for the safe MIME list and explicit `attachment` overrides it.
+- [x] **Step 4: Run contract test and verify it passes**.
+- [x] **Step 5: Commit** the contract update.
 
 ### Task 3: Admin Router UI + types
 
@@ -79,11 +79,11 @@
 - Consumes: `RouterCoreFileRouteTarget.disposition?`.
 - Produces: `buildRouterTarget` emits disposition only for `core-file`.
 
-- [ ] **Step 1: Write RED frontend test** asserting `buildRouterTarget` keeps `disposition: "attachment"` and omits it when `inline`/unset; non-file targets never emit it.
-- [ ] **Step 2: Run `pnpm --filter @website-engine/admin test -- <test path>` and verify RED**.
-- [ ] **Step 3: Update TS type/draft/builder and add accessible `<select>` in RouteDialog** shown only for `targetKind === "core-file"`.
-- [ ] **Step 4: Run the focused test and full admin test suite; verify green**.
-- [ ] **Step 5: Commit** the Admin change.
+- [x] **Step 1: Write RED frontend test** asserting `buildRouterTarget` keeps `disposition: "attachment"` and omits it when `inline`/unset; non-file targets never emit it.
+- [x] **Step 2: Run `pnpm --filter @website-engine/admin test -- <test path>` and verify RED**.
+- [x] **Step 3: Update TS type/draft/builder and add accessible `<select>` in RouteDialog** shown only for `targetKind === "core-file"`.
+- [x] **Step 4: Run the focused test and full admin test suite; verify green**.
+- [x] **Step 5: Commit** the Admin change.
 
 ### Task 4: Remove the inactive Site toggle
 
@@ -99,11 +99,11 @@
 - Consumes: nothing from Router.
 - Produces: no `fileDisposition` in new snapshots or UI.
 
-- [ ] **Step 1: Update RED tests** asserting no file-disposition control and no `fileDisposition` field in created route nodes.
-- [ ] **Step 2: Run them and verify RED**.
-- [ ] **Step 3: Remove the field from UI, types, route-tree and spec promise**; do not migrate stored legacy snapshots.
-- [ ] **Step 4: Run focused + full admin tests and verify green**.
-- [ ] **Step 5: Commit** the Site cleanup.
+- [x] **Step 1: Update RED tests** asserting no file-disposition control and no `fileDisposition` field in created route nodes.
+- [x] **Step 2: Run them and verify RED**.
+- [x] **Step 3: Remove the field from UI, types, route-tree and spec promise**; do not migrate stored legacy snapshots.
+- [x] **Step 4: Run focused + full admin tests and verify green**.
+- [x] **Step 5: Commit** the Site cleanup.
 
 ### Task 5: Acceptance + live verification
 
@@ -111,7 +111,7 @@
 - Modify: `tests/ACCEPTANCE-MATRIX.md`
 - Modify: `docs/QA_REPORT.md`
 
-- [ ] **Step 1: Add executable acceptance scenarios** for inline safe image, forced attachment, unsafe MIME, HEAD/304, and existing route default.
-- [ ] **Step 2: Run full Go module checks, admin typecheck/test/build, ESLint, and the live disposable-stack curl probes.**
-- [ ] **Step 3: Record exact commands and outputs; do not mark blocked checks as pass.**
-- [ ] **Step 4: Commit evidence and push** only after all applicable checks pass.
+- [x] **Step 1: Add executable acceptance scenarios** for inline safe image, forced attachment, unsafe MIME, HEAD/304, and existing route default.
+- [x] **Step 2: Run full Go module checks, admin typecheck/test/build, ESLint, and the live disposable-stack curl probes.**
+- [x] **Step 3: Record exact commands and outputs; do not mark blocked checks as pass.**
+- [x] **Step 4: Commit evidence and push** only after all applicable checks pass.
