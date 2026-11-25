@@ -4,45 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
-
-type fakeForkCopier struct {
-	payload websiteapi.SnapshotForkWorkflowPayload
-	calls   int
-	err     error
-}
-
-func (f *fakeForkCopier) CopySnapshotContent(_ context.Context, payload websiteapi.SnapshotForkWorkflowPayload) error {
-	f.calls++
-	f.payload = payload
-	return f.err
-}
-
-type fakeForkFinalizer struct {
-	snapshotID string
-	revision   int64
-	calls      int
-	snapshot   websiteapi.Snapshot
-	err        error
-}
-
-func (f *fakeForkFinalizer) MarkSnapshotReady(_ context.Context, snapshotID string, expectedRevision int64) (websiteapi.Snapshot, error) {
-	f.calls++
-	f.snapshotID = snapshotID
-	f.revision = expectedRevision
-	if f.err != nil {
-		return websiteapi.Snapshot{}, f.err
-	}
-	if f.snapshot.ID != "" {
-		return f.snapshot, nil
-	}
-	return websiteapi.Snapshot{ID: snapshotID, State: "ready", Revision: expectedRevision + 1}, nil
-}
 
 func forkTask(payload websiteapi.SnapshotForkWorkflowPayload) contracts.OperationTask {
 	raw, _ := json.Marshal(payload)
@@ -60,10 +26,8 @@ func validForkPayload() websiteapi.SnapshotForkWorkflowPayload {
 	}
 }
 
-func TestForkHandlerCopiesThenFinalizes(t *testing.T) {
-	copier := &fakeForkCopier{}
-	finalizer := &fakeForkFinalizer{}
-	handler, err := NewForkHandler(copier, finalizer, 3)
+func TestForkHandlerEmitsIndependentClassIsolatedTasks(t *testing.T) {
+	handler, err := NewForkHandler(3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,23 +35,51 @@ func TestForkHandlerCopiesThenFinalizes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WorkerHandler: %v", err)
 	}
-	if copier.calls != 1 || finalizer.calls != 1 {
-		t.Fatalf("calls copier=%d finalizer=%d", copier.calls, finalizer.calls)
+	if len(outcome.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(outcome.Children))
 	}
-	if finalizer.snapshotID != validForkPayload().TargetSnapshotID || finalizer.revision != 3 {
-		t.Fatalf("finalizer got %s rev %d", finalizer.snapshotID, finalizer.revision)
+	copyChild, finalizeChild := outcome.Children[0], outcome.Children[1]
+	if copyChild.OperationID != ForkCopyOperationID || copyChild.Version != ForkChildContractVersion {
+		t.Fatalf("copy task = %s/v%d", copyChild.OperationID, copyChild.Version)
+	}
+	if finalizeChild.OperationID != ForkFinalizeOperationID || finalizeChild.Version != ForkChildContractVersion {
+		t.Fatalf("finalize task = %s/v%d", finalizeChild.OperationID, finalizeChild.Version)
+	}
+	if copyChild.EmissionKey == "" || finalizeChild.EmissionKey == "" || copyChild.EmissionKey == finalizeChild.EmissionKey {
+		t.Fatalf("emission keys = %q, %q", copyChild.EmissionKey, finalizeChild.EmissionKey)
+	}
+	if len(finalizeChild.DependsOnEmissions) != 1 || finalizeChild.DependsOnEmissions[0] != copyChild.EmissionKey {
+		t.Fatalf("finalize dependencies = %v, want [%s]", finalizeChild.DependsOnEmissions, copyChild.EmissionKey)
+	}
+	if copyChild.MaxAttempts != 3 || finalizeChild.MaxAttempts != 3 {
+		t.Fatalf("max attempts = %d, %d", copyChild.MaxAttempts, finalizeChild.MaxAttempts)
+	}
+	var copyPayload websiteapi.SnapshotForkWorkflowPayload
+	if err := json.Unmarshal(copyChild.Payload, &copyPayload); err != nil {
+		t.Fatal(err)
+	}
+	if copyPayload != validForkPayload() {
+		t.Fatalf("copy payload = %#v, want %#v", copyPayload, validForkPayload())
+	}
+	var finalizePayload ForkFinalizePayload
+	if err := json.Unmarshal(finalizeChild.Payload, &finalizePayload); err != nil {
+		t.Fatal(err)
+	}
+	if finalizePayload.SnapshotID != validForkPayload().TargetSnapshotID || finalizePayload.ExpectedRevision != 3 {
+		t.Fatalf("finalize payload = %#v", finalizePayload)
 	}
 	var result ForkResult
 	if err := json.Unmarshal(outcome.Result, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Format != ForkRootFormat || result.TargetRevision != 4 {
+	if result.Format != ForkRootFormat || result.TargetSnapshotID != validForkPayload().TargetSnapshotID ||
+		result.CopyEmissionKey != copyChild.EmissionKey || result.FinalizeEmissionKey != finalizeChild.EmissionKey {
 		t.Fatalf("result=%#v", result)
 	}
 }
 
 func TestForkHandlerRejectsInvalidPayload(t *testing.T) {
-	handler, err := NewForkHandler(&fakeForkCopier{}, &fakeForkFinalizer{}, 3)
+	handler, err := NewForkHandler(3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,54 +91,8 @@ func TestForkHandlerRejectsInvalidPayload(t *testing.T) {
 	}
 }
 
-func TestForkHandlerPropagatesCopyError(t *testing.T) {
-	want := errors.New("copy failed")
-	copier := &fakeForkCopier{err: want}
-	finalizer := &fakeForkFinalizer{}
-	handler, err := NewForkHandler(copier, finalizer, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = handler.WorkerHandler(context.Background(), forkTask(validForkPayload()))
-	if !errors.Is(err, want) {
-		t.Fatalf("err=%v want %v", err, want)
-	}
-	if !strings.Contains(err.Error(), "copy snapshot content") {
-		t.Fatalf("copy failure lacks workflow stage context: %v", err)
-	}
-	if finalizer.calls != 0 {
-		t.Fatalf("finalizer should not run on copy failure, calls=%d", finalizer.calls)
-	}
-}
-
-func TestForkHandlerPropagatesFinalizeErrorAfterCopy(t *testing.T) {
-	want := errors.New("finalize failed")
-	copier := &fakeForkCopier{}
-	finalizer := &fakeForkFinalizer{err: want}
-	handler, err := NewForkHandler(copier, finalizer, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = handler.WorkerHandler(context.Background(), forkTask(validForkPayload()))
-	if !errors.Is(err, want) {
-		t.Fatalf("err=%v want %v", err, want)
-	}
-	if !strings.Contains(err.Error(), "finalize snapshot") {
-		t.Fatalf("finalization failure lacks workflow stage context: %v", err)
-	}
-	if copier.calls != 1 || finalizer.calls != 1 {
-		t.Fatalf("calls copier=%d finalizer=%d", copier.calls, finalizer.calls)
-	}
-}
-
-func TestForkHandlerRejectsMissingTaskID(t *testing.T) {
-	handler, err := NewForkHandler(&fakeForkCopier{}, &fakeForkFinalizer{}, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	task := forkTask(validForkPayload())
-	task.TaskID = ""
-	if _, err := handler.WorkerHandler(context.Background(), task); !errors.Is(err, errInvalidForkTask) {
-		t.Fatalf("err=%v want invalid fork task", err)
+func TestForkHandlerRejectsInvalidConfiguration(t *testing.T) {
+	if _, err := NewForkHandler(0); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("err=%v want invalid configuration", err)
 	}
 }

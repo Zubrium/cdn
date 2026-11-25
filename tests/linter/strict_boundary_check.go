@@ -29,7 +29,6 @@ var strictBoundaryBaseline = map[string]bool{
 	"composition-runtime|main/internal/composition/publication_component.go":                                                                                  true,
 	"composition-runtime|main/internal/composition/publication_trigger.go":                                                                                    true,
 	"composition-runtime|main/internal/composition/router_component.go":                                                                                       true,
-	"composition-runtime|main/internal/composition/snapshot_fork_full.go":                                                                                     true,
 	"composition-runtime|main/internal/composition/website_build_input.go":                                                                                    true,
 	"composition-runtime|main/internal/composition/website_core_ports.go":                                                                                     true,
 	"composition-runtime|main/internal/composition/website_component.go":                                                                                      true,

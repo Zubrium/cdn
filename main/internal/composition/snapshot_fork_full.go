@@ -4,38 +4,38 @@ package composition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
-	platform "github.com/Zubrium/cdn/core/presentation"
-	contentengine "github.com/Zubrium/cdn/engines/content"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/google/uuid"
 )
 
-type snapshotForkWorkflowStarter struct{ core *coreComponent }
+type snapshotForkWorkflowStarter struct{ dispatcher contracts.Dispatcher }
 
 func (s snapshotForkWorkflowStarter) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
-	if s.core == nil || s.core.runtime == nil {
-		return contracts.WorkflowStartReceipt{}, platform.ErrCoordinatorNotReady
+	if s.dispatcher == nil {
+		return contracts.WorkflowStartReceipt{}, contracts.ErrInvalidOperation
 	}
-	client, err := s.core.runtime.NewWorkflowClient(websiteworkflow.ComponentID)
-	if err != nil {
-		return contracts.WorkflowStartReceipt{}, err
-	}
-	receipt, err := client.Start(ctx, platform.WorkflowStartRequest{
-		OperationID: request.OperationID, ContractVersion: request.ContractVersion,
-		IdempotencyKey: request.IdempotencyKey, Payload: request.Payload,
-	})
-	if err != nil {
-		return contracts.WorkflowStartReceipt{}, err
-	}
-	return contracts.WorkflowStartReceipt{WorkflowID: receipt.WorkflowID, RootTaskID: receipt.RootTaskID, State: receipt.State, Created: receipt.Created}, nil
+	return contracts.CallWorkflowStart(ctx, s.dispatcher, request)
 }
 
 type snapshotForkContentCopierHandle struct{ component *coreComponent }
+
+func (h snapshotForkContentCopierHandle) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	payload, err := websiteworkflow.DecodeForkPayload(task.Payload)
+	if err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	if err := h.CopySnapshotContent(ctx, payload); err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	return contracts.OperationOutcome{Result: []byte(`{"format":"website.snapshot-fork-copy/v1"}`)}, nil
+}
 
 func (h snapshotForkContentCopierHandle) CopySnapshotContent(ctx context.Context, payload websiteapi.SnapshotForkWorkflowPayload) error {
 	if h.component == nil {
@@ -45,18 +45,35 @@ func (h snapshotForkContentCopierHandle) CopySnapshotContent(ctx context.Context
 	if content == nil || content.engine == nil || content.projections == nil {
 		return errors.New("content fork dependency is not initialized")
 	}
-	credential := content.config.ContentAPI.ServiceCredential
-	if credential == "" {
-		return errors.New("content service credential is not configured")
-	}
-	authCtx, err := content.engine.Authenticate(ctx, credential)
-	if err != nil {
-		return err
-	}
-	return snapshotForkContentCopier{engine: content.engine, projections: content.projections}.CopySnapshotContent(authCtx, payload)
+	return snapshotForkContentCopier{
+		engine: content.engine, projections: content.projections,
+		locale: content.config.ContentAPI.Locale, credential: content.config.ContentAPI.ServiceCredential,
+	}.CopySnapshotContent(ctx, payload)
 }
 
 type snapshotForkWebsiteFinalizerHandle struct{ component *coreComponent }
+
+func (h snapshotForkWebsiteFinalizerHandle) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+	payload, err := contracts.DecodePayload[websiteworkflow.ForkFinalizePayload](task.Payload)
+	if err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	if _, err := uuid.Parse(payload.SnapshotID); err != nil || payload.ExpectedRevision < 1 {
+		return contracts.OperationOutcome{}, websiteworkflow.ErrInvalidPayload
+	}
+	snapshot, err := h.MarkSnapshotReady(ctx, payload.SnapshotID, payload.ExpectedRevision)
+	if err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	result, err := json.Marshal(websiteworkflow.ForkFinalizeResult{
+		Format: websiteworkflow.ForkRootFormat, SnapshotID: payload.SnapshotID,
+		Revision: snapshot.Revision,
+	})
+	if err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	return contracts.OperationOutcome{Result: result}, nil
+}
 
 func (h snapshotForkWebsiteFinalizerHandle) MarkSnapshotReady(ctx context.Context, snapshotID string, expectedRevision int64) (websiteapi.Snapshot, error) {
 	if h.component == nil {
@@ -77,9 +94,25 @@ func (h snapshotForkWebsiteFinalizerHandle) MarkSnapshotReady(ctx context.Contex
 	return website.service.MarkSnapshotReady(authCtx, snapshotID, expectedRevision)
 }
 
+// snapshotForkContentPort and snapshotForkProjectionPort are narrow ports
+// implemented by the compiled Content component. The worker handler holds only
+// these ports; engine identity and credentials stay server-side.
+type snapshotForkContentPort interface {
+	Authenticate(context.Context, string) (context.Context, error)
+	GetWorkspace(context.Context, contentapi.Projections) (contentapi.Workspace, error)
+	CopySnapshotContent(context.Context, contentapi.CopySnapshotContentRequest) (contentapi.CopySnapshotContentResult, error)
+}
+
+type snapshotForkProjectionPort interface {
+	GetContentProjectionsForLocale(context.Context, string, string) (contentapi.Projections, error)
+	getContentProjectionsForLocaleAllowState(context.Context, string, string, bool) (contentapi.Projections, error)
+}
+
 type snapshotForkContentCopier struct {
-	engine      *contentengine.Engine
-	projections *contentProjectionProvider
+	engine      snapshotForkContentPort
+	projections snapshotForkProjectionPort
+	locale      string
+	credential  string
 }
 
 func snapshotForkStageError(stage string, err error) error {
@@ -90,22 +123,26 @@ func snapshotForkStageError(stage string, err error) error {
 }
 
 func (c snapshotForkContentCopier) CopySnapshotContent(ctx context.Context, payload websiteapi.SnapshotForkWorkflowPayload) error {
-	if c.engine == nil || c.projections == nil {
+	if c.engine == nil || c.projections == nil || c.locale == "" || c.credential == "" {
 		return errors.New("content fork dependency is not initialized")
 	}
-	sourceSchema, err := c.projections.GetContentProjectionsForLocale(ctx, payload.SourceSnapshotID, c.projections.locale)
+	authCtx, err := c.engine.Authenticate(ctx, c.credential)
+	if err != nil {
+		return snapshotForkStageError("authorize content", err)
+	}
+	sourceSchema, err := c.projections.GetContentProjectionsForLocale(authCtx, payload.SourceSnapshotID, c.locale)
 	if err != nil {
 		return snapshotForkStageError("load source projection", err)
 	}
-	targetSchema, err := c.projections.getContentProjectionsForLocaleAllowState(ctx, payload.TargetSnapshotID, c.projections.locale, true)
+	targetSchema, err := c.projections.getContentProjectionsForLocaleAllowState(authCtx, payload.TargetSnapshotID, c.locale, true)
 	if err != nil {
 		return snapshotForkStageError("load target projection", err)
 	}
-	workspace, err := c.engine.GetWorkspace(ctx, sourceSchema)
+	workspace, err := c.engine.GetWorkspace(authCtx, sourceSchema)
 	if err != nil {
 		return snapshotForkStageError("load source workspace", err)
 	}
-	_, err = c.engine.CopySnapshotContent(ctx, contentapi.CopySnapshotContentRequest{
+	_, err = c.engine.CopySnapshotContent(authCtx, contentapi.CopySnapshotContentRequest{
 		SourceSchema:                    sourceSchema,
 		TargetSchema:                    targetSchema,
 		SourceSnapshotID:                payload.SourceSnapshotID,

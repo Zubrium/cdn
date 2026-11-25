@@ -68,6 +68,8 @@ func allBusOperationKeys() []contracts.Key {
 		{ID: websiteworkflow.OperationID, Version: 1},
 		{ID: websiteworkflow.MediaOperationID, Version: 1},
 		{ID: websiteworkflow.ForkOperationID, Version: 1},
+		{ID: websiteworkflow.ForkCopyOperationID, Version: websiteworkflow.ForkChildContractVersion},
+		{ID: websiteworkflow.ForkFinalizeOperationID, Version: websiteworkflow.ForkChildContractVersion},
 	}...)
 }
 

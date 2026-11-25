@@ -9,7 +9,7 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
-type snapshotForkWorkflowStarter struct{ core *coreComponent }
+type snapshotForkWorkflowStarter struct{ dispatcher contracts.Dispatcher }
 
 func (s snapshotForkWorkflowStarter) Start(context.Context, contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	return contracts.WorkflowStartReceipt{}, errors.New("snapshot fork workflow is not available in this profile")

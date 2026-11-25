@@ -86,11 +86,21 @@ func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resol
 		if err := register(websiteworkflow.ComponentID, websiteworkflow.MediaOperationID, 1, config.Scales.WorkerPools.Publication.Enabled, handler.MediaWorkerHandler); err != nil {
 			return nil, err
 		}
-		forkHandler, err := websiteworkflow.NewForkHandler(snapshotForkContentCopierHandle{component: component}, snapshotForkWebsiteFinalizerHandle{component: component}, config.Coordinator.MaxAttempts)
+		forkHandler, err := websiteworkflow.NewForkHandler(config.Coordinator.MaxAttempts)
 		if err != nil {
 			return nil, err
 		}
 		if err := register(websiteworkflow.ComponentID, websiteworkflow.ForkOperationID, 1, config.Scales.WorkerPools.Publication.Enabled, forkHandler.WorkerHandler); err != nil {
+			return nil, err
+		}
+		if _, compiled := selected["engine.content"]; compiled {
+			if err := register("engine.content", websiteworkflow.ForkCopyOperationID, websiteworkflow.ForkChildContractVersion,
+				config.Scales.WorkerPools.Publication.Enabled, snapshotForkContentCopierHandle{component: component}.WorkerHandler); err != nil {
+				return nil, err
+			}
+		}
+		if err := register(websiteworkflow.ComponentID, websiteworkflow.ForkFinalizeOperationID, websiteworkflow.ForkChildContractVersion,
+			config.Scales.WorkerPools.Publication.Enabled, snapshotForkWebsiteFinalizerHandle{component: component}.WorkerHandler); err != nil {
 			return nil, err
 		}
 	}
@@ -102,8 +112,8 @@ func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resol
 // construct scoped workflow clients whose tasks wait in the durable store
 // until the corresponding pool is explicitly enabled.
 func compiledWorkerClasses(selected map[string]struct{}) []string {
-	classes := make([]string, 0, 4)
-	for _, id := range []string{archive.DataModuleID, media.DataModuleID, prerender.DataModuleID, websiteworkflow.ComponentID} {
+	classes := make([]string, 0, 5)
+	for _, id := range []string{archive.DataModuleID, media.DataModuleID, prerender.DataModuleID, websiteworkflow.ComponentID, "engine.content"} {
 		if _, compiled := selected[id]; compiled {
 			classes = append(classes, id)
 		}
@@ -117,7 +127,7 @@ func compiledWorkerClasses(selected map[string]struct{}) []string {
 // remain resolvable, but they produce no pool and cannot claim work or borrow
 // another pool's limits.
 func workerTaskPools(config appconfig.Resolved, dispatcher *bus.Dispatcher, operations map[contracts.Key]TaskOperationBinding) ([]platform.TaskPoolConfig, error) {
-	specs := make([]TaskPoolSpec, 0, 4)
+	specs := make([]TaskPoolSpec, 0, 5)
 	add := func(classID string, pool appconfig.ResolvedWorkerPool) {
 		if pool.Enabled {
 			specs = append(specs, TaskPoolSpec{ClassID: classID, Concurrency: pool.Limit,
@@ -128,6 +138,9 @@ func workerTaskPools(config appconfig.Resolved, dispatcher *bus.Dispatcher, oper
 	add(media.DataModuleID, config.Scales.WorkerPools.Media)
 	add(prerender.DataModuleID, config.Scales.WorkerPools.Prerender)
 	add(websiteworkflow.ComponentID, config.Scales.WorkerPools.Publication)
+	if _, registered := operations[contracts.Key{ID: websiteworkflow.ForkCopyOperationID, Version: websiteworkflow.ForkChildContractVersion}]; registered {
+		add("engine.content", config.Scales.WorkerPools.Publication)
+	}
 	return NewDataBusTaskPools(dispatcher, operations, specs)
 }
 

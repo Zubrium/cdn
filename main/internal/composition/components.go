@@ -659,7 +659,7 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		GroupAccess:              adminGroupAccessResolver{access: identityAccess, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
 		CoordinatorAuthorization: adminCoordinatorAuthorization{access: coordinatorAccess},
 		Files:                    c.loader.service, WorkflowControl: c.workflowControl,
-		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{core: c.core},
+		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "admin.api")},
 	}
 	if c.config.Retirement.Enabled {
 		// The Admin listener may start before the retirement component's Start
