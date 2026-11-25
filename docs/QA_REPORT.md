@@ -1,5 +1,17 @@
 # QA-отчёт
 
+## Website integration ledger (2026-11-26)
+
+`go test -overlay=/tmp/website-acceptance-audit-overlay.json -tags='full
+website_acceptance' -gcflags=-e ./cmd/zubrium -run '^$'` из `main` завершился
+ошибкой компиляции: `WEB-021/022` fixtures используют удалённые поля
+publication/retirement Config. Поэтому связанные сценарии `WEB-012`,
+`WEB-018..022` переведены в `execution_status: blocked`, а их исторические
+прогоны не считаются текущим pass. Валидатор ledger подтвердил denominator 29,
+23 pass и 6 blocked; `python3 -m unittest tests/qa/test_scenario_ledger.py
+tests/qa/test_run_test_suite.py` прошёл (28 тестов). `covered` отражает наличие
+сценариев, а не успешный запуск.
+
 ## Инициализация workflow handlers (2026-11-26)
 
 Регистрация publication/retirement происходила до `Start` компонентов и

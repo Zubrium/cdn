@@ -206,8 +206,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_feature_import_acceptance_test.go",
       "test_symbol": "TestWebsiteFeatureImportAcceptance/WEB-012",
       "coverage_status": "covered",
-      "execution_status": "pass",
-      "blocker": null
+      "execution_status": "blocked",
+      "blocker": "Пакет main/cmd/zubrium с тегами full website_acceptance не компилируется: WEB-021/022 fixtures используют удалённые поля workflow Config после перехода на DataBus; требуется восстановить fixtures и выполнить на disposable PostgreSQL/S3."
     },
     {
       "id": "WEB-013",
@@ -309,8 +309,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_integration_persistence_boundary_test.go",
       "test_symbol": "TestWebsiteIntegrationPersistenceBoundary/WEB-018",
       "coverage_status": "covered",
-      "execution_status": "pass",
-      "blocker": null
+      "execution_status": "blocked",
+      "blocker": "Пакет main/cmd/zubrium с тегами full website_acceptance не компилируется: WEB-021/022 fixtures используют удалённые поля workflow Config после перехода на DataBus; требуется восстановить fixtures и выполнить на disposable PostgreSQL/S3."
     },
     {
       "id": "WEB-019",
@@ -326,8 +326,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_media_derivative_acceptance_test.go",
       "test_symbol": "TestWebsiteMediaDerivativeAcceptance/WEB-019",
       "coverage_status": "covered",
-      "execution_status": "pass",
-      "blocker": null
+      "execution_status": "blocked",
+      "blocker": "Пакет main/cmd/zubrium с тегами full website_acceptance не компилируется: WEB-021/022 fixtures используют удалённые поля workflow Config после перехода на DataBus; требуется восстановить fixtures и выполнить на disposable PostgreSQL/S3."
     },
     {
       "id": "WEB-020",
@@ -343,8 +343,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_prerender_acceptance_test.go",
       "test_symbol": "TestWebsitePrerenderAcceptance/WEB-020",
       "coverage_status": "covered",
-      "execution_status": "pass",
-      "blocker": null
+      "execution_status": "blocked",
+      "blocker": "Пакет main/cmd/zubrium с тегами full website_acceptance не компилируется: WEB-021/022 fixtures используют удалённые поля workflow Config после перехода на DataBus; требуется восстановить fixtures и выполнить на disposable PostgreSQL/S3."
     },
     {
       "id": "WEB-021",
@@ -360,8 +360,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_publication_fanout_acceptance_test.go",
       "test_symbol": "TestWebsitePublicationFanoutAcceptance/WEB-021",
       "coverage_status": "covered",
-      "execution_status": "pass",
-      "blocker": null
+      "execution_status": "blocked",
+      "blocker": "Пакет main/cmd/zubrium с тегами full website_acceptance не компилируется: WEB-021/022 fixtures используют удалённые поля workflow Config после перехода на DataBus; требуется восстановить fixtures и выполнить на disposable PostgreSQL/S3."
     },
     {
       "id": "WEB-022",
@@ -377,8 +377,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_page_retirement_acceptance_test.go",
       "test_symbol": "TestWebsitePageRetirementAcceptance/WEB-022",
       "coverage_status": "covered",
-      "execution_status": "pass",
-      "blocker": null
+      "execution_status": "blocked",
+      "blocker": "Пакет main/cmd/zubrium с тегами full website_acceptance не компилируется: WEB-021/022 fixtures используют удалённые поля workflow Config после перехода на DataBus; требуется восстановить fixtures и выполнить на disposable PostgreSQL/S3."
     },
     {
       "id": "WEB-023",
