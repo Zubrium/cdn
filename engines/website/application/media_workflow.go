@@ -228,7 +228,7 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	if source.ID != sourceID || !sha256HexPattern.MatchString(source.SHA256) || source.Size <= 0 {
 		return websiteapi.MediaJob{}, websiteapi.ErrInvalid
 	}
-	fingerprint, err := mediaFingerprint(sourceID, strings.ToLower(source.SHA256), snapshotID, placementID, request.SchemaKind, request.FieldPath, profileDigest, s.config.MediaProcessorVersion)
+	fingerprint, err := mediaRequestFingerprint(request.SchemaKind, sourceID, strings.ToLower(source.SHA256), snapshotID, placementID, request.FieldPath, profileDigest, s.config.MediaProcessorVersion)
 	if err != nil {
 		return websiteapi.MediaJob{}, websiteapi.ErrUnavailable
 	}
@@ -487,6 +487,25 @@ func validMediaFieldPath(path string) bool {
 		}
 	}
 	return true
+}
+
+// Data input jobs retain the established receipt identity. Argument jobs use
+// a distinct identity so equal paths in the two manifest areas cannot collide.
+func mediaRequestFingerprint(schemaKind string, values ...string) (string, error) {
+	if len(values) != 7 {
+		return "", websiteapi.ErrInvalid
+	}
+	switch schemaKind {
+	case "dataInputs":
+		return mediaFingerprint(values...)
+	case "arguments":
+		scoped := append([]string(nil), values[:4]...)
+		scoped = append(scoped, schemaKind)
+		scoped = append(scoped, values[4:]...)
+		return mediaFingerprint(scoped...)
+	default:
+		return "", websiteapi.ErrInvalid
+	}
 }
 
 func mediaFingerprint(values ...string) (string, error) {

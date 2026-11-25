@@ -1,5 +1,18 @@
 # QA-отчёт
 
+## Идентичность media receipts (2026-11-26)
+
+`TestMediaRequestFingerprintPreservesExistingInputIdentity` проверяет, что
+fingerprint `dataInputs` сохраняет алгоритм до введения `schema_kind`, а
+аргументы используют отдельную идентичность и сохраняют уже введённую для них
+формулу. Для `engines/website` прошли `go test` и `go vet` с overlay
+`/tmp/website-media-fingerprint-overlay.json`, а также `go build ./...`;
+overlay создан `python3 tests/go-overlay.py` из корня. Это проверка алгоритма,
+не live replay сохранённой job на PostgreSQL/S3.
+Jobs `dataInputs`, созданные именно промежуточной версией `46d20a1` с другой
+формулой fingerprint, требуют отдельной проверки и миграционного решения;
+наличие таких пользовательских jobs не установлено.
+
 ## Admin: подготовка media (2026-11-26)
 
 Picker вызывает Website derivative API с `schema_kind`, snapshot, placement и
