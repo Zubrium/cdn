@@ -17,9 +17,11 @@ type DeclaredMediaPreparation = NonNullable<ModelContentPlacementField["preparat
 export function mediaRenditionContext(
   item: DeclaredMediaPreparation,
   snapshotId: string,
+  placementId: string,
 ): MediaRenditionContext {
   return {
     snapshotId,
+    placementId,
     featureKey: item.featureKey,
     buildVersion: item.buildVersion,
     schemaKind: item.schemaKind,
@@ -45,7 +47,7 @@ export function useModelContentEditorModel(
       for (const input of placement.inputs) {
         for (const field of input.fields) {
           if (field.type !== "media") continue;
-          const contexts = (field.preparations ?? []).map((item) => mediaRenditionContext(item, workspace.snapshot.id));
+          const contexts = (field.preparations ?? []).map((item) => mediaRenditionContext(item, workspace.snapshot.id, placement.id));
           const current = preparations[field.fieldId] ?? [];
           const byKey = new Map(current.map((item) => [JSON.stringify(item), item]));
           contexts.forEach((item) => byKey.set(JSON.stringify(item), item));

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, getSyntheticDataMode, subscribeSyntheticDataMode } from "../../../../frontend/admin/src/api";
-import type { FormFieldDefinition, MediaRenditionContext, SiteConfig } from "../../../../frontend/admin/src/types";
+import type { FormFieldDefinition, SiteConfig } from "../../../../frontend/admin/src/types";
 
 function stubAdminBrowser(fetchMock: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("window", {
@@ -40,30 +40,17 @@ describe("Website pagination API", () => {
     expect(snapshots.map((snapshot) => snapshot.id)).toEqual(["snapshot-1", "snapshot-2"]);
   });
 
-  it("does not send picker accept metadata to the rendition endpoint", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ready" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+  it("starts media derivative jobs using the Website HTTP contract", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "job-1", state: "queued" }), {
+      status: 202, headers: { "Content-Type": "application/json" },
     }));
-    vi.stubGlobal("window", {
-      location: { origin: "http://localhost" },
-      localStorage: { getItem: () => null },
-      dispatchEvent: () => true,
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await api.media.prepareRenditions("media-id", {
-      snapshotId: "snapshot-id",
-      featureKey: "product-card",
-      buildVersion: "2.1.0",
-      schemaKind: "dataInputs",
-      fieldPath: "/product/image",
-      buildDigest: "sha256:build",
-      accept: "raster-image",
-    } as MediaRenditionContext);
-
-    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).not.toHaveProperty("accept");
+    stubAdminBrowser(fetchMock);
+    const input = { snapshot_id: "snapshot-id", placement_id: "placement-id", schema_kind: "dataInputs" as const, field_path: "/product/image", source_file_id: "media-id" };
+    await api.website.createMediaDerivative(input, "media-request-1234");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/admin/media/derivatives");
+    expect(JSON.parse(String(init.body))).toEqual(input);
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe("media-request-1234");
   });
 });
 

@@ -1,5 +1,17 @@
 # QA-отчёт
 
+## Admin: подготовка media (2026-11-26)
+
+Picker вызывает Website derivative API с `schema_kind`, snapshot, placement и
+полем, ожидает окончания job и не применяет выбранный файл при ошибке или
+отмене ожидания. Из `frontend/` прошли Admin `typecheck`, `lint` и `test`
+(61 файл, 284 теста); Vite production build прошёл с выходом в отдельный
+`/tmp/website-admin-media-build`, без перезаписи существующего `pkg/static/dist`.
+Тесты покрывают запрос, ожидание, ошибку и отмену; реальные браузер, worker и
+PostgreSQL/S3 не запускались. Content projection пока не поставляет сведения о
+media-профилях; новые несохранённые placements и полный workflow требуют
+отдельной реализации и приёмки. Пункт TODO остаётся открытым.
+
 ## Media schema kind и ограничение acceptance (2026-11-26)
 
 Для Website media resolver проверены одинаковые пути в `arguments` и

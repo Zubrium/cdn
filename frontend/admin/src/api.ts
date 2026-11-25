@@ -21,8 +21,6 @@ import type {
   FileLimits, FileUploadSession,
   FileSet,
   MediaListParams,
-  MediaRenditionContext,
-  MediaRenditionState,
   MediaStatus,
   Principal,
   RouterRoute,
@@ -1076,9 +1074,9 @@ export const api = {
       schema_kind: "arguments" | "dataInputs";
       field_path: string;
       source_file_id: string;
-    }, idempotencyKey: string): Promise<WebsiteMediaJob> {
+    }, idempotencyKey: string, signal?: AbortSignal): Promise<WebsiteMediaJob> {
       return request<WebsiteMediaJob>(`${ADMIN_ROOT}/media/derivatives`, {
-        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input,
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: input, signal,
       });
     },
     mediaJob(id: string, signal?: AbortSignal): Promise<WebsiteMediaJob> {
@@ -1382,22 +1380,6 @@ export const api = {
         body: { name: filename },
         headers: { "If-Match": `"${id}-r${revision}"` },
       }));
-    },
-    prepareRenditions(id: string, context: MediaRenditionContext): Promise<MediaRenditionState> {
-      return request<MediaRenditionState>(
-        `${ADMIN_ROOT}/media/${encoded(id)}/renditions/prepare`,
-        {
-          method: "POST",
-          body: {
-            snapshotId: context.snapshotId,
-            featureKey: context.featureKey,
-            buildVersion: context.buildVersion,
-            schemaKind: context.schemaKind,
-            fieldPath: context.fieldPath,
-            buildDigest: context.buildDigest,
-          },
-        },
-      );
     },
     remove(id: string, revision: number): Promise<void> {
       return request<void>(`/api/files/objects/${encoded(id)}`, {

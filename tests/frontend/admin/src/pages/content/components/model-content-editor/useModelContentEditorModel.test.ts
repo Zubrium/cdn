@@ -12,14 +12,15 @@ describe("mediaRenditionContext", () => {
       accept: "raster-image",
     };
 
-    expect(mediaRenditionContext(declared, "snapshot-1")).toEqual({
+    expect(mediaRenditionContext(declared, "snapshot-1", "placement-1")).toEqual({
       snapshotId: "snapshot-1",
+      placementId: "placement-1",
       featureKey: "product-card",
       buildVersion: "2.1.0",
       schemaKind: "dataInputs",
       fieldPath: "/product/image",
       buildDigest: "sha256:build",
     });
-    expect(mediaRenditionContext(declared, "snapshot-1")).not.toHaveProperty("accept");
+    expect(mediaRenditionContext(declared, "snapshot-1", "placement-1")).not.toHaveProperty("accept");
   });
 });

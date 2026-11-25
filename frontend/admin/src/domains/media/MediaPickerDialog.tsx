@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Check, ExternalLink, ImagePlus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -50,6 +50,8 @@ export function MediaPickerDialog({
 }) {
   const [search, setSearch] = useState("");
   const [isPreparing, setIsPreparing] = useState(false);
+  const preparationController = useRef<AbortController | null>(null);
+  useEffect(() => () => preparationController.current?.abort(), []);
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelected);
   const [selectedItems, setSelectedItems] = useState<Record<string, Media>>({});
   const debouncedSearch = useDebouncedValue(search.trim(), 250);
@@ -128,12 +130,15 @@ export function MediaPickerDialog({
       .filter((item, index, all) => all.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(item)) === index);
     if (selection.length > 0 && contexts.length > 0) {
       setIsPreparing(true);
+      const controller = new AbortController();
+      preparationController.current = controller;
       try {
-        await prepareMediaRenditions(selection.map((media) => media.id), contexts, api.media);
+        await prepareMediaRenditions(selection.map((media) => media.id), contexts, api.website, controller.signal);
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Не удалось подготовить медиа");
+        if (!controller.signal.aborted) toast.error(error instanceof Error ? error.message : "Не удалось подготовить медиа");
         return;
       } finally {
+        preparationController.current = null;
         setIsPreparing(false);
       }
     }
@@ -153,7 +158,7 @@ export function MediaPickerDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {isPreparing && <p role="status" className="text-sm text-muted-foreground">Готовим варианты файлов для размещённых фич…</p>}
+        {isPreparing && <div><p role="status" className="text-sm text-muted-foreground">Готовим варианты файлов для размещённых фич…</p><Button type="button" variant="outline" onClick={() => preparationController.current?.abort()}>Отменить ожидание</Button></div>}
 
         <div className="flex flex-col gap-2 sm:flex-row">
           <div className="relative flex-1">
