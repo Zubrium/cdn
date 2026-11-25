@@ -110,7 +110,10 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		web019AssertWorkerContractTamperingRejected(t, profile, profileJSON)
 
 		// Without a verified sandbox capability the Website path fails closed.
-		ports := composition.NewWebsiteCorePorts(runtime)
+		ports, err := composition.NewWebsiteCorePorts(runtime, credential, []string{"features"})
+		if err != nil {
+			t.Fatalf("build Website module DataBus ports: %v", err)
+		}
 		unavailable, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
 		}, websiteData, ports.Authority, ports.Sessions)
@@ -218,7 +221,7 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 			t.Fatalf("issue workflow task-graph capability: %v", err)
 		}
 		workflow := &web019WorkflowClient{
-			client:     composition.NewWebsiteWorkflowClient(runtime, websiteworkflow.ComponentID),
+			client:     composition.NewWebsiteWorkflowClient(runtime, websiteworkflow.ComponentID, credential, []string{"features"}),
 			coreClient: workflowClient, control: workflowControl, maxPages: 4,
 		}
 

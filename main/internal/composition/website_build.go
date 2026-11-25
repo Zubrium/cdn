@@ -16,44 +16,42 @@ var (
 )
 
 // websiteBuildWorkflowClient is the narrow, owner-scoped adapter supplied to
-// Website application over neutral DataBus workflow DTOs.
+// Website application over neutral DataBus workflow DTOs. The dispatcher binds
+// the module identity; no request can choose an operation, owner or task.
 type websiteBuildWorkflowClient struct {
-	operations coreWorkflowOperations
+	dispatcher contracts.Dispatcher
 }
 
-func newWebsiteBuildWorkflowClient(runtime *coreComponent, owner string) *websiteBuildWorkflowClient {
-	if runtime == nil {
-		return &websiteBuildWorkflowClient{}
-	}
-	return &websiteBuildWorkflowClient{operations: coreWorkflowOperations{runtime: runtime.runtime, owner: owner}}
+func newWebsiteBuildWorkflowClient(dispatcher contracts.Dispatcher) *websiteBuildWorkflowClient {
+	return &websiteBuildWorkflowClient{dispatcher: dispatcher}
 }
 
 func (client *websiteBuildWorkflowClient) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
-	if client == nil || client.operations.runtime == nil {
+	if client == nil || client.dispatcher == nil {
 		return contracts.WorkflowStartReceipt{}, errWebsiteBuildUnavailable
 	}
-	return client.operations.Start(ctx, request)
+	return contracts.CallWorkflowStart(ctx, client.dispatcher, request)
 }
 
 func (client *websiteBuildWorkflowClient) Get(ctx context.Context, workflowID uuid.UUID) (contracts.WorkflowState, error) {
-	if client == nil || client.operations.runtime == nil {
+	if client == nil || client.dispatcher == nil {
 		return contracts.WorkflowState{}, errWebsiteBuildUnavailable
 	}
-	return client.operations.Get(ctx, workflowID)
+	return contracts.CallWorkflowState(ctx, client.dispatcher, workflowID)
 }
 
 func (client *websiteBuildWorkflowClient) GetTaskResult(ctx context.Context, workflowID, taskID uuid.UUID) (contracts.WorkflowTaskResult, error) {
-	if client == nil || client.operations.runtime == nil {
+	if client == nil || client.dispatcher == nil {
 		return contracts.WorkflowTaskResult{}, errWebsiteBuildUnavailable
 	}
-	return client.operations.GetTaskResult(ctx, workflowID, taskID)
+	return contracts.CallWorkflowTaskResult(ctx, client.dispatcher, workflowID, taskID)
 }
 
 func (client *websiteBuildWorkflowClient) ResolveTaskID(ctx context.Context, workflowID uuid.UUID, emissionKey string) (uuid.UUID, error) {
-	if client == nil || client.operations.runtime == nil {
+	if client == nil || client.dispatcher == nil {
 		return uuid.Nil, errWebsiteBuildUnavailable
 	}
-	return client.operations.ResolveTaskID(ctx, workflowID, emissionKey)
+	return contracts.CallWorkflowTaskIDResolve(ctx, client.dispatcher, workflowID, emissionKey)
 }
 
 type websiteLocaleCatalogSource interface {

@@ -87,7 +87,10 @@ func TestWebsiteIntegrationPersistenceBoundary(t *testing.T) {
 		// Build and locale capabilities are deliberately nil: WEB-018 does not
 		// start a durable build, and the service fails closed if build paths are
 		// reached. Only group and session capabilities are real Core capabilities.
-		ports := composition.NewWebsiteCorePorts(runtime)
+		ports, err := composition.NewWebsiteCorePorts(runtime, credential, []string{"features"})
+		if err != nil {
+			t.Fatalf("build Website module DataBus ports: %v", err)
+		}
 		service, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup:            "features",
 			CoordinatorAccessGroup: "features",

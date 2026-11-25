@@ -30,9 +30,9 @@ import (
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiterepo "github.com/Zubrium/cdn/engines/website/repository"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/main/internal/composition"
 	publication "github.com/Zubrium/cdn/main/internal/publication"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
-	"github.com/Zubrium/cdn/main/internal/composition"
 	routerpresent "github.com/Zubrium/cdn/presentation/router"
 	workerprerender "github.com/Zubrium/cdn/workers/prerender"
 	"github.com/google/uuid"
@@ -112,7 +112,10 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		trackedFiles := &web021TrackedFiles{FilesCapability: files}
 		t.Cleanup(func() { trackedFiles.cleanup(t, serviceSession) })
 
-		ports := composition.NewWebsiteCorePorts(runtime)
+		ports, err := composition.NewWebsiteCorePorts(runtime, credential, []string{"features"})
+		if err != nil {
+			t.Fatalf("build Website module DataBus ports: %v", err)
+		}
 		base, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
 		}, websiteData, ports.Authority, ports.Sessions)
@@ -234,7 +237,10 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Router target validator: %v", err)
 		}
-		coreAccess := composition.NewCoreAccess(runtime)
+		coreAccess, err := composition.NewCoreAccess(runtime, credential, []string{"router_routes"})
+		if err != nil {
+			t.Fatalf("build Router module DataBus access client: %v", err)
+		}
 		routeService, err := routesapp.New(routeStore, coreAccess, coreAccess, targetValidator,
 			routesapp.Config{BranchID: branchID, AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
 		if err != nil {

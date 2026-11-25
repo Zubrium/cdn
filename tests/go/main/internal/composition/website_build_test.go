@@ -39,7 +39,7 @@ func TestWebsiteLocaleCatalogPinsRevisionOnlyForConfiguredLocale(t *testing.T) {
 }
 
 func TestWebsiteBuildWorkflowClientFailsClosedWithoutCore(t *testing.T) {
-	client := newWebsiteBuildWorkflowClient(nil, "engine.website")
+	client := newWebsiteBuildWorkflowClient(nil)
 	ctx := context.Background()
 	id := uuid.New()
 	if _, err := client.Start(ctx, contracts.WorkflowStartInput{}); !errors.Is(err, errWebsiteBuildUnavailable) {

@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 
-		websiteengine "github.com/Zubrium/cdn/engines/website"
+	websiteengine "github.com/Zubrium/cdn/engines/website"
 	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
+	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
-	"github.com/Zubrium/cdn/workers/archive"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type websiteEngineComponent struct {
@@ -30,7 +31,7 @@ func newWebsiteEngineComponent(core *coreComponent, config appconfig.Resolved) *
 }
 
 func (component *websiteEngineComponent) Start(ctx context.Context) error {
-	if component == nil || ctx == nil || component.core == nil || component.core.runtime == nil {
+	if component == nil || ctx == nil || component.core == nil || component.core.runtime == nil || component.core.dispatcher == nil {
 		return errors.New("Website dependencies are not initialized")
 	}
 	if err := ctx.Err(); err != nil {
@@ -41,9 +42,23 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := component.core.configureWebsiteFileServices(ctx, component.config.RouterAPI.ServiceCredential); err != nil {
+		return err
+	}
+	moduleDispatcher := bus.NewModuleDispatcher(component.core.dispatcher, "engine.website")
+	ports, err := newWebsiteCorePorts(moduleDispatcher)
+	if err != nil {
+		return err
+	}
+	files, err := contracts.NewCoreFilesClient(moduleDispatcher, func() contracts.StreamRegistrar {
+		return bus.NewScopedStreams()
+	})
+	if err != nil {
+		return err
+	}
 	var buildWorkflow websiteapp.BuildWorkflowClient
 	if websiteBuildEnabled {
-		buildWorkflow = newWebsiteBuildWorkflowClient(component.core, websiteworkflow.ComponentID)
+		buildWorkflow = newWebsiteBuildWorkflowClient(moduleDispatcher)
 	}
 	if component.localeCatalog == nil {
 		component.localeCatalog = newWebsiteLocaleCatalog()
@@ -61,30 +76,37 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 		BuildWorkflow:          buildWorkflow,
 		LocaleCatalog:          component.localeCatalog,
 		BuildInputResolver:     buildInputResolver,
-		BuildFiles:             websiteFiles{runtime: component.core.runtime},
+		BuildFiles:             moduleCoreFiles{files: files},
 		PrerenderImageDigest:   component.config.Prerender.SandboxImage,
 		BuildOperationID:       websiteworkflow.OperationID,
 		BuildContractVersion:   websiteworkflow.ContractVersion,
 		FeatureImportFileSetID: component.config.FeatureImport.TargetFileSetID,
 	}
 	if component.config.FeatureImport.Enabled {
-		serviceConfig.Files = websiteFiles{runtime: component.core.runtime}
-		serviceConfig.Workflow = newWebsiteBuildWorkflowClient(component.core, archive.DataModuleID)
-		serviceConfig.Sessions = websiteSessions{runtime: component.core.runtime}
+		importDispatcher := bus.NewModuleDispatcher(component.core.dispatcher, "engine.website.import")
+		importFiles, err := contracts.NewCoreFilesClient(importDispatcher, func() contracts.StreamRegistrar {
+			return bus.NewScopedStreams()
+		})
+		if err != nil {
+			return err
+		}
+		serviceConfig.Files = moduleCoreFiles{files: importFiles}
+		serviceConfig.Workflow = newWebsiteBuildWorkflowClient(importDispatcher)
+		serviceConfig.Sessions = ports.Sessions
 	}
 	if component.config.Media.Enabled {
 		state, err := component.core.MediaSandboxState()
 		if err != nil {
 			return err
 		}
-		serviceConfig.MediaWorkflow = newWebsiteBuildWorkflowClient(component.core, websiteworkflow.ComponentID)
-		serviceConfig.MediaFiles = websiteFiles{runtime: component.core.runtime}
+		serviceConfig.MediaWorkflow = newWebsiteBuildWorkflowClient(moduleDispatcher)
+		serviceConfig.MediaFiles = moduleCoreFiles{files: files}
 		serviceConfig.MediaOperationID = websiteworkflow.MediaOperationID
 		serviceConfig.MediaContractVersion = websiteworkflow.MediaContractVersion
 		serviceConfig.MediaProcessorVersion = component.config.Media.ProcessorVersion
 		serviceConfig.MediaSandbox = staticMediaSandboxProbe{state: state}
 	}
-	service, err := websiteapp.NewService(serviceConfig, data, websiteAuthority{runtime: component.core.runtime}, websiteSessions{runtime: component.core.runtime})
+	service, err := websiteapp.NewService(serviceConfig, data, ports.Authority, ports.Sessions)
 	if err != nil {
 		return err
 	}

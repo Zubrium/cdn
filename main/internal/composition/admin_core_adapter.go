@@ -11,44 +11,148 @@ import (
 	"github.com/google/uuid"
 )
 
-// adminIdentityAdapter maps Core identity administration and credential-bound
-// sessions onto the neutral Admin HTTP ports. It is supplied only by the
-// composition root; the Admin module never imports Core.
-type adminIdentityAdapter struct{ runtime *platform.Runtime }
-
-func (a adminIdentityAdapter) session(ctx context.Context, subject contracts.AuthorizationSubject) (platform.Session, error) {
-	return resolveCoreSession(ctx, a.runtime, subject)
+// adminIdentityAdapter exposes Admin's neutral identity ports through the
+// module-scoped DataBus. The Admin module never receives a Core runtime or a
+// Core session.
+type adminIdentityAdapter struct {
+	access   contracts.CoreAccess
+	identity *contracts.AdminIdentityClient
 }
 
 func (a adminIdentityAdapter) Authenticate(ctx context.Context, credential string) (contracts.AuthorizationSubject, error) {
-	if _, _, err := a.runtime.Identity().Authenticate(ctx, credential); err != nil {
+	principal, err := a.access.Authenticate(ctx, credential)
+	if err != nil {
 		return contracts.AuthorizationSubject{}, mapCoreIdentityError(err)
 	}
+	_ = principal
 	return contracts.AuthorizationSubject{Credential: credential}, nil
 }
 
 func (a adminIdentityAdapter) CreatePrincipal(ctx context.Context, subject contracts.AuthorizationSubject, input adminapi.CreatePrincipalRequest) (adminapi.PrincipalCreated, error) {
-	session, err := a.session(ctx, subject)
+	created, err := a.identity.CreatePrincipal(ctx, subject, contracts.CreatePrincipalInput{
+		Name:                    input.Name,
+		ExpiresAt:               input.ExpiresAt,
+		CanManageAdministrators: input.CanManageAdministrators,
+		GroupAccess:             input.GroupAccess,
+	})
 	if err != nil {
 		return adminapi.PrincipalCreated{}, mapCoreIdentityError(err)
+	}
+	return adminapi.PrincipalCreated{ID: created.ID, Name: created.Name, Credential: created.Credential}, nil
+}
+
+func (a adminIdentityAdapter) ListPrincipals(ctx context.Context, subject contracts.AuthorizationSubject) ([]contracts.Principal, error) {
+	principals, err := a.identity.ListPrincipals(ctx, subject)
+	if err != nil {
+		return nil, mapCoreIdentityError(err)
+	}
+	return principals, nil
+}
+
+func (a adminIdentityAdapter) SetPrincipalManagement(ctx context.Context, subject contracts.AuthorizationSubject, id string, enabled bool) error {
+	return mapCoreIdentityError(a.identity.SetPrincipalManagement(ctx, subject, id, enabled))
+}
+
+func (a adminIdentityAdapter) DeactivatePrincipal(ctx context.Context, subject contracts.AuthorizationSubject, id string) error {
+	return mapCoreIdentityError(a.identity.DeactivatePrincipal(ctx, subject, id))
+}
+
+func (a adminIdentityAdapter) IssueCredential(ctx context.Context, subject contracts.AuthorizationSubject, principalID string, expires *time.Time) (string, string, error) {
+	issued, err := a.identity.IssueCredential(ctx, subject, principalID, expires)
+	if err != nil {
+		return "", "", mapCoreIdentityError(err)
+	}
+	return issued.ID, issued.Credential, nil
+}
+
+func (a adminIdentityAdapter) ListCredentials(ctx context.Context, subject contracts.AuthorizationSubject, principalID string) ([]contracts.Credential, error) {
+	credentials, err := a.identity.ListCredentials(ctx, subject, principalID)
+	if err != nil {
+		return nil, mapCoreIdentityError(err)
+	}
+	return credentials, nil
+}
+
+func (a adminIdentityAdapter) RevokeCredential(ctx context.Context, subject contracts.AuthorizationSubject, credentialID string) error {
+	return mapCoreIdentityError(a.identity.RevokeCredential(ctx, subject, credentialID))
+}
+
+func (a adminIdentityAdapter) SetGroupAccess(ctx context.Context, subject contracts.AuthorizationSubject, principalID, group string, level contracts.AccessLevel) error {
+	return mapCoreIdentityError(a.identity.SetGroupAccess(ctx, subject, principalID, group, level))
+}
+
+func (a adminIdentityAdapter) GroupAccess(ctx context.Context, subject contracts.AuthorizationSubject, principalID, group string) (contracts.AccessLevel, error) {
+	level, err := a.identity.GroupAccess(ctx, subject, principalID, group)
+	return level, mapCoreIdentityError(err)
+}
+
+func (a adminIdentityAdapter) ListAccessGroups(ctx context.Context, subject contracts.AuthorizationSubject) ([]contracts.AccessGroup, error) {
+	groups, err := a.identity.ListAccessGroups(ctx, subject)
+	if err != nil {
+		return nil, mapCoreIdentityError(err)
+	}
+	return groups, nil
+}
+
+func (a adminIdentityAdapter) CreateSession(ctx context.Context, credential string) (contracts.CreatedSession, error) {
+	created, err := a.identity.CreateSession(ctx, credential)
+	if err != nil {
+		return contracts.CreatedSession{}, mapCoreIdentityError(err)
+	}
+	return created, nil
+}
+
+func (a adminIdentityAdapter) AuthenticateSession(ctx context.Context, token string) (contracts.AuthorizationSubject, contracts.Principal, error) {
+	principal, err := a.access.AuthenticateSession(ctx, token)
+	if err != nil {
+		return contracts.AuthorizationSubject{}, contracts.Principal{}, mapCoreIdentityError(err)
+	}
+	return contracts.AuthorizationSubject{SessionToken: token}, principal, nil
+}
+
+func (a adminIdentityAdapter) RevokeSession(ctx context.Context, token string) error {
+	return mapCoreIdentityError(a.identity.RevokeSession(ctx, token))
+}
+
+// coreAdminIdentityOperations is the Core-facing implementation registered on
+// the DataBus. It resolves the caller's already authenticated subject to a Core
+// session inside the composition root; the JSON payload never carries a Core
+// capability.
+type coreAdminIdentityOperations struct{ core *coreComponent }
+
+func (a coreAdminIdentityOperations) session(ctx context.Context, subject contracts.AuthorizationSubject) (platform.Session, error) {
+	if a.core == nil || a.core.runtime == nil {
+		return platform.Session{}, contracts.ErrAccessUnavailable
+	}
+	session, err := resolveCoreSession(ctx, a.core.runtime, subject)
+	if err != nil {
+		return platform.Session{}, mapCoreIdentityError(err)
+	}
+	return session, nil
+}
+
+func (a coreAdminIdentityOperations) CreatePrincipal(ctx context.Context, subject contracts.AuthorizationSubject, input contracts.CreatePrincipalInput) (contracts.AdminCreatePrincipalResponse, error) {
+	session, err := a.session(ctx, subject)
+	if err != nil {
+		return contracts.AdminCreatePrincipalResponse{}, err
 	}
 	groups := make(map[string]platform.AccessLevel, len(input.GroupAccess))
 	for group, level := range input.GroupAccess {
 		groups[group] = platform.AccessLevel(level)
 	}
-	id, credential, err := a.runtime.IdentityAdmin().CreatePrincipalWithAccess(ctx, session, input.Name, input.ExpiresAt, input.CanManageAdministrators, groups)
+	id, credential, err := a.core.runtime.IdentityAdmin().CreatePrincipalWithAccess(ctx, session, input.Name, input.ExpiresAt, input.CanManageAdministrators, groups)
 	if err != nil {
-		return adminapi.PrincipalCreated{}, mapCoreIdentityError(err)
+		return contracts.AdminCreatePrincipalResponse{}, mapCoreIdentityError(err)
 	}
-	return adminapi.PrincipalCreated{ID: id, Name: input.Name, Credential: credential}, nil
+	return contracts.AdminCreatePrincipalResponse{ID: id, Name: input.Name, Credential: credential}, nil
 }
 
-func (a adminIdentityAdapter) ListPrincipals(ctx context.Context, subject contracts.AuthorizationSubject) ([]contracts.Principal, error) {
+func (a coreAdminIdentityOperations) ListPrincipals(ctx context.Context, subject contracts.AuthorizationSubject) ([]contracts.Principal, error) {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return nil, mapCoreIdentityError(err)
+		return nil, err
 	}
-	principals, err := a.runtime.IdentityAdmin().ListPrincipals(ctx, session)
+	principals, err := a.core.runtime.IdentityAdmin().ListPrincipals(ctx, session)
 	if err != nil {
 		return nil, mapCoreIdentityError(err)
 	}
@@ -59,37 +163,40 @@ func (a adminIdentityAdapter) ListPrincipals(ctx context.Context, subject contra
 	return result, nil
 }
 
-func (a adminIdentityAdapter) SetPrincipalManagement(ctx context.Context, subject contracts.AuthorizationSubject, id string, enabled bool) error {
+func (a coreAdminIdentityOperations) SetPrincipalManagement(ctx context.Context, subject contracts.AuthorizationSubject, id string, enabled bool) error {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return mapCoreIdentityError(err)
+		return err
 	}
-	return mapCoreIdentityError(a.runtime.IdentityAdmin().SetPrincipalManagement(ctx, session, id, enabled))
+	return mapCoreIdentityError(a.core.runtime.IdentityAdmin().SetPrincipalManagement(ctx, session, id, enabled))
 }
 
-func (a adminIdentityAdapter) DeactivatePrincipal(ctx context.Context, subject contracts.AuthorizationSubject, id string) error {
+func (a coreAdminIdentityOperations) DeactivatePrincipal(ctx context.Context, subject contracts.AuthorizationSubject, id string) error {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return mapCoreIdentityError(err)
+		return err
 	}
-	return mapCoreIdentityError(a.runtime.IdentityAdmin().DeactivatePrincipal(ctx, session, id))
+	return mapCoreIdentityError(a.core.runtime.IdentityAdmin().DeactivatePrincipal(ctx, session, id))
 }
 
-func (a adminIdentityAdapter) IssueCredential(ctx context.Context, subject contracts.AuthorizationSubject, principalID string, expires *time.Time) (string, string, error) {
+func (a coreAdminIdentityOperations) IssueCredential(ctx context.Context, subject contracts.AuthorizationSubject, principalID string, expires *time.Time) (contracts.AdminIssueCredentialResponse, error) {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return "", "", mapCoreIdentityError(err)
+		return contracts.AdminIssueCredentialResponse{}, err
 	}
-	id, secret, err := a.runtime.IdentityAdmin().IssueCredential(ctx, session, principalID, expires)
-	return id, secret, mapCoreIdentityError(err)
+	id, secret, err := a.core.runtime.IdentityAdmin().IssueCredential(ctx, session, principalID, expires)
+	if err != nil {
+		return contracts.AdminIssueCredentialResponse{}, mapCoreIdentityError(err)
+	}
+	return contracts.AdminIssueCredentialResponse{ID: id, Credential: secret}, nil
 }
 
-func (a adminIdentityAdapter) ListCredentials(ctx context.Context, subject contracts.AuthorizationSubject, principalID string) ([]contracts.Credential, error) {
+func (a coreAdminIdentityOperations) ListCredentials(ctx context.Context, subject contracts.AuthorizationSubject, principalID string) ([]contracts.Credential, error) {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return nil, mapCoreIdentityError(err)
+		return nil, err
 	}
-	credentials, err := a.runtime.IdentityAdmin().ListCredentials(ctx, session, principalID)
+	credentials, err := a.core.runtime.IdentityAdmin().ListCredentials(ctx, session, principalID)
 	if err != nil {
 		return nil, mapCoreIdentityError(err)
 	}
@@ -101,37 +208,37 @@ func (a adminIdentityAdapter) ListCredentials(ctx context.Context, subject contr
 	return result, nil
 }
 
-func (a adminIdentityAdapter) RevokeCredential(ctx context.Context, subject contracts.AuthorizationSubject, credentialID string) error {
+func (a coreAdminIdentityOperations) RevokeCredential(ctx context.Context, subject contracts.AuthorizationSubject, credentialID string) error {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return mapCoreIdentityError(err)
+		return err
 	}
-	return mapCoreIdentityError(a.runtime.IdentityAdmin().RevokeCredential(ctx, session, credentialID))
+	return mapCoreIdentityError(a.core.runtime.IdentityAdmin().RevokeCredential(ctx, session, credentialID))
 }
 
-func (a adminIdentityAdapter) SetGroupAccess(ctx context.Context, subject contracts.AuthorizationSubject, principalID, group string, level contracts.AccessLevel) error {
+func (a coreAdminIdentityOperations) SetGroupAccess(ctx context.Context, subject contracts.AuthorizationSubject, principalID, group string, level contracts.AccessLevel) error {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return mapCoreIdentityError(err)
+		return err
 	}
-	return mapCoreIdentityError(a.runtime.IdentityAdmin().SetGroupAccess(ctx, session, principalID, group, platform.AccessLevel(level)))
+	return mapCoreIdentityError(a.core.runtime.IdentityAdmin().SetGroupAccess(ctx, session, principalID, group, platform.AccessLevel(level)))
 }
 
-func (a adminIdentityAdapter) GroupAccess(ctx context.Context, subject contracts.AuthorizationSubject, principalID, group string) (contracts.AccessLevel, error) {
+func (a coreAdminIdentityOperations) GroupAccess(ctx context.Context, subject contracts.AuthorizationSubject, principalID, group string) (contracts.AccessLevel, error) {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return contracts.AccessLevelDenied, mapCoreIdentityError(err)
+		return contracts.AccessLevelDenied, err
 	}
-	level, err := a.runtime.IdentityAdmin().GroupAccess(ctx, session, principalID, group)
+	level, err := a.core.runtime.IdentityAdmin().GroupAccess(ctx, session, principalID, group)
 	return contracts.AccessLevel(level), mapCoreIdentityError(err)
 }
 
-func (a adminIdentityAdapter) ListAccessGroups(ctx context.Context, subject contracts.AuthorizationSubject) ([]contracts.AccessGroup, error) {
+func (a coreAdminIdentityOperations) ListAccessGroups(ctx context.Context, subject contracts.AuthorizationSubject) ([]contracts.AccessGroup, error) {
 	session, err := a.session(ctx, subject)
 	if err != nil {
-		return nil, mapCoreIdentityError(err)
+		return nil, err
 	}
-	groups, err := a.runtime.IdentityAdmin().ListAccessGroups(ctx, session)
+	groups, err := a.core.runtime.IdentityAdmin().ListAccessGroups(ctx, session)
 	if err != nil {
 		return nil, mapCoreIdentityError(err)
 	}
@@ -142,8 +249,8 @@ func (a adminIdentityAdapter) ListAccessGroups(ctx context.Context, subject cont
 	return result, nil
 }
 
-func (a adminIdentityAdapter) CreateSession(ctx context.Context, credential string) (contracts.CreatedSession, error) {
-	created, err := a.runtime.Sessions().CreateSession(ctx, credential)
+func (a coreAdminIdentityOperations) CreateSession(ctx context.Context, credential string) (contracts.CreatedSession, error) {
+	created, err := a.core.runtime.Sessions().CreateSession(ctx, credential)
 	if err != nil {
 		return contracts.CreatedSession{}, mapCoreIdentityError(err)
 	}
@@ -151,70 +258,59 @@ func (a adminIdentityAdapter) CreateSession(ctx context.Context, credential stri
 		IdleExpiresAt: created.IdleExpiresAt, AbsoluteExpiresAt: created.AbsoluteExpiresAt}, nil
 }
 
-func (a adminIdentityAdapter) AuthenticateSession(ctx context.Context, token string) (contracts.AuthorizationSubject, contracts.Principal, error) {
-	_, principal, err := a.runtime.Sessions().AuthenticateSession(ctx, token)
-	if err != nil {
-		return contracts.AuthorizationSubject{}, contracts.Principal{}, mapCoreIdentityError(err)
-	}
-	return contracts.AuthorizationSubject{SessionToken: token}, contractPrincipal(principal), nil
+func (a coreAdminIdentityOperations) RevokeSession(ctx context.Context, token string) error {
+	return mapCoreIdentityError(a.core.runtime.Sessions().RevokeSession(ctx, token))
 }
 
-func (a adminIdentityAdapter) RevokeSession(ctx context.Context, token string) error {
-	return mapCoreIdentityError(a.runtime.Sessions().RevokeSession(ctx, token))
-}
-
-// adminGroupAccessResolver exposes the session principal's direct levels in
-// the configured static groups by probing Core authorization per request.
+// adminGroupAccessResolver probes the caller's direct levels through the
+// module-scoped Core access operations. Group keys come from startup config,
+// never from the browser request.
 type adminGroupAccessResolver struct {
-	runtime *platform.Runtime
-	groups  []string
+	access contracts.CoreAccess
+	groups []string
 }
 
 func (r adminGroupAccessResolver) ResolveGroupAccess(ctx context.Context, token string) (map[string]contracts.AccessLevel, error) {
-	if r.runtime == nil || token == "" {
+	if r.access == nil || token == "" {
 		return nil, contracts.ErrAccessUnavailable
 	}
-	session, _, err := r.runtime.Sessions().AuthenticateSession(ctx, token)
-	if err != nil {
+	subject := contracts.AuthorizationSubject{SessionToken: token}
+	if _, err := r.access.AuthenticateSession(ctx, token); err != nil {
 		return nil, err
 	}
 	access := make(map[string]contracts.AccessLevel)
 	for _, group := range r.groups {
-		err := r.runtime.GroupAuthorization().RequireGroupLevel(ctx, session, []string{group}, platform.AccessLevelWrite)
+		err := r.access.RequireGroupLevel(ctx, subject, []string{group}, contracts.AccessLevelWrite)
 		if err == nil {
 			access[group] = contracts.AccessLevelWrite
 			continue
 		}
-		if !errors.Is(err, platform.ErrForbidden) {
+		if !errors.Is(err, contracts.ErrAccessForbidden) {
 			return nil, err
 		}
-		err = r.runtime.GroupAuthorization().RequireGroupLevel(ctx, session, []string{group}, platform.AccessLevelRead)
+		err = r.access.RequireGroupLevel(ctx, subject, []string{group}, contracts.AccessLevelRead)
 		if err == nil {
 			access[group] = contracts.AccessLevelRead
-		} else if !errors.Is(err, platform.ErrForbidden) {
+		} else if !errors.Is(err, contracts.ErrAccessForbidden) {
 			return nil, err
 		}
 	}
 	return access, nil
 }
 
-// adminCoordinatorAuthorization adapts Core's coordinator-scoped authorization
-// capability to the neutral Admin coordinator port.
-type adminCoordinatorAuthorization struct{ runtime *platform.Runtime }
+// adminCoordinatorAuthorization adapts the neutral Core access client to the
+// Admin coordinator authorization port.
+type adminCoordinatorAuthorization struct{ access contracts.CoreAccess }
 
 func (a adminCoordinatorAuthorization) Authenticate(ctx context.Context, credential string) (contracts.AuthorizationSubject, error) {
-	if _, err := a.runtime.CoordinatorAuthorization().Authenticate(ctx, credential); err != nil {
+	if _, err := a.access.Authenticate(ctx, credential); err != nil {
 		return contracts.AuthorizationSubject{}, mapCoreAccessError(err)
 	}
 	return contracts.AuthorizationSubject{Credential: credential}, nil
 }
 
 func (a adminCoordinatorAuthorization) RequireGroupLevel(ctx context.Context, subject contracts.AuthorizationSubject, group string, level contracts.AccessLevel) error {
-	session, err := resolveCoreSession(ctx, a.runtime, subject)
-	if err != nil {
-		return mapCoreAccessError(err)
-	}
-	return mapCoreAccessError(a.runtime.CoordinatorAuthorization().RequireGroupLevel(ctx, session, group, platform.AccessLevel(level)))
+	return mapCoreAccessError(a.access.RequireGroupLevel(ctx, subject, []string{group}, level))
 }
 
 // adminWorkflowControl converts Core's workflow-control projections into the

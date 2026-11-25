@@ -25,10 +25,22 @@ func (adapter coreSubjectFileStat) StatFile(ctx context.Context, fileID string) 
 }
 
 func hasCoreFileConsumers(selected map[string]struct{}) bool {
-	for _, moduleID := range []string{"engine.content", "engine.forms", "engine.router", "worker.archive", "worker.media", "worker.prerender"} {
+	for _, moduleID := range []string{
+		"engine.website", "engine.website.import", "engine.content", "engine.forms", "engine.router",
+		"worker.archive", "worker.media", "worker.prerender", "main.publication", "admin.api",
+	} {
 		if _, ok := selected[moduleID]; ok {
 			return true
 		}
+	}
+	if _, ok := selected["engine.publication"]; ok {
+		return true
+	}
+	if _, ok := selected["admin.coordinator"]; ok {
+		return true
+	}
+	if _, ok := selected["admin.identity"]; ok {
+		return true
 	}
 	return false
 }
@@ -43,14 +55,28 @@ func hasCoreAccessConsumers(selected map[string]struct{}) bool {
 }
 
 func moduleUsesCoreAccess(moduleID string, selected map[string]struct{}) bool {
+	if moduleID == "admin.api" || moduleID == "main.publication" || moduleID == "composition.retirement" {
+		return true
+	}
 	if _, ok := selected[moduleID]; !ok {
 		return false
 	}
-	return moduleID == "engine.content" || moduleID == "engine.forms" || moduleID == "engine.router"
+	switch moduleID {
+	case "engine.website", "engine.website.import", "engine.content", "engine.forms", "engine.router", "admin.coordinator", "admin.identity":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCoreFileConsumer(moduleID string) bool {
-	return moduleID == "engine.content" || moduleID == "engine.forms" || moduleID == "engine.router" || moduleID == "worker.archive" || moduleID == "worker.media" || moduleID == "worker.prerender"
+	switch moduleID {
+	case "engine.website", "engine.website.import", "engine.content", "engine.forms", "engine.router",
+		"worker.archive", "worker.media", "worker.prerender", "main.publication", "admin.api":
+		return true
+	default:
+		return false
+	}
 }
 
 func (adapter coreSessionFileAdapter) StatFile(ctx context.Context, fileID string) (contracts.File, error) {

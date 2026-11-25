@@ -92,7 +92,10 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			t.Fatalf("authenticate service identity: %v", err)
 		}
 		files := runtime.Files()
-		ports := composition.NewWebsiteCorePorts(runtime)
+		ports, err := composition.NewWebsiteCorePorts(runtime, credential, []string{"features"})
+		if err != nil {
+			t.Fatalf("build Website module DataBus ports: %v", err)
+		}
 
 		base, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
@@ -378,7 +381,7 @@ func TestWebsitePrerenderAcceptance(t *testing.T) {
 			t.Fatalf("issue workflow task-graph capability: %v", err)
 		}
 		tracking := &web020WorkflowClient{
-			client:     composition.NewWebsiteWorkflowClient(runtime, websiteworkflow.ComponentID),
+			client:     composition.NewWebsiteWorkflowClient(runtime, websiteworkflow.ComponentID, credential, []string{"features"}),
 			coreClient: workflowClient, control: workflowControl, maxPages: 4,
 			started: map[uuid.UUID]web020StartedWorkflow{},
 		}

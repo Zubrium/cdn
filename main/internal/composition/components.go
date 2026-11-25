@@ -111,6 +111,17 @@ func (c *coreComponent) Start(ctx context.Context) error {
 	}
 	coreConfig.AccessGroups = groups
 	c.config.Core.AccessGroups = groups
+	for _, alias := range []string{"engine.website.import", "admin.api", "main.publication", "composition.retirement"} {
+		if moduleUsesCoreAccess(alias, c.selected) {
+			c.accessGroups[alias] = configuredGroupNames(groups)
+		}
+	}
+	if _, selected := c.selected["admin.identity"]; selected {
+		c.accessGroups["admin.identity"] = configuredGroupNames(groups)
+	}
+	if _, selected := c.selected["admin.coordinator"]; selected {
+		c.accessGroups["admin.coordinator"] = []string{c.config.Coordinator.WorkflowAccessGroup}
+	}
 	if c.observer == nil {
 		return errors.New("core cache observer is not configured")
 	}
@@ -205,6 +216,12 @@ func (c *coreComponent) Start(ctx context.Context) error {
 		if err := bus.RegisterCoreAccess(c.dispatcher, coreRuntimeAccess{runtime: runtime}, c.accessGroups); err != nil {
 			_ = runtime.Close()
 			return fmt.Errorf("register Core access operations: %w", err)
+		}
+	}
+	if _, selected := c.selected["admin.identity"]; selected {
+		if err := bus.RegisterAdminIdentity(c.dispatcher, coreAdminIdentityOperations{core: c}); err != nil {
+			_ = runtime.Close()
+			return fmt.Errorf("register Core admin identity operations: %w", err)
 		}
 	}
 	if _, selected := c.selected["admin.coordinator"]; selected {
@@ -353,6 +370,23 @@ func (w corePrerenderArtifactWriter) WriteArtifact(ctx context.Context, requestK
 		return "", err
 	}
 	return response.FileID, nil
+}
+
+// configureWebsiteFileServices is a Core-facing composition adapter. Website
+// receives only module-scoped DataBus file clients; this binds the pre-issued
+// Core file capability for each Website module identity.
+func (c *coreComponent) configureWebsiteFileServices(ctx context.Context, credential string) error {
+	if c == nil || c.runtime == nil || credential == "" {
+		return errRuntimeModuleBusUnavailable
+	}
+	session, _, err := c.runtime.Identity().Authenticate(ctx, credential)
+	if err != nil {
+		return err
+	}
+	files := coreSessionFileAdapter{files: c.runtime.Files(), session: session}
+	c.setCoreFiles("engine.website", files)
+	c.setCoreFiles("engine.website.import", files)
+	return nil
 }
 
 func (c *coreComponent) setCoreFiles(moduleID string, files contracts.CoreFiles) {
@@ -606,11 +640,24 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		routerOperations = c.routerEngine.registry
 	}
 	adminConfig.Router = routerPresentationConfig(c.config, routerOperations)
-	identity := adminIdentityAdapter{runtime: c.core.runtime}
+	identityDispatcher := bus.NewModuleDispatcher(c.dispatcher, "admin.identity")
+	identityAccess, err := contracts.NewCoreAccessClient(identityDispatcher)
+	if err != nil {
+		return fmt.Errorf("build Admin identity access client: %w", err)
+	}
+	identityClient, err := contracts.NewAdminIdentityClient(identityDispatcher)
+	if err != nil {
+		return fmt.Errorf("build Admin identity client: %w", err)
+	}
+	identity := adminIdentityAdapter{access: identityAccess, identity: identityClient}
+	coordinatorAccess, err := contracts.NewCoreAccessClient(bus.NewModuleDispatcher(c.dispatcher, "admin.coordinator"))
+	if err != nil {
+		return fmt.Errorf("build Admin coordinator access client: %w", err)
+	}
 	dependencies := transport.AdminDependencies{
 		CoreReady: c.core.runtime.CoordinatorReady, Identity: identity, Sessions: identity,
-		GroupAccess:              adminGroupAccessResolver{runtime: c.core.runtime, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
-		CoordinatorAuthorization: adminCoordinatorAuthorization{runtime: c.core.runtime},
+		GroupAccess:              adminGroupAccessResolver{access: identityAccess, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
+		CoordinatorAuthorization: adminCoordinatorAuthorization{access: coordinatorAccess},
 		Files:                    c.loader.service, WorkflowControl: c.workflowControl,
 		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{core: c.core},
 	}
@@ -805,6 +852,9 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			contracts.AccessRequireGroupOperation().Key,
 		)
 	}
+	if _, ok := selected["admin.identity"]; ok {
+		keys = append(keys, bus.AdminIdentityOperationKeys()...)
+	}
 	if hasWorkflowConsumers(selected) {
 		keys = append(keys,
 			contracts.WorkflowStartOperation().Key,
@@ -849,7 +899,8 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	}
 	if hasWorkflowConsumers(selected) {
 		workflowOperations := map[string]bus.WorkflowOperations{
-			"engine.website": coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.website"},
+			"engine.website":        coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.website"},
+			"engine.website.import": coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: archive.DataModuleID},
 		}
 		for _, moduleID := range []string{"engine.publication", "composition.retirement", "admin.coordinator", "worker.archive", "worker.media", "worker.prerender"} {
 			if _, ok := selected[moduleID]; ok {

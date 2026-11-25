@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrInvalidModuleIdentity       = errors.New("invalid DataBus module identity")
+	ErrInvalidModuleIdentity        = errors.New("invalid DataBus module identity")
 	ErrOperationNotAllowedForModule = errors.New("operation is not allowed for this DataBus module")
 )
 
@@ -110,6 +110,7 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 		contracts.GetPageRetirementOperation().Key,
 	}
 	publishedContent := []contracts.Key{contracts.PublishedContentReadOperation().Key}
+	adminIdentity := AdminIdentityOperationKeys()
 
 	join := func(groups ...[]contracts.Key) []contracts.Key {
 		var result []contracts.Key
@@ -120,7 +121,7 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 	}
 
 	switch moduleID {
-	case "engine.website":
+	case "engine.website", "engine.website.import":
 		return join(core, access, files, records, workflow)
 	case "engine.content":
 		return join(core, access, files, records)
@@ -136,8 +137,12 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 		return join(core, access, files, records, workflow, publication)
 	case "composition.retirement":
 		return join(core, access, files, records, workflow, retirement)
+	case "admin.identity":
+		return join(core, access, adminIdentity)
+	case "admin.coordinator":
+		return join(core, access, workflow, adminWorkflow)
 	case "admin.api":
-		return join(core, access, files, records, workflow, adminWorkflow, publication, retirement, publishedContent)
+		return join(core, access, files, records, workflow, adminWorkflow, adminIdentity, publication, retirement, publishedContent)
 	default:
 		return nil
 	}
