@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -184,6 +185,27 @@ func (dispatcher *Dispatcher) register(key contracts.Key, handler Handler) error
 	}
 	dispatcher.handlers[key] = handler
 	return nil
+}
+
+// AllowedKeys returns a sorted copy of the compiled static allowlist. It is
+// intentionally read-only: callers cannot add operations to a dispatcher.
+func (dispatcher *Dispatcher) AllowedKeys() []contracts.Key {
+	if dispatcher == nil {
+		return nil
+	}
+	dispatcher.mu.RLock()
+	defer dispatcher.mu.RUnlock()
+	keys := make([]contracts.Key, 0, len(dispatcher.allowed))
+	for key := range dispatcher.allowed {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].ID == keys[j].ID {
+			return keys[i].Version < keys[j].Version
+		}
+		return keys[i].ID < keys[j].ID
+	})
+	return keys
 }
 
 func (dispatcher *Dispatcher) EnableScopedStreams() error {

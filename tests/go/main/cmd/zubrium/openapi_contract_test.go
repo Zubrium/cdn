@@ -26,10 +26,7 @@ type openAPIDocument struct {
 	Paths      map[string]openAPIPath `yaml:"paths"`
 	Components struct {
 		SecuritySchemes map[string]openAPISecurityScheme `yaml:"securitySchemes"`
-		Schemas         map[string]struct {
-			Required   []string             `yaml:"required"`
-			Properties map[string]yaml.Node `yaml:"properties"`
-		} `yaml:"schemas"`
+		Schemas         map[string]openAPIBuildSchema    `yaml:"schemas"`
 	} `yaml:"components"`
 }
 
@@ -45,10 +42,14 @@ type openAPIParameter struct {
 }
 
 type openAPIBuildSchema struct {
-	Type                 string               `yaml:"type"`
-	AdditionalProperties bool                 `yaml:"additionalProperties"`
-	Required             []string             `yaml:"required"`
-	Properties           map[string]yaml.Node `yaml:"properties"`
+	Type                 string                 `yaml:"type"`
+	Ref                  string                 `yaml:"$ref"`
+	AdditionalProperties bool                   `yaml:"additionalProperties"`
+	Required             []string               `yaml:"required"`
+	Properties           map[string]yaml.Node   `yaml:"properties"`
+	AllOf                []openAPIBuildSchema   `yaml:"allOf"`
+	OneOf                []openAPIBuildSchema   `yaml:"oneOf"`
+	AnyOf                []openAPIBuildSchema   `yaml:"anyOf"`
 }
 
 type openAPIPath struct {
