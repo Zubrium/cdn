@@ -82,7 +82,11 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 	if err := s.startWorkflow(ctx, run); err != nil {
 		return Result{}, err
 	}
-	return s.result(ctx, run)
+	_, _, current, err := s.loadRun(ctx, run.RunID)
+	if err != nil {
+		return Result{}, err
+	}
+	return s.result(ctx, current)
 }
 
 // Retry resumes an existing durable run with the identical workflow start
@@ -106,7 +110,11 @@ func (s *Service) restart(ctx context.Context, run runRecord) (Result, error) {
 	if err := s.startWorkflow(ctx, run); err != nil {
 		return Result{}, err
 	}
-	return s.result(ctx, run)
+	_, _, current, err := s.loadRun(ctx, run.RunID)
+	if err != nil {
+		return Result{}, err
+	}
+	return s.result(ctx, current)
 }
 
 func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
@@ -127,13 +135,33 @@ func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
 		})
 	}
 	input := workflowStartInput(s.config.BranchID, trigger, run.Locale, run.RunID, targets)
+	key, record, current, err := s.loadRun(ctx, run.RunID)
+	if err != nil {
+		return err
+	}
+	if current.State == stateSuccess || current.State != run.State {
+		return nil
+	}
 	if _, err := s.config.Starter.Start(ctx, input); err != nil {
-		if _, _, _, loadErr := s.loadRun(ctx, run.RunID); loadErr == nil {
-			_ = s.markRunState(ctx, run.RunID, stateFailed, "workflow_start_failed")
+		_ = s.markStartOutcome(ctx, key, record.Revision, current, stateFailed, "workflow_start_failed")
+		return err
+	}
+	return s.markStartOutcome(ctx, key, record.Revision, current, stateRunning, "")
+}
+
+// A worker may finish before Start returns. The start response must not
+// overwrite a state written after the pre-start revision was read.
+func (s *Service) markStartOutcome(ctx context.Context, key workflow.RecordKey, revision int64, run runRecord, state, code string) error {
+	run.State, run.ErrorCode = state, code
+	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.putRun(ctx, key, revision, run); err != nil {
+		if errors.Is(err, ErrConflict) {
+			_, _, _, readErr := s.loadRun(ctx, run.RunID)
+			return readErr
 		}
 		return err
 	}
-	return s.markRunState(ctx, run.RunID, stateRunning, "")
+	return nil
 }
 
 func workflowStartInput(branchID string, trigger Trigger, locale, runID string, targets []workflow.PublicationWorkflowTarget) workflow.WorkflowStartInput {

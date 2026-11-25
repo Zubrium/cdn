@@ -2,10 +2,58 @@ package publication
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	workflow "github.com/Zubrium/cdn/pkg/contracts"
 )
+
+type workflowStartFunc func(context.Context, workflow.WorkflowStartInput) (workflow.WorkflowStartReceipt, error)
+
+func (f workflowStartFunc) Start(ctx context.Context, input workflow.WorkflowStartInput) (workflow.WorkflowStartReceipt, error) {
+	return f(ctx, input)
+}
+
+func TestPublishReportsCurrentStateWhenWorkflowCompletesDuringStart(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(map[bool]string{false: "running", true: "completed"}[complete], func(t *testing.T) {
+			var service *Service
+			starter := workflowStartFunc(func(ctx context.Context, input workflow.WorkflowStartInput) (workflow.WorkflowStartReceipt, error) {
+				if complete {
+					var payload workflow.PublicationWorkflowPayload
+					if err := json.Unmarshal(input.Payload, &payload); err != nil {
+						t.Fatal(err)
+					}
+					if err := service.updateTarget(ctx, payload.RunID, testRouteA, testLocale, func(target *targetRecord) { target.State = stateSuccess }); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := service.FinalizeRun(ctx, payload.RunID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return workflow.WorkflowStartReceipt{State: "running"}, nil
+			})
+			var err error
+			service, err = NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
+				Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.Publish(context.Background(), Trigger{Locale: testLocale, ContentPublicationRevision: 4, IdempotencyKey: testKey})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := stateRunning
+			if complete {
+				want = stateSuccess
+			}
+			_, _, stored, err := service.loadRun(context.Background(), result.RunID)
+			if err != nil || result.State != want || stored.State != want {
+				t.Fatalf("response=%s stored=%s want=%s err=%v", result.State, stored.State, want, err)
+			}
+		})
+	}
+}
 
 func TestBuildAndActivationRejectSubstitutedServerOwnedValues(t *testing.T) {
 	store := newMemoryRecordStore()
