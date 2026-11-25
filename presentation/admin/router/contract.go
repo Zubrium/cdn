@@ -5,11 +5,11 @@ package router
 import (
 	"net/http"
 
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	routerhttp "github.com/Zubrium/cdn/presentation/router"
 )
 
-type Engine = engine.Contract
+type Engine = contracts.Contract
 type Config = routerhttp.Config
 
 func NewHandler(api Engine, config Config) (http.Handler, error) {

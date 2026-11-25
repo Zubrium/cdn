@@ -6,24 +6,16 @@ import (
 	"testing"
 	"time"
 
-	contentengine "github.com/Zubrium/cdn/engines/content/presentation"
-	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
-	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
-	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
 	fileapi "github.com/Zubrium/cdn/presentation/fileapi"
 )
 
-// The mux builds handlers without invoking their APIs, so embedded interfaces
-// are enough to exercise route ownership without a live Core or database.
-type isolationLoader struct{ fileapi.Loader }
-type isolationIdentity struct{ adminapi.IdentityAdminAPI }
-type isolationSessions struct{ adminapi.SessionAdminAPI }
-type isolationGroupAccess struct {
-	adminapi.SessionGroupAccessResolver
+// The mux builds handlers without invoking their APIs, so a static mount
+// table is enough to exercise route ownership without a live Core or database.
+func isolationHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 }
-type isolationContent struct{ contentengine.API }
-type isolationContentSchemas struct{ contentadmin.SchemaSnapshots }
-type isolationForms struct{ formsengine.API }
 
 func apiIsolationMux(t *testing.T, notifications bool) http.Handler {
 	t.Helper()
@@ -45,21 +37,28 @@ func apiIsolationMux(t *testing.T, notifications bool) http.Handler {
 		FormsExportMaxBytes:      1 << 20,
 	}
 	deps := AdminDependencies{
-		CoreReady:      func() bool { return false },
-		Files:          &isolationLoader{},
-		Identity:       &isolationIdentity{},
-		Sessions:       &isolationSessions{},
-		GroupAccess:    &isolationGroupAccess{},
-		Content:        &isolationContent{},
-		ContentSchemas: &isolationContentSchemas{},
-		Forms:          &isolationForms{},
-	}
-	if notifications {
-		deps.NotificationHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"unavailable"}`))
-		})
+		CoreReady: func() bool { return false },
+		HandlerMounts: func(HandlerContext) ([]HandlerMount, error) {
+			mounts := []HandlerMount{
+				{Patterns: []string{
+					"/api/admin/session", "/api/admin/principals", "/api/admin/principals/",
+					"/api/admin/credentials/", "/api/admin/access-groups",
+				}, Handler: isolationHandler(), Guarded: true},
+				{Patterns: []string{"/api/admin/content/"}, Handler: isolationHandler(), Guarded: true},
+				{Patterns: []string{"/api/admin/forms/"}, Handler: isolationHandler(), Guarded: true},
+			}
+			if notifications {
+				mounts = append(mounts, HandlerMount{
+					Patterns: []string{"/api/admin/notifications"}, Guarded: true,
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "application/json; charset=utf-8")
+						w.WriteHeader(http.StatusServiceUnavailable)
+						_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+					}),
+				})
+			}
+			return mounts, nil
+		},
 	}
 	server, err := NewAdminServer(config, deps)
 	if err != nil {

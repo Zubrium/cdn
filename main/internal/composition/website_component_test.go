@@ -8,15 +8,13 @@ import (
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 )
 
-func TestWebsiteBuildCapabilitiesAreAvailableBeforeComponentStart(t *testing.T) {
-	website := newWebsiteEngineComponent(nil, appconfig.Resolved{})
-	if website.localeCatalog == nil || website.contentBuildView == nil {
-		t.Fatal("Website build capabilities must be initialized before dependent components are registered")
+func TestContentComponentHasNoLateBoundWebsiteHandles(t *testing.T) {
+	content := newContentEngineComponent(nil, appconfig.Resolved{})
+	if content.projections != nil {
+		t.Fatal("Content component must not retain a Website projection handle before Start")
 	}
-	content := newContentEngineComponent(nil, appconfig.Resolved{}, nil)
-	content.buildLocaleCatalog = website.localeCatalog
-	content.buildProjection = website.contentBuildView
-	if content.buildLocaleCatalog != website.localeCatalog || content.buildProjection != website.contentBuildView {
-		t.Fatal("Content must retain the Website build capability instances created during composition")
+	website := newWebsiteEngineComponent(nil, appconfig.Resolved{})
+	if website.localeCatalog != nil || website.contentBuildView != nil {
+		t.Fatal("Website build clients must not be initialized before trusted Core capabilities exist")
 	}
 }

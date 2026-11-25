@@ -4,14 +4,14 @@ package contentapi
 import (
 	"context"
 
-	engine "github.com/Zubrium/cdn/engines/content/presentation"
+	engine "github.com/Zubrium/cdn/pkg/contracts"
 )
 
-type Engine = engine.API
+type Engine = engine.AdminContentAPI
 
 // SchemaSnapshots is supplied by the trusted outer Presentation composition.
 // Implementations must obtain Website-owned projections from a trusted facade,
 // never from request data. Missing projections fail closed.
 type SchemaSnapshots interface {
-	GetContentProjections(context.Context, string) (engine.Projections, error)
+	GetContentProjections(context.Context, string) (engine.AdminContentProjections, error)
 }

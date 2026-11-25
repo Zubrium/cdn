@@ -8,32 +8,28 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content"
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
-	websiteapp "github.com/Zubrium/cdn/engines/website/application"
-	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/main/internal/contentbridge"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 )
 
 type contentEngineComponent struct {
-	core               *coreComponent
-	config             appconfig.Resolved
-	website            websiteapi.API
-	engine             *contentengine.Engine
-	projections        *contentProjectionProvider
-	serviceCtx         context.Context
-	cancel             context.CancelFunc
-	buildLocaleCatalog *websiteLocaleCatalog
-	buildProjection    *websiteContentBuildProjection
+	core        *coreComponent
+	config      appconfig.Resolved
+	engine      *contentengine.Engine
+	projections *contentProjectionClient
+	serviceCtx  context.Context
+	cancel      context.CancelFunc
 }
 
-func newContentEngineComponent(core *coreComponent, config appconfig.Resolved, website websiteapi.API) *contentEngineComponent {
-	return &contentEngineComponent{core: core, config: config, website: website}
+func newContentEngineComponent(core *coreComponent, config appconfig.Resolved) *contentEngineComponent {
+	return &contentEngineComponent{core: core, config: config}
 }
 
 func (component *contentEngineComponent) Start(ctx context.Context) error {
-	if component == nil || ctx == nil || component.core == nil || component.core.runtime == nil || component.website == nil {
+	if component == nil || ctx == nil || component.core == nil || component.core.runtime == nil || component.core.dispatcher == nil {
 		return errors.New("Content dependencies are not initialized")
 	}
 	if err := ctx.Err(); err != nil {
@@ -62,19 +58,16 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 	if principal.ID == "" || !principal.Active {
 		return errors.New("Content service identity is inactive")
 	}
-	websiteCtx, err := component.website.Authenticate(ctx, credential)
-	if err != nil || websiteCtx == nil {
-		return errors.New("Content Website service context could not be established")
-	}
-	websiteCtx, cancel := context.WithCancel(websiteCtx)
 	data, err := component.core.registerModuleData(contentengine.RecordDescriptor())
 	if err != nil {
-		cancel()
 		return err
 	}
-	provider, err := newContentProjectionProvider(component.website, websiteCtx, component.config.ContentAPI.Locale)
+	bridge, err := contentbridge.NewClient(newContentBridgeWorkflowClient(moduleDispatcher))
 	if err != nil {
-		cancel()
+		return err
+	}
+	provider, err := newContentProjectionClient(bridge, component.config.ContentAPI.Locale)
+	if err != nil {
 		return err
 	}
 	engine, err := contentengine.New(contentengine.Dependencies{
@@ -83,20 +76,15 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 		Data: data, Projections: provider,
 	})
 	if err != nil {
-		cancel()
 		return err
 	}
 	contentCtx, err := engine.Authenticate(ctx, credential)
 	if err != nil || contentCtx == nil {
-		cancel()
 		return errors.New("Content service context could not be established")
 	}
 	contentCtx, contentCancel := context.WithCancel(contentCtx)
 	component.engine, component.projections, component.serviceCtx = engine, provider, contentCtx
-	component.cancel = func() {
-		contentCancel()
-		cancel()
-	}
+	component.cancel = contentCancel
 	if component.core != nil {
 		component.core.contentHandle.Store(component)
 	}
@@ -112,12 +100,6 @@ func (component *contentEngineComponent) Activate(context.Context) error {
 	}
 	if component.engine == nil || component.serviceCtx == nil {
 		return nil
-	}
-	if component.buildLocaleCatalog != nil {
-		component.buildLocaleCatalog.setSource(component.serviceCtx, component.engine)
-	}
-	if component.buildProjection != nil {
-		component.buildProjection.setSource(component.serviceCtx, component)
 	}
 	return nil
 }
@@ -171,23 +153,37 @@ func (component *contentEngineComponent) ReadPublishedContent(ctx context.Contex
 // ResolveContentBuildProjection pins the published Content revision and the
 // locale-specific editorial selection for one page snapshot. It uses only
 // trusted projections derived from the Website-owned snapshot.
-func (component *contentEngineComponent) ResolveContentBuildProjection(ctx context.Context, pageSnapshotID, locale string) (websiteapp.ContentBuildProjection, error) {
-	if component == nil || ctx == nil || component.engine == nil || component.projections == nil || pageSnapshotID == "" || locale == "" {
-		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+func (component *contentEngineComponent) ResolveContentBuildProjection(ctx context.Context, pageSnapshotID, locale string) (contracts.ContentBuildProjectionResponse, error) {
+	if component == nil || component.projections == nil {
+		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
 	}
 	projections, err := component.projections.GetContentProjectionsForLocale(ctx, pageSnapshotID, locale)
-	if err != nil || !projections.VerifyScope(pageSnapshotID) || projections.Locale != locale {
-		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+	if err != nil {
+		return contracts.ContentBuildProjectionResponse{}, err
+	}
+	return component.ResolveContentBuildProjectionFromProjections(ctx, projections, locale)
+}
+
+// ResolveContentBuildProjectionFromProjections uses an already validated,
+// workflow-produced projection. The isolated build worker receives the Website
+// projection through the root workflow's declared emission dependency and
+// never calls a Website-owned operation itself.
+func (component *contentEngineComponent) ResolveContentBuildProjectionFromProjections(ctx context.Context, projections contentapi.Projections, locale string) (contracts.ContentBuildProjectionResponse, error) {
+	if component == nil || ctx == nil || component.engine == nil || locale == "" {
+		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
+	}
+	if !projections.VerifyScope(projections.Page.PageSnapshotID) || projections.Locale != locale {
+		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
 	}
 	workspace, err := component.engine.GetWorkspace(ctx, projections)
 	if err != nil || workspace.PublishedRevision < 0 || workspace.Selections == nil {
-		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
 	}
 	encoded, err := json.Marshal(workspace.Selections)
 	if err != nil {
-		return websiteapp.ContentBuildProjection{}, contentapi.ErrUnavailable
+		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
 	}
-	return websiteapp.ContentBuildProjection{
+	return contracts.ContentBuildProjectionResponse{
 		PublicationRevision: workspace.PublishedRevision,
 		SelectionDigest:     prerendercontract.HexDigest(encoded),
 	}, nil

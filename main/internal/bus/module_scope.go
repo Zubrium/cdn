@@ -121,10 +121,12 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 	}
 
 	switch moduleID {
-	case "engine.website", "engine.website.import":
+	case "engine.website":
+		return join(core, access, files, records, workflow)
+	case "engine.website.import":
 		return join(core, access, files, records, workflow)
 	case "engine.content":
-		return join(core, access, files, records)
+		return join(core, access, files, records, workflow)
 	case "engine.forms":
 		return join(core, access, files, records)
 	case "engine.loader":

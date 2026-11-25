@@ -150,17 +150,9 @@ type publisher struct {
 	}
 }
 
-func TestStrictBoundaryBaselineHidesOnlyKnownDebt(t *testing.T) {
-	var baselineKey string
-	for key := range strictBoundaryBaseline {
-		baselineKey = key
-		break
-	}
-	if baselineKey == "" {
-		t.Fatal("strict boundary baseline is empty during migration")
-	}
-	if got := strictViolation(nil, baselineKey, "known"); len(got) != 0 {
-		t.Fatalf("known baseline debt was reported: %v", got)
+func TestStrictBoundaryBaselineIsEmptyAfterMigration(t *testing.T) {
+	if len(strictBoundaryBaseline) != 0 {
+		t.Fatalf("strict boundary baseline still hides %d known debts", len(strictBoundaryBaseline))
 	}
 	got := strictViolation(nil, "unknown|debt", "new violation")
 	if len(got) != 1 || !strings.Contains(got[0], "new violation") {

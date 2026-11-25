@@ -157,10 +157,8 @@ router_api:
   service_credential_env: TEST_ROUTER_SERVICE
   form_session_cookie_secure: false
   public_listen_address: 127.0.0.1:8081
-  upload_staging_directory: /tmp/zubrium-router-upload-qa
   upload_max_file_bytes: 524288
   upload_max_concurrent: 1
-  upload_max_staged_bytes: 524288
   upload_allowed_content_types: [image/png]
 forms_api:
   file_service_credential_env: TEST_FORMS_SERVICE

@@ -21,6 +21,39 @@ import (
 	"github.com/Zubrium/cdn/workers/prerender"
 )
 
+// isWorkflowOnlyOperation reports operations whose task keys belong to the
+// dedicated workflow dispatcher. HTTP ingress keys stay on the component bus.
+func isWorkflowOnlyOperation(id string) bool {
+	switch id {
+	case contracts.PublicationStartOperationID, contracts.PublicationBuildOperationID,
+		contracts.PublicationActivateOperationID, contracts.PublicationFinalizeOperationID,
+		contracts.RetirementStartOperationID, contracts.RetirementRouteRemoveOperationID,
+		contracts.RetirementPageFinalizeOperationID:
+		return true
+	default:
+		return false
+	}
+}
+
+func legacyTaskOperations(operations map[contracts.Key]TaskOperationBinding) map[contracts.Key]TaskOperationBinding {
+	legacy := make(map[contracts.Key]TaskOperationBinding, len(operations))
+	for key, binding := range operations {
+		if !isWorkflowOnlyOperation(key.ID) {
+			legacy[key] = binding
+		}
+	}
+	return legacy
+}
+
+// Durable workflow tasks are dispatched through a dedicated, sealed bus whose
+// allowlist is derived from the compiled task registry. The public component
+// dispatcher keeps its exact static allowlist and remains the ingress for
+// workflow-control and component operations.
+var (
+	workflowTaskDispatcher *bus.Dispatcher
+	workflowTaskOperations map[contracts.Key]TaskOperationBinding
+)
+
 func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resolved, component *coreComponent, observer *observability.Observer) (map[contracts.Key]TaskOperationBinding, error) {
 	operations := make(map[contracts.Key]TaskOperationBinding)
 	register := func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error {
@@ -104,7 +137,42 @@ func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resol
 			return nil, err
 		}
 	}
-	return operations, nil
+	if err := registerContentBridgeWorkerHandlers(register, selected, config, component); err != nil {
+		return nil, err
+	}
+	if err := registerPublicationWorkflowWorkerHandlers(register, selected, config); err != nil {
+		return nil, err
+	}
+	if err := registerRetirementWorkflowWorkerHandlers(register, selected, config); err != nil {
+		return nil, err
+	}
+	workflowTaskOperations = make(map[contracts.Key]TaskOperationBinding, len(operations))
+	for key, binding := range operations {
+		if isWorkflowOnlyOperation(key.ID) {
+			workflowTaskOperations[key] = binding
+		}
+	}
+	if config.Scales.Bus.MaxInFlight <= 0 || len(operations) == 0 {
+		return legacyTaskOperations(operations), nil
+	}
+	keys := make([]contracts.Key, 0, len(operations))
+	handlers := make(map[contracts.Key]bus.TaskOperationHandler, len(operations))
+	for key, binding := range operations {
+		keys = append(keys, key)
+		handlers[key] = binding.Handler
+	}
+	dispatcher, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: config.Scales.Bus.MaxInFlight}, keys...)
+	if err != nil {
+		return nil, err
+	}
+	if err := bus.RegisterTaskOperations(dispatcher, handlers); err != nil {
+		return nil, err
+	}
+	if err := dispatcher.Seal(); err != nil {
+		return nil, err
+	}
+	workflowTaskDispatcher = dispatcher
+	return legacyTaskOperations(operations), nil
 }
 
 // compiledWorkerClasses is the union of task classes present in this binary,
@@ -112,8 +180,8 @@ func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resol
 // construct scoped workflow clients whose tasks wait in the durable store
 // until the corresponding pool is explicitly enabled.
 func compiledWorkerClasses(selected map[string]struct{}) []string {
-	classes := make([]string, 0, 5)
-	for _, id := range []string{archive.DataModuleID, media.DataModuleID, prerender.DataModuleID, websiteworkflow.ComponentID, "engine.content"} {
+	classes := make([]string, 0, 7)
+	for _, id := range []string{archive.DataModuleID, media.DataModuleID, prerender.DataModuleID, websiteworkflow.ComponentID, "engine.content", "engine.publication", "composition.retirement"} {
 		if _, compiled := selected[id]; compiled {
 			classes = append(classes, id)
 		}
@@ -127,6 +195,18 @@ func compiledWorkerClasses(selected map[string]struct{}) []string {
 // remain resolvable, but they produce no pool and cannot claim work or borrow
 // another pool's limits.
 func workerTaskPools(config appconfig.Resolved, dispatcher *bus.Dispatcher, operations map[contracts.Key]TaskOperationBinding) ([]platform.TaskPoolConfig, error) {
+	if workflowTaskDispatcher != nil {
+		dispatcher = workflowTaskDispatcher
+		all := make(map[contracts.Key]TaskOperationBinding, len(operations)+len(workflowTaskOperations))
+		workflowTaskDispatcher = nil
+		for key, binding := range operations {
+			all[key] = binding
+		}
+		for key, binding := range workflowTaskOperations {
+			all[key] = binding
+		}
+		operations = all
+	}
 	specs := make([]TaskPoolSpec, 0, 5)
 	add := func(classID string, pool appconfig.ResolvedWorkerPool) {
 		if pool.Enabled {
@@ -141,7 +221,70 @@ func workerTaskPools(config appconfig.Resolved, dispatcher *bus.Dispatcher, oper
 	if _, registered := operations[contracts.Key{ID: websiteworkflow.ForkCopyOperationID, Version: websiteworkflow.ForkChildContractVersion}]; registered {
 		add("engine.content", config.Scales.WorkerPools.Publication)
 	}
+	add("engine.publication", config.Scales.WorkerPools.Publication)
+	add("engine.router", config.Scales.WorkerPools.Publication)
+	add("composition.retirement", config.Scales.WorkerPools.Publication)
 	return NewDataBusTaskPools(dispatcher, operations, specs)
+}
+
+func registerPublicationWorkflowWorkerHandlers(register func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error, selected map[string]struct{}, config appconfig.Resolved) error {
+	if _, compiled := selected["engine.publication"]; !compiled {
+		return nil
+	}
+	enabled := config.Scales.WorkerPools.Publication.Enabled
+	root, err := newPublicationRootHandler(config.Coordinator.MaxAttempts)
+	if err != nil {
+		return err
+	}
+	if err := register("engine.publication", contracts.PublicationStartOperationID, contracts.PublicationStartContractVersion,
+		enabled, root); err != nil {
+		return err
+	}
+	if _, compiled := selected[websiteworkflow.ComponentID]; compiled {
+		if err := register(websiteworkflow.ComponentID, contracts.PublicationBuildOperationID, contracts.PublicationChildContractVersion,
+			enabled, publicationBuildHandler{component: currentPublicationHandlerCore()}.WorkerHandler); err != nil {
+			return err
+		}
+		if err := register(websiteworkflow.ComponentID, contracts.PublicationFinalizeOperationID, contracts.PublicationChildContractVersion,
+			enabled, publicationFinalizeHandler{}.WorkerHandler); err != nil {
+			return err
+		}
+	}
+	if _, compiled := selected["engine.router"]; compiled {
+		if err := register("engine.router", contracts.PublicationActivateOperationID, contracts.PublicationChildContractVersion,
+			enabled, publicationActivateHandler{component: currentPublicationHandlerCore()}.WorkerHandler); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func registerRetirementWorkflowWorkerHandlers(register func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error, selected map[string]struct{}, config appconfig.Resolved) error {
+	if _, compiled := selected["composition.retirement"]; !compiled {
+		return nil
+	}
+	enabled := config.Scales.WorkerPools.Publication.Enabled
+	root, err := newRetirementRootHandler(config.Coordinator.MaxAttempts)
+	if err != nil {
+		return err
+	}
+	if err := register("composition.retirement", contracts.RetirementStartOperationID, contracts.RetirementStartContractVersion,
+		enabled, root); err != nil {
+		return err
+	}
+	if _, compiled := selected["engine.router"]; compiled {
+		if err := register("engine.router", contracts.RetirementRouteRemoveOperationID, contracts.RetirementChildContractVersion,
+			enabled, retirementRouteRemoveHandler{component: currentRetirementHandlerCore()}.WorkerHandler); err != nil {
+			return err
+		}
+	}
+	if _, compiled := selected[websiteworkflow.ComponentID]; compiled {
+		if err := register(websiteworkflow.ComponentID, contracts.RetirementPageFinalizeOperationID, contracts.RetirementChildContractVersion,
+			enabled, retirementFinalizeHandler{component: currentRetirementHandlerCore()}.WorkerHandler); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func configuredOperation(classID string, enabled bool, handler bus.TaskOperationHandler) bus.TaskOperationHandler {

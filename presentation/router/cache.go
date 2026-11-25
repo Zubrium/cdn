@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -184,7 +183,7 @@ type routeCacheKey struct {
 }
 
 type cachedRoute struct {
-	route       engine.Route
+	route       contracts.Route
 	fingerprint string
 }
 
@@ -250,11 +249,11 @@ func newRouteCache(branch string, routes RouteResolver, fingerprints RouteFinger
 	}
 }
 
-func (cache *routeCache) resolve(ctx context.Context, key routeCacheKey, host, path string) (engine.Route, error) {
+func (cache *routeCache) resolve(ctx context.Context, key routeCacheKey, host, path string) (contracts.Route, error) {
 	if entry, found := cache.cache.get(key); found {
 		current, err := cache.fingerprints.ResolveRouteFingerprint(ctx, cache.branch, entry.route.ID)
 		if err != nil {
-			return engine.Route{}, err
+			return contracts.Route{}, err
 		}
 		if current == entry.fingerprint {
 			return entry.route, nil
@@ -263,20 +262,20 @@ func (cache *routeCache) resolve(ctx context.Context, key routeCacheKey, host, p
 	}
 	route, err := cache.routes.ResolveRoute(ctx, host, path)
 	if err != nil {
-		return engine.Route{}, err
+		return contracts.Route{}, err
 	}
 	if route.BranchID != cache.branch {
-		return engine.Route{}, engine.ErrNotFound
+		return contracts.Route{}, contracts.ErrPublicNotFound
 	}
 	fingerprint, err := cache.fingerprints.ResolveRouteFingerprint(ctx, cache.branch, route.ID)
 	if err != nil {
-		return engine.Route{}, err
+		return contracts.Route{}, err
 	}
 	cache.cache.put(key, cachedRoute{route: route, fingerprint: fingerprint}, routeCacheSize(key, route))
 	return route, nil
 }
 
-func routeCacheSize(key routeCacheKey, route engine.Route) int64 {
+func routeCacheSize(key routeCacheKey, route contracts.Route) int64 {
 	size := int64(len(key.branch) + len(key.host) + len(key.path) + len(key.method) + len(route.ID) + 128)
 	size += int64(len(route.Target.DefaultLocale))
 	for _, locale := range route.Target.LocaleTargets {

@@ -6,8 +6,7 @@ import (
 	"errors"
 	"net/http"
 
-	forms "github.com/Zubrium/cdn/engines/forms/presentation"
-	router "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type SubmitOperation struct {
@@ -21,16 +20,16 @@ type submitBody struct {
 
 func NewSubmitOperation(api VisitorAPI, maxRequestBytes int64) (*SubmitOperation, error) {
 	if api == nil || maxRequestBytes < 1 || maxRequestBytes > 16<<20 {
-		return nil, router.ErrInvalid
+		return nil, contracts.ErrPublicInvalid
 	}
 	return &SubmitOperation{api: api, maxRequestBytes: maxRequestBytes}, nil
 }
 
-func (operation *SubmitOperation) Descriptor() router.PublicOperationDescriptor {
+func (operation *SubmitOperation) Descriptor() contracts.PublicOperationDescriptor {
 	if operation == nil {
-		return router.PublicOperationDescriptor{}
+		return contracts.PublicOperationDescriptor{}
 	}
-	return router.PublicOperationDescriptor{ID: SubmitOperationID, ContractVersion: 1,
+	return contracts.PublicOperationDescriptor{ID: SubmitOperationID, ContractVersion: 1,
 		Methods: []string{http.MethodPost}, MaxRequestBytes: operation.maxRequestBytes,
 		AllowedContentTypes: []string{"application/json"}}
 }
@@ -48,38 +47,38 @@ func (operation *SubmitOperation) ValidateRouteConfigWithContext(ctx context.Con
 	return validateBindingWithForms(ctx, operation.api, config)
 }
 
-func (operation *SubmitOperation) Execute(ctx context.Context, raw json.RawMessage, request router.PublicOperationRequest) (router.DeliveryResponse, error) {
+func (operation *SubmitOperation) Execute(ctx context.Context, raw json.RawMessage, request contracts.PublicOperationRequest) (contracts.DeliveryResponse, error) {
 	if operation == nil || operation.api == nil || ctx == nil {
-		return router.DeliveryResponse{}, router.ErrUnavailable
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 	}
 	config, err := decodeBinding(raw)
 	if err != nil {
-		return router.DeliveryResponse{}, router.ErrInvalidTarget
+		return contracts.DeliveryResponse{}, contracts.ErrInvalidTarget
 	}
 	binding := config.Binding()
 	if request.Method != http.MethodPost || request.Query != "" || request.ContentLength < -1 || request.ContentLength == 0 ||
 		request.ContentLength > operation.maxRequestBytes || request.IdempotencyKey == "" || len(request.EscapedPath) > 8192 {
 		if request.ContentLength > operation.maxRequestBytes {
-			return router.DeliveryResponse{}, router.ErrTooLarge
+			return contracts.DeliveryResponse{}, contracts.ErrPublicTooLarge
 		}
-		return router.DeliveryResponse{}, router.ErrInvalid
+		return contracts.DeliveryResponse{}, contracts.ErrPublicInvalid
 	}
 	token := tokenFor(request, binding.FormID)
 	if token == "" {
-		return formErrorResponse(forms.ErrNotFound, binding.FormID, false)
+		return formErrorResponse(contracts.ErrPublicNotFound, binding.FormID, false)
 	}
 	var body submitBody
 	if err := readJSON(request, operation.maxRequestBytes, &body); err != nil {
 		return formErrorResponse(err, binding.FormID, false)
 	}
 	if body.Values == nil {
-		return formErrorResponse(forms.ErrInvalid, binding.FormID, false)
+		return formErrorResponse(contracts.ErrPublicInvalid, binding.FormID, false)
 	}
-	receipt, err := operation.api.SubmitVisitorResponse(ctx, forms.SubmitVisitorResponseRequest{
+	receipt, err := operation.api.SubmitVisitorResponse(ctx, contracts.PublicSubmitVisitorResponseRequest{
 		PublicFormBinding: binding, Token: token, IdempotencyKey: request.IdempotencyKey, Values: body.Values,
 	})
 	if err != nil {
-		return formErrorResponse(err, binding.FormID, errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound))
+		return formErrorResponse(err, binding.FormID, errors.Is(err, contracts.ErrPublicExpired) || errors.Is(err, contracts.ErrPublicNotFound))
 	}
 	// Keep the capability cookie after success so a client that did not receive
 	// this response can safely retry with the same idempotency key and receive

@@ -18,61 +18,7 @@ import (
 // strictBoundaryBaseline records debt that still has to be migrated. Entries
 // are removed as each wave lands; the final linter freeze requires an empty
 // baseline.
-var strictBoundaryBaseline = map[string]bool{
-	"composition-runtime|main/internal/composition/admin_core_adapter.go":                                                                                     true,
-	"composition-runtime|main/internal/composition/components.go":                                                                                             true,
-	"composition-runtime|main/internal/composition/content_component.go":                                                                                      true,
-	"composition-runtime|main/internal/composition/core_access_adapter.go":                                                                                    true,
-	"composition-runtime|main/internal/composition/devfixtures_profile.go":                                                                                    true,
-	"composition-runtime|main/internal/composition/forms_component.go":                                                                                        true,
-	"composition-runtime|main/internal/composition/loader_core_adapter.go":                                                                                    true,
-	"composition-runtime|main/internal/composition/publication_component.go":                                                                                  true,
-	"composition-runtime|main/internal/composition/publication_trigger.go":                                                                                    true,
-	"composition-runtime|main/internal/composition/router_component.go":                                                                                       true,
-	"composition-runtime|main/internal/composition/website_build_input.go":                                                                                    true,
-	"composition-runtime|main/internal/composition/website_core_ports.go":                                                                                     true,
-	"composition-runtime|main/internal/composition/website_component.go":                                                                                      true,
-	"composition-runtime|main/internal/composition/workflow_operations.go":                                                                                    true,
-	"presentation-engine-import|presentation/admin/base/transport/transport.go|github.com/Zubrium/cdn/engines/website/presentation":                           true,
-	"presentation-engine-import|presentation/admin/base/transport/transport.go|github.com/Zubrium/cdn/engines/router/presentation":                            true,
-	"presentation-engine-import|presentation/admin/base/transport/transport.go|github.com/Zubrium/cdn/engines/content/presentation":                           true,
-	"presentation-engine-import|presentation/admin/base/transport/transport.go|github.com/Zubrium/cdn/engines/forms/presentation":                             true,
-	"presentation-engine-import|presentation/admin/content/contract.go|github.com/Zubrium/cdn/engines/content/presentation":                                   true,
-	"presentation-engine-import|presentation/admin/content/handler.go|github.com/Zubrium/cdn/engines/content/domain":                                          true,
-	"presentation-engine-import|presentation/admin/content/handler.go|github.com/Zubrium/cdn/engines/content/presentation":                                    true,
-	"presentation-engine-import|presentation/admin/files/handler.go|github.com/Zubrium/cdn/engines/loader/presentation":                                       true,
-	"presentation-engine-import|presentation/admin/files/types.go|github.com/Zubrium/cdn/engines/loader/presentation":                                         true,
-	"presentation-engine-import|presentation/admin/forms/contract.go|github.com/Zubrium/cdn/engines/forms/presentation":                                       true,
-	"presentation-engine-import|presentation/admin/forms/handler.go|github.com/Zubrium/cdn/engines/forms/presentation":                                        true,
-	"presentation-engine-import|presentation/admin/router/contract.go|github.com/Zubrium/cdn/engines/router/presentation":                                     true,
-	"presentation-engine-import|presentation/admin/sites/handler.go|github.com/Zubrium/cdn/engines/website/presentation":                                      true,
-	"presentation-engine-import|presentation/router/artifact_canonical.go|github.com/Zubrium/cdn/engines/router/presentation":                                 true,
-	"presentation-engine-import|presentation/router/cache.go|github.com/Zubrium/cdn/engines/router/presentation":                                              true,
-	"presentation-engine-import|presentation/router/delivery.go|github.com/Zubrium/cdn/engines/router/features/routes/model":                                  true,
-	"presentation-engine-import|presentation/router/delivery.go|github.com/Zubrium/cdn/engines/router/presentation":                                           true,
-	"presentation-engine-import|presentation/router/delivery.go|github.com/Zubrium/cdn/engines/router/features/routes/application":                            true,
-	"presentation-engine-import|presentation/router/handler.go|github.com/Zubrium/cdn/engines/router/presentation":                                            true,
-	"presentation-engine-import|presentation/router/operations.go|github.com/Zubrium/cdn/engines/router/presentation":                                         true,
-	"presentation-engine-import|presentation/router/publiccontentruntime/operation.go|github.com/Zubrium/cdn/engines/content/presentation":                    true,
-	"presentation-engine-import|presentation/router/publiccontentruntime/operation.go|github.com/Zubrium/cdn/engines/router/presentation":                     true,
-	"presentation-engine-import|presentation/router/publicforms/common.go|github.com/Zubrium/cdn/engines/router/presentation":                                 true,
-	"presentation-engine-import|presentation/router/publicforms/common.go|github.com/Zubrium/cdn/engines/forms/presentation":                                  true,
-	"presentation-engine-import|presentation/router/publicforms/session.go|github.com/Zubrium/cdn/engines/forms/presentation":                                 true,
-	"presentation-engine-import|presentation/router/publicforms/session.go|github.com/Zubrium/cdn/engines/router/presentation":                                true,
-	"presentation-engine-import|presentation/router/publicforms/submit.go|github.com/Zubrium/cdn/engines/forms/presentation":                                  true,
-	"presentation-engine-import|presentation/router/publicforms/submit.go|github.com/Zubrium/cdn/engines/router/presentation":                                 true,
-	"presentation-engine-import|presentation/router/publicupload/upload.go|github.com/Zubrium/cdn/engines/forms/presentation":                                 true,
-	"presentation-engine-import|presentation/router/publicupload/upload.go|github.com/Zubrium/cdn/engines/router/presentation":                                true,
-	"presentation-engine-import|presentation/router/publicupload/upload.go|github.com/Zubrium/cdn/engines/loader/features/files/pkg":                          true,
-	"presentation-engine-import|presentation/router/warmup.go|github.com/Zubrium/cdn/engines/router/presentation":                                             true,
-	"router-fs-staging|presentation/router/publicupload/upload.go":                                                                                            true,
-	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/content":                                           true,
-	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/forms":                                             true,
-	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/router":                                            true,
-	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/router|github.com/Zubrium/cdn/presentation/router": true,
-	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/fileapi":                                                 true,
-	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/sitesapi":                                                true,
-}
+var strictBoundaryBaseline = map[string]bool{}
 
 const (
 	corePresentationImportPath = "github.com/Zubrium/cdn/core/presentation"
@@ -169,9 +115,46 @@ func aliasSet(imports map[string]string, predicate func(string) bool) map[string
 }
 
 func checkCompositionRuntimeHandles(root string) []string {
-	base := filepath.Join(root, "main", "internal", "composition")
+	// Composition is the only place allowed to hold Core runtime handles while
+	// adapting them to DataBus clients. Domain packages under main/internal
+	// must not retain those handles themselves.
+	base := filepath.Join(root, "main", "internal")
+	domainDirs := map[string]bool{
+		filepath.Join(base, "publication"):   true,
+		filepath.Join(base, "retirement"):    true,
+		filepath.Join(base, "contentbridge"): true,
+	}
 	var violations []string
-	err := walkGoFiles(base, true, func(path string, file *ast.File, fset *token.FileSet, imports map[string]string) error {
+	err := filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if !domainDirs[path] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return fmt.Errorf("parse %s: %w", path, parseErr)
+		}
+		imports := make(map[string]string)
+		for _, imported := range file.Imports {
+			value, unquoteErr := strconv.Unquote(imported.Path.Value)
+			if unquoteErr != nil {
+				return unquoteErr
+			}
+			alias := pathBase(value)
+			if imported.Name != nil {
+				alias = imported.Name.Name
+			}
+			imports[alias] = value
+		}
 		relativeFile := relative(root, path)
 		coreAliases := aliasSet(imports, func(value string) bool { return value == corePresentationImportPath })
 		engineAliases := aliasSet(imports, func(value string) bool { return strings.HasPrefix(value, engineImportPrefix) })
@@ -222,7 +205,7 @@ func checkCompositionRuntimeHandles(root string) []string {
 		return nil
 	})
 	if err != nil {
-		return append(violations, fmt.Sprintf("scan composition runtime handles: %v", err))
+		return append(violations, fmt.Sprintf("scan domain runtime handles: %v", err))
 	}
 	return violations
 }

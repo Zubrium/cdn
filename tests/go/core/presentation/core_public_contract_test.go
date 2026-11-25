@@ -37,9 +37,11 @@ func TestCoreDoesNotDependOnConcreteEnginesOrWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"github.com/Zubrium/cdn/engines/", "github.com/Zubrium/cdn/workers/"} {
-		if strings.Contains(string(moduleFile), forbidden) {
-			t.Errorf("Core module directly requires a concrete component package %q", forbidden)
+	for _, required := range moduleRequirePaths(moduleFile) {
+		for _, forbidden := range []string{"github.com/Zubrium/cdn/engines/", "github.com/Zubrium/cdn/workers/"} {
+			if strings.HasPrefix(required, forbidden) {
+				t.Errorf("Core module directly requires a concrete component package %q", required)
+			}
 		}
 	}
 	err = filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
@@ -190,6 +192,53 @@ func TestCoreLayerImportPolicyRejectsOutwardDependencies(t *testing.T) {
 			t.Errorf("Core import %s -> %s must be rejected", pair[0], pair[1])
 		}
 	}
+}
+
+// moduleRequirePaths reads only require directives. A replace directive is a
+// workspace-local build mapping, not a module dependency, and must not make
+// this contract test fail.
+func moduleRequirePaths(moduleFile []byte) []string {
+	var paths []string
+	inRequire, inReplace := false, false
+	for _, raw := range strings.Split(string(moduleFile), "\n") {
+		line := strings.TrimSpace(strings.SplitN(raw, "//", 2)[0])
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if inReplace {
+			if fields[0] == ")" {
+				inReplace = false
+			}
+			continue
+		}
+		if inRequire {
+			if fields[0] == ")" {
+				inRequire = false
+				continue
+			}
+			if len(fields) >= 2 {
+				paths = append(paths, strings.Trim(fields[0], `"`))
+			}
+			continue
+		}
+		if fields[0] == "replace" {
+			if len(fields) > 1 && fields[1] == "(" {
+				inReplace = true
+			}
+			continue
+		}
+		if fields[0] == "require" {
+			if len(fields) > 1 && fields[1] == "(" {
+				inRequire = true
+				continue
+			}
+			if len(fields) >= 2 {
+				paths = append(paths, strings.Trim(fields[1], `"`))
+			}
+		}
+	}
+	return paths
 }
 
 func coreLayerImportAllowed(from, to string) bool {

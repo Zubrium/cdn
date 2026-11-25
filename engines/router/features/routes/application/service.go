@@ -20,12 +20,12 @@ import (
 )
 
 var (
-	ErrUnauthorized  = errors.New("Router request is unauthorized")
-	ErrForbidden     = errors.New("Router request is forbidden")
-	ErrNotFound      = repository.ErrNotFound
-	ErrConflict      = repository.ErrConflict
-	ErrInvalid       = errors.New("invalid Router request")
-	ErrUnavailable   = repository.ErrUnavailable
+	ErrUnauthorized  = contracts.ErrPublicUnauthorized
+	ErrForbidden     = contracts.ErrPublicForbidden
+	ErrNotFound      = contracts.ErrPublicNotFound
+	ErrConflict      = contracts.ErrPublicConflict
+	ErrInvalid       = contracts.ErrPublicInvalid
+	ErrUnavailable   = contracts.ErrPublicUnavailable
 	validIdempotency = regexp.MustCompile(`^[A-Za-z0-9._:-]{16,128}$`)
 )
 

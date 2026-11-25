@@ -1,28 +1,20 @@
 package publication
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Zubrium/cdn/pkg/contracts"
-	"io"
-	"strconv"
 	"strings"
 	"time"
 
-	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
-	featureruntime "github.com/Zubrium/cdn/engines/website/features/runtime"
-	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
-	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
+	workflow "github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
 
-// Publish creates a durable run from the trusted registry and advances every
-// affected target. Successful targets stay activated when another target fails.
+// Publish creates a durable run from the trusted registry and starts the
+// class-scoped workflow. Successful targets stay activated when another target
+// fails; no engine is called by this package.
 func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) {
 	if s == nil || ctx == nil {
 		return Result{}, ErrUnavailable
@@ -36,45 +28,37 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		return Result{}, err
 	}
 	if _, _, existing, err := s.loadRun(ctx, runID); err == nil {
+		if existing.State == stateStarting || existing.State == stateFailed {
+			return s.restart(ctx, existing)
+		}
 		return s.result(ctx, existing)
-	} else if !errors.Is(err, contracts.ErrRecordNotFound) && !errors.Is(err, ErrInvalid) {
+	} else if !errors.Is(err, workflow.ErrRecordNotFound) {
 		return Result{}, err
 	}
 
-	websiteCtx, err := s.config.Website.Authenticate(ctx, s.config.WebsiteCredential)
-	if err != nil {
-		return Result{}, ErrUnavailable
-	}
-	routerCtx, err := s.config.Router.Authenticate(ctx, s.config.RouterCredential)
-	if err != nil {
-		return Result{}, ErrUnavailable
-	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	run := runRecord{
 		Kind: recordTypeRun, RunID: runID, BranchID: s.config.BranchID, Locale: locale,
 		ContentPublicationRevision: trigger.ContentPublicationRevision, SystemModelRevision: trigger.SystemModelRevision,
-		State: stateRunning, CreatedAt: now, UpdatedAt: now,
+		IdempotencyKey: trigger.IdempotencyKey, State: stateStarting, CreatedAt: now, UpdatedAt: now,
 	}
-	mutations := make([]contracts.RecordMutation, 0, maxTargets+1)
+	mutations := make([]workflow.RecordMutation, 0, maxTargets+1)
 	runValue, err := encodeModuleData(run, runIndex(run))
 	if err != nil {
 		return Result{}, err
 	}
-	mutations = append(mutations, contracts.RecordMutation{
+	mutations = append(mutations, workflow.RecordMutation{
 		Key: runDataKey(s.config.BranchID, runID), ExpectedRevision: 0, Value: runValue,
 	})
 	for _, target := range s.target {
 		if target.Locale != locale {
 			continue
 		}
-		digest, err := s.resolveInputDigest(websiteCtx, target, locale, trigger)
-		if err != nil {
-			return Result{}, err
-		}
 		record := targetRecord{
 			Kind: recordTypeTarget, RunID: runID, RouteID: target.RouteID,
-			PageSnapshotID: target.PageSnapshotID, Locale: locale, State: statePending, Revision: 1,
-			InputDigest: digest, CreatedAt: now, UpdatedAt: now,
+			PageSnapshotID: target.PageSnapshotID, Locale: locale,
+			ContentPublicationRevision: trigger.ContentPublicationRevision, SystemModelRevision: trigger.SystemModelRevision,
+			State: statePending, Revision: 1, CreatedAt: now, UpdatedAt: now,
 		}
 		value, err := encodeModuleData(record, targetIndex(record))
 		if err != nil {
@@ -82,7 +66,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		}
 		key := targetDataKey(s.config.BranchID, runID, target.RouteID, locale)
 		run.TargetKeys = append(run.TargetKeys, key.RecordKey)
-		mutations = append(mutations, contracts.RecordMutation{Key: key, ExpectedRevision: 0, Value: value})
+		mutations = append(mutations, workflow.RecordMutation{Key: key, ExpectedRevision: 0, Value: value})
 	}
 	if len(run.TargetKeys) == 0 {
 		return Result{}, fmt.Errorf("%w: no trusted target for locale %s", ErrInvalid, locale)
@@ -95,241 +79,283 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 	if err := s.config.Store.Batch(ctx, mutations); err != nil {
 		return Result{}, mapStoreError(err)
 	}
-	return s.advance(ctx, websiteCtx, routerCtx, runID)
+	if err := s.startWorkflow(ctx, run); err != nil {
+		return Result{}, err
+	}
+	return s.result(ctx, run)
 }
 
-// Retry advances only the failed targets of an existing durable run. Successes
-// are never rebuilt or re-activated.
+// Retry resumes an existing durable run with the identical workflow start
+// input. Core deduplicates the idempotency key, so a retry cannot start a
+// second workflow for the same run.
 func (s *Service) Retry(ctx context.Context, runID string) (Result, error) {
 	if s == nil || ctx == nil || !runKeyPattern.MatchString(runID) {
 		return Result{}, ErrInvalid
 	}
-	if _, _, _, err := s.loadRun(ctx, runID); err != nil {
+	_, _, run, err := s.loadRun(ctx, runID)
+	if err != nil {
 		return Result{}, err
 	}
-	websiteCtx, err := s.config.Website.Authenticate(ctx, s.config.WebsiteCredential)
-	if err != nil {
-		return Result{}, ErrUnavailable
+	if run.State == stateSuccess {
+		return s.result(ctx, run)
 	}
-	routerCtx, err := s.config.Router.Authenticate(ctx, s.config.RouterCredential)
-	if err != nil {
-		return Result{}, ErrUnavailable
-	}
-	return s.advance(ctx, websiteCtx, routerCtx, runID)
+	return s.restart(ctx, run)
 }
 
-func (s *Service) advance(ctx, websiteCtx, routerCtx context.Context, runID string) (Result, error) {
-	runKey, runRecord, run, err := s.loadRun(ctx, runID)
+func (s *Service) restart(ctx context.Context, run runRecord) (Result, error) {
+	if err := s.startWorkflow(ctx, run); err != nil {
+		return Result{}, err
+	}
+	return s.result(ctx, run)
+}
+
+func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
+	if s.config.Starter == nil {
+		return ErrUnavailable
+	}
+	trigger := Trigger{Locale: run.Locale, ContentPublicationRevision: run.ContentPublicationRevision,
+		SystemModelRevision: run.SystemModelRevision, IdempotencyKey: run.IdempotencyKey}
+	targets := make([]workflow.PublicationWorkflowTarget, 0, len(run.TargetKeys))
+	for _, recordKey := range run.TargetKeys {
+		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		_, target, err := s.loadTarget(ctx, key, run.RunID)
+		if err != nil {
+			return err
+		}
+		targets = append(targets, workflow.PublicationWorkflowTarget{
+			RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID, Locale: target.Locale,
+		})
+	}
+	input := workflowStartInput(s.config.BranchID, trigger, run.Locale, run.RunID, targets)
+	if _, err := s.config.Starter.Start(ctx, input); err != nil {
+		if _, _, _, loadErr := s.loadRun(ctx, run.RunID); loadErr == nil {
+			_ = s.markRunState(ctx, run.RunID, stateFailed, "workflow_start_failed")
+		}
+		return err
+	}
+	return s.markRunState(ctx, run.RunID, stateRunning, "")
+}
+
+func workflowStartInput(branchID string, trigger Trigger, locale, runID string, targets []workflow.PublicationWorkflowTarget) workflow.WorkflowStartInput {
+	payload, _ := json.Marshal(workflow.PublicationWorkflowPayload{
+		RunID: runID, BranchID: branchID, Locale: locale,
+		ContentPublicationRevision: trigger.ContentPublicationRevision, SystemModelRevision: trigger.SystemModelRevision,
+		IdempotencyKey: trigger.IdempotencyKey, Targets: targets,
+	})
+	return workflow.WorkflowStartInput{
+		OperationID:     workflow.PublicationStartOperationID,
+		ContractVersion: workflow.PublicationStartContractVersion,
+		IdempotencyKey:  "publication:" + runID + ":" + trigger.IdempotencyKey,
+		Payload:         payload,
+	}
+}
+
+func (s *Service) markRunState(ctx context.Context, runID, state, errorCode string) error {
+	return s.updateRun(ctx, runID, func(run *runRecord) { run.State, run.ErrorCode = state, errorCode })
+}
+
+func (s *Service) updateRun(ctx context.Context, runID string, mutate func(*runRecord)) error {
+	key, record, run, err := s.loadRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	mutate(&run)
+	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return s.putRun(ctx, key, record.Revision, run)
+}
+
+// BeginBuild reserves one target for an isolated Website build. The child
+// payload is checked against the durable target record before any engine work.
+func (s *Service) BeginBuild(ctx context.Context, payload workflow.PublicationBuildPayload) error {
+	if err := workflow.ValidatePublicationBuildPayload(payload); err != nil {
+		return err
+	}
+	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	current, target, err := s.loadTarget(ctx, key, payload.RunID)
+	if err != nil {
+		return err
+	}
+	if target.PageSnapshotID != payload.PageSnapshotID || target.Locale != payload.Locale ||
+		target.ContentPublicationRevision != payload.ContentPublicationRevision ||
+		target.SystemModelRevision != payload.SystemModelRevision {
+		return fmt.Errorf("%w: build payload does not match durable target", ErrInvalid)
+	}
+	target.State = stateRunning
+	target.Revision++
+	target.ErrorCode = ""
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return s.putTarget(ctx, key, current.Revision, target)
+}
+
+// FinishBuild stores the verified artifact identity and the digest it was
+// built from. The artifact record is the only channel activation may read.
+func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationBuildPayload, result workflow.PublicationBuildResult) error {
+	if err := workflow.ValidatePublicationBuildPayload(payload); err != nil {
+		return err
+	}
+	if result.Format != workflow.PublicationBuildResultFormat || result.RunID != payload.RunID ||
+		result.RouteID != payload.RouteID || result.Locale != payload.Locale ||
+		result.SnapshotID != payload.PageSnapshotID || result.InputDigest == "" ||
+		result.ArtifactManifestFileID == "" || !runKeyPattern.MatchString(result.ArtifactManifestFileID) {
+		return fmt.Errorf("%w: invalid build result", ErrInvalid)
+	}
+	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	current, target, err := s.loadTarget(ctx, key, payload.RunID)
+	if err != nil {
+		return err
+	}
+	if target.InputDigest != "" && target.InputDigest != result.InputDigest {
+		return ErrStale
+	}
+	target.State = stateBuilt
+	target.Revision++
+	target.InputDigest = result.InputDigest
+	target.BuildID = workflow.PublicationBuildIdempotencyKey(payload)
+	target.ArtifactManifestFileID = result.ArtifactManifestFileID
+	target.ErrorCode = ""
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.putTarget(ctx, key, current.Revision, target); err != nil {
+		return err
+	}
+	return s.putArtifact(ctx, artifactRecord{
+		Kind: recordTypeArtifact, RunID: payload.RunID, RouteID: payload.RouteID, Locale: payload.Locale,
+		SnapshotID: payload.PageSnapshotID, InputDigest: result.InputDigest, ArtifactManifestFileID: result.ArtifactManifestFileID,
+	})
+}
+
+// TargetSnapshot returns the server-owned snapshot bound to one run slot. The
+// Router activation adapter uses it only to recompute the trusted input digest.
+func (s *Service) TargetSnapshot(ctx context.Context, runID, routeID, locale string) (string, error) {
+	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
+		return "", ErrInvalid
+	}
+	key := targetDataKey(s.config.BranchID, runID, routeID, locale)
+	_, target, err := s.loadTarget(ctx, key, runID)
+	if err != nil {
+		return "", err
+	}
+	return target.PageSnapshotID, nil
+}
+
+// ArtifactDigest returns the input digest pinned when the verified build was
+// stored. The Router activation adapter recomputes the current trusted digest
+// and rejects the activation if it no longer matches.
+func (s *Service) ArtifactDigest(ctx context.Context, runID, routeID, locale string) (string, error) {
+	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
+		return "", ErrInvalid
+	}
+	artifact, err := s.loadArtifact(ctx, runID, routeID, locale)
+	if err != nil {
+		return "", err
+	}
+	return artifact.InputDigest, nil
+}
+
+// BeginActivation checks that the artifact belongs to the exact server-owned
+// slot before Router is allowed to switch its locale target.
+func (s *Service) BeginActivation(ctx context.Context, payload workflow.PublicationActivatePayload) error {
+	if err := workflow.ValidatePublicationActivatePayload(payload); err != nil {
+		return err
+	}
+	artifact, err := s.loadArtifact(ctx, payload.RunID, payload.RouteID, payload.Locale)
+	if err != nil {
+		return err
+	}
+	if artifact.ArtifactManifestFileID != payload.ArtifactManifestFileID {
+		return fmt.Errorf("%w: activation artifact substitution", ErrInvalid)
+	}
+	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	current, target, err := s.loadTarget(ctx, key, payload.RunID)
+	if err != nil {
+		return err
+	}
+	if (target.State != stateBuilt && target.State != stateRunning && target.State != stateSuccess && target.State != stateFailed) ||
+		target.ArtifactManifestFileID != artifact.ArtifactManifestFileID {
+		return fmt.Errorf("%w: target is not built for this artifact", ErrStale)
+	}
+	target.State = stateRunning
+	target.Revision++
+	target.ErrorCode = ""
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return s.putTarget(ctx, key, current.Revision, target)
+}
+
+// FinishActivation records a successful Router CAS. The run state is computed
+// only by FinalizeRun after every activation emission has settled.
+func (s *Service) FinishActivation(ctx context.Context, payload workflow.PublicationActivatePayload, result workflow.PublicationActivateResult) error {
+	if err := workflow.ValidatePublicationActivatePayload(payload); err != nil {
+		return err
+	}
+	if result.Format != workflow.PublicationActivateResultFormat || result.RunID != payload.RunID ||
+		result.RouteID != payload.RouteID || result.Locale != payload.Locale ||
+		result.ArtifactManifestFileID != payload.ArtifactManifestFileID || result.Revision < 1 {
+		return fmt.Errorf("%w: invalid activation result", ErrInvalid)
+	}
+	return s.updateTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, func(target *targetRecord) {
+		target.State = stateSuccess
+		target.Revision++
+		target.ErrorCode = ""
+	})
+}
+
+// FailTarget records a bounded failure code without discarding a ready build.
+func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string, err error) error {
+	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
+		return ErrInvalid
+	}
+	return s.updateTarget(ctx, runID, routeID, locale, func(target *targetRecord) {
+		target.State = stateFailed
+		target.Revision++
+		target.ErrorCode = errorCode(err)
+	})
+}
+
+func (s *Service) updateTarget(ctx context.Context, runID, routeID, locale string, mutate func(*targetRecord)) error {
+	key := targetDataKey(s.config.BranchID, runID, routeID, locale)
+	current, target, err := s.loadTarget(ctx, key, runID)
+	if err != nil {
+		return err
+	}
+	mutate(&target)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return s.putTarget(ctx, key, current.Revision, target)
+}
+
+// FinalizeRun computes the durable run state from per-target outcomes. It is
+// the only task allowed to close a run and never re-runs engine work.
+func (s *Service) FinalizeRun(ctx context.Context, runID string) (Result, error) {
+	if s == nil || ctx == nil || !runKeyPattern.MatchString(runID) {
+		return Result{}, ErrInvalid
+	}
+	_, _, run, err := s.loadRun(ctx, runID)
 	if err != nil {
 		return Result{}, err
 	}
+	state := stateSuccess
 	for _, recordKey := range run.TargetKeys {
-		key := contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
-		current, target, err := s.loadTarget(ctx, key, runID)
-		if err != nil {
-			return Result{}, err
-		}
-		if target.State == stateSuccess {
-			continue
-		}
-		// Core's record revision is opaque and global. Publication keeps its own
-		// monotonic target revision in the durable payload and uses only the
-		// observed Core revision as the write CAS token.
-		target.State = stateRunning
-		target.Revision++
-		target.ErrorCode = ""
-		target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		if err := s.putTarget(ctx, key, current.Revision, target); err != nil {
-			return Result{}, err
-		}
-		if err := s.processTarget(ctx, websiteCtx, routerCtx, &target); err != nil {
-			target.State = stateFailed
-			target.ErrorCode = errorCode(err)
-		} else {
-			target.State = stateSuccess
-			target.ErrorCode = ""
-		}
-		runningRecord, running, err := s.loadTarget(ctx, key, runID)
-		if err != nil {
-			return Result{}, err
-		}
-		target.Revision = running.Revision + 1
-		target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		if err := s.putTarget(ctx, key, runningRecord.Revision, target); err != nil {
-			return Result{}, err
-		}
-	}
-	loaded := run
-	loaded.State = stateSuccess
-	for _, recordKey := range loaded.TargetKeys {
-		key := contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, runID)
 		if err != nil {
 			return Result{}, err
 		}
 		if target.State != stateSuccess {
-			loaded.State = stateFailed
+			state = stateFailed
 		}
 	}
-	loaded.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.putRun(ctx, runKey, runRecord.Revision, loaded); err != nil {
+	if err := s.markRunState(ctx, runID, state, ""); err != nil {
 		return Result{}, err
 	}
-	return s.result(ctx, loaded)
-}
-
-func (s *Service) processTarget(ctx, websiteCtx, routerCtx context.Context, target *targetRecord) error {
-	trigger := Trigger{Locale: target.Locale}
-	digest, err := s.resolveInputDigest(websiteCtx, trustedTargetFromRecord(target), target.Locale, trigger)
+	_, _, run, err = s.loadRun(ctx, runID)
 	if err != nil {
-		return err
+		return Result{}, err
 	}
-	if digest != target.InputDigest {
-		return ErrStale
-	}
-	if target.BuildID == "" || target.ArtifactManifestFileID == "" {
-		key, err := activationKeyWithRevision("build", target.RunID, target.RouteID, target.Locale, target.Revision)
-		if err != nil {
-			return err
-		}
-		job, err := s.config.Website.BuildSnapshot(websiteCtx, websiteapi.BuildSnapshotRequest{
-			SnapshotID: target.PageSnapshotID, Locale: target.Locale, IdempotencyKey: key,
-		})
-		if err != nil || job.ID == "" {
-			if err == nil {
-				err = ErrUnavailable
-			}
-			return fmt.Errorf("build: %w", err)
-		}
-		if job.InputDigest != target.InputDigest {
-			return ErrStale
-		}
-		target.BuildID = job.ID
-		ready, err := s.awaitBuild(websiteCtx, job.ID)
-		if err != nil {
-			return err
-		}
-		if ready.State == "failed" || ready.ErrorCode != "" || ready.ArtifactManifestFileID == "" {
-			target.BuildID, target.ArtifactManifestFileID = "", ""
-			return fmt.Errorf("build: %s", valueOr(ready.ErrorCode, "not_ready"))
-		}
-		if ready.InputDigest != target.InputDigest || ready.SnapshotID != target.PageSnapshotID || ready.Locale != target.Locale {
-			return ErrStale
-		}
-		packaged, err := s.packageArtifact(ctx, target.RunID, target.RouteID, target.Locale,
-			ready.ArtifactManifestFileID, target.InputDigest)
-		if err != nil {
-			target.BuildID, target.ArtifactManifestFileID = "", ""
-			return err
-		}
-		target.ArtifactManifestFileID = packaged
-	}
-	// A build that became ready is activated only if every trusted input still
-	// resolves to the exact digest pinned when the fan-out record was created.
-	fresh, err := s.resolveInputDigest(websiteCtx, trustedTargetFromRecord(target), target.Locale, trigger)
-	if err != nil {
-		return err
-	}
-	if fresh != target.InputDigest {
-		return ErrStale
-	}
-	route, err := s.config.Router.GetRoute(routerCtx, target.RouteID)
-	if err != nil {
-		return fmt.Errorf("route read: %w", err)
-	}
-	// Re-check immediately before the CAS: a revision advanced while the
-	// artifact was being built must invalidate this result rather than let an
-	// old build activate against a newer trusted input.
-	currentDigest, err := s.resolveInputDigest(websiteCtx, trustedTargetFromRecord(target), target.Locale, Trigger{})
-	if err != nil {
-		return err
-	}
-	if currentDigest != target.InputDigest {
-		return ErrStale
-	}
-	slot, found := route.Target.LocaleTarget(target.Locale)
-	if !found || slot.Revision < 1 {
-		return fmt.Errorf("route locale: %w", ErrInvalid)
-	}
-	key, err := activationKey("cas", target.RunID, target.RouteID, target.Locale)
-	if err != nil {
-		return err
-	}
-	if _, err := s.config.Router.ReplaceLocaleTarget(routerCtx, routerapi.ReplaceLocaleTargetRequest{
-		RouteID: target.RouteID, Locale: target.Locale, ArtifactManifestFileID: target.ArtifactManifestFileID,
-		ExpectedRevision: slot.Revision, IdempotencyKey: key,
-	}); err != nil {
-		if errors.Is(err, routerapi.ErrConflict) {
-			return fmt.Errorf("router cas: %w", ErrConflict)
-		}
-		return fmt.Errorf("router cas: %w", err)
-	}
-	return nil
-}
-
-func trustedTargetFromRecord(target *targetRecord) Target {
-	return Target{RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID, Locale: target.Locale}
-}
-
-func (s *Service) awaitBuild(ctx context.Context, buildID string) (websiteapi.BuildJob, error) {
-	deadline := time.Now().Add(s.config.BuildTimeout)
-	for {
-		job, err := s.config.Website.GetBuild(ctx, buildID)
-		if err != nil {
-			return websiteapi.BuildJob{}, fmt.Errorf("build status: %w", err)
-		}
-		if job.State == "ready" || job.State == "failed" {
-			return job, nil
-		}
-		if time.Now().After(deadline) {
-			return websiteapi.BuildJob{}, fmt.Errorf("build: %w", context.DeadlineExceeded)
-		}
-		select {
-		case <-ctx.Done():
-			return websiteapi.BuildJob{}, ctx.Err()
-		case <-time.After(s.config.PollInterval):
-		}
-	}
-}
-
-func (s *Service) resolveTrustedInput(ctx context.Context, target Target) (*prerendercontract.TrustedInput, error) {
-	snapshot, err := s.config.Website.GetSnapshot(ctx, target.PageSnapshotID)
-	if err != nil {
-		return nil, fmt.Errorf("snapshot: %w", err)
-	}
-	if snapshot.State != "ready" || snapshot.ID != target.PageSnapshotID {
-		return nil, fmt.Errorf("snapshot: %w", ErrInvalid)
-	}
-	revision, err := s.config.LocaleCatalog.LocaleCatalogRevision(ctx, target.Locale)
-	if err != nil || revision < 0 {
-		return nil, ErrUnavailable
-	}
-	input, err := s.config.InputResolver.ResolveBuildInput(ctx, snapshot, target.Locale, revision)
-	if err != nil {
-		return nil, fmt.Errorf("trusted input: %w", err)
-	}
-	if err := prerendercontract.ValidateTrustedInput(input); err != nil {
-		return nil, fmt.Errorf("trusted input: %w", err)
-	}
-	return &input, nil
-}
-
-func (s *Service) resolveInputDigest(ctx context.Context, target Target, locale string, trigger Trigger) (string, error) {
-	input, err := s.resolveTrustedInput(ctx, target)
-	if err != nil {
-		return "", err
-	}
-	digest, err := prerendercontract.InputDigest(*input)
-	if err != nil {
-		return "", fmt.Errorf("trusted input: %w", err)
-	}
-	return digest, nil
+	return s.result(ctx, run)
 }
 
 func (s *Service) result(ctx context.Context, run runRecord) (Result, error) {
 	result := Result{RunID: run.RunID, State: run.State, Targets: make([]TargetResult, 0, len(run.TargetKeys))}
 	for _, recordKey := range run.TargetKeys {
-		key := contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, run.RunID)
 		if err != nil {
 			return Result{}, err
@@ -355,98 +381,14 @@ func deterministicRunID(trigger Trigger, locale string) (string, error) {
 	return uuid.NewSHA1(uuid.NameSpaceURL, encoded).String(), nil
 }
 
-func activationKeyWithRevision(kind, runID, routeID, locale string, revision int64) (string, error) {
-	return activationKey(kind+"-"+strconv.FormatInt(revision, 10), runID, routeID, locale)
-}
-
-func activationKey(kind, runID, routeID, locale string) (string, error) {
-	sum := sha256.Sum256([]byte(strings.Join([]string{kind, runID, routeID, locale}, "\x00")))
-	return "pub-" + hex.EncodeToString(sum[:])[:32], nil
-}
-
-// packageArtifact converts a verified WEB-020 prerender manifest into the
-// static-page-artifact/v1 manifest consumed by Router. Both the source and the
-// packaged file are written only through Core capabilities; no build result can
-// choose a route, locale, access group or Core file identity.
-func (s *Service) packageArtifact(ctx context.Context, runID, routeID, locale, prerenderFileID, inputDigest string) (string, error) {
-	session, _, err := s.config.FileIdentity.Authenticate(ctx, s.config.FileCredential)
-	if err != nil {
-		return "", fmt.Errorf("artifact identity: %w", err)
-	}
-	reader, _, err := s.config.Files.ReadFile(ctx, session, prerenderFileID)
-	if err != nil {
-		return "", fmt.Errorf("artifact read: %w", err)
-	}
-	defer reader.Close()
-	limit := int64(s.config.Store.MaxPayloadBytes())
-	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
-	if err != nil || int64(len(data)) > limit {
-		return "", fmt.Errorf("artifact read: %w", ErrInvalid)
-	}
-	source, err := prerendercontract.VerifyManifest(data, inputDigest)
-	if err != nil || source.Locale != locale || len(source.Artifacts) == 0 {
-		return "", ErrStale
-	}
-	manifest := featureruntime.ArtifactManifest{
-		Format: "static-page-artifact/v1", Assets: map[string]featureruntime.ArtifactFile{},
-	}
-	for _, artifact := range source.Artifacts {
-		parsed, err := uuid.Parse(artifact.FileID)
-		if err != nil || parsed == uuid.Nil || parsed.String() != artifact.FileID || artifact.SHA256 == "" || artifact.Size < 1 {
-			return "", ErrInvalid
-		}
-		entry := featureruntime.ArtifactFile{
-			FileID: artifact.FileID, ContentType: artifact.MediaType, SHA256: artifact.SHA256, Size: artifact.Size,
-		}
-		if artifact.Path == "index.html" {
-			if manifest.Document.FileID != "" {
-				return "", ErrInvalid
-			}
-			manifest.Document = entry
-			continue
-		}
-		if artifact.Path == "" || strings.Contains(artifact.Path, "..") {
-			return "", ErrInvalid
-		}
-		manifest.Assets[artifact.Path] = entry
-	}
-	if manifest.Document.FileID == "" {
-		return "", ErrInvalid
-	}
-	payload, err := json.Marshal(manifest)
-	if err != nil {
-		return "", err
-	}
-	manifest.Digest, err = featureruntime.ArtifactDigest(payload)
-	if err != nil {
-		return "", fmt.Errorf("artifact digest: %w", err)
-	}
-	encoded, err := json.Marshal(manifest)
-	if err != nil {
-		return "", err
-	}
-	key, err := activationKey("artifact", runID, routeID, locale)
-	if err != nil {
-		return "", err
-	}
-	fileID, err := s.config.Files.CreateFile(ctx, session,
-		uuid.NewSHA1(uuid.NameSpaceURL, []byte(key)).String(), []string{"features"},
-		map[string]string{"artifact_path": "manifest.json", "record_type": "publication_artifact"},
-		"application/json", int64(len(encoded)), bytes.NewReader(encoded))
-	if err != nil {
-		return "", fmt.Errorf("artifact create: %w", err)
-	}
-	return fileID, nil
-}
-
 func errorCode(err error) string {
 	switch {
+	case err == nil:
+		return ""
 	case errors.Is(err, ErrStale):
 		return "stale_build_input"
 	case errors.Is(err, ErrConflict):
 		return "router_cas_conflict"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "build_timeout"
 	case errors.Is(err, ErrInvalid):
 		return "invalid_target"
 	default:
@@ -456,11 +398,4 @@ func errorCode(err error) string {
 		}
 		return message
 	}
-}
-
-func valueOr(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }

@@ -132,9 +132,12 @@ func TestRouterTopologyScenario(t *testing.T) {
 		}
 
 		transportSource := topologyRead(t, "presentation/admin/base/transport/transport.go")
+		// Feature handlers are declared by composition and mounted by the
+		// neutral Admin transport; liveness probes stay in the transport.
+		mountSource := transportSource + topologyRead(t, "main/internal/composition/admin_mounts.go")
 		for _, path := range []string{"/api/files", "/api/files/", "/healthz", "/readyz"} {
-			if !strings.Contains(transportSource, `"`+path+`"`) && !strings.Contains(transportSource, `"GET `+path+`"`) {
-				t.Errorf("transport no longer registers existing path %s", path)
+			if !strings.Contains(mountSource, `"`+path+`"`) && !strings.Contains(mountSource, `"GET `+path+`"`) {
+				t.Errorf("Admin transport no longer registers existing path %s", path)
 			}
 		}
 		if versionPrefix.MatchString(transportSource) {

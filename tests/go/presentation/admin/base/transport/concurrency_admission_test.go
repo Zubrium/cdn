@@ -20,7 +20,19 @@ type admissionReadiness struct{ ready bool }
 
 func (r *admissionReadiness) Ready() bool { return r.ready }
 
-type admissionLoader struct{ fileapi.Loader }
+func admissionDependencies() AdminDependencies {
+	return AdminDependencies{
+		CoreReady: func() bool { return true },
+		HandlerMounts: func(HandlerContext) ([]HandlerMount, error) {
+			return []HandlerMount{{
+				Patterns: []string{"/api/admin/model"}, Guarded: true,
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				}),
+			}}, nil
+		},
+	}
+}
 
 func admissionObserver(t *testing.T) *observability.Observer {
 	t.Helper()
@@ -186,9 +198,7 @@ func TestConcurrencyAdmissionScenario(t *testing.T) {
 			"shutdown shorter than request": {Address: "127.0.0.1:0", MaxInFlight: 1, RequestTimeout: 2 * time.Second, ShutdownTimeout: time.Second},
 		} {
 			t.Run(name, func(t *testing.T) {
-				if _, err := NewAdminServer(AdminConfig{Server: config}, AdminDependencies{
-					CoreReady: func() bool { return true }, Files: &admissionLoader{},
-				}); err == nil {
+				if _, err := NewAdminServer(AdminConfig{Server: config}, admissionDependencies()); err == nil {
 					t.Fatal("NewAdminServer accepted an incomplete concurrency configuration")
 				}
 			})
@@ -205,9 +215,7 @@ func TestConcurrencyAdmissionScenario(t *testing.T) {
 			<-r.Context().Done()
 			w.WriteHeader(http.StatusNoContent)
 		})
-		server, err := NewAdminServer(admissionServerConfig(observer, ui), AdminDependencies{
-			CoreReady: func() bool { return true }, Files: &admissionLoader{},
-		})
+		server, err := NewAdminServer(admissionServerConfig(observer, ui), admissionDependencies())
 		if err != nil {
 			t.Fatal(err)
 		}

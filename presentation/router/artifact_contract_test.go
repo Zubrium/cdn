@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -169,14 +168,14 @@ func TestRouterRejectsDigestAndCacheClassSubstitution(t *testing.T) {
 		_, files := contractArtifact(t, "immutable", nil, func(manifest map[string]any) {
 			manifest["digest"] = "sha256:" + strings.Repeat("0", 64)
 		})
-		if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
+		if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, contracts.ErrInvalidTarget) {
 			t.Fatalf("tampered digest returned %v, want ErrInvalidTarget", err)
 		}
 	})
 	for _, class := range []string{"document", "forever"} {
 		t.Run("cache class "+class, func(t *testing.T) {
 			_, files := contractArtifact(t, class, nil, nil)
-			if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
+			if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, contracts.ErrInvalidTarget) {
 				t.Fatalf("cache class %q returned %v, want ErrInvalidTarget", class, err)
 			}
 		})
@@ -185,7 +184,7 @@ func TestRouterRejectsDigestAndCacheClassSubstitution(t *testing.T) {
 		_, files := contractArtifact(t, "", func(payload map[string]any) {
 			payload["document"].(map[string]any)["cache_class"] = ""
 		}, nil)
-		if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, engine.ErrInvalidTarget) {
+		if _, _, err := readArtifactManifest(context.Background(), files, contractManifestID); !errors.Is(err, contracts.ErrInvalidTarget) {
 			t.Fatalf("document cache class returned %v, want ErrInvalidTarget", err)
 		}
 	})

@@ -9,7 +9,7 @@ import (
 	"io"
 	"unicode/utf8"
 
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const canonicalArtifactMaxNesting = 64
@@ -24,22 +24,22 @@ const canonicalArtifactMaxNesting = 64
 // is enforced by the cross-module conformance test.
 func canonicalArtifactPayload(data []byte) ([]byte, error) {
 	if len(data) == 0 || !utf8.Valid(data) {
-		return nil, engine.ErrInvalidTarget
+		return nil, contracts.ErrInvalidTarget
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	value, err := decodeUniqueArtifactJSON(decoder, 1)
 	if err != nil || ensureNoTrailingArtifactJSON(decoder) != nil {
-		return nil, engine.ErrInvalidTarget
+		return nil, contracts.ErrInvalidTarget
 	}
 	payload, ok := value.(map[string]any)
 	if !ok {
-		return nil, engine.ErrInvalidTarget
+		return nil, contracts.ErrInvalidTarget
 	}
 	delete(payload, "digest")
 	canonical, err := json.Marshal(payload)
 	if err != nil {
-		return nil, engine.ErrInvalidTarget
+		return nil, contracts.ErrInvalidTarget
 	}
 	return canonical, nil
 }

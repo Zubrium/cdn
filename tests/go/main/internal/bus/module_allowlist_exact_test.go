@@ -70,6 +70,13 @@ func allBusOperationKeys() []contracts.Key {
 		{ID: websiteworkflow.ForkOperationID, Version: 1},
 		{ID: websiteworkflow.ForkCopyOperationID, Version: websiteworkflow.ForkChildContractVersion},
 		{ID: websiteworkflow.ForkFinalizeOperationID, Version: websiteworkflow.ForkChildContractVersion},
+		{ID: contracts.ContentProjectionOperationID, Version: contracts.ContentBridgeRootVersion},
+		{ID: contracts.WebsiteProjectionOperationID, Version: contracts.ContentBridgeChildVersion},
+		{ID: contracts.ContentBuildProjectionOperationID, Version: contracts.ContentBridgeChildVersion},
+		{ID: contracts.ContentBuildOperationID, Version: contracts.ContentBridgeRootVersion},
+		{ID: contracts.ContentBuildResolveOperationID, Version: contracts.ContentBridgeChildVersion},
+		{ID: contracts.ContentLocaleOperationID, Version: contracts.ContentBridgeRootVersion},
+		{ID: contracts.ContentLocaleReadOperationID, Version: contracts.ContentBridgeChildVersion},
 	}...)
 }
 
@@ -136,9 +143,13 @@ func expectedKeysForModule(t *testing.T, moduleID string) map[contracts.Key]stru
 	publishedContent := keySet(contracts.PublishedContentReadOperation().Key)
 
 	switch moduleID {
-	case "engine.website", "engine.website.import":
+	case "engine.website":
 		return unionKeySets(core, access, files, records, workflow)
-	case "engine.content", "engine.forms", "engine.loader":
+	case "engine.website.import":
+		return unionKeySets(core, access, files, records, workflow)
+	case "engine.content":
+		return unionKeySets(core, access, files, records, workflow)
+	case "engine.forms", "engine.loader":
 		return unionKeySets(core, access, files, records)
 	case "engine.router":
 		return unionKeySets(core, access, files, publishedContent)

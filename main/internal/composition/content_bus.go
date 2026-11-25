@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 
-	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -16,23 +15,23 @@ type busPublishedContentReader struct {
 	dispatcher contracts.Dispatcher
 }
 
-func (reader busPublishedContentReader) ReadPublishedContent(ctx context.Context, pageSnapshotID, locale string) (contentapi.PublishedContent, error) {
+func (reader busPublishedContentReader) ReadPublishedContent(ctx context.Context, pageSnapshotID, locale string) (contracts.PublishedContent, error) {
 	if reader.dispatcher == nil {
-		return contentapi.PublishedContent{}, contracts.ErrDispatcherUnavailable
+		return contracts.PublishedContent{}, contracts.ErrDispatcherUnavailable
 	}
 	response, err := contracts.Call(ctx, reader.dispatcher, contracts.PublishedContentReadOperation(), contracts.PublishedContentReadRequest{
 		PageSnapshotID: pageSnapshotID, Locale: locale,
 	})
 	if err != nil {
-		return contentapi.PublishedContent{}, err
+		return contracts.PublishedContent{}, err
 	}
-	var content contentapi.PublishedContent
+	var content contracts.PublishedContent
 	if err := json.Unmarshal(response.Payload, &content); err != nil {
-		return contentapi.PublishedContent{}, errors.New("invalid published content response")
+		return contracts.PublishedContent{}, errors.New("invalid published content response")
 	}
 	return content, nil
 }
 
 var _ interface {
-	ReadPublishedContent(context.Context, string, string) (contentapi.PublishedContent, error)
+	ReadPublishedContent(context.Context, string, string) (contracts.PublishedContent, error)
 } = busPublishedContentReader{}

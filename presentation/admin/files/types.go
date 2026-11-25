@@ -3,32 +3,33 @@ package fileapi
 import (
 	"errors"
 
-	loaderapi "github.com/Zubrium/cdn/engines/loader/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 var (
-	ErrUnauthorized = loaderapi.ErrUnauthorized
-	ErrForbidden    = loaderapi.ErrForbidden
-	ErrNotFound     = loaderapi.ErrNotFound
-	ErrConflict     = loaderapi.ErrConflict
-	ErrInvalid      = loaderapi.ErrInvalid
-	ErrTooLarge     = loaderapi.ErrTooLarge
-	ErrUnavailable  = loaderapi.ErrUnavailable
+	ErrUnauthorized = contracts.ErrAdminFilesUnauthorized
+	ErrForbidden    = contracts.ErrAdminFilesForbidden
+	ErrNotFound     = contracts.ErrAdminFilesNotFound
+	ErrConflict     = contracts.ErrAdminFilesConflict
+	ErrInvalid      = contracts.ErrAdminFilesInvalid
+	ErrTooLarge     = contracts.ErrAdminFilesTooLarge
+	ErrUnavailable  = contracts.ErrAdminFilesUnavailable
 )
 
-type Loader = loaderapi.API
-type BeginUploadInput = loaderapi.BeginUploadInput
-type UploadPart = loaderapi.UploadPart
-type UploadSession = loaderapi.UploadSession
-type FileMetadataPatch = loaderapi.FileMetadataPatch
-type File = loaderapi.File
-type ListQuery = loaderapi.ListQuery
-type FilePage = loaderapi.FilePage
-type CreateFileSetInput = loaderapi.CreateFileSetInput
-type FileSetMetadataPatch = loaderapi.FileSetMetadataPatch
-type FileSet = loaderapi.FileSet
-type SetListQuery = loaderapi.SetListQuery
-type FileSetPage = loaderapi.FileSetPage
+type Loader = contracts.AdminFilesAPI
+type BeginUploadInput = contracts.AdminFileBeginUploadInput
+type UploadPart = contracts.AdminFileUploadPart
+type UploadSession = contracts.AdminFileUploadSession
+type FileMetadataPatch = contracts.AdminFileMetadataPatch
+type File = contracts.AdminFile
+type ListQuery = contracts.AdminFileListQuery
+type FilePage = contracts.AdminFilePage
+type CreateFileSetInput = contracts.AdminFileCreateFileSetInput
+type FileSetMetadataPatch = contracts.AdminFileSetMetadataPatch
+type FileSet = contracts.AdminFileSet
+type SetListQuery = contracts.AdminFileSetListQuery
+type FileSetPage = contracts.AdminFileSetPage
+
 type Config struct {
 	MaxFileBytes      int64
 	MaxPartBytes      int64

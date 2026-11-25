@@ -10,20 +10,9 @@ import (
 	"sync"
 	"time"
 
-	contentengine "github.com/Zubrium/cdn/engines/content/presentation"
-	formsengine "github.com/Zubrium/cdn/engines/forms/presentation"
-	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
-	websiteengine "github.com/Zubrium/cdn/engines/website/presentation"
-	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
-	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
-	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
-	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
-	formsadmin "github.com/Zubrium/cdn/presentation/admin/forms"
-	adminrouter "github.com/Zubrium/cdn/presentation/admin/router"
-	"github.com/Zubrium/cdn/presentation/fileapi"
+	fileapi "github.com/Zubrium/cdn/presentation/fileapi"
 	routerhttp "github.com/Zubrium/cdn/presentation/router"
-	sitesapi "github.com/Zubrium/cdn/presentation/sitesapi"
 )
 
 type ServerConfig struct {
@@ -63,21 +52,8 @@ type AdminConfig struct {
 
 type AdminDependencies struct {
 	CoreReady                func() bool
-	Identity                 adminapi.IdentityAdminAPI
-	Sessions                 adminapi.SessionAdminAPI
-	GroupAccess              adminapi.SessionGroupAccessResolver
-	CoordinatorAuthorization coordinatoradmin.GroupAuthorization
-	Files                    fileapi.Loader
-	WorkflowControl          coordinatoradmin.WorkflowControl
-	Website                  websiteengine.API
-	Retirement               sitesapi.PageRetirementAPI
-	SnapshotForkWorkflow     sitesapi.SnapshotForkWorkflowStarter
-	Content                  contentengine.API
-	ContentSchemas           contentadmin.SchemaSnapshots
-	Forms                    formsengine.API
-	Router                   *routerenginepresentation.APIAdapter
-	RouterOperations         *routerhttp.PublicOperationRegistry
-	NotificationHandler      http.Handler
+	AuthorizeWorkflowSession func(context.Context, string, string) error
+	HandlerMounts            func(HandlerContext) ([]HandlerMount, error)
 }
 
 type Readiness interface {
@@ -99,21 +75,12 @@ type AdminServer struct {
 }
 
 func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, error) {
-	if config.Server.Address == "" || deps.CoreReady == nil || deps.Files == nil {
+	if config.Server.Address == "" || deps.CoreReady == nil {
 		return nil, errors.New("Admin transport dependencies are incomplete")
 	}
 	ingress, err := newIngressLimiter(config.Server, config.Observer, "admin")
 	if err != nil {
 		return nil, err
-	}
-	if config.IdentityEnabled && (deps.Identity == nil || deps.Sessions == nil || deps.GroupAccess == nil) {
-		return nil, errors.New("Admin identity dependencies are incomplete")
-	}
-	if deps.NotificationHandler != nil && (!config.IdentityEnabled || deps.Identity == nil || deps.Sessions == nil) {
-		return nil, errors.New("Admin notification dependencies are incomplete")
-	}
-	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
-		return nil, errors.New("Admin coordinator dependencies are incomplete")
 	}
 	publisher := newConcurrencyContractPublisher()
 	publisher.publish(config.Observer, "admin")
@@ -181,162 +148,28 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		return nil
 	}
 	guard := func(handler http.Handler) http.Handler { return s.requireCoreRuntime(handler) }
-	fileConfig := s.config.FileAPI
-	fileConfig.AllowedOrigins = append([]string(nil), s.config.AllowedOrigins...)
-	fileHandler, err := fileapi.NewHandler(s.deps.Files, fileConfig)
-	if err != nil {
-		return nil, err
-	}
-	if err := mount("/api/files", guard(fileHandler)); err != nil {
-		return nil, err
-	}
-	if err := mount("/api/files/", guard(fileHandler)); err != nil {
-		return nil, err
-	}
-	if s.deps.WorkflowControl != nil {
-		authorize, err := coordinatoradmin.NewGroupAuthorizer(s.deps.CoordinatorAuthorization, s.config.WorkflowAccessGroup)
+	ctx := HandlerContext{AuthorizeWorkflowSession: s.deps.AuthorizeWorkflowSession}
+	if s.deps.HandlerMounts != nil {
+		declared, err := s.deps.HandlerMounts(ctx)
 		if err != nil {
 			return nil, err
 		}
-		handler, err := coordinatoradmin.NewHandler(s.deps.WorkflowControl, authorize, coordinatoradmin.Config{
-			DefaultPageSize: s.config.WorkflowPageDefault, MaxPageSize: s.config.WorkflowPageMaximum,
-			AllowedOrigins:   append([]string(nil), s.config.AllowedOrigins...),
-			SessionAuthorize: s.coordinatorSessionAuthorize,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := mount("/api/coordinator/workflows", guard(handler)); err != nil {
-			return nil, err
-		}
-		if err := mount("/api/coordinator/workflows/", guard(handler)); err != nil {
-			return nil, err
-		}
-	}
-	if s.config.IdentityEnabled {
-		handler, err := adminapi.NewHandlerWithSessions(s.deps.Identity, s.deps.Sessions, adminapi.Config{
-			MaxJSONBytes: s.config.MaxJSONBytes, SessionCookieSecure: s.config.SessionCookieSecure,
-			AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-			GroupAccess:    s.deps.GroupAccess,
-		})
-		if err != nil {
-			return nil, err
-		}
-		sessionHandler := guard(handler)
-		if s.config.SyntheticData {
-			sessionHandler = syntheticDataMode(sessionHandler)
-		}
-		for _, pattern := range []string{
-			"/api/admin/session",
-			"/api/admin/principals",
-			"/api/admin/principals/",
-			"/api/admin/credentials/",
-			"/api/admin/access-groups",
-		} {
-			if err := mount(pattern, sessionHandler); err != nil {
-				return nil, err
+		for _, declaration := range declared {
+			if declaration.Handler == nil || len(declaration.Patterns) == 0 {
+				return nil, errors.New("Admin handler mount is incomplete")
 			}
-		}
-	}
-	if s.deps.NotificationHandler != nil {
-		if err := mount("/api/admin/notifications", guard(s.deps.NotificationHandler)); err != nil {
-			return nil, err
-		}
-	}
-	if s.deps.Website != nil {
-		handler, err := sitesapi.NewHandler(s.deps.Website, sitesapi.Config{
-			MaxJSONBytes: s.config.MaxJSONBytes, DefaultPageSize: s.config.DefaultPageSize,
-			MaxPageSize: s.config.MaxPageSize, AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-			Retirement: s.deps.Retirement, SnapshotForkWorkflow: s.deps.SnapshotForkWorkflow,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("initialize Website API: %w", err)
-		}
-		wrapped := guard(handler)
-		if s.config.SyntheticData {
-			wrapped = syntheticDataMode(wrapped)
-		}
-		for _, pattern := range []string{
-			"/api/admin/model",
-			"/api/admin/model/",
-			"/api/admin/pages",
-			"/api/admin/pages/",
-			"/api/admin/templates",
-			"/api/admin/templates/",
-			"/api/admin/snapshots",
-			"/api/admin/snapshots/",
-			"/api/admin/builds",
-			"/api/admin/builds/",
-			"/api/admin/features",
-			"/api/admin/features/",
-			"/api/admin/feature-imports",
-			"/api/admin/feature-imports/",
-			"/api/admin/media",
-			"/api/admin/media/",
-		} {
-			if err := mount(pattern, wrapped); err != nil {
-				return nil, err
+			handler := declaration.Handler
+			if declaration.Guarded {
+				handler = guard(handler)
 			}
-		}
-	}
-	if s.deps.Content != nil {
-		handler, err := contentadmin.NewHandler(s.deps.Content, s.deps.ContentSchemas, contentadmin.Config{
-			MaxJSONBytes: s.config.MaxJSONBytes, DefaultPageSize: s.config.DefaultPageSize,
-			MaxPageSize: s.config.MaxPageSize, AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("initialize Content API: %w", err)
-		}
-		wrapped := guard(handler)
-		if s.config.SyntheticData {
-			wrapped = syntheticDataMode(wrapped)
-		}
-		if err := mount("/api/admin/content/", wrapped); err != nil {
-			return nil, err
-		}
-	}
-	if s.deps.Forms != nil {
-		handler, err := formsadmin.NewHandler(s.deps.Forms, formsadmin.Config{
-			MaxJSONBytes: s.config.MaxJSONBytes, DefaultPageSize: s.config.DefaultPageSize,
-			MaxPageSize: s.config.MaxPageSize, ExportMaxConcurrent: s.config.FormsExportMaxConcurrent,
-			ExportMaxRows: s.config.FormsExportMaxRows, ExportMaxBytes: s.config.FormsExportMaxBytes,
-			AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("initialize Forms API: %w", err)
-		}
-		wrapped := guard(handler)
-		if s.config.SyntheticData {
-			wrapped = syntheticDataMode(wrapped)
-		}
-		if err := mount("/api/admin/forms/", wrapped); err != nil {
-			return nil, err
-		}
-	}
-	if s.config.RouterAdminEnabled {
-		if s.deps.Router == nil || s.deps.RouterOperations == nil {
-			return nil, errors.New("Router Admin dependencies are not initialized")
-		}
-		routerConfig := s.config.Router
-		routerConfig.AllowedOrigins = append([]string(nil), s.config.AllowedOrigins...)
-		routerConfig.PublicOperations = s.deps.RouterOperations
-		handler, err := adminrouter.NewHandler(s.deps.Router, routerConfig)
-		if err != nil {
-			return nil, err
-		}
-		if err := mount("/api/admin/router", guard(handler)); err != nil {
-			return nil, err
-		}
-		if err := mount("/api/admin/router/", guard(handler)); err != nil {
-			return nil, err
-		}
-	}
-	if s.config.UIHandler != nil {
-		if err := mount("/admin", s.config.UIHandler); err != nil {
-			return nil, err
-		}
-		if err := mount("/admin/", s.config.UIHandler); err != nil {
-			return nil, err
+			if declaration.Synthetic {
+				handler = syntheticDataMode(handler)
+			}
+			for _, pattern := range declaration.Patterns {
+				if err := mount(pattern, handler); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if err := mount("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -359,6 +192,13 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		w.WriteHeader(http.StatusNoContent)
 	})); err != nil {
 		return nil, err
+	}
+	if s.config.UIHandler != nil {
+		for _, pattern := range []string{"/admin", "/admin/"} {
+			if err := mount(pattern, s.config.UIHandler); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// Exact anchors prevent ServeMux from redirecting subtree roots such as
 	// /api/admin/content to /api/admin/content/. Those roots are not routes.
@@ -487,7 +327,7 @@ type PublicConfig struct {
 
 type PublicServer struct {
 	config    PublicConfig
-	api       *routerenginepresentation.APIAdapter
+	api       routerhttp.API
 	readyFn   func() bool
 	ingress   *ingressLimiter
 	contracts *concurrencyContractPublisher
@@ -499,7 +339,7 @@ type PublicServer struct {
 	ready     bool
 }
 
-func NewPublicServer(config PublicConfig, api *routerenginepresentation.APIAdapter, ready func() bool) (*PublicServer, error) {
+func NewPublicServer(config PublicConfig, api routerhttp.API, ready func() bool) (*PublicServer, error) {
 	if config.Server.Address == "" || api == nil || ready == nil {
 		return nil, errors.New("public Router transport dependencies are incomplete")
 	}
@@ -643,20 +483,6 @@ func syntheticDataMode(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (s *AdminServer) coordinatorSessionAuthorize(ctx context.Context, token string, permission coordinatoradmin.Permission) error {
-	session, _, err := s.deps.Sessions.AuthenticateSession(ctx, token)
-	if err != nil {
-		return err
-	}
-	level := contracts.AccessLevelRead
-	if permission == coordinatoradmin.RetryTasks {
-		level = contracts.AccessLevelWrite
-	} else if permission != coordinatoradmin.ReadWorkflows {
-		return contracts.ErrAccessForbidden
-	}
-	return s.deps.CoordinatorAuthorization.RequireGroupLevel(ctx, session, s.config.WorkflowAccessGroup, level)
 }
 
 func closedErrors() <-chan error {

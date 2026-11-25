@@ -15,14 +15,9 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 
-	forms "github.com/Zubrium/cdn/engines/forms/presentation"
-	loader "github.com/Zubrium/cdn/engines/loader/features/files/pkg"
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	"github.com/Zubrium/cdn/presentation/router/publicforms"
@@ -31,29 +26,20 @@ import (
 
 const OperationID = "public.form-upload"
 
-type Loader interface {
-	Authenticate(context.Context, string) (context.Context, error)
-	BeginUpload(context.Context, loader.BeginUploadInput) (loader.UploadSession, error)
-	PutUploadPart(context.Context, string, int, int64, string, io.Reader) (loader.UploadSession, error)
-	CommitUpload(context.Context, string) (loader.File, error)
-	AbortUpload(context.Context, string) error
-	StatFile(context.Context, string) (loader.File, error)
-	DeleteFile(context.Context, string, int64) error
-	GetFileSet(context.Context, string) (loader.FileSet, error)
-	AddFileToSet(context.Context, string, string, int64) (loader.FileSet, error)
-}
+// Loader and Forms are process-local DataBus clients. Router never receives an
+// engine facade, credential, module ID or storage destination from the request.
+type Loader = contracts.PublicLoaderClient
+type Forms = contracts.PublicFormsVisitor
 
 type Config struct {
 	Credential           string
 	GroupAuthorization   GroupAuthorization
-	StagingDirectory     string
 	MaxFileBytes         int64
 	PartSize             int64
 	MaxParts             int
 	MaxConcurrentUploads int
-	MaxStagedBytes       int64
 	AllowedContentTypes  []string
-	Forms                publicforms.VisitorAPI
+	Forms                Forms
 }
 
 // GroupAuthorization checks current Core grants for Router's configured
@@ -68,13 +54,12 @@ type Operation struct {
 	loader               Loader
 	credential           string
 	authorization        GroupAuthorization
-	stagingDirectory     string
 	maxFileBytes         int64
 	partSize             int64
 	maxParts             int
 	maxConcurrentUploads int
 	allowedContentTypes  []string
-	forms                publicforms.VisitorAPI
+	forms                Forms
 	slots                chan struct{}
 }
 
@@ -99,11 +84,8 @@ type formResult struct {
 
 func New(api Loader, cfg Config) (*Operation, error) {
 	if nilDependency(api) || nilDependency(cfg.GroupAuthorization) || cfg.Credential == "" || strings.ContainsRune(cfg.Credential, '\x00') || cfg.MaxFileBytes <= 0 ||
-		cfg.PartSize <= 0 || cfg.MaxParts <= 0 || cfg.MaxParts > 1000 || cfg.MaxConcurrentUploads <= 0 || cfg.MaxConcurrentUploads > 1024 || cfg.MaxStagedBytes <= 0 {
+		cfg.PartSize <= 0 || cfg.MaxParts <= 0 || cfg.MaxParts > 1000 || cfg.MaxConcurrentUploads <= 0 || cfg.MaxConcurrentUploads > 1024 {
 		return nil, errors.New("invalid public upload operation configuration")
-	}
-	if cfg.MaxFileBytes > cfg.MaxStagedBytes/int64(cfg.MaxConcurrentUploads) {
-		return nil, errors.New("public upload concurrency exceeds the staging byte budget")
 	}
 	partsNeeded := cfg.MaxFileBytes / cfg.PartSize
 	if cfg.MaxFileBytes%cfg.PartSize != 0 {
@@ -112,15 +94,12 @@ func New(api Loader, cfg Config) (*Operation, error) {
 	if partsNeeded > int64(cfg.MaxParts) {
 		return nil, errors.New("public upload byte limit exceeds Loader part capacity")
 	}
-	if err := validateStagingDirectory(cfg.StagingDirectory); err != nil {
-		return nil, err
-	}
 	allowed, err := normalizeAllowedContentTypes(cfg.AllowedContentTypes)
 	if err != nil || len(allowed) == 0 {
 		return nil, errors.New("public upload operation requires explicit allowed content types")
 	}
 	return &Operation{
-		loader: api, credential: cfg.Credential, authorization: cfg.GroupAuthorization, stagingDirectory: filepath.Clean(cfg.StagingDirectory),
+		loader: api, credential: cfg.Credential, authorization: cfg.GroupAuthorization,
 		maxFileBytes: cfg.MaxFileBytes, partSize: cfg.PartSize, maxParts: cfg.MaxParts,
 		maxConcurrentUploads: cfg.MaxConcurrentUploads,
 		allowedContentTypes:  allowed, forms: cfg.Forms, slots: make(chan struct{}, cfg.MaxConcurrentUploads),
@@ -138,22 +117,6 @@ func nilDependency(value any) bool {
 	default:
 		return false
 	}
-}
-
-func validateStagingDirectory(path string) error {
-	if path == "" || strings.TrimSpace(path) != path || !filepath.IsAbs(path) {
-		return errors.New("public upload staging directory must be configured as an absolute path")
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("inspect public upload staging directory: %w", err)
-	}
-	mode := info.Mode().Perm()
-	isSymlink := info.Mode()&os.ModeSymlink != 0
-	if !info.IsDir() || isSymlink || mode&0o700 != 0o700 || mode&0o077 != 0 {
-		return fmt.Errorf("public upload staging directory must be an owner-only writable non-symlink directory (mode %04o, directory %t, symlink %t)", mode, info.IsDir(), isSymlink)
-	}
-	return nil
 }
 
 func normalizeAllowedContentTypes(values []string) ([]string, error) {
@@ -190,11 +153,11 @@ func isActiveContentType(mediaType string) bool {
 	}
 }
 
-func (operation *Operation) Descriptor() engine.PublicOperationDescriptor {
+func (operation *Operation) Descriptor() contracts.PublicOperationDescriptor {
 	if operation == nil {
-		return engine.PublicOperationDescriptor{}
+		return contracts.PublicOperationDescriptor{}
 	}
-	return engine.PublicOperationDescriptor{
+	return contracts.PublicOperationDescriptor{
 		ID: OperationID, ContractVersion: 1, Methods: []string{"POST"},
 		MaxRequestBytes:     operation.maxFileBytes,
 		AllowedContentTypes: append([]string(nil), operation.allowedContentTypes...),
@@ -203,7 +166,7 @@ func (operation *Operation) Descriptor() engine.PublicOperationDescriptor {
 
 func (operation *Operation) ValidateRouteConfig(raw json.RawMessage) error {
 	if operation == nil {
-		return engine.ErrInvalidPublicOperation
+		return contracts.ErrPublicInvalidOperation
 	}
 	config, err := decodeRouteConfig(raw)
 	if err != nil {
@@ -217,21 +180,21 @@ func (operation *Operation) ValidateRouteConfig(raw json.RawMessage) error {
 // the FileSet management group before the route is stored.
 func (operation *Operation) ValidateRouteConfigWithContext(ctx context.Context, raw json.RawMessage) error {
 	if operation == nil || ctx == nil {
-		return engine.ErrUnavailable
+		return contracts.ErrPublicUnavailable
 	}
 	config, err := decodeRouteConfig(raw)
 	if err != nil || operation.validateRouteConfig(config) != nil {
-		return engine.ErrInvalidTarget
+		return contracts.ErrPublicInvalidTarget
 	}
-	if _, err = operation.authorizeRoute(ctx, config); err != nil {
+	if err = operation.authorizeRoute(ctx, config); err != nil {
 		return err
 	}
 	if config.Form != nil {
 		if operation.forms == nil || config.FileSetID == "" {
-			return engine.ErrInvalidTarget
+			return contracts.ErrPublicInvalidTarget
 		}
 		allowed, _ := normalizeAllowedContentTypes(config.AllowedContentTypes)
-		if err := operation.forms.ValidatePublicUploadRoute(ctx, forms.PublicUploadRouteBinding{
+		if err := operation.forms.ValidatePublicUploadRoute(ctx, contracts.PublicUploadRouteBinding{
 			PublicFormBinding: config.Form.Binding(), AccessGroup: config.AccessGroup,
 			MaxBytes: config.MaxBytes, AllowedContentTypes: allowed,
 		}); err != nil {
@@ -241,55 +204,51 @@ func (operation *Operation) ValidateRouteConfigWithContext(ctx context.Context, 
 	return nil
 }
 
-func (operation *Operation) authorizeRoute(ctx context.Context, config routeConfig) (context.Context, error) {
+func (operation *Operation) authorizeRoute(ctx context.Context, config routeConfig) error {
 	session, principal, err := operation.authorization.Authenticate(ctx, operation.credential)
 	if err != nil {
-		return nil, mapCoreAuthorizationError(err)
+		return mapCoreAuthorizationError(err)
 	}
 	if !principal.Active {
-		return nil, engine.ErrUnauthorized
+		return contracts.ErrPublicUnauthorized
 	}
 	if err := operation.authorization.RequireGroupLevel(ctx, session, []string{config.AccessGroup}, contracts.AccessLevelWrite); err != nil {
-		return nil, mapCoreAuthorizationError(err)
-	}
-	loaderCtx, err := operation.loader.Authenticate(ctx, operation.credential)
-	if err != nil || loaderCtx == nil {
-		return nil, mapLoaderAuthorizationError(err)
+		return mapCoreAuthorizationError(err)
 	}
 	if config.FileSetID == "" {
-		return loaderCtx, nil
+		return nil
 	}
-	set, err := operation.loader.GetFileSet(loaderCtx, config.FileSetID)
+	set, err := operation.loader.GetFileSet(ctx, contracts.PublicLoaderGetFileSetRequest{FileSetID: config.FileSetID})
 	if err != nil || set.ID != config.FileSetID || !validGroup(set.ManagementGroup) {
-		if errors.Is(err, loader.ErrNotFound) || (err == nil && (set.ID != config.FileSetID || !validGroup(set.ManagementGroup))) {
-			return nil, engine.ErrNotFound
+		if errors.Is(err, contracts.ErrPublicNotFound) || (err == nil && (set.ID != config.FileSetID || !validGroup(set.ManagementGroup))) {
+			return contracts.ErrPublicNotFound
 		}
-		return nil, mapLoaderAuthorizationError(err)
+		return mapPublicError(err)
 	}
 	if err := operation.authorization.RequireGroupLevel(ctx, session, []string{set.ManagementGroup}, contracts.AccessLevelWrite); err != nil {
-		return nil, mapCoreAuthorizationError(err)
+		return mapCoreAuthorizationError(err)
 	}
-	return loaderCtx, nil
+	return nil
 }
 
 func decodeRouteConfig(raw json.RawMessage) (routeConfig, error) {
 	if len(raw) == 0 || len(raw) > 64<<10 {
-		return routeConfig{}, engine.ErrInvalidTarget
+		return routeConfig{}, contracts.ErrPublicInvalidTarget
 	}
 	var config routeConfig
 	if err := httpjson.DecodeBytes(raw, &config); err != nil {
-		return routeConfig{}, engine.ErrInvalidTarget
+		return routeConfig{}, contracts.ErrPublicInvalidTarget
 	}
 	if config.FileSetID != "" {
 		id, err := uuid.Parse(config.FileSetID)
 		if err != nil || id == uuid.Nil {
-			return routeConfig{}, engine.ErrInvalidTarget
+			return routeConfig{}, contracts.ErrPublicInvalidTarget
 		}
 		config.FileSetID = id.String()
 	}
 	if config.Form != nil {
 		if config.Form.Validate() != nil || config.FileSetID == "" {
-			return routeConfig{}, engine.ErrInvalidTarget
+			return routeConfig{}, contracts.ErrPublicInvalidTarget
 		}
 	}
 	return config, nil
@@ -297,24 +256,24 @@ func decodeRouteConfig(raw json.RawMessage) (routeConfig, error) {
 
 func (operation *Operation) validateRouteConfig(config routeConfig) error {
 	if !config.Enabled || !validGroup(config.AccessGroup) || config.MaxBytes <= 0 || config.MaxBytes > operation.maxFileBytes {
-		return engine.ErrInvalidTarget
+		return contracts.ErrPublicInvalidTarget
 	}
 	if config.FileSetID != "" {
 		id, err := uuid.Parse(config.FileSetID)
 		if err != nil || id == uuid.Nil {
-			return engine.ErrInvalidTarget
+			return contracts.ErrPublicInvalidTarget
 		}
 	}
 	if config.Form != nil && (config.Form.Validate() != nil || config.FileSetID == "" || operation.forms == nil) {
-		return engine.ErrInvalidTarget
+		return contracts.ErrPublicInvalidTarget
 	}
 	allowed, err := normalizeAllowedContentTypes(config.AllowedContentTypes)
 	if err != nil {
-		return engine.ErrInvalidTarget
+		return contracts.ErrPublicInvalidTarget
 	}
 	for _, mediaType := range allowed {
 		if !contains(operation.allowedContentTypes, mediaType) {
-			return engine.ErrInvalidTarget
+			return contracts.ErrPublicInvalidTarget
 		}
 	}
 	return nil
@@ -342,132 +301,122 @@ func contains(values []string, expected string) bool {
 	return false
 }
 
-func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, request engine.PublicOperationRequest) (engine.DeliveryResponse, error) {
+func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, request contracts.PublicOperationRequest) (contracts.DeliveryResponse, error) {
 	if operation == nil || ctx == nil {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 	}
 	config, err := decodeRouteConfig(raw)
 	if err != nil || operation.validateRouteConfig(config) != nil {
-		return engine.DeliveryResponse{}, engine.ErrInvalidTarget
+		return contracts.DeliveryResponse{}, contracts.ErrPublicInvalidTarget
 	}
 	config.AllowedContentTypes, _ = normalizeAllowedContentTypes(config.AllowedContentTypes)
 	mediaType, _, err := mime.ParseMediaType(request.ContentType)
+	stream, hasStream := contracts.PublicStreamReference(request.Body)
 	if request.Method != "POST" || err != nil || !contains(config.AllowedContentTypes, strings.ToLower(mediaType)) ||
-		request.ContentLength < -1 || request.ContentLength > config.MaxBytes || !loader.ValidIdempotencyKey(request.IdempotencyKey) ||
-		request.Host == "" || len(request.Host) > 512 || strings.ContainsAny(request.Host, "\r\n") || len(request.EscapedPath) > 8192 {
+		request.ContentLength < -1 || request.ContentLength > config.MaxBytes || !contracts.ValidPublicIdempotencyKey(request.IdempotencyKey) ||
+		request.Host == "" || len(request.Host) > 512 || strings.ContainsAny(request.Host, "\r\n") || len(request.EscapedPath) > 8192 ||
+		!hasStream || request.Streams == nil {
 		if request.ContentLength > config.MaxBytes {
-			return engine.DeliveryResponse{}, engine.ErrTooLarge
+			return contracts.DeliveryResponse{}, contracts.ErrPublicTooLarge
 		}
-		return engine.DeliveryResponse{}, engine.ErrInvalid
-	}
-	if request.Body == nil {
-		return engine.DeliveryResponse{}, engine.ErrInvalid
+		return contracts.DeliveryResponse{}, contracts.ErrPublicInvalid
 	}
 	fieldID := ""
 	var formBinding *publicforms.BindingConfig
 	var formToken string
-	var reservation forms.VisitorUploadReservation
+	var reservation contracts.PublicVisitorUploadReservation
 	if config.Form == nil {
 		if request.Query != "" {
-			return engine.DeliveryResponse{}, engine.ErrInvalid
+			return contracts.DeliveryResponse{}, contracts.ErrPublicInvalid
 		}
 	} else {
 		fieldID, err = parseFieldQuery(request.Query)
 		if err != nil {
-			return engine.DeliveryResponse{}, err
+			return contracts.DeliveryResponse{}, err
 		}
 		formBinding = config.Form
 		formToken = request.FormSessionTokens[formBinding.FormID]
 		if formToken == "" {
-			return publicforms.ErrorResponse(forms.ErrNotFound, formBinding.FormID, false)
+			return publicforms.ErrorResponse(contracts.ErrPublicNotFound, formBinding.FormID, false)
 		}
 	}
-	loaderCtx, err := operation.authorizeRoute(ctx, config)
-	if err != nil {
-		if errors.Is(err, engine.ErrForbidden) || errors.Is(err, engine.ErrUnauthorized) {
-			return engine.DeliveryResponse{}, engine.ErrUnavailable
+	if err := operation.authorizeRoute(ctx, config); err != nil {
+		if errors.Is(err, contracts.ErrPublicForbidden) || errors.Is(err, contracts.ErrPublicUnauthorized) {
+			return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 		}
-		return engine.DeliveryResponse{}, err
+		return contracts.DeliveryResponse{}, err
 	}
 	select {
 	case operation.slots <- struct{}{}:
 		defer func() { <-operation.slots }()
 	case <-ctx.Done():
-		return engine.DeliveryResponse{}, ctx.Err()
+		return contracts.DeliveryResponse{}, ctx.Err()
 	}
 	if formBinding != nil {
-		reservation, err = operation.forms.BeginVisitorUpload(ctx, forms.BeginVisitorUploadRequest{
+		reservation, err = operation.forms.BeginVisitorUpload(ctx, contracts.PublicBeginVisitorUploadRequest{
 			PublicFormBinding: formBinding.Binding(), Token: formToken, FieldID: fieldID,
 			IdempotencyKey: scopedFormIdempotencyKey(request, config, fieldID), ContentType: strings.ToLower(mediaType),
 			DeclaredSize: request.ContentLength, RouteMaxBytes: config.MaxBytes,
 			RouteContentTypes: append([]string(nil), config.AllowedContentTypes...), AccessGroup: config.AccessGroup,
 		})
 		if err != nil {
-			return publicforms.ErrorResponse(err, formBinding.FormID, errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound))
+			return publicforms.ErrorResponse(err, formBinding.FormID, errors.Is(err, contracts.ErrPublicExpired) || errors.Is(err, contracts.ErrPublicNotFound))
 		}
 		if !validUUID(reservation.ID) || reservation.FieldID != fieldID || reservation.MaxBytes <= 0 || reservation.MaxBytes > config.MaxBytes {
-			return engine.DeliveryResponse{}, engine.ErrUnavailable
+			return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 		}
 	}
 	maxBytes := config.MaxBytes
 	if formBinding != nil {
 		maxBytes = reservation.MaxBytes
 	}
-	staged, size, checksum, err := operation.stage(ctx, request.Body, maxBytes)
+	key := scopedIdempotencyKey(request, config)
+	name := "public-upload-" + key[:32]
+	attributes := map[string]string{"source": "router-public-upload"}
+	if formBinding != nil {
+		name = "form-upload-" + reservation.ID[:8]
+		attributes = map[string]string{"source": "router-form-upload", "form_id": formBinding.FormID, "field_id": fieldID}
+	}
+	session, err := operation.loader.BeginUpload(ctx, contracts.PublicLoaderBeginUploadRequest{
+		Stream: stream, Name: name, IdempotencyKey: key, ContentType: strings.ToLower(mediaType),
+		DeclaredSize: request.ContentLength, MaxBytes: maxBytes, PartSize: operation.partSize,
+		Groups: []string{config.AccessGroup}, Attributes: attributes,
+	}, request.Streams)
 	if err != nil {
 		if formBinding != nil {
 			_ = operation.abortFormReservation(ctx, *formBinding, formToken, reservation.ID)
 		}
-		return engine.DeliveryResponse{}, err
+		return contracts.DeliveryResponse{}, mapPublicError(err)
 	}
-	defer func() {
-		_ = staged.Close()
-		_ = os.Remove(staged.Name())
-	}()
-	if request.ContentLength >= 0 && size != request.ContentLength {
+	if !validUUID(session.ID) || session.PartSize != operation.partSize {
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
+	}
+	if session.State != "uploading" && session.State != "committing" && session.State != "committed" {
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
+	}
+	file, err := operation.loader.Commit(ctx, contracts.PublicLoaderCommitRequest{SessionID: session.ID, Parts: session.StagedParts})
+	if err != nil || !validUUID(file.ID) {
+		_ = operation.loader.Abort(ctx, contracts.PublicLoaderAbortRequest{SessionID: session.ID, Parts: session.StagedParts})
 		if formBinding != nil {
 			_ = operation.abortFormReservation(ctx, *formBinding, formToken, reservation.ID)
 		}
-		return engine.DeliveryResponse{}, engine.ErrInvalid
+		return contracts.DeliveryResponse{}, mapPublicError(err)
 	}
 	if err := ctx.Err(); err != nil {
-		return engine.DeliveryResponse{}, err
+		return contracts.DeliveryResponse{}, err
 	}
 
 	if formBinding != nil {
-		return operation.executeFormUpload(ctx, loaderCtx, staged, size, checksum, strings.ToLower(mediaType), config, *formBinding, formToken, fieldID, reservation)
+		return operation.executeFormUpload(ctx, config, *formBinding, formToken, fieldID, reservation, file)
 	}
-	key := scopedIdempotencyKey(request, config)
-	name := "public-upload-" + key[:32]
-	session, err := operation.loader.BeginUpload(loaderCtx, loader.BeginUploadInput{
-		IdempotencyKey: key, Name: name, ContentType: strings.ToLower(mediaType), Size: size, SHA256: checksum,
-		Groups: []string{config.AccessGroup}, Attributes: map[string]string{"source": "router-public-upload"},
-	})
-	if err != nil || !validUUID(session.ID) || session.PartSize != operation.partSize {
-		return engine.DeliveryResponse{}, mapLoaderError(err)
+	if err := operation.addToFileSet(ctx, config.FileSetID, file.ID); err != nil {
+		return contracts.DeliveryResponse{}, err
 	}
-	if session.State == "uploading" {
-		if err := operation.uploadParts(loaderCtx, staged, session, size); err != nil {
-			return engine.DeliveryResponse{}, err
-		}
-	} else if session.State != "committing" && session.State != "committed" {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
-	}
-	file, err := operation.loader.CommitUpload(loaderCtx, session.ID)
-	if err != nil || !validUUID(file.ID) {
-		return engine.DeliveryResponse{}, mapLoaderError(err)
-	}
-	if config.FileSetID != "" {
-		if err := operation.addToFileSet(loaderCtx, config.FileSetID, file.ID); err != nil {
-			return engine.DeliveryResponse{}, err
-		}
-	}
-
 	body, err := json.Marshal(result{FileID: file.ID, FileSetID: config.FileSetID})
 	if err != nil {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 	}
-	return engine.DeliveryResponse{
+	return contracts.DeliveryResponse{
 		StatusCode: 201, ContentType: "application/json; charset=utf-8", ContentLength: int64(len(body)),
 		CacheControl: "no-store", Body: io.NopCloser(bytes.NewReader(body)),
 	}, nil
@@ -475,20 +424,20 @@ func (operation *Operation) Execute(ctx context.Context, raw json.RawMessage, re
 
 func parseFieldQuery(raw string) (string, error) {
 	if raw == "" || len(raw) > 256 {
-		return "", engine.ErrInvalid
+		return "", contracts.ErrPublicInvalid
 	}
 	values, err := url.ParseQuery(raw)
 	if err != nil || len(values) != 1 || len(values["field"]) != 1 {
-		return "", engine.ErrInvalid
+		return "", contracts.ErrPublicInvalid
 	}
 	field := values.Get("field")
 	if len(field) == 0 || len(field) > 64 || field[0] < 'a' || field[0] > 'z' {
-		return "", engine.ErrInvalid
+		return "", contracts.ErrPublicInvalid
 	}
 	for index := 1; index < len(field); index++ {
 		char := field[index]
 		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
-			return "", engine.ErrInvalid
+			return "", contracts.ErrPublicInvalid
 		}
 	}
 	return field, nil
@@ -496,219 +445,108 @@ func parseFieldQuery(raw string) (string, error) {
 
 func (operation *Operation) abortFormReservation(ctx context.Context, binding publicforms.BindingConfig, token, reservationID string) error {
 	if operation.forms == nil {
-		return engine.ErrUnavailable
+		return contracts.ErrPublicUnavailable
 	}
-	return operation.forms.AbortVisitorUpload(ctx, forms.AbortVisitorUploadRequest{
+	return operation.forms.AbortVisitorUpload(ctx, contracts.PublicAbortVisitorUploadRequest{
 		PublicFormBinding: binding.Binding(), Token: token, ReservationID: reservationID,
 	})
 }
 
-func (operation *Operation) executeFormUpload(ctx, loaderCtx context.Context, staged *os.File, size int64, checksum, mediaType string,
-	config routeConfig, binding publicforms.BindingConfig, token, fieldID string,
-	reservation forms.VisitorUploadReservation) (engine.DeliveryResponse, error) {
+func (operation *Operation) executeFormUpload(ctx context.Context, config routeConfig, binding publicforms.BindingConfig, token, fieldID string,
+	reservation contracts.PublicVisitorUploadReservation, file contracts.PublicLoaderFile) (contracts.DeliveryResponse, error) {
 	if reservation.Completed {
-		if !validUUID(reservation.FileID) || !validUUID(reservation.AttachmentID) || reservation.Size != size || reservation.SHA256 != checksum ||
-			reservation.ContentType != mediaType || reservation.AccessGroup != config.AccessGroup {
-			return publicforms.ErrorResponse(forms.ErrConflict, binding.FormID, false)
+		if !validUUID(reservation.FileID) || !validUUID(reservation.AttachmentID) || reservation.Size != file.Size || reservation.SHA256 != file.SHA256 ||
+			reservation.ContentType != file.ContentType || reservation.AccessGroup != config.AccessGroup {
+			return publicforms.ErrorResponse(contracts.ErrPublicConflict, binding.FormID, false)
 		}
-		if err := operation.addToFileSet(loaderCtx, config.FileSetID, reservation.FileID); err != nil {
-			return engine.DeliveryResponse{}, err
+		if err := operation.addToFileSet(ctx, config.FileSetID, reservation.FileID); err != nil {
+			return contracts.DeliveryResponse{}, err
 		}
-		return formUploadResponse(http.StatusOK, forms.VisitorAttachment{ID: reservation.AttachmentID, FieldID: fieldID})
+		return formUploadResponse(http.StatusOK, contracts.PublicVisitorAttachment{ID: reservation.AttachmentID, FieldID: fieldID})
 	}
-	key := "form-upload-" + reservation.ID
-	name := "form-upload-" + reservation.ID[:8]
-	session, err := operation.loader.BeginUpload(loaderCtx, loader.BeginUploadInput{
-		IdempotencyKey: key, Name: name, ContentType: mediaType, Size: size, SHA256: checksum,
-		Groups: []string{config.AccessGroup}, Attributes: map[string]string{"source": "router-form-upload", "form_id": binding.FormID, "field_id": fieldID},
-	})
-	if err != nil || !validUUID(session.ID) || session.PartSize != operation.partSize {
-		return engine.DeliveryResponse{}, mapLoaderError(err)
-	}
-	if session.State == "uploading" {
-		if err := operation.uploadParts(loaderCtx, staged, session, size); err != nil {
-			return engine.DeliveryResponse{}, err
-		}
-	} else if session.State != "committing" && session.State != "committed" {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
-	}
-	file, err := operation.loader.CommitUpload(loaderCtx, session.ID)
-	if err != nil || !validUUID(file.ID) {
-		return engine.DeliveryResponse{}, mapLoaderError(err)
-	}
-	attachment, err := operation.forms.CompleteVisitorUpload(ctx, forms.CompleteVisitorUploadRequest{
+	attachment, err := operation.forms.CompleteVisitorUpload(ctx, contracts.PublicCompleteVisitorUploadRequest{
 		PublicFormBinding: binding.Binding(), Token: token, ReservationID: reservation.ID,
 		FileID: file.ID, SHA256: file.SHA256, ContentType: file.ContentType, Size: file.Size, AccessGroup: config.AccessGroup,
 	})
 	if err != nil {
-		if errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound) {
+		if errors.Is(err, contracts.ErrPublicExpired) || errors.Is(err, contracts.ErrPublicNotFound) {
 			// A committed Loader file is not a usable attachment until Forms has
 			// recorded it. Expiry and missing reservation are definitive; a CAS
 			// conflict is ambiguous because another concurrent request may have
 			// completed the same reservation, so preserve the file for retry.
-			if cleanupErr := operation.deleteCommittedFile(loaderCtx, file.ID); cleanupErr != nil {
-				return engine.DeliveryResponse{}, engine.ErrUnavailable
+			if cleanupErr := operation.deleteCommittedFile(ctx, file.ID); cleanupErr != nil {
+				return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 			}
 			_ = operation.abortFormReservation(ctx, binding, token, reservation.ID)
 		}
-		return publicforms.ErrorResponse(err, binding.FormID, errors.Is(err, forms.ErrExpired) || errors.Is(err, forms.ErrNotFound))
+		return publicforms.ErrorResponse(err, binding.FormID, errors.Is(err, contracts.ErrPublicExpired) || errors.Is(err, contracts.ErrPublicNotFound))
 	}
 	if attachment.ID == "" || attachment.FieldID != fieldID {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 	}
-	if err := operation.addToFileSet(loaderCtx, config.FileSetID, file.ID); err != nil {
-		return engine.DeliveryResponse{}, err
+	if err := operation.addToFileSet(ctx, config.FileSetID, file.ID); err != nil {
+		return contracts.DeliveryResponse{}, err
 	}
 	return formUploadResponse(http.StatusCreated, attachment)
 }
 
 func (operation *Operation) deleteCommittedFile(ctx context.Context, fileID string) error {
 	for attempt := 0; attempt < 3; attempt++ {
-		file, err := operation.loader.StatFile(ctx, fileID)
-		if errors.Is(err, loader.ErrNotFound) {
+		file, err := operation.loader.StatFile(ctx, contracts.PublicLoaderStatFileRequest{FileID: fileID})
+		if errors.Is(err, contracts.ErrPublicNotFound) {
 			return nil
 		}
 		if err != nil || file.ID != fileID || file.Revision < 1 {
-			return engine.ErrUnavailable
+			return contracts.ErrPublicUnavailable
 		}
-		err = operation.loader.DeleteFile(ctx, fileID, file.Revision)
-		if err == nil || errors.Is(err, loader.ErrNotFound) {
+		err = operation.loader.DeleteFile(ctx, contracts.PublicLoaderDeleteFileRequest{FileID: fileID, Revision: file.Revision})
+		if err == nil || errors.Is(err, contracts.ErrPublicNotFound) {
 			return nil
 		}
-		if !errors.Is(err, loader.ErrConflict) {
-			return engine.ErrUnavailable
+		if !errors.Is(err, contracts.ErrPublicConflict) {
+			return contracts.ErrPublicUnavailable
 		}
 	}
-	return engine.ErrUnavailable
+	return contracts.ErrPublicUnavailable
 }
 
-func formUploadResponse(status int, attachment forms.VisitorAttachment) (engine.DeliveryResponse, error) {
+func formUploadResponse(status int, attachment contracts.PublicVisitorAttachment) (contracts.DeliveryResponse, error) {
 	body, err := json.Marshal(formResult{AttachmentID: attachment.ID, FieldID: attachment.FieldID})
 	if err != nil {
-		return engine.DeliveryResponse{}, engine.ErrUnavailable
+		return contracts.DeliveryResponse{}, contracts.ErrPublicUnavailable
 	}
-	return engine.DeliveryResponse{StatusCode: status, ContentType: "application/json; charset=utf-8", ContentLength: int64(len(body)),
+	return contracts.DeliveryResponse{StatusCode: status, ContentType: "application/json; charset=utf-8", ContentLength: int64(len(body)),
 		CacheControl: "no-store", Body: io.NopCloser(bytes.NewReader(body))}, nil
 }
 
-func scopedFormIdempotencyKey(request engine.PublicOperationRequest, config routeConfig, fieldID string) string {
+func scopedFormIdempotencyKey(request contracts.PublicOperationRequest, config routeConfig, fieldID string) string {
 	value := strings.Join([]string{scopedIdempotencyKey(request, config), config.Form.FormID,
 		fmt.Sprint(config.Form.SchemaVersion), fieldID}, "\x00")
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 
-func (operation *Operation) stage(ctx context.Context, body io.Reader, maxBytes int64) (*os.File, int64, string, error) {
-	file, err := os.CreateTemp(operation.stagingDirectory, "public-upload-*")
-	if err != nil {
-		return nil, 0, "", engine.ErrUnavailable
-	}
-	removeOnError := true
-	defer func() {
-		if removeOnError {
-			_ = file.Close()
-			_ = os.Remove(file.Name())
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return nil, 0, "", engine.ErrUnavailable
-	}
-	sha := sha256.New()
-	count, err := copyBounded(ctx, io.MultiWriter(file, sha), body, maxBytes)
-	if err != nil {
-		return nil, 0, "", err
-	}
-	if err := file.Sync(); err != nil {
-		return nil, 0, "", engine.ErrUnavailable
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, "", engine.ErrUnavailable
-	}
-	removeOnError = false
-	return file, count, hex.EncodeToString(sha.Sum(nil)), nil
-}
-
-func copyBounded(ctx context.Context, destination io.Writer, source io.Reader, maxBytes int64) (int64, error) {
-	buffer := make([]byte, 32*1024)
-	var total int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return total, err
-		}
-		read, readErr := source.Read(buffer)
-		if read > 0 {
-			if total > maxBytes-int64(read) {
-				return total, engine.ErrTooLarge
-			}
-			written, writeErr := destination.Write(buffer[:read])
-			if writeErr != nil {
-				return total, engine.ErrUnavailable
-			}
-			if written != read {
-				return total, engine.ErrUnavailable
-			}
-			total += int64(read)
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				return total, nil
-			}
-			if errors.Is(readErr, engine.ErrTooLarge) {
-				return total, engine.ErrTooLarge
-			}
-			return total, engine.ErrUnavailable
-		}
-		if read == 0 {
-			return total, io.ErrNoProgress
-		}
-	}
-}
-
-func (operation *Operation) uploadParts(ctx context.Context, file *os.File, session loader.UploadSession, total int64) error {
-	if total == 0 {
+func (operation *Operation) addToFileSet(ctx context.Context, setID, fileID string) error {
+	if setID == "" {
 		return nil
 	}
-	partCount := 1 + (total-1)/session.PartSize
-	if partCount > int64(operation.maxParts) {
-		return engine.ErrTooLarge
-	}
-	for part := int64(0); part < partCount; part++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		offset := part * session.PartSize
-		size := min(session.PartSize, total-offset)
-		hasher := sha256.New()
-		read, err := io.CopyN(hasher, io.NewSectionReader(file, offset, size), size)
-		if err != nil || read != size {
-			return engine.ErrUnavailable
-		}
-		_, err = operation.loader.PutUploadPart(ctx, session.ID, int(part+1), size, hex.EncodeToString(hasher.Sum(nil)), io.NewSectionReader(file, offset, size))
-		if err != nil {
-			return mapLoaderError(err)
-		}
-	}
-	return nil
-}
-
-func (operation *Operation) addToFileSet(ctx context.Context, setID, fileID string) error {
 	for attempt := 0; attempt < 3; attempt++ {
-		set, err := operation.loader.GetFileSet(ctx, setID)
+		set, err := operation.loader.GetFileSet(ctx, contracts.PublicLoaderGetFileSetRequest{FileSetID: setID})
 		if err != nil || set.ID != setID || set.Revision <= 0 {
-			return engine.ErrUnavailable
+			return contracts.ErrPublicUnavailable
 		}
-		_, err = operation.loader.AddFileToSet(ctx, setID, fileID, set.Revision)
+		_, err = operation.loader.AddFileToSet(ctx, contracts.PublicLoaderAddFileSetRequest{FileSetID: setID, FileID: fileID, Revision: set.Revision})
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, loader.ErrConflict) || ctx.Err() != nil {
-			return engine.ErrUnavailable
+		if !errors.Is(err, contracts.ErrPublicConflict) || ctx.Err() != nil {
+			return mapPublicError(err)
 		}
 	}
-	return engine.ErrUnavailable
+	return contracts.ErrPublicUnavailable
 }
 
-func scopedIdempotencyKey(request engine.PublicOperationRequest, config routeConfig) string {
+func scopedIdempotencyKey(request contracts.PublicOperationRequest, config routeConfig) string {
 	value := strings.Join([]string{OperationID, request.Method, strings.ToLower(request.Host), request.EscapedPath,
 		config.AccessGroup, config.FileSetID, request.IdempotencyKey}, "\x00")
 	sum := sha256.Sum256([]byte(value))
@@ -720,46 +558,21 @@ func validUUID(value string) bool {
 	return err == nil && id != uuid.Nil
 }
 
-func mapLoaderError(err error) error {
-	if errors.Is(err, loader.ErrUnauthorized) || errors.Is(err, loader.ErrForbidden) {
-		return engine.ErrUnavailable
-	}
-	if errors.Is(err, loader.ErrConflict) {
-		return engine.ErrConflict
-	}
-	if errors.Is(err, loader.ErrTooLarge) {
-		return engine.ErrTooLarge
-	}
-	if errors.Is(err, loader.ErrInvalid) {
-		return engine.ErrInvalid
-	}
-	return engine.ErrUnavailable
+func mapPublicError(err error) error {
+	return publicforms.MapFormsError(err)
 }
 
 func mapCoreAuthorizationError(err error) error {
 	switch {
 	case errors.Is(err, contracts.ErrAccessForbidden):
-		return engine.ErrForbidden
+		return contracts.ErrPublicForbidden
 	case errors.Is(err, contracts.ErrAccessUnauthorized):
-		return engine.ErrUnauthorized
+		return contracts.ErrPublicUnauthorized
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	default:
-		return engine.ErrUnavailable
+		return contracts.ErrPublicUnavailable
 	}
 }
 
-func mapLoaderAuthorizationError(err error) error {
-	switch {
-	case errors.Is(err, loader.ErrUnauthorized):
-		return engine.ErrUnauthorized
-	case errors.Is(err, loader.ErrForbidden):
-		return engine.ErrForbidden
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return err
-	default:
-		return engine.ErrUnavailable
-	}
-}
-
-var _ engine.PublicOperation = (*Operation)(nil)
+var _ contracts.PublicOperation = (*Operation)(nil)

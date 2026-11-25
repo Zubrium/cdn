@@ -35,6 +35,7 @@ type routerEngineComponent struct {
 	registry     *router.PublicOperationRegistry
 	routes       router.RouteResolver
 	delivery     *router.CoreDelivery
+	public       *routerPublicServices
 	warmupReady  bool
 	warmupCancel context.CancelFunc
 	warmupDone   chan struct{}
@@ -46,13 +47,30 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	}
 	settings := component.config.RouterAPI
 	operations := make([]routerenginepresentation.PublicOperation, 0, 4)
-	var formsAPI publicforms.VisitorAPI
+	moduleDispatcher := bus.NewModuleDispatcher(component.dispatcher, "engine.router")
+	access, err := contracts.NewCoreAccessClient(moduleDispatcher)
+	if err != nil {
+		return fmt.Errorf("configure Router Core access DataBus client: %w", err)
+	}
+	var formsEngineAPI routerPublicFormsEngine
 	if component.forms != nil {
 		if component.forms.engine == nil {
 			return errors.New("Forms Engine is not initialized")
 		}
-		formsAPI = component.forms.engine
+		formsEngineAPI = component.forms.engine
 	}
+	publicServices, err := newRouterPublicServices(routerPublicDependencies{
+		forms: formsEngineAPI, loader: component.loader.service,
+		staging: loaderFiles{runtime: component.core.runtime}, authorization: moduleCoreGroupAuthorization{access: access},
+		credential: settings.ServiceCredential, partSize: component.config.Loader.PartSize,
+		maxFile: settings.UploadMaxFileBytes, maxParts: component.config.Loader.MaxParts,
+		maxInFlight: settings.UploadMaxConcurrent,
+	})
+	if err != nil {
+		return fmt.Errorf("configure public Router DataBus services: %w", err)
+	}
+	component.public = publicServices
+	formsAPI := publicforms.VisitorAPI(publicServices.Forms)
 	if _, enabled := component.selected["public.content-runtime"]; enabled {
 		if component.content == nil || component.content.engine == nil || component.dispatcher == nil {
 			return errors.New("Content runtime bus is not initialized")
@@ -78,18 +96,13 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		operations = append(operations, submit)
 	}
 	if _, enabled := component.selected["public.form-upload"]; enabled {
-		accessDispatcher := bus.NewModuleDispatcher(component.dispatcher, "engine.router")
-		access, err := contracts.NewCoreAccessClient(accessDispatcher)
-		if err != nil {
-			return fmt.Errorf("configure Router access DataBus client: %w", err)
-		}
-		upload, err := publicupload.New(component.loader.service, publicupload.Config{
-			Credential: settings.ServiceCredential, StagingDirectory: settings.UploadStagingDirectory,
-			MaxFileBytes: settings.UploadMaxFileBytes, PartSize: component.config.Loader.PartSize,
-			MaxParts: component.config.Loader.MaxParts, MaxConcurrentUploads: settings.UploadMaxConcurrent,
-			MaxStagedBytes: settings.UploadMaxStagedBytes, AllowedContentTypes: append([]string(nil), settings.UploadAllowedContentTypes...),
-			GroupAuthorization: moduleCoreGroupAuthorization{access: access},
-			Forms:              formsAPI,
+		upload, err := publicupload.New(publicServices.Loader, publicupload.Config{
+			Credential: settings.ServiceCredential, MaxFileBytes: settings.UploadMaxFileBytes,
+			PartSize: component.config.Loader.PartSize, MaxParts: component.config.Loader.MaxParts,
+			MaxConcurrentUploads: settings.UploadMaxConcurrent,
+			AllowedContentTypes:  append([]string(nil), settings.UploadAllowedContentTypes...),
+			GroupAuthorization:   moduleCoreGroupAuthorization{access: access},
+			Forms:                formsAPI,
 		})
 		if err != nil {
 			return fmt.Errorf("configure Router public upload: %w", err)
@@ -107,11 +120,6 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	repository, err := routesrepo.NewModuleDataRepository(moduleData)
 	if err != nil {
 		return err
-	}
-	moduleDispatcher := bus.NewModuleDispatcher(component.dispatcher, "engine.router")
-	access, err := contracts.NewCoreAccessClient(moduleDispatcher)
-	if err != nil {
-		return fmt.Errorf("configure Router Core access DataBus client: %w", err)
 	}
 	fileSession, _, err := component.core.runtime.Identity().Authenticate(ctx, settings.ServiceCredential)
 	if err != nil {
@@ -208,6 +216,12 @@ func (component *routerEngineComponent) Stop(ctx context.Context) error {
 	}
 	component.warmupCancel = nil
 	component.warmupDone = nil
+	if component.public != nil {
+		if err := component.public.Close(ctx); err != nil {
+			return err
+		}
+		component.public = nil
+	}
 	component.api = nil
 	component.registry = nil
 	component.delivery = nil
@@ -274,7 +288,7 @@ func (component *publicRouterComponent) Start(ctx context.Context) error {
 			RequestTimeout:  component.config.Scales.RouterHTTP.RequestDuration(),
 			ShutdownTimeout: component.config.HTTP.ShutdownTimeout,
 		},
-		Router:   routerPublicPresentationConfig(component.config, component.engine.registry, component.engine.routes),
+		Router:   routerPublicPresentationConfig(component.config, component.engine.registry, component.engine.routes, component.engine.publicStreams()),
 		PerRoute: perRoute,
 	}, component.engine.api, component.core.IsReady)
 	if err != nil {
@@ -329,7 +343,8 @@ func routerPresentationConfig(config appconfig.Resolved, operations *router.Publ
 // routerPublicPresentationConfig adds the explicitly compiled locale
 // preference operation to the anonymous listener only. The Admin listener
 // keeps the plain configuration and never registers a public preference path.
-func routerPublicPresentationConfig(config appconfig.Resolved, operations *router.PublicOperationRegistry, routes router.RouteResolver) router.Config {
+func routerPublicPresentationConfig(config appconfig.Resolved, operations *router.PublicOperationRegistry, routes router.RouteResolver,
+	streams func() contracts.PublicUploadStreams) router.Config {
 	cfg := routerPresentationConfig(config, operations)
 	settings := config.RouterAPI
 	cfg.LocalePreference = router.LocalePreferenceConfig{
@@ -338,7 +353,15 @@ func routerPublicPresentationConfig(config appconfig.Resolved, operations *route
 		MaxAge:  settings.LocalePreferenceMaxAge,
 	}
 	cfg.LocaleResolver = routes
+	cfg.UploadStreams = streams
 	return cfg
+}
+
+func (component *routerEngineComponent) publicStreams() func() contracts.PublicUploadStreams {
+	if component == nil || component.public == nil {
+		return nil
+	}
+	return component.public.Streams
 }
 
 type publicUploadComponent struct {

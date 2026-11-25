@@ -44,7 +44,7 @@ func TestContentProjectionProviderNamesSnapshotLookupFailureStage(t *testing.T) 
 	want := websiteapi.ErrNotFound
 	fake := contentTestFixture()
 	fake.snapshotErr = want
-	provider, err := newContentProjectionProvider(fake, serviceCtx, "en-US")
+	provider, err := newWebsiteContentProjectionProvider(fake, serviceCtx, "en-US")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func contentTestManifest() []byte {
 
 func TestContentProjectionProviderConvertsTrustedWebsiteProjection(t *testing.T) {
 	serviceCtx := context.WithValue(context.Background(), contentTestContextKey{}, "trusted")
-	provider, err := newContentProjectionProvider(contentTestFixture(), serviceCtx, "en-US")
+	provider, err := newWebsiteContentProjectionProvider(contentTestFixture(), serviceCtx, "en-US")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestContentProjectionProviderFailsClosedOnInvalidProjections(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			fake := contentTestFixture()
 			tc.mutate(fake)
-			provider, err := newContentProjectionProvider(fake, serviceCtx, "en-US")
+			provider, err := newWebsiteContentProjectionProvider(fake, serviceCtx, "en-US")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -219,15 +219,15 @@ func TestContentComponentFailsClosedWithoutCredentialOrRuntime(t *testing.T) {
 	}
 	assertSilentFailureStream(t, component.Errors())
 
-	component = newContentEngineComponent(nil, appconfig.Resolved{}, nil)
+	component = newContentEngineComponent(nil, appconfig.Resolved{})
 	if err := component.Start(ctx); err == nil {
 		t.Fatal("Content component started without Core runtime")
 	}
-	component = newContentEngineComponent(&coreComponent{}, appconfig.Resolved{}, &contentTestWebsiteAPI{})
+	component = newContentEngineComponent(&coreComponent{}, appconfig.Resolved{})
 	if err := component.Start(ctx); err == nil {
 		t.Fatal("Content component started without Core runtime capability")
 	}
-	component = newContentEngineComponent(&coreComponent{runtime: &platform.Runtime{}}, appconfig.Resolved{}, &contentTestWebsiteAPI{})
+	component = newContentEngineComponent(&coreComponent{runtime: &platform.Runtime{}}, appconfig.Resolved{})
 	if err := component.Start(ctx); err == nil {
 		t.Fatal("Content component started without a service credential")
 	}

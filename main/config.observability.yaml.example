@@ -241,10 +241,8 @@ router_api:
   # Один Router process обслуживает одну настроенную branch.
   branch_id: main
   public_listen_address: 0.0.0.0:8081
-  upload_staging_directory: /var/lib/zubrium/router-staging
   upload_max_file_bytes: 104857600
   upload_max_concurrent: 4
-  upload_max_staged_bytes: 419430400
   upload_allowed_content_types:
     - application/pdf
     - image/jpeg

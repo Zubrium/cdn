@@ -28,5 +28,12 @@ func TestFullProfileStaticAllowlistIsExact(t *testing.T) {
 		contracts.PublicationPublishOperation().Key,
 		contracts.RetirePageOperation().Key,
 		contracts.GetPageRetirementOperation().Key,
+		{ID: contracts.ContentProjectionOperationID, Version: contracts.ContentBridgeRootVersion},
+		{ID: contracts.WebsiteProjectionOperationID, Version: contracts.ContentBridgeChildVersion},
+		{ID: contracts.ContentBuildProjectionOperationID, Version: contracts.ContentBridgeChildVersion},
+		{ID: contracts.ContentBuildOperationID, Version: contracts.ContentBridgeRootVersion},
+		{ID: contracts.ContentBuildResolveOperationID, Version: contracts.ContentBridgeChildVersion},
+		{ID: contracts.ContentLocaleOperationID, Version: contracts.ContentBridgeRootVersion},
+		{ID: contracts.ContentLocaleReadOperationID, Version: contracts.ContentBridgeChildVersion},
 	}...)
 }

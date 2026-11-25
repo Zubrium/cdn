@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	httpauth "github.com/Zubrium/cdn/presentation/httpauth"
 	"github.com/google/uuid"
@@ -55,12 +55,23 @@ type Config struct {
 	DefaultPageSize         int
 	MaxPageSize             int
 	AllowedOrigins          []string
-	PublicOperations        engine.PublicOperationCatalog
+	PublicOperations        contracts.PublicOperationCatalog
 	FormSessionCookieSecure bool
 	LocalePreference        LocalePreferenceConfig
 	LocaleResolver          RouteResolver
 	Compression             CompressionConfig
+	// UploadStreams creates a per-request scoped stream set for anonymous
+	// uploads. The HTTP boundary alone registers r.Body; no visitor payload can
+	// choose a stream target. It is unset on the Admin listener.
+	UploadStreams func() contracts.PublicUploadStreams
 }
+
+type publicUploadBody struct {
+	io.Reader
+	reference contracts.StreamRef
+}
+
+func (body publicUploadBody) StreamReference() contracts.StreamRef { return body.reference }
 
 type Handler struct {
 	api       API
@@ -71,8 +82,8 @@ type Handler struct {
 }
 
 type API interface {
-	engine.SettingsAPI
-	engine.DeliveryAPI
+	contracts.SettingsAPI
+	contracts.DeliveryAPI
 }
 
 func NewHandler(api API, cfg Config) (*Handler, error) {
@@ -129,12 +140,12 @@ func (h *Handler) setLocalePreference(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
-	locale, err := engine.CanonicalLocale(request.Locale)
+	locale, err := contracts.CanonicalLocale(request.Locale)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_locale")
 		return
 	}
-	path, err := engine.NormalizePath(request.ReturnPath)
+	path, err := contracts.NormalizePath(request.ReturnPath)
 	if err != nil || path != request.ReturnPath {
 		writeError(w, http.StatusBadRequest, "invalid_return_path")
 		return
@@ -144,7 +155,7 @@ func (h *Handler) setLocalePreference(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if route.BranchID != h.cfg.BranchID || route.State != engine.RouteStateActive {
+	if route.BranchID != h.cfg.BranchID || route.State != contracts.RouteStateActive {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -170,7 +181,7 @@ func (h *Handler) listOperations(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := []engine.PublicOperationDescriptor{}
+	items := []contracts.PublicOperationDescriptor{}
 	if h.cfg.PublicOperations != nil {
 		var err error
 		items, err = h.cfg.PublicOperations.ListPublicOperations(ctx)
@@ -180,7 +191,7 @@ func (h *Handler) listOperations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Items []engine.PublicOperationDescriptor `json:"items"`
+		Items []contracts.PublicOperationDescriptor `json:"items"`
 	}{Items: items})
 }
 
@@ -258,7 +269,7 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	page, err := h.api.ListRoutes(ctx, engine.ListRoutesRequest{BranchID: h.cfg.BranchID, Host: query.Get("host"), Cursor: query.Get("cursor"), Limit: limit})
+	page, err := h.api.ListRoutes(ctx, contracts.ListRoutesRequest{BranchID: h.cfg.BranchID, Host: query.Get("host"), Cursor: query.Get("cursor"), Limit: limit})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -276,7 +287,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	var input engine.CreateRouteRequest
+	var input contracts.CreateRouteRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -347,7 +358,7 @@ func (h *Handler) replaceTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Target engine.RouteTarget `json:"target"`
+		Target contracts.RouteTarget `json:"target"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
@@ -374,7 +385,7 @@ func (h *Handler) replaceTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	route, err := h.api.ReplaceRouteTarget(ctx, engine.ReplaceRouteTargetRequest{RouteID: id, Target: input.Target, ExpectedRevision: expectedRevision})
+	route, err := h.api.ReplaceRouteTarget(ctx, contracts.ReplaceRouteTargetRequest{RouteID: id, Target: input.Target, ExpectedRevision: expectedRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -391,18 +402,18 @@ func validTargetMatch(match, targetKind string) bool {
 	if match != "exact" && match != "prefix" {
 		return false
 	}
-	return (targetKind != engine.TargetCoreFile && targetKind != engine.TargetRegisteredOperation) || match == "exact"
+	return (targetKind != contracts.TargetCoreFile && targetKind != contracts.TargetRegisteredOperation) || match == "exact"
 }
 
-func (h *Handler) validateTarget(ctx context.Context, target engine.RouteTarget) error {
+func (h *Handler) validateTarget(ctx context.Context, target contracts.RouteTarget) error {
 	if err := target.Validate(); err != nil {
 		return err
 	}
-	if target.Kind != engine.TargetRegisteredOperation {
+	if target.Kind != contracts.TargetRegisteredOperation {
 		return nil
 	}
 	if h.cfg.PublicOperations == nil {
-		return engine.ErrPublicOperationNotRegistered
+		return contracts.ErrPublicOperationNotRegistered
 	}
 	return h.cfg.PublicOperations.ValidatePublicOperationTarget(ctx, target)
 }
@@ -421,7 +432,7 @@ func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.api.DeleteRoute(ctx, engine.DeleteRouteRequest{RouteID: id, ExpectedRevision: expected}); err != nil {
+	if err := h.api.DeleteRoute(ctx, contracts.DeleteRouteRequest{RouteID: id, ExpectedRevision: expected}); err != nil {
 		writeEngineError(w, err)
 		return
 	}
@@ -455,15 +466,34 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	request := engine.DeliveryRequest{
+	var body io.Reader = r.Body
+	var streams contracts.PublicUploadStreams
+	if h.cfg.UploadStreams != nil && r.Body != nil {
+		streams = h.cfg.UploadStreams()
+		reference, err := streams.AddReader(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "unavailable")
+			return
+		}
+		body = publicUploadBody{Reader: r.Body, reference: reference}
+	}
+	defer func() {
+		if streams != nil {
+			_ = streams.Close()
+		}
+	}()
+	request := contracts.DeliveryRequest{
 		BranchID: h.cfg.BranchID, Host: r.Host, Method: r.Method,
 		EscapedPath: r.URL.EscapedPath(), Query: r.URL.RawQuery,
 		ContentType: r.Header.Get("Content-Type"), ContentLength: r.ContentLength,
-		IdempotencyKey: r.Header.Get("Idempotency-Key"), Body: r.Body,
+		IdempotencyKey: r.Header.Get("Idempotency-Key"), Body: body,
 		IfNoneMatch: r.Header.Get("If-None-Match"), IfModifiedSince: r.Header.Get("If-Modified-Since"),
 		Range: r.Header.Get("Range"), IfRange: r.Header.Get("If-Range"),
 		LocalePreference: localePreferenceCookie(r), AcceptLanguage: r.Header.Get("Accept-Language"),
 		FormSessionTokens: formTokens,
+	}
+	if streams != nil {
+		request.Streams = streams
 	}
 	response, err := h.api.Deliver(r.Context(), request)
 	if err != nil {
@@ -571,7 +601,7 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, response.Body)
 }
 
-func (h *Handler) canCompress(r *http.Request, response engine.DeliveryResponse) bool {
+func (h *Handler) canCompress(r *http.Request, response contracts.DeliveryResponse) bool {
 	config := h.cfg.Compression
 	if !config.Enabled || r.Method == http.MethodHead || response.StatusCode != http.StatusOK || response.Body == nil ||
 		r.Header.Get("Range") != "" || response.ContentLength < config.MinBytes || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
@@ -672,7 +702,7 @@ func validFormSessionToken(value string) bool {
 	return err == nil && len(decoded) == 32
 }
 
-func (h *Handler) setFormSessionCookie(w http.ResponseWriter, change engine.FormSessionCookieChange) {
+func (h *Handler) setFormSessionCookie(w http.ResponseWriter, change contracts.FormSessionCookieChange) {
 	name := "zubrium_form_" + change.FormID
 	if h.cfg.FormSessionCookieSecure {
 		name = "__Host-zubrium-form-" + change.FormID
@@ -728,9 +758,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target a
 	err := httpjson.DecodeRequest(w, r, maxBytes, target)
 	switch {
 	case errors.Is(err, httpjson.ErrTooLarge):
-		return engine.ErrTooLarge
+		return contracts.ErrPublicTooLarge
 	case errors.Is(err, httpjson.ErrInvalid):
-		return engine.ErrInvalid
+		return contracts.ErrPublicInvalid
 	default:
 		return err
 	}
@@ -778,7 +808,7 @@ func validIdempotencyKey(value string) bool {
 	return true
 }
 
-func validDeliveryResponse(response engine.DeliveryResponse) bool {
+func validDeliveryResponse(response contracts.DeliveryResponse) bool {
 	if response.StatusCode < 200 || response.StatusCode > 599 || response.StatusCode == http.StatusSwitchingProtocols || response.ContentLength < -1 {
 		return false
 	}
@@ -888,17 +918,17 @@ func setRouteETag(w http.ResponseWriter, revision int64) {
 
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, engine.ErrUnauthorized):
+	case errors.Is(err, contracts.ErrPublicUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, engine.ErrForbidden):
+	case errors.Is(err, contracts.ErrPublicForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
-	case errors.Is(err, engine.ErrNotFound):
+	case errors.Is(err, contracts.ErrPublicNotFound):
 		writeError(w, http.StatusNotFound, "not_found")
-	case errors.Is(err, engine.ErrConflict):
+	case errors.Is(err, contracts.ErrPublicConflict):
 		writeError(w, http.StatusConflict, "conflict")
-	case errors.Is(err, engine.ErrTooLarge):
+	case errors.Is(err, contracts.ErrPublicTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
-	case errors.Is(err, engine.ErrInvalid), errors.Is(err, engine.ErrInvalidTarget):
+	case errors.Is(err, contracts.ErrPublicInvalid), errors.Is(err, contracts.ErrInvalidTarget):
 		writeError(w, http.StatusBadRequest, "invalid_request")
 	default:
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
@@ -906,7 +936,7 @@ func writeEngineError(w http.ResponseWriter, err error) {
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, engine.ErrTooLarge) {
+	if errors.Is(err, contracts.ErrPublicTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
 		return
 	}

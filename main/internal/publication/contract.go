@@ -1,6 +1,6 @@
-// Package publication owns the trusted, server-side publication fan-out that
-// connects a ready Website locale artifact with independently activated Router
-// (route, locale) targets. No visitor input enters this package.
+// Package publication owns the trusted, server-side publication fan-out. Its
+// root task only validates a server-owned payload and declares class-scoped
+// children; engine work executes in isolated workers assembled by main.
 package publication
 
 import (
@@ -8,13 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"time"
 
-	core "github.com/Zubrium/cdn/core/presentation"
-	contentdomain "github.com/Zubrium/cdn/engines/content/domain"
-	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
-	websiteapp "github.com/Zubrium/cdn/engines/website/application"
-	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -23,13 +17,16 @@ const (
 	namespace = "main/publication"
 	scopeType = "branch"
 
-	recordTypeRun    = "publication_run"
-	recordTypeTarget = "publication_target"
+	recordTypeRun     = "publication_run"
+	recordTypeTarget  = "publication_target"
+	recordTypeArtifact = "publication_artifact"
 
-	statePending = "pending"
-	stateRunning = "running"
-	stateSuccess = "success"
-	stateFailed  = "failed"
+	stateStarting = "starting"
+	statePending  = "pending"
+	stateRunning  = "running"
+	stateBuilt    = "built"
+	stateSuccess  = "success"
+	stateFailed   = "failed"
 
 	maxTargets = 256
 )
@@ -40,7 +37,7 @@ var (
 	ErrConflict    = errors.New("publication fan-out revision conflict")
 	ErrStale       = errors.New("stale publication build result")
 	runKeyPattern  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	keyPartPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+	keyPartPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{16,128}$`)
 )
 
 // Target is one trusted (route, page snapshot, locale) publication slot. It is
@@ -60,6 +57,12 @@ type Trigger struct {
 	ContentPublicationRevision int64  `json:"content_publication_revision"`
 	SystemModelRevision        int64  `json:"system_model_revision,omitempty"`
 	IdempotencyKey             string `json:"-"`
+}
+
+// WorkflowStarter is the narrow, module-scoped port used to start the root
+// task. It carries no Core runtime, capability or engine handle.
+type WorkflowStarter interface {
+	Start(context.Context, contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error)
 }
 
 func ModuleDataDescriptor() contracts.RecordDescriptor {
@@ -86,46 +89,14 @@ func (Module) ComponentDescriptor() contracts.ComponentDescriptor {
 	return contracts.ComponentDescriptor{ID: moduleID, Kind: "composition", Version: 1}
 }
 
-// LocaleCatalog supplies the authoritative locale-catalog revision used by the
-// versioned WEB-020 trusted build input.
-type LocaleCatalog interface {
-	LocaleCatalogRevision(context.Context, string) (int64, error)
-}
-
-// Website is the narrow, authenticated Website facade used by fan-out. It
-// still resolves the complete trusted build input internally.
-type Website interface {
-	Authenticate(context.Context, string) (context.Context, error)
-	GetSnapshot(context.Context, string) (websiteapi.Snapshot, error)
-	BuildSnapshot(context.Context, websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error)
-	GetBuild(context.Context, string) (websiteapi.BuildJob, error)
-}
-
-// Router is the narrow, authenticated Router target-CAS facade. Locale values
-// are catalog slots from the trusted registry, never visitor input.
-type Router interface {
-	Authenticate(context.Context, string) (context.Context, error)
-	GetRoute(context.Context, string) (routerapi.Route, error)
-	ReplaceLocaleTarget(context.Context, routerapi.ReplaceLocaleTargetRequest) (routerapi.Route, error)
-}
-
 // Config is the complete set of trusted capabilities required by the fan-out.
-// Every field must be supplied by the static composition root.
+// Engine credentials and channel handles stay in the composition root.
 type Config struct {
-	BranchID          string
-	Store             contracts.RecordDataStore
-	Targets           []Target
-	Website           Website
-	WebsiteCredential string
-	Router            Router
-	RouterCredential  string
-	FileIdentity      core.IdentityCapability
-	Files             core.FilesCapability
-	FileCredential    string
-	LocaleCatalog     LocaleCatalog
-	InputResolver     websiteapp.BuildInputResolver
-	BuildTimeout      time.Duration
-	PollInterval      time.Duration
+	BranchID    string
+	Store       contracts.RecordDataStore
+	Starter     WorkflowStarter
+	Targets     []Target
+	MaxAttempts int
 }
 
 // Result is the durable partial result of one publication run.
@@ -144,7 +115,8 @@ type TargetResult struct {
 	ErrorCode              string `json:"error_code,omitempty"`
 }
 
-// Service coordinates durable rebuild and Router activation records.
+// Service coordinates durable workflow starts and publication records. It
+// stores only neutral record data and a module-scoped workflow starter port.
 type Service struct {
 	config Config
 	target []Target
@@ -152,21 +124,17 @@ type Service struct {
 
 // NewService fails closed until composition supplies every trusted capability.
 func NewService(config Config) (*Service, error) {
-	if config.BranchID == "" || config.Store == nil || config.Website == nil || config.Router == nil ||
-		config.FileIdentity == nil || config.Files == nil || config.FileCredential == "" ||
-		config.LocaleCatalog == nil || config.InputResolver == nil || config.WebsiteCredential == "" ||
-		config.RouterCredential == "" || config.BuildTimeout <= 0 || config.PollInterval <= 0 ||
-		len(config.Targets) == 0 || len(config.Targets) > maxTargets {
+	if config.BranchID == "" || config.Store == nil || len(config.Targets) == 0 ||
+		len(config.Targets) > maxTargets || config.MaxAttempts < 1 || config.MaxAttempts > 100 {
 		return nil, ErrUnavailable
 	}
 	seen := make(map[string]struct{}, len(config.Targets))
 	for _, target := range config.Targets {
-		locale, err := contentdomain.CanonicalLocale(target.Locale)
-		if err != nil || locale != target.Locale || target.RouteID == "" || target.PageSnapshotID == "" ||
+		if contracts.ValidateWorkflowLocale(target.Locale) != nil ||
 			!runKeyPattern.MatchString(target.RouteID) || !runKeyPattern.MatchString(target.PageSnapshotID) {
 			return nil, ErrInvalid
 		}
-		key := target.RouteID + "\x00" + locale
+		key := target.RouteID + "\x00" + target.Locale
 		if _, duplicate := seen[key]; duplicate {
 			return nil, ErrInvalid
 		}
@@ -176,10 +144,10 @@ func NewService(config Config) (*Service, error) {
 }
 
 func validateTrigger(trigger Trigger) (string, error) {
-	locale, err := contentdomain.CanonicalLocale(trigger.Locale)
-	if err != nil || locale != trigger.Locale || trigger.ContentPublicationRevision < 0 ||
-		trigger.SystemModelRevision < 0 || !keyPartPattern.MatchString(trigger.IdempotencyKey) {
+	if contracts.ValidateWorkflowLocale(trigger.Locale) != nil ||
+		trigger.ContentPublicationRevision < 0 || trigger.SystemModelRevision < 0 ||
+		!keyPartPattern.MatchString(trigger.IdempotencyKey) {
 		return "", fmt.Errorf("%w: invalid publication trigger", ErrInvalid)
 	}
-	return locale, nil
+	return trigger.Locale, nil
 }

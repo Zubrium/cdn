@@ -10,23 +10,24 @@ import (
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
+	"github.com/Zubrium/cdn/main/internal/contentbridge"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 type websiteEngineComponent struct {
-	core             *coreComponent
-	config           appconfig.Resolved
-	service          *websiteapp.Service
-	localeCatalog    *websiteLocaleCatalog
-	contentBuildView *websiteContentBuildProjection
-	inputResolver    websiteapp.BuildInputResolver
+	core               *coreComponent
+	config             appconfig.Resolved
+	service            *websiteapp.Service
+	serviceCtx         context.Context
+	projectionProvider *websiteContentProjectionProvider
+	localeCatalog      *websiteLocaleCatalog
+	contentBuildView   *websiteContentBuildProjection
+	inputResolver      websiteapp.BuildInputResolver
 }
 
 func newWebsiteEngineComponent(core *coreComponent, config appconfig.Resolved) *websiteEngineComponent {
 	return &websiteEngineComponent{
 		core: core, config: config,
-		localeCatalog:    newWebsiteLocaleCatalog(),
-		contentBuildView: newWebsiteContentBuildProjection(),
 	}
 }
 
@@ -60,13 +61,13 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if websiteBuildEnabled {
 		buildWorkflow = newWebsiteBuildWorkflowClient(moduleDispatcher)
 	}
-	if component.localeCatalog == nil {
-		component.localeCatalog = newWebsiteLocaleCatalog()
+	bridge, err := contentbridge.NewClient(newContentBridgeWorkflowClient(moduleDispatcher))
+	if err != nil {
+		return err
 	}
-	if component.contentBuildView == nil {
-		component.contentBuildView = newWebsiteContentBuildProjection()
-	}
-	buildInputResolver, err := websiteapp.NewModuleBuildInputResolver(data, component.contentBuildView, component.config.Prerender.SandboxImage)
+	component.localeCatalog = newWebsiteLocaleCatalog(bridge)
+	component.contentBuildView = newWebsiteContentBuildProjection(bridge)
+	buildInputResolver, err := websiteapp.NewModuleBuildInputResolver(data, websiteContentBuildProjectionAdapter{client: component.contentBuildView}, component.config.Prerender.SandboxImage)
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,15 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	component.service = service
+	serviceCtx, err := service.Authenticate(ctx, component.config.ContentAPI.ServiceCredential)
+	if err != nil || serviceCtx == nil {
+		return errors.New("Website service context could not be established")
+	}
+	projectionProvider, err := newWebsiteContentProjectionProvider(service, serviceCtx, component.config.ContentAPI.Locale)
+	if err != nil {
+		return err
+	}
+	component.service, component.serviceCtx, component.projectionProvider = service, serviceCtx, projectionProvider
 	component.inputResolver = buildInputResolver
 	return nil
 }

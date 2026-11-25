@@ -6,12 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Zubrium/cdn/engines/router/features/routes/model"
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
-func deliverCoreFileDisposition(t *testing.T, contentType, configured string, method string, ifNoneMatch string) engine.DeliveryResponse {
+func deliverCoreFileDisposition(t *testing.T, contentType, configured string, method string, ifNoneMatch string) contracts.DeliveryResponse {
 	t.Helper()
 	fileID := "01938f7a-68af-7c10-a51d-78b6ca125401"
 	files := newCacheScenarioFiles()
@@ -19,10 +17,10 @@ func deliverCoreFileDisposition(t *testing.T, contentType, configured string, me
 		file: contracts.File{ID: fileID, ContentType: contentType, SHA256: strings.Repeat("a", 64), Size: 4},
 		body: "body",
 	}
-	target := model.Target{Kind: model.TargetCoreFile, FileID: fileID, Disposition: configured}
+	target := contracts.Target{Kind: contracts.TargetCoreFile, FileID: fileID, Disposition: configured}
 	route := cacheScenarioRoute(target, 1)
 	route.Path = "/image"
-	route.Match = model.MatchExact
+	route.Match = contracts.MatchExact
 	routes := &cacheScenarioRoutes{route: route}
 	delivery, err := NewCoreDelivery(cacheScenarioBranch, files, routes, nil)
 	if err != nil {

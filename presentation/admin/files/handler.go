@@ -14,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	loaderapi "github.com/Zubrium/cdn/engines/loader/presentation"
+	loaderapi "github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
@@ -940,7 +940,7 @@ func validNamespace(value string) bool {
 }
 
 func validIdempotencyKey(value string) bool {
-	return loaderapi.ValidIdempotencyKey(value)
+	return loaderapi.ValidAdminFileIdempotencyKey(value)
 }
 
 func validUUID(value string) bool {

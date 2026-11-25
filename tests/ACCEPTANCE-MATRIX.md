@@ -58,16 +58,16 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 
 ## Строгие границы модулей (2026-11-25)
 
-Контракт зафиксирован в [SPEC-modular-platform.md](../spec/architecture/SPEC-modular-platform.md). Статусы `planned` будут заменены на `pass` только после конкретного прогона с evidence в [QA report](../docs/QA_REPORT.md).
+Контракт зафиксирован в [SPEC-modular-platform.md](../spec/architecture/SPEC-modular-platform.md). Статусы `pass` выставлены после полного sweep с зафиксированным evidence в [QA report](../docs/QA_REPORT.md) и логом [`output/architecture-boundaries-20261125-sweep.txt`](../output/architecture-boundaries-20261125-sweep.txt).
 
 | ID | Вход и предусловия | Ожидаемый результат | Статус |
 | -- | ------------------ | ------------------- | ------ |
-| ARCH-001 | AST-проверка всех модулей на прямые cross-module handle’ы и `*core/presentation.Runtime` вне registration в `main`. | Прямых межмодульных вызовов нет; Core вызывается только адаптерами `main` по DataBus. | planned |
-| ARCH-002 | Presentation вызывает чужой engine (Forms, Loader, Website, Router, Content). | Вызов идёт только через зарегистрированную DataBus operation; facade handle’ов нет; внешний HTTP-ответ сохраняется. | planned |
-| ARCH-003 | Два engine участвуют в одной бизнес-цепочке (например snapshot → pre-render → pre-render with content). | Оркестрация только через Core Coordinator workflow с независимыми task/worker; прямого или bus-вызова engine→engine нет; асинхронность только здесь. | planned |
-| ARCH-004 | Публичная загрузка через Router operation. | Тело передаётся scoped stream в Loader по DataBus; Router не использует ФС; байты и checksum владеет Core/Loader staging. | planned |
-| ARCH-005 | Dispatch DataBus operation с module ID/class. | Allowlist и module/class проверяются на dispatch/registration; workflow-операции зарегистрированы; клиент не может передать `operation_id`. | planned |
-| ARCH-006 | Отдельная сборка Presentation-модулей при `GOWORK=off`, подключены notifications. | Циклов go.mod нет; notifications — отдельный модуль `presentation/admin/base/notification`; публичный Router не зависит от Admin auth; SSE-контракт сохранён. | planned |
+| ARCH-001 | AST-проверка всех модулей на прямые cross-module handle’ы и `*core/presentation.Runtime` вне registration в `main`. | Прямых межмодульных вызовов нет; Core вызывается только адаптерами `main` по DataBus. | pass |
+| ARCH-002 | Presentation вызывает чужой engine (Forms, Loader, Website, Router, Content). | Вызов идёт только через зарегистрированную DataBus operation; facade handle’ов нет; внешний HTTP-ответ сохраняется. | pass |
+| ARCH-003 | Два engine участвуют в одной бизнес-цепочке (например snapshot → pre-render → pre-render with content). | Оркестрация только через Core Coordinator workflow с независимыми task/worker; прямого или bus-вызова engine→engine нет; асинхронность только здесь. | pass |
+| ARCH-004 | Публичная загрузка через Router operation. | Тело передаётся scoped stream в Loader по DataBus; Router не использует ФС; байты и checksum владеет Core/Loader staging. | pass |
+| ARCH-005 | Dispatch DataBus operation с module ID/class. | Allowlist и module/class проверяются на dispatch/registration; workflow-операции зарегистрированы; клиент не может передать `operation_id`. | pass |
+| ARCH-006 | Отдельная сборка Presentation-модулей при `GOWORK=off`, подключены notifications. | Циклов go.mod нет; notifications — отдельный модуль `presentation/admin/base/notification`; публичный Router не зависит от Admin auth; SSE-контракт сохранён. | pass |
 
 ## Admin UI/UX polish browser scenarios (2026-11-23)
 

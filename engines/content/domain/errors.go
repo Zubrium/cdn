@@ -1,32 +1,23 @@
 package domain
 
 import (
-	"errors"
 	"strings"
 
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"golang.org/x/text/language"
 )
 
 var (
-	ErrInvalid     = errors.New("invalid Content data")
-	ErrNotFound    = errors.New("Content data not found")
-	ErrConflict    = errors.New("Content revision conflict")
-	ErrUnavailable = errors.New("Content data unavailable")
-	ErrTooLarge    = errors.New("Content data exceeds configured limits")
+	ErrInvalid     = contracts.ErrAdminContentInvalid
+	ErrNotFound    = contracts.ErrAdminContentNotFound
+	ErrConflict    = contracts.ErrAdminContentConflict
+	ErrUnavailable = contracts.ErrAdminContentUnavailable
+	ErrTooLarge    = contracts.ErrAdminContentTooLarge
 )
 
-type LocaleConfig struct {
-	Revision      int64    `json:"revision"`
-	Locales       []string `json:"locales"`
-	DefaultLocale string   `json:"default_locale"`
-}
+type LocaleConfig = contracts.AdminContentLocaleConfig
 
-type ReplaceLocaleConfigRequest struct {
-	ExpectedRevision int64    `json:"expected_revision"`
-	Locales          []string `json:"locales"`
-	DefaultLocale    string   `json:"default_locale"`
-	IdempotencyKey   string   `json:"-"`
-}
+type ReplaceLocaleConfigRequest = contracts.AdminContentReplaceLocaleConfigRequest
 
 // maxLocaleLength matches the Admin Content API locale schema (maxLength: 64).
 // The check is applied after canonicalization because legacy tags may expand.

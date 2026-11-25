@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -17,26 +18,40 @@ type runRecord struct {
 	Locale                     string   `json:"locale"`
 	ContentPublicationRevision int64    `json:"content_publication_revision"`
 	SystemModelRevision        int64    `json:"system_model_revision"`
+	IdempotencyKey             string   `json:"idempotency_key"`
 	State                      string   `json:"state"`
+	ErrorCode                  string   `json:"error_code,omitempty"`
 	TargetKeys                 []string `json:"target_keys"`
 	CreatedAt                  string   `json:"created_at"`
 	UpdatedAt                  string   `json:"updated_at"`
 }
 
 type targetRecord struct {
+	Kind                       string `json:"kind"`
+	RunID                      string `json:"run_id"`
+	RouteID                    string `json:"route_id"`
+	PageSnapshotID             string `json:"page_snapshot_id"`
+	Locale                     string `json:"locale"`
+	ContentPublicationRevision int64  `json:"content_publication_revision"`
+	SystemModelRevision        int64  `json:"system_model_revision"`
+	State                      string `json:"state"`
+	Revision                   int64  `json:"revision"`
+	InputDigest                string `json:"input_digest,omitempty"`
+	BuildID                    string `json:"build_id,omitempty"`
+	ArtifactManifestFileID     string `json:"artifact_manifest_file_id,omitempty"`
+	ErrorCode                  string `json:"error_code,omitempty"`
+	CreatedAt                  string `json:"created_at"`
+	UpdatedAt                  string `json:"updated_at"`
+}
+
+type artifactRecord struct {
 	Kind                   string `json:"kind"`
 	RunID                  string `json:"run_id"`
 	RouteID                string `json:"route_id"`
-	PageSnapshotID         string `json:"page_snapshot_id"`
 	Locale                 string `json:"locale"`
-	State                  string `json:"state"`
-	Revision               int64  `json:"revision"`
+	SnapshotID             string `json:"snapshot_id"`
 	InputDigest            string `json:"input_digest"`
-	BuildID                string `json:"build_id,omitempty"`
-	ArtifactManifestFileID string `json:"artifact_manifest_file_id,omitempty"`
-	ErrorCode              string `json:"error_code,omitempty"`
-	CreatedAt              string `json:"created_at"`
-	UpdatedAt              string `json:"updated_at"`
+	ArtifactManifestFileID string `json:"artifact_manifest_file_id"`
 }
 
 func runDataKey(branchID, runID string) contracts.RecordKey {
@@ -45,6 +60,10 @@ func runDataKey(branchID, runID string) contracts.RecordKey {
 
 func targetDataKey(branchID, runID, routeID, locale string) contracts.RecordKey {
 	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: branchID, RecordKey: "target/" + runID + "/" + routeID + "/" + locale}
+}
+
+func artifactDataKey(branchID, runID, routeID, locale string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: branchID, RecordKey: "artifact/" + runID + "/" + routeID + "/" + locale}
 }
 
 func runIndex(run runRecord) []byte {
@@ -57,6 +76,13 @@ func runIndex(run runRecord) []byte {
 func targetIndex(target targetRecord) []byte {
 	value, _ := json.Marshal(map[string]any{
 		"record_type": recordTypeTarget, "run_id": target.RunID, "state": target.State, "locale": target.Locale,
+	})
+	return value
+}
+
+func artifactIndex(artifact artifactRecord) []byte {
+	value, _ := json.Marshal(map[string]any{
+		"record_type": recordTypeArtifact, "run_id": artifact.RunID, "state": "ready", "locale": artifact.Locale,
 	})
 	return value
 }
@@ -90,7 +116,8 @@ func (s *Service) loadTarget(ctx context.Context, key contracts.RecordKey, runID
 	}
 	var target targetRecord
 	if record.PayloadVersion != dataVersion || record.Revision < 1 || json.Unmarshal(record.Payload, &target) != nil ||
-		target.Kind != recordTypeTarget || target.RunID != runID || target.RouteID == "" || target.Locale == "" || target.Revision < 1 {
+		target.Kind != recordTypeTarget || target.RunID != runID || target.RouteID == "" || target.PageSnapshotID == "" ||
+		target.Locale == "" || target.Revision < 1 {
 		return contracts.Record{}, targetRecord{}, fmt.Errorf("%w: invalid publication target record", ErrInvalid)
 	}
 	return record, target, nil
@@ -118,6 +145,32 @@ func (s *Service) putTarget(ctx context.Context, key contracts.RecordKey, expect
 	return nil
 }
 
+func (s *Service) putArtifact(ctx context.Context, artifact artifactRecord) error {
+	key := artifactDataKey(s.config.BranchID, artifact.RunID, artifact.RouteID, artifact.Locale)
+	value, err := encodeModuleData(artifact, artifactIndex(artifact))
+	if err != nil {
+		return err
+	}
+	if _, err := s.config.Store.Put(ctx, key, *value, 0); err != nil && !errors.Is(err, contracts.ErrRecordConflict) {
+		return mapStoreError(err)
+	}
+	return nil
+}
+
+func (s *Service) loadArtifact(ctx context.Context, runID, routeID, locale string) (artifactRecord, error) {
+	record, err := s.config.Store.Get(ctx, artifactDataKey(s.config.BranchID, runID, routeID, locale))
+	if err != nil {
+		return artifactRecord{}, mapStoreError(err)
+	}
+	var artifact artifactRecord
+	if record.PayloadVersion != dataVersion || json.Unmarshal(record.Payload, &artifact) != nil || artifact.Kind != recordTypeArtifact ||
+		artifact.RunID != runID || artifact.RouteID != routeID || artifact.Locale != locale ||
+		artifact.ArtifactManifestFileID == "" || artifact.InputDigest == "" {
+		return artifactRecord{}, fmt.Errorf("%w: invalid publication artifact record", ErrInvalid)
+	}
+	return artifact, nil
+}
+
 func mapStoreError(err error) error {
 	switch {
 	case err == nil:
@@ -125,7 +178,7 @@ func mapStoreError(err error) error {
 	case errors.Is(err, contracts.ErrRecordConflict):
 		return ErrConflict
 	case errors.Is(err, contracts.ErrRecordInvalid), errors.Is(err, contracts.ErrRecordNotFound):
-		return ErrInvalid
+		return err
 	default:
 		return ErrUnavailable
 	}

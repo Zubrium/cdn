@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
-	routerenginepresentation "github.com/Zubrium/cdn/engines/router/presentation"
 	"github.com/Zubrium/cdn/pkg/observability"
+	routerhttp "github.com/Zubrium/cdn/presentation/router"
 )
+
+type routeAdmissionAPI struct{ routerhttp.API }
 
 func routeAdmissionConfig(observer *observability.Observer, perRoute PerRouteAdmission) PublicConfig {
 	return PublicConfig{
@@ -28,7 +30,7 @@ func routeAdmissionConfig(observer *observability.Observer, perRoute PerRouteAdm
 
 func routeAdmissionServer(t *testing.T, observer *observability.Observer, perRoute PerRouteAdmission) *PublicServer {
 	t.Helper()
-	server, err := NewPublicServer(routeAdmissionConfig(observer, perRoute), &routerenginepresentation.APIAdapter{}, func() bool { return true })
+	server, err := NewPublicServer(routeAdmissionConfig(observer, perRoute), &routeAdmissionAPI{}, func() bool { return true })
 	if err != nil {
 		t.Fatalf("NewPublicServer: %v", err)
 	}
@@ -103,7 +105,7 @@ func TestConcurrencyLimitsScenario(t *testing.T) {
 				Overrides: []RouteAdmissionOverride{
 					{ID: "route-a", Path: "/static", MaxInFlight: 3},
 				},
-			}), &routerenginepresentation.APIAdapter{}, func() bool { return true })
+			}), &routeAdmissionAPI{}, func() bool { return true })
 			if !errors.Is(err, ErrInvalidRouteAdmission) {
 				t.Fatalf("override above global = %v, want ErrInvalidRouteAdmission", err)
 			}
@@ -114,7 +116,7 @@ func TestConcurrencyLimitsScenario(t *testing.T) {
 			_, err := NewPublicServer(routeAdmissionConfig(observer, PerRouteAdmission{
 				Enabled:            true,
 				DefaultMaxInFlight: 3,
-			}), &routerenginepresentation.APIAdapter{}, func() bool { return true })
+			}), &routeAdmissionAPI{}, func() bool { return true })
 			if !errors.Is(err, ErrInvalidRouteAdmission) {
 				t.Fatalf("default above global = %v, want ErrInvalidRouteAdmission", err)
 			}
@@ -130,7 +132,7 @@ func TestConcurrencyLimitsScenario(t *testing.T) {
 				}},
 			} {
 				t.Run(name, func(t *testing.T) {
-					_, err := NewPublicServer(routeAdmissionConfig(observer, perRoute), &routerenginepresentation.APIAdapter{}, func() bool { return true })
+					_, err := NewPublicServer(routeAdmissionConfig(observer, perRoute), &routeAdmissionAPI{}, func() bool { return true })
 					if !errors.Is(err, ErrInvalidRouteAdmission) {
 						t.Fatalf("static route config = %v, want ErrInvalidRouteAdmission", err)
 					}

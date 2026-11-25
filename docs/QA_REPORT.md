@@ -1,11 +1,60 @@
 # QA-отчёт
 
+## Финальный sweep строгих границ модулей (2026-11-25)
+
+Статусы `ARCH-001..ARCH-006` в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md)
+выставлены `pass` только по результатам этого прогона. Рабочий стек
+`zubriumprod205553`, его PostgreSQL/MinIO и пользовательские uncommitted-файлы
+не изменялись; живые write-запросы не отправлялись.
+
+Проверяемые команды (overlay пересоздан из `tests/go-overlay.py`):
+
+```sh
+seed=/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/opencode/zubrium-obs-20261125
+python3 tests/go-overlay.py > "$seed/api-isolation-overlay.json"
+GOWORK=off GO111MODULE=off go run ./tests/linter
+GOWORK=off GO111MODULE=off go test ./tests/linter
+(cd core && GOFLAGS="-overlay=$seed/api-isolation-overlay.json" go test -count=1 -p=1 ./...)
+for module in $(grep -E '^\s*\./' go.work | tr -d '\t ./'); do
+  (cd "$module" && GOWORK=off GOFLAGS="-overlay=$seed/api-isolation-overlay.json" go test -count=1 -p=1 ./... && GOWORK=off GOFLAGS="-overlay=$seed/api-isolation-overlay.json" go vet ./... && GOWORK=off go build ./...)
+done
+for tag in default full router devfixtures; do
+  (cd main && GOWORK=off GOFLAGS="-overlay=$seed/api-isolation-overlay.json" go test -count=1 -tags="$tag" -p=1 ./... && GOWORK=off go build -tags="$tag" ./...)
+done
+git diff --check
+```
+
+Результат: все шаги завершились `PASS`, включая 22 repository-local Go модуля,
+линтер с пустым strict baseline, точные allowlist-тесты (в том числе 67 Admin
+engine operation keys) и все четыре скомпилированных профиля `main`. Полный
+machine-readable лог с длительностями и выводом каждого шага —
+[`output/architecture-boundaries-20261125-sweep.txt`](../output/architecture-boundaries-20261125-sweep.txt);
+прогон 2026-11-25 06:22:18+0300 — 06:23:50+0300, итог `ALL PASS`.
+
+После зелёного sweep правила линтера зафиксированы манифестом SHA-256 в
+`tests/linter/rules_freeze_test.go`; тест отклоняет изменение любого rules-файла
+и появление нового. Повторные `go run ./tests/linter` и
+`GOWORK=off GO111MODULE=off go test ./tests/linter` после фиксации прошли.
+
+Покрытие сценариев: ARCH-001 — AST-линтер и тесты границ; ARCH-002 — Admin
+DataBus adapters и Router public operations; ARCH-003 — workflow-тесты
+`main/internal/{publication,retirement,contentbridge}` и `engines/website`;
+ARCH-004 — тесты `presentation/router/publicupload` и `router_public_bus`;
+ARCH-005 — точные allowlist/module-scope тесты и запрет клиентского
+`operation_id`; ARCH-006 — изолированные `test/vet/build` по каждому модулю и
+отдельный модуль `presentation/admin/base/notification`.
+
+Ограничения прогона: интеграционные сценарии с PostgreSQL/S3 и живой
+browser/E2E в этой волне не выполнялись — для них нужны disposable ресурсы и
+изолированный стек; это не трактуется как `pass`. Фронтенд Admin в этой волне
+не изменялся, поэтому `pnpm typecheck/test/build` и ESLint повторно не
+запускались.
+
 ## Промежуточные чекпоинты strict boundary (2026-11-25)
 
 Работы ведутся в отдельном checkout ветки `readiness-20261123`; рабочий стек
 `zubriumprod205553`, его PostgreSQL/MinIO и пользовательские uncommitted-файлы
-не изменялись. Статусы `ARCH-001..ARCH-006` в acceptance matrix остаются
-`planned` до финального sweep с полным evidence.
+не изменялись.
 
 ### Точный DataBus allowlist и HTTP ingress
 

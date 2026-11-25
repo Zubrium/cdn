@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	engine "github.com/Zubrium/cdn/engines/forms/presentation"
+	engine "github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
 )
@@ -33,14 +33,14 @@ type Config struct {
 }
 
 type Handler struct {
-	api         engine.API
+	api         engine.AdminFormsAPI
 	cfg         Config
 	transport   *adminhttpauth.Transport
 	mux         *http.ServeMux
 	exportSlots chan struct{}
 }
 
-func NewHandler(api engine.API, config Config) (*Handler, error) {
+func NewHandler(api engine.AdminFormsAPI, config Config) (*Handler, error) {
 	if nilInterface(api) || config.MaxJSONBytes < 1 || config.MaxJSONBytes > 16<<20 ||
 		config.MaxPageSize < 1 || config.MaxPageSize > 500 || config.DefaultPageSize < 1 || config.DefaultPageSize > config.MaxPageSize ||
 		config.ExportMaxConcurrent < 1 || config.ExportMaxConcurrent > 16 ||
@@ -116,7 +116,7 @@ func (h *Handler) saveSchema(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var request engine.SaveSchemaRequest
+	var request engine.AdminFormsSaveSchemaRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -152,7 +152,7 @@ func (h *Handler) listSubmissions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	page, err := h.api.ListSubmissions(ctx, engine.ListSubmissionsRequest{FormID: query["form_id"], Key: query["key"], State: query["state"], Cursor: query["cursor"], Limit: limit})
+	page, err := h.api.ListSubmissions(ctx, engine.AdminFormsListSubmissionsRequest{FormID: query["form_id"], Key: query["key"], State: query["state"], Cursor: query["cursor"], Limit: limit})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -208,7 +208,7 @@ func (h *Handler) exportSubmissions(w http.ResponseWriter, r *http.Request) {
 }
 
 type exportRow struct {
-	submission engine.Submission
+	submission engine.AdminFormsSubmission
 	valuesJSON []byte
 }
 
@@ -224,7 +224,7 @@ func (h *Handler) readExportRows(ctx context.Context, formID, formKey, state str
 	var encodedValuesBytes int64
 	maxPages := h.cfg.ExportMaxRows + 1
 	for pageNumber := 0; pageNumber < maxPages; pageNumber++ {
-		page, err := h.api.ListSubmissions(ctx, engine.ListSubmissionsRequest{
+		page, err := h.api.ListSubmissions(ctx, engine.AdminFormsListSubmissionsRequest{
 			FormID: formID, Key: formKey, State: state, Cursor: cursor, Limit: h.cfg.DefaultPageSize,
 		})
 		if err != nil {
@@ -380,7 +380,7 @@ func (h *Handler) setSubmissionStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	submission, err := h.api.SetSubmissionStatus(ctx, engine.SetSubmissionStatusRequest{SubmissionID: submissionID, Status: request.Status, ExpectedRevision: request.ExpectedRevision})
+	submission, err := h.api.SetSubmissionStatus(ctx, engine.AdminFormsSetSubmissionStatusRequest{SubmissionID: submissionID, Status: request.Status, ExpectedRevision: request.ExpectedRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -401,7 +401,7 @@ func (h *Handler) deleteSubmission(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if err := h.api.DeleteSubmission(ctx, engine.DeleteSubmissionRequest{SubmissionID: submissionID, ExpectedRevision: revision}); err != nil {
+	if err := h.api.DeleteSubmission(ctx, engine.AdminFormsDeleteSubmissionRequest{SubmissionID: submissionID, ExpectedRevision: revision}); err != nil {
 		writeEngineError(w, err)
 		return
 	}
@@ -499,16 +499,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, target any)
 	err := httpjson.DecodeRequest(w, r, limit, target)
 	switch {
 	case errors.Is(err, httpjson.ErrTooLarge):
-		return engine.ErrTooLarge
+		return engine.ErrAdminFormsTooLarge
 	case errors.Is(err, httpjson.ErrInvalid):
-		return engine.ErrInvalid
+		return engine.ErrAdminFormsInvalid
 	default:
 		return err
 	}
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, engine.ErrTooLarge) {
+	if errors.Is(err, engine.ErrAdminFormsTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
 		return
 	}
@@ -517,17 +517,17 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, engine.ErrUnauthorized):
+	case errors.Is(err, engine.ErrAdminFormsUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, engine.ErrForbidden):
+	case errors.Is(err, engine.ErrAdminFormsForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
-	case errors.Is(err, engine.ErrNotFound):
+	case errors.Is(err, engine.ErrAdminFormsNotFound):
 		writeError(w, http.StatusNotFound, "not_found")
-	case errors.Is(err, engine.ErrConflict):
+	case errors.Is(err, engine.ErrAdminFormsConflict):
 		writeError(w, http.StatusConflict, "conflict")
-	case errors.Is(err, engine.ErrInvalid):
+	case errors.Is(err, engine.ErrAdminFormsInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request")
-	case errors.Is(err, engine.ErrTooLarge):
+	case errors.Is(err, engine.ErrAdminFormsTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
 	default:
 		writeError(w, http.StatusServiceUnavailable, "unavailable")

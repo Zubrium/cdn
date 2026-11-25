@@ -3,6 +3,7 @@ package composition
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
@@ -35,19 +36,21 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	starter := retirementWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, "composition.retirement")}
 	service, err := retirement.NewService(retirement.Config{
-		BranchID:          component.config.RouterAPI.BranchID,
-		Store:             data,
-		Routes:            component.config.Retirement.Routes,
-		Website:           component.website.service,
-		WebsiteCredential: component.config.Retirement.WebsiteCredential,
-		Router:            component.router.api,
-		RouterCredential:  component.config.Retirement.RouterCredential,
+		BranchID:    component.config.RouterAPI.BranchID,
+		Store:       data,
+		Routes:      component.config.Retirement.Routes,
+		Starter:     starter,
+		MaxAttempts: component.config.Coordinator.MaxAttempts,
 	})
 	if err != nil {
 		return err
 	}
 	component.service = service
+	setRetirementWorkflowService(service)
+	setRetirementHandlerCore(component.core)
+	setRetirementHandlerRouter(component.router)
 	component.client = &retirementClient{dispatcher: component.dispatcher}
 	return nil
 }
@@ -80,7 +83,54 @@ func (component *retirementComponent) retirePage(ctx context.Context, request co
 	if component == nil || component.service == nil {
 		return contracts.PageRetirement{}, errors.New("Retirement workflow is unavailable")
 	}
-	return component.service.RetirePage(ctx, request)
+	job, exists, err := component.service.FindReceipt(ctx, request)
+	if err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	if exists {
+		return component.service.Launch(ctx, job)
+	}
+	retired, err := component.service.PageIsRetired(ctx, request.PageID)
+	if err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	if retired {
+		return contracts.PageRetirement{}, retirement.ErrConflict
+	}
+	if err := validateRetirementPage(ctx, component, request); err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	job, err = component.service.Prepare(ctx, request)
+	if err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	if err := markPageRetiring(ctx, component.core, job); err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	return component.service.Launch(ctx, job)
+}
+
+func validateRetirementPage(ctx context.Context, component *retirementComponent, request contracts.RetirePageRequest) error {
+	if component == nil || component.core == nil || component.config.Retirement.WebsiteCredential == "" {
+		return retirement.ErrUnavailable
+	}
+	website := component.core.websiteHandle.Load()
+	if website == nil || website.service == nil {
+		return retirement.ErrUnavailable
+	}
+	websiteCtx, err := website.service.Authenticate(ctx, component.config.Retirement.WebsiteCredential)
+	if err != nil {
+		return retirement.ErrUnavailable
+	}
+	page, err := website.service.GetPage(websiteCtx, request.PageID)
+	if err != nil {
+		return retirement.ErrUnavailable
+	}
+	if page.ID != request.PageID || page.LifecycleState != contracts.RetirementPageStateActive ||
+		page.RetirementJobID != "" || request.IfMatch != fmt.Sprintf("\"%d\"", page.Revision) {
+		return retirement.ErrConflict
+	}
+	return nil
 }
 
 func (component *retirementComponent) getPageRetirement(ctx context.Context, request contracts.PageRetirementQuery) (contracts.PageRetirement, error) {

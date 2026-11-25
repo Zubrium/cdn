@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	website "github.com/Zubrium/cdn/engines/website/presentation"
+	website "github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
@@ -46,14 +46,14 @@ type Config struct {
 }
 
 type Handler struct {
-	website    website.API
+	website    website.AdminWebsiteAPI
 	retirement PageRetirementAPI
 	cfg        Config
 	auth       *adminhttpauth.Transport
 	mux        *http.ServeMux
 }
 
-func NewHandler(api website.API, cfg Config) (*Handler, error) {
+func NewHandler(api website.AdminWebsiteAPI, cfg Config) (*Handler, error) {
 	if nilInterface(api) || cfg.MaxJSONBytes <= 0 || cfg.MaxJSONBytes > 16<<20 ||
 		cfg.DefaultPageSize < 1 || cfg.MaxPageSize < cfg.DefaultPageSize || cfg.MaxPageSize > 500 {
 		return nil, errors.New("invalid Website API configuration")
@@ -122,7 +122,7 @@ func (h *Handler) beginImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	job, err := h.website.BeginFeatureImport(ctx, website.ImportFeatureRequest{
+	job, err := h.website.BeginFeatureImport(ctx, website.AdminWebsiteImportFeatureRequest{
 		SourceFileID: request.SourceFileID, ExpectedSHA256: strings.ToLower(request.ExpectedSHA256), IdempotencyKey: key,
 	})
 	if err != nil {
@@ -300,7 +300,7 @@ func (h *Handler) createPage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	value, err := h.website.CreatePage(ctx, website.CreatePageRequest{
+	value, err := h.website.CreatePage(ctx, website.AdminWebsiteCreatePageRequest{
 		Name: input.Name, TemplateID: input.TemplateID,
 		TemplateRevision: input.TemplateRevision, IdempotencyKey: key,
 	})
@@ -385,7 +385,7 @@ func (h *Handler) getPageRetirement(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-func validPageResponse(value website.Page, pageID string) bool {
+func validPageResponse(value website.AdminWebsitePage, pageID string) bool {
 	return validUUID(value.ID) && value.ID == pageID && validSnapshotName(value.Name) &&
 		value.Revision >= 1 && (value.LifecycleState == "active" || value.LifecycleState == "retiring" || value.LifecycleState == "retired") &&
 		(value.RetirementJobID == "" || validUUID(value.RetirementJobID)) &&
@@ -513,7 +513,7 @@ func (h *Handler) createPageTemplate(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name          string                            `json:"name"`
 		Description   string                            `json:"description"`
-		Configuration website.PageTemplateConfiguration `json:"configuration"`
+		Configuration website.AdminWebsitePageTemplateConfiguration `json:"configuration"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
@@ -523,7 +523,7 @@ func (h *Handler) createPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	value, err := h.website.CreatePageTemplate(ctx, website.CreatePageTemplateRequest{
+	value, err := h.website.CreatePageTemplate(ctx, website.AdminWebsiteCreatePageTemplateRequest{
 		Name: input.Name, Description: input.Description,
 		Configuration: input.Configuration, IdempotencyKey: key,
 	})
@@ -558,7 +558,7 @@ func (h *Handler) updatePageTemplate(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name          string                            `json:"name"`
 		Description   string                            `json:"description"`
-		Configuration website.PageTemplateConfiguration `json:"configuration"`
+		Configuration website.AdminWebsitePageTemplateConfiguration `json:"configuration"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
@@ -568,7 +568,7 @@ func (h *Handler) updatePageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	value, err := h.website.UpdatePageTemplate(ctx, website.UpdatePageTemplateRequest{
+	value, err := h.website.UpdatePageTemplate(ctx, website.AdminWebsiteUpdatePageTemplateRequest{
 		TemplateID: templateID, ExpectedRevision: revision,
 		Name: input.Name, Description: input.Description, Configuration: input.Configuration,
 	})
@@ -599,7 +599,7 @@ func (h *Handler) deletePageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, "invalid_revision")
 		return
 	}
-	if err := h.website.DeletePageTemplate(ctx, website.DeletePageTemplateRequest{TemplateID: templateID, ExpectedRevision: revision}); err != nil {
+	if err := h.website.DeletePageTemplate(ctx, website.AdminWebsiteDeletePageTemplateRequest{TemplateID: templateID, ExpectedRevision: revision}); err != nil {
 		writeEngineError(w, err)
 		return
 	}
@@ -621,7 +621,7 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	var input website.ApplyPageTemplateRequest
+	var input website.AdminWebsiteApplyPageTemplateRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -645,7 +645,7 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
-	payload, marshalErr := json.Marshal(website.SnapshotForkWorkflowPayload{
+	payload, marshalErr := json.Marshal(website.AdminWebsiteSnapshotForkWorkflowPayload{
 		SourceSnapshotID: input.ExpectedSnapshotID, TargetSnapshotID: snapshot.ID,
 		ExpectedSourceContentRevision: input.ExpectedContentRevision, TargetSnapshotRevision: snapshot.Revision,
 		ContentCopyIdempotencyKey: "content-reset:" + digestText(snapshot.ID),
@@ -668,13 +668,13 @@ func (h *Handler) applyPageTemplate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, snapshot)
 }
 
-func validPageTemplate(value website.PageTemplate, templateID string) bool {
+func validPageTemplate(value website.AdminWebsitePageTemplate, templateID string) bool {
 	return validUUID(value.ID) && value.ID == templateID && validSnapshotName(value.Name) &&
 		utf8.ValidString(value.Description) && len(value.Description) <= 1000 && value.Revision >= 1 &&
 		sha256Pattern.MatchString(value.Digest) && validPageTemplateConfiguration(value.Configuration)
 }
 
-func validPageTemplateConfiguration(value website.PageTemplateConfiguration) bool {
+func validPageTemplateConfiguration(value website.AdminWebsitePageTemplateConfiguration) bool {
 	if value.SchemaVersion != 1 || value.FeaturePins == nil || !validSnapshotPayload(value.Payload) {
 		return false
 	}
@@ -718,7 +718,7 @@ func (h *Handler) saveContentModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var request website.SaveContentModelRequest
+	var request website.AdminWebsiteSaveContentModelRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -831,7 +831,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	var input website.CreateSnapshotRequest
+	var input website.AdminWebsiteCreateSnapshotRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -865,7 +865,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if input.ParentID != "" {
 		copyKey := "content-copy:" + digestText(value.ID)
-		payload, marshalErr := json.Marshal(website.SnapshotForkWorkflowPayload{
+		payload, marshalErr := json.Marshal(website.AdminWebsiteSnapshotForkWorkflowPayload{
 			SourceSnapshotID: input.ParentID, TargetSnapshotID: value.ID,
 			ExpectedSourceContentRevision: input.ExpectedContentRevision, TargetSnapshotRevision: value.Revision,
 			ContentCopyIdempotencyKey: copyKey,
@@ -910,7 +910,7 @@ func (h *Handler) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, "invalid_revision")
 		return
 	}
-	if err := h.website.DeleteSnapshot(ctx, website.DeleteSnapshotRequest{SnapshotID: snapshotID, ExpectedRevision: revision}); err != nil {
+	if err := h.website.DeleteSnapshot(ctx, website.AdminWebsiteDeleteSnapshotRequest{SnapshotID: snapshotID, ExpectedRevision: revision}); err != nil {
 		writeEngineError(w, err)
 		return
 	}
@@ -937,7 +937,7 @@ func validPageID(value string) bool {
 	return validUUID(value)
 }
 
-func validSnapshotPayload(payload website.SnapshotPayload) bool {
+func validSnapshotPayload(payload website.AdminWebsiteSnapshotPayload) bool {
 	return validUniqueJSONObject(payload.Config, 8<<20) && validUniqueJSONObject(payload.Metadata, 1<<20)
 }
 
@@ -993,7 +993,7 @@ func (h *Handler) buildSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	job, err := h.website.BuildSnapshot(ctx, website.BuildSnapshotRequest{SnapshotID: input.SnapshotID, Locale: input.Locale, IdempotencyKey: key})
+	job, err := h.website.BuildSnapshot(ctx, website.AdminWebsiteBuildSnapshotRequest{SnapshotID: input.SnapshotID, Locale: input.Locale, IdempotencyKey: key})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -1034,7 +1034,7 @@ func (h *Handler) createMediaDerivative(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	var input website.CreateDerivativeRequest
+	var input website.AdminWebsiteCreateDerivativeRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -1148,9 +1148,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target a
 	err := httpjson.DecodeRequest(w, r, maxBytes, target)
 	switch {
 	case errors.Is(err, httpjson.ErrTooLarge):
-		return website.ErrTooLarge
+		return website.ErrAdminWebsiteTooLarge
 	case errors.Is(err, httpjson.ErrInvalid):
-		return website.ErrInvalid
+		return website.ErrAdminWebsiteInvalid
 	default:
 		return err
 	}
@@ -1158,17 +1158,17 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target a
 
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, website.ErrUnauthorized):
+	case errors.Is(err, website.ErrAdminWebsiteUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, website.ErrForbidden):
+	case errors.Is(err, website.ErrAdminWebsiteForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
-	case errors.Is(err, website.ErrNotFound):
+	case errors.Is(err, website.ErrAdminWebsiteNotFound):
 		writeError(w, http.StatusNotFound, "not_found")
-	case errors.Is(err, website.ErrConflict):
+	case errors.Is(err, website.ErrAdminWebsiteConflict):
 		writeError(w, http.StatusConflict, "conflict")
-	case errors.Is(err, website.ErrTooLarge):
+	case errors.Is(err, website.ErrAdminWebsiteTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
-	case errors.Is(err, website.ErrInvalid):
+	case errors.Is(err, website.ErrAdminWebsiteInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request")
 	default:
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
@@ -1176,7 +1176,7 @@ func writeEngineError(w http.ResponseWriter, err error) {
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, website.ErrTooLarge) {
+	if errors.Is(err, website.ErrAdminWebsiteTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
 		return
 	}

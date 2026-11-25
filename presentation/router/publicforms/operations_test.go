@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	forms "github.com/Zubrium/cdn/engines/forms/presentation"
-	router "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/presentation/router/publicforms"
 )
 
@@ -21,44 +20,44 @@ type stubVisitorAPI struct {
 	submitRequests  int
 }
 
-func (api *stubVisitorAPI) ValidatePublicForm(context.Context, forms.PublicFormBinding) error {
+func (api *stubVisitorAPI) ValidatePublicForm(context.Context, contracts.PublicFormBinding) error {
 	return api.validateFormErr
 }
 
-func (api *stubVisitorAPI) ValidatePublicUploadRoute(context.Context, forms.PublicUploadRouteBinding) error {
+func (api *stubVisitorAPI) ValidatePublicUploadRoute(context.Context, contracts.PublicUploadRouteBinding) error {
 	return nil
 }
 
-func (api *stubVisitorAPI) CreateVisitorSession(context.Context, forms.CreateVisitorSessionRequest) (forms.VisitorSessionCredential, error) {
-	return forms.VisitorSessionCredential{}, nil
+func (api *stubVisitorAPI) CreateVisitorSession(context.Context, contracts.PublicFormBinding) (contracts.PublicVisitorSessionCredential, error) {
+	return contracts.PublicVisitorSessionCredential{}, nil
 }
 
-func (api *stubVisitorAPI) GetVisitorSession(context.Context, forms.GetVisitorSessionRequest) (forms.VisitorSession, error) {
-	return forms.VisitorSession{}, nil
+func (api *stubVisitorAPI) GetVisitorSession(context.Context, contracts.PublicGetVisitorSessionRequest) (contracts.PublicVisitorSession, error) {
+	return contracts.PublicVisitorSession{}, nil
 }
 
-func (api *stubVisitorAPI) BeginVisitorUpload(context.Context, forms.BeginVisitorUploadRequest) (forms.VisitorUploadReservation, error) {
-	return forms.VisitorUploadReservation{}, nil
+func (api *stubVisitorAPI) BeginVisitorUpload(context.Context, contracts.PublicBeginVisitorUploadRequest) (contracts.PublicVisitorUploadReservation, error) {
+	return contracts.PublicVisitorUploadReservation{}, nil
 }
 
-func (api *stubVisitorAPI) CompleteVisitorUpload(context.Context, forms.CompleteVisitorUploadRequest) (forms.VisitorAttachment, error) {
-	return forms.VisitorAttachment{}, nil
+func (api *stubVisitorAPI) CompleteVisitorUpload(context.Context, contracts.PublicCompleteVisitorUploadRequest) (contracts.PublicVisitorAttachment, error) {
+	return contracts.PublicVisitorAttachment{}, nil
 }
 
-func (api *stubVisitorAPI) AbortVisitorUpload(context.Context, forms.AbortVisitorUploadRequest) error {
+func (api *stubVisitorAPI) AbortVisitorUpload(context.Context, contracts.PublicAbortVisitorUploadRequest) error {
 	return nil
 }
 
-func (api *stubVisitorAPI) CancelVisitorSession(context.Context, forms.CancelVisitorSessionRequest) error {
+func (api *stubVisitorAPI) CancelVisitorSession(context.Context, contracts.PublicCancelVisitorSessionRequest) error {
 	return nil
 }
 
-func (api *stubVisitorAPI) SubmitVisitorResponse(context.Context, forms.SubmitVisitorResponseRequest) (forms.VisitorSubmissionReceipt, error) {
+func (api *stubVisitorAPI) SubmitVisitorResponse(context.Context, contracts.PublicSubmitVisitorResponseRequest) (contracts.PublicVisitorSubmissionReceipt, error) {
 	api.submitRequests++
 	if api.submitErr != nil {
-		return forms.VisitorSubmissionReceipt{}, api.submitErr
+		return contracts.PublicVisitorSubmissionReceipt{}, api.submitErr
 	}
-	return forms.VisitorSubmissionReceipt{ID: "receipt-1", CreatedAt: time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)}, nil
+	return contracts.PublicVisitorSubmissionReceipt{ID: "receipt-1", CreatedAt: time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)}, nil
 }
 
 func routeConfig(t *testing.T, extra string) json.RawMessage {
@@ -67,8 +66,8 @@ func routeConfig(t *testing.T, extra string) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-func submitRequest(body string, key string, token string) router.PublicOperationRequest {
-	return router.PublicOperationRequest{
+func submitRequest(body string, key string, token string) contracts.PublicOperationRequest {
+	return contracts.PublicOperationRequest{
 		Method:            "POST",
 		EscapedPath:       "/forms/contact/submit",
 		IdempotencyKey:    key,
@@ -123,12 +122,12 @@ func TestSubmitOperationRejectsRequestsWithoutCapabilityOrIdempotency(t *testing
 		t.Fatal("Forms was called without a session capability")
 	}
 
-	if _, err := operation.Execute(context.Background(), config, submitRequest(body, "", "capability-token")); !errors.Is(err, router.ErrInvalid) {
+	if _, err := operation.Execute(context.Background(), config, submitRequest(body, "", "capability-token")); !errors.Is(err, contracts.ErrPublicInvalid) {
 		t.Fatalf("missing idempotency key error = %v, want invalid", err)
 	}
 	request := submitRequest(body, "qa-battery-valid-key-1", "capability-token")
 	request.Query = "field=attachment"
-	if _, err := operation.Execute(context.Background(), config, request); !errors.Is(err, router.ErrInvalid) {
+	if _, err := operation.Execute(context.Background(), config, request); !errors.Is(err, contracts.ErrPublicInvalid) {
 		t.Fatalf("query string error = %v, want invalid", err)
 	}
 }
@@ -148,7 +147,7 @@ func TestSubmitOperationMapsFormsErrorsAndCookiePolicy(t *testing.T) {
 		}
 	})
 	t.Run("conflict keeps cookie", func(t *testing.T) {
-		operation, err := publicforms.NewSubmitOperation(&stubVisitorAPI{submitErr: forms.ErrConflict}, 1024)
+		operation, err := publicforms.NewSubmitOperation(&stubVisitorAPI{submitErr: contracts.ErrPublicConflict}, 1024)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,7 +157,7 @@ func TestSubmitOperationMapsFormsErrorsAndCookiePolicy(t *testing.T) {
 		}
 	})
 	t.Run("expired clears cookie", func(t *testing.T) {
-		operation, err := publicforms.NewSubmitOperation(&stubVisitorAPI{submitErr: forms.ErrExpired}, 1024)
+		operation, err := publicforms.NewSubmitOperation(&stubVisitorAPI{submitErr: contracts.ErrPublicExpired}, 1024)
 		if err != nil {
 			t.Fatal(err)
 		}

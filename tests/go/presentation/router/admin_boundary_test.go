@@ -2,18 +2,17 @@ package router
 
 import (
 	"context"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 )
 
 func TestRouterPublicListenerDoesNotServeAdminOperations(t *testing.T) {
-	handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(context.Context, engine.DeliveryRequest) (engine.DeliveryResponse, error) {
+	handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(context.Context, contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 		t.Fatal("public delivery must not be called for an Admin path")
-		return engine.DeliveryResponse{}, nil
+		return contracts.DeliveryResponse{}, nil
 	}}, Config{BranchID: "main", MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
 	if err != nil {
 		t.Fatal(err)

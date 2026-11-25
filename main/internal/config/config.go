@@ -121,10 +121,8 @@ type RouterAPI struct {
 	BranchID                  string                 `yaml:"branch_id"`
 	ServiceCredentialEnv      string                 `yaml:"service_credential_env"`
 	PublicListenAddress       string                 `yaml:"public_listen_address"`
-	UploadStagingDirectory    string                 `yaml:"upload_staging_directory"`
 	UploadMaxFileBytes        int64                  `yaml:"upload_max_file_bytes"`
 	UploadMaxConcurrent       int                    `yaml:"upload_max_concurrent"`
-	UploadMaxStagedBytes      int64                  `yaml:"upload_max_staged_bytes"`
 	UploadAllowedContentTypes []string               `yaml:"upload_allowed_content_types"`
 	FormSessionCookieSecure   *bool                  `yaml:"form_session_cookie_secure"`
 	LocalePreference          RouterLocalePreference `yaml:"locale_preference"`
@@ -293,10 +291,8 @@ type RouterAPISettings struct {
 	BranchID                   string
 	ServiceCredential          string
 	PublicListenAddress        string
-	UploadStagingDirectory     string
 	UploadMaxFileBytes         int64
 	UploadMaxConcurrent        int
-	UploadMaxStagedBytes       int64
 	UploadAllowedContentTypes  []string
 	FormSessionCookieSecure    bool
 	FormSessionCookieSecureSet bool
@@ -545,11 +541,9 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 			return errors.New("public.form-upload requires public.router")
 		}
 		settings := r.RouterAPI
-		if settings.UploadStagingDirectory == "" || !filepath.IsAbs(settings.UploadStagingDirectory) || filepath.Clean(settings.UploadStagingDirectory) != settings.UploadStagingDirectory || settings.UploadStagingDirectory == string(filepath.Separator) ||
-			settings.UploadMaxFileBytes <= 0 || settings.UploadMaxFileBytes > r.Loader.MaxFileBytes || settings.UploadMaxConcurrent <= 0 || settings.UploadMaxConcurrent > 1024 ||
-			settings.UploadMaxStagedBytes <= 0 || settings.UploadMaxFileBytes > settings.UploadMaxStagedBytes/int64(settings.UploadMaxConcurrent) ||
+		if settings.UploadMaxFileBytes <= 0 || settings.UploadMaxFileBytes > r.Loader.MaxFileBytes || settings.UploadMaxConcurrent <= 0 || settings.UploadMaxConcurrent > 1024 ||
 			!validUploadContentTypes(settings.UploadAllowedContentTypes) {
-			return errors.New("public.form-upload requires explicit staging, size, concurrency, and MIME limits within Loader capacity")
+			return errors.New("public.form-upload requires explicit size, concurrency, and MIME limits within Loader capacity")
 		}
 	}
 	return nil
@@ -1079,8 +1073,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			AllowedOrigins:      append([]string(nil), c.AdminAPI.AllowedOrigins...)},
 		RouterAPI: RouterAPISettings{MaxJSONBytes: c.RouterAPI.MaxJSONBytes, DefaultPageSize: c.RouterAPI.DefaultPageSize, MaxPageSize: c.RouterAPI.MaxPageSize,
 			BranchID: c.RouterAPI.BranchID, ServiceCredential: routerServiceCredential, PublicListenAddress: c.RouterAPI.PublicListenAddress,
-			UploadStagingDirectory: c.RouterAPI.UploadStagingDirectory, UploadMaxFileBytes: c.RouterAPI.UploadMaxFileBytes,
-			UploadMaxConcurrent: c.RouterAPI.UploadMaxConcurrent, UploadMaxStagedBytes: c.RouterAPI.UploadMaxStagedBytes,
+			UploadMaxFileBytes: c.RouterAPI.UploadMaxFileBytes, UploadMaxConcurrent: c.RouterAPI.UploadMaxConcurrent,
 			UploadAllowedContentTypes:  append([]string(nil), c.RouterAPI.UploadAllowedContentTypes...),
 			FormSessionCookieSecure:    c.RouterAPI.FormSessionCookieSecure != nil && *c.RouterAPI.FormSessionCookieSecure,
 			FormSessionCookieSecureSet: c.RouterAPI.FormSessionCookieSecure != nil,
@@ -1170,8 +1163,8 @@ func resolveWarmupKeys(c Config) ([]platform.CacheKey, []ResolvedPublishedArtifa
 			locale, _ := routermodel.CanonicalLocale(artifact.Locale)
 			entry.artifacts = append(entry.artifacts, ResolvedPublishedArtifact{
 				RouteID: artifact.RouteID, Locale: locale, FileID: artifact.FileID,
-				Tier: platform.CacheTier(strings.ToUpper(artifact.Tier)),
-				Paths: append([]string(nil), artifact.Paths...),
+				Tier:           platform.CacheTier(strings.ToUpper(artifact.Tier)),
+				Paths:          append([]string(nil), artifact.Paths...),
 				Authorizations: authorizations(artifact.Authorization),
 			})
 		}

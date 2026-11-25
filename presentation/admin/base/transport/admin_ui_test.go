@@ -7,14 +7,12 @@ import (
 	"testing"
 	"time"
 
-	website "github.com/Zubrium/cdn/engines/website/presentation"
 	fileapi "github.com/Zubrium/cdn/presentation/fileapi"
 )
 
 // The mux builds handlers without invoking their APIs, so embedding the
 // interfaces is enough to provide non-nil dependencies for route tests.
 type uiTestLoader struct{ fileapi.Loader }
-type uiTestWebsite struct{ website.API }
 
 func uiTestServer(t *testing.T, uiHandler http.Handler) *AdminServer {
 	t.Helper()
@@ -30,7 +28,15 @@ func uiTestServer(t *testing.T, uiHandler http.Handler) *AdminServer {
 		MaxJSONBytes: 1 << 20, DefaultPageSize: 1, MaxPageSize: 10,
 		UIHandler: uiHandler,
 	}, AdminDependencies{
-		CoreReady: func() bool { return false }, Files: &uiTestLoader{}, Website: &uiTestWebsite{},
+		CoreReady: func() bool { return false },
+		HandlerMounts: func(HandlerContext) ([]HandlerMount, error) {
+			return []HandlerMount{{
+				Patterns: []string{"/api/admin/model"}, Guarded: true,
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}),
+			}}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("create Admin server: %v", err)

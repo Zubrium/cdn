@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -21,8 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zubrium/cdn/engines/router/features/routes/model"
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -143,23 +142,23 @@ func strconvQuote(value string) string {
 	return string(encoded)
 }
 
-func cacheScenarioTarget(manifestID string) model.Target {
-	return model.Target{
-		Kind:          model.TargetStaticSiteArtifact,
+func cacheScenarioTarget(manifestID string) contracts.Target {
+	return contracts.Target{
+		Kind:          contracts.TargetStaticSiteArtifact,
 		DefaultLocale: "en-US",
-		LocaleTargets: []model.LocaleArtifactTarget{{Locale: "en-US", ArtifactManifestFileID: manifestID, Revision: 1}},
+		LocaleTargets: []contracts.LocaleArtifactTarget{{Locale: "en-US", ArtifactManifestFileID: manifestID, Revision: 1}},
 	}
 }
 
-func cacheScenarioRoute(target model.Target, revision int64) model.Route {
-	return model.Route{
+func cacheScenarioRoute(target contracts.Target, revision int64) contracts.Route {
+	return contracts.Route{
 		ID:        "01938f7a-68af-7c20-a51d-78b6ca125399",
 		BranchID:  cacheScenarioBranch,
 		Host:      cacheScenarioHost,
 		Path:      cacheScenarioPath,
-		Match:     model.MatchPrefix,
+		Match:     contracts.MatchPrefix,
 		Target:    target,
-		State:     model.StateActive,
+		State:     contracts.RouteStateActive,
 		Revision:  revision,
 		CreatedAt: time.Unix(1, 0).UTC(),
 		UpdatedAt: time.Unix(1, 0).UTC(),
@@ -168,7 +167,7 @@ func cacheScenarioRoute(target model.Target, revision int64) model.Route {
 
 type cacheScenarioRoutes struct {
 	mu             sync.Mutex
-	route          model.Route
+	route          contracts.Route
 	fingerprint    string
 	resolveErr     error
 	fingerprintErr error
@@ -176,12 +175,12 @@ type cacheScenarioRoutes struct {
 	validations    int
 }
 
-func (routes *cacheScenarioRoutes) ResolveRoute(_ context.Context, _, _ string) (model.Route, error) {
+func (routes *cacheScenarioRoutes) ResolveRoute(_ context.Context, _, _ string) (contracts.Route, error) {
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	routes.resolves++
 	if routes.resolveErr != nil {
-		return model.Route{}, routes.resolveErr
+		return contracts.Route{}, routes.resolveErr
 	}
 	return routes.route, nil
 }
@@ -196,11 +195,11 @@ func (routes *cacheScenarioRoutes) ResolveRouteFingerprint(_ context.Context, _,
 	return routes.fingerprint, nil
 }
 
-func (routes *cacheScenarioRoutes) GetRoute(_ context.Context, branchID, routeID string) (model.Route, error) {
+func (routes *cacheScenarioRoutes) GetRoute(_ context.Context, branchID, routeID string) (contracts.Route, error) {
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	if branchID != cacheScenarioBranch || routeID != routes.route.ID {
-		return model.Route{}, engine.ErrNotFound
+		return contracts.Route{}, contracts.ErrPublicNotFound
 	}
 	return routes.route, nil
 }
@@ -211,8 +210,8 @@ func (routes *cacheScenarioRoutes) counters() (int, int) {
 	return routes.resolves, routes.validations
 }
 
-func cacheScenarioDeliveryRequest(path string) engine.DeliveryRequest {
-	return engine.DeliveryRequest{
+func cacheScenarioDeliveryRequest(path string) contracts.DeliveryRequest {
+	return contracts.DeliveryRequest{
 		BranchID: cacheScenarioBranch, Host: cacheScenarioHost, Method: http.MethodGet,
 		EscapedPath: path,
 	}
@@ -337,7 +336,7 @@ func cacheScenarioWarmupConfig() RouterWarmupConfig {
 	return RouterWarmupConfig{Manifests: true, Routes: true, RefreshInterval: 10 * time.Millisecond}
 }
 
-func cacheScenarioBody(t *testing.T, response engine.DeliveryResponse) string {
+func cacheScenarioBody(t *testing.T, response contracts.DeliveryResponse) string {
 	t.Helper()
 	if response.Body == nil {
 		return ""
@@ -351,7 +350,7 @@ func cacheScenarioBody(t *testing.T, response engine.DeliveryResponse) string {
 }
 
 type cacheScenarioHandlerAPI struct {
-	deliver func(context.Context, engine.DeliveryRequest) (engine.DeliveryResponse, error)
+	deliver func(context.Context, contracts.DeliveryRequest) (contracts.DeliveryResponse, error)
 }
 
 func (api cacheScenarioHandlerAPI) Authenticate(context.Context, string) (context.Context, error) {
@@ -360,26 +359,49 @@ func (api cacheScenarioHandlerAPI) Authenticate(context.Context, string) (contex
 func (api cacheScenarioHandlerAPI) AuthenticateSession(context.Context, string) (context.Context, error) {
 	return context.Background(), nil
 }
-func (api cacheScenarioHandlerAPI) ListRoutes(context.Context, engine.ListRoutesRequest) (engine.RoutePage, error) {
-	return engine.RoutePage{}, engine.ErrUnavailable
+func (api cacheScenarioHandlerAPI) ListRoutes(context.Context, contracts.ListRoutesRequest) (contracts.RoutePage, error) {
+	return contracts.RoutePage{}, contracts.ErrPublicUnavailable
 }
-func (api cacheScenarioHandlerAPI) GetRoute(context.Context, string) (engine.Route, error) {
-	return engine.Route{}, engine.ErrUnavailable
+func (api cacheScenarioHandlerAPI) GetRoute(context.Context, string) (contracts.Route, error) {
+	return contracts.Route{}, contracts.ErrPublicUnavailable
 }
-func (api cacheScenarioHandlerAPI) CreateRoute(context.Context, engine.CreateRouteRequest) (engine.Route, error) {
-	return engine.Route{}, engine.ErrUnavailable
+func (api cacheScenarioHandlerAPI) CreateRoute(context.Context, contracts.CreateRouteRequest) (contracts.Route, error) {
+	return contracts.Route{}, contracts.ErrPublicUnavailable
 }
-func (api cacheScenarioHandlerAPI) ReplaceRouteTarget(context.Context, engine.ReplaceRouteTargetRequest) (engine.Route, error) {
-	return engine.Route{}, engine.ErrUnavailable
+func (api cacheScenarioHandlerAPI) ReplaceRouteTarget(context.Context, contracts.ReplaceRouteTargetRequest) (contracts.Route, error) {
+	return contracts.Route{}, contracts.ErrPublicUnavailable
 }
-func (api cacheScenarioHandlerAPI) ReplaceLocaleTarget(context.Context, engine.ReplaceLocaleTargetRequest) (engine.Route, error) {
-	return engine.Route{}, engine.ErrUnavailable
+func (api cacheScenarioHandlerAPI) ReplaceLocaleTarget(context.Context, contracts.ReplaceLocaleTargetRequest) (contracts.Route, error) {
+	return contracts.Route{}, contracts.ErrPublicUnavailable
 }
-func (api cacheScenarioHandlerAPI) DeleteRoute(context.Context, engine.DeleteRouteRequest) error {
-	return engine.ErrUnavailable
+func (api cacheScenarioHandlerAPI) DeleteRoute(context.Context, contracts.DeleteRouteRequest) error {
+	return contracts.ErrPublicUnavailable
 }
-func (api cacheScenarioHandlerAPI) Deliver(ctx context.Context, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
+func (api cacheScenarioHandlerAPI) Deliver(ctx context.Context, request contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 	return api.deliver(ctx, request)
+}
+
+func TestCoreDeliveryMapsRouteLookupErrorsToPublicSentinels(t *testing.T) {
+	for name, scenario := range map[string]struct {
+		resolveErr error
+		want       error
+	}{
+		"not found":     {contracts.ErrPublicNotFound, contracts.ErrPublicNotFound},
+		"invalid route": {contracts.ErrInvalidRoute, contracts.ErrPublicNotFound},
+		"unavailable":   {fmt.Errorf("storage: %w", contracts.ErrPublicUnavailable), contracts.ErrPublicUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			routes := &cacheScenarioRoutes{resolveErr: scenario.resolveErr}
+			delivery, err := NewCoreDelivery(cacheScenarioBranch, newCacheScenarioFiles(), routes, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = delivery.Deliver(context.Background(), cacheScenarioDeliveryRequest(cacheScenarioPath))
+			if !errors.Is(err, scenario.want) {
+				t.Fatalf("Deliver error = %v, want %v", err, scenario.want)
+			}
+		})
+	}
 }
 
 func TestCacheRouterScenario(t *testing.T) {
@@ -456,9 +478,9 @@ func TestCacheRouterScenario(t *testing.T) {
 			"01938f7a-68af-7c10-a51d-78b6ca125301", "01938f7a-68af-7c10-a51d-78b6ca125302", "01938f7a-68af-7c10-a51d-78b6ca125304", "en", 1)
 		cacheScenarioArtifact(t, files,
 			"01938f7a-68af-7c10-a51d-78b6ca125305", "01938f7a-68af-7c10-a51d-78b6ca125306", "01938f7a-68af-7c10-a51d-78b6ca125307", "de", 1)
-		target := model.Target{
-			Kind: model.TargetStaticSiteArtifact, DefaultLocale: "en-US",
-			LocaleTargets: []model.LocaleArtifactTarget{
+		target := contracts.Target{
+			Kind: contracts.TargetStaticSiteArtifact, DefaultLocale: "en-US",
+			LocaleTargets: []contracts.LocaleArtifactTarget{
 				{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301", Revision: 1},
 				{Locale: "de-DE", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125305", Revision: 1},
 			},
@@ -468,7 +490,7 @@ func TestCacheRouterScenario(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(ctx context.Context, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
+		handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(ctx context.Context, request contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 			return delivery.Deliver(ctx, request)
 		}}, Config{BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
 		if err != nil {
@@ -526,14 +548,14 @@ func TestCacheRouterScenario(t *testing.T) {
 		etag := `"sha256-` + strings.Repeat("a", 64) + `"`
 		forbiddenControl := false
 		newAPI := func() cacheScenarioHandlerAPI {
-			return cacheScenarioHandlerAPI{deliver: func(_ context.Context, request engine.DeliveryRequest) (engine.DeliveryResponse, error) {
+			return cacheScenarioHandlerAPI{deliver: func(_ context.Context, request contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 				if request.IfNoneMatch == etag {
-					return engine.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: "no-store"}, nil
+					return contracts.DeliveryResponse{StatusCode: http.StatusNotModified, ContentLength: -1, ETag: etag, CacheControl: "no-store"}, nil
 				}
 				if forbiddenControl {
-					return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: "text/html; charset=utf-8", ContentLength: int64(len(body)), ETag: etag, CacheControl: "private", Body: io.NopCloser(strings.NewReader(body))}, nil
+					return contracts.DeliveryResponse{StatusCode: http.StatusOK, ContentType: "text/html; charset=utf-8", ContentLength: int64(len(body)), ETag: etag, CacheControl: "private", Body: io.NopCloser(strings.NewReader(body))}, nil
 				}
-				return engine.DeliveryResponse{StatusCode: http.StatusOK, ContentType: "text/html; charset=utf-8", ContentLength: int64(len(body)), ETag: etag, CacheControl: "no-store", Body: io.NopCloser(strings.NewReader(body))}, nil
+				return contracts.DeliveryResponse{StatusCode: http.StatusOK, ContentType: "text/html; charset=utf-8", ContentLength: int64(len(body)), ETag: etag, CacheControl: "no-store", Body: io.NopCloser(strings.NewReader(body))}, nil
 			}}
 		}
 		handler, err := NewHandler(newAPI(), Config{
@@ -908,4 +930,4 @@ func TestCacheRouterScenario(t *testing.T) {
 	})
 }
 
-var _ engine.DeliveryAPI = cacheScenarioHandlerAPI{}
+var _ contracts.DeliveryAPI = cacheScenarioHandlerAPI{}

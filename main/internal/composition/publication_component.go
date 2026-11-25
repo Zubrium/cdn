@@ -3,6 +3,7 @@ package composition
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
@@ -36,26 +37,26 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	session, _, err := component.core.runtime.Identity().Authenticate(ctx, component.config.RouterAPI.ServiceCredential)
+	if err != nil {
+		return fmt.Errorf("authenticate publication file service: %w", err)
+	}
+	component.core.setCoreFiles("main.publication", coreSessionFileAdapter{files: component.core.runtime.Files(), session: session})
+	starter := publicationWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, "main.publication")}
 	service, err := publication.NewService(publication.Config{
-		BranchID:          component.config.RouterAPI.BranchID,
-		Store:             data,
-		Targets:           component.config.Publication.Targets,
-		Website:           component.website.service,
-		WebsiteCredential: component.config.Publication.WebsiteCredential,
-		Router:            component.router.api,
-		RouterCredential:  component.config.Publication.RouterCredential,
-		FileIdentity:      component.core.runtime.Identity(),
-		Files:             component.core.runtime.Files(),
-		FileCredential:    component.config.Publication.WebsiteCredential,
-		LocaleCatalog:     component.website.localeCatalog,
-		InputResolver:     component.website.inputResolver,
-		BuildTimeout:      component.config.Publication.BuildTimeout,
-		PollInterval:      component.config.Publication.PollInterval,
+		BranchID:    component.config.RouterAPI.BranchID,
+		Store:       data,
+		Targets:     component.config.Publication.Targets,
+		Starter:     starter,
+		MaxAttempts: component.config.Coordinator.MaxAttempts,
 	})
 	if err != nil {
 		return err
 	}
 	component.service = service
+	setPublicationWorkflowService(service)
+	setPublicationHandlerCore(component.core)
+	setPublicationHandlerRouter(component.router)
 	return nil
 }
 

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
+	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
 const (
@@ -100,7 +100,7 @@ func (delivery *CoreDelivery) initCacheMetrics() {
 // WarmupRouteSource is satisfied by the Router route service. It reads a
 // server-owned route record by its configured identity.
 type WarmupRouteSource interface {
-	GetRoute(context.Context, string, string) (engine.Route, error)
+	GetRoute(context.Context, string, string) (contracts.Route, error)
 }
 
 var (
@@ -113,14 +113,14 @@ var (
 // metadata check and an authoritative route revision check.
 func (delivery *CoreDelivery) Warmup(ctx context.Context, targets []RouterWarmupTarget, config RouterWarmupConfig) (WarmupResult, error) {
 	if delivery == nil || ctx == nil {
-		return WarmupResult{}, engine.ErrInvalid
+		return WarmupResult{}, contracts.ErrPublicInvalid
 	}
 	result := WarmupResult{}
 	if len(targets) == 0 {
 		return result, nil
 	}
 	if delivery.manifests == nil || delivery.routeCache == nil {
-		return result, engine.ErrInvalid
+		return result, contracts.ErrPublicInvalid
 	}
 	runCtx := ctx
 	if config.Timeout > 0 {
@@ -213,14 +213,14 @@ func validateWarmupTarget(target RouterWarmupTarget) error {
 	if target.RouteID == "" || target.Locale == "" || target.FileID == "" {
 		return errRouterWarmupTarget
 	}
-	if _, err := engine.CanonicalLocale(target.Locale); err != nil {
+	if _, err := contracts.CanonicalLocale(target.Locale); err != nil {
 		return errRouterWarmupTarget
 	}
 	if len(target.Paths) == 0 {
 		return errRouterWarmupTarget
 	}
 	for _, path := range target.Paths {
-		normalized, err := engine.NormalizePath(path)
+		normalized, err := contracts.NormalizePath(path)
 		if err != nil || normalized != path {
 			return errRouterWarmupTarget
 		}
@@ -240,14 +240,14 @@ func (delivery *CoreDelivery) warmupRoute(ctx context.Context, target RouterWarm
 	}
 	route, err := source.GetRoute(ctx, delivery.branchID, target.RouteID)
 	if err != nil || route.ID != target.RouteID || route.BranchID != delivery.branchID ||
-		route.State != engine.RouteStateActive || engine.ValidateRoute(route) != nil {
+		route.State != contracts.RouteStateActive || contracts.ValidateRoute(route) != nil {
 		return errRouterWarmupRoute
 	}
 	if !matchesPublishedSlot(route, target) {
 		return errRouterWarmupRoute
 	}
 	for _, path := range target.Paths {
-		if !engine.PathMatches(route.Path, path, route.Match) {
+		if !contracts.PathMatches(route.Path, path, route.Match) {
 			return errRouterWarmupRoute
 		}
 		key := routeCacheKey{branch: delivery.branchID, host: route.Host, path: path, method: http.MethodGet}
@@ -260,7 +260,7 @@ func (delivery *CoreDelivery) warmupRoute(ctx context.Context, target RouterWarm
 	return nil
 }
 
-func matchesPublishedSlot(route engine.Route, target RouterWarmupTarget) bool {
+func matchesPublishedSlot(route contracts.Route, target RouterWarmupTarget) bool {
 	for _, slot := range route.Target.LocaleTargets {
 		if slot.Locale == target.Locale {
 			return slot.ArtifactManifestFileID == target.FileID

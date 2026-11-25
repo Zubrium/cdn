@@ -24,16 +24,21 @@ type routeRecord struct {
 }
 
 type jobRecord struct {
-	Kind           string        `json:"kind"`
-	ID             string        `json:"id"`
-	PageID         string        `json:"page_id"`
-	BranchID       string        `json:"branch_id"`
-	IdempotencyKey string        `json:"idempotency_key"`
-	State          string        `json:"state"`
-	Routes         []routeRecord `json:"routes"`
-	CreatedAt      string        `json:"created_at"`
-	UpdatedAt      string        `json:"updated_at"`
+	Kind             string        `json:"kind"`
+	ID               string        `json:"id"`
+	PageID           string        `json:"page_id"`
+	BranchID         string        `json:"branch_id"`
+	ExpectedRevision int64         `json:"expected_revision"`
+	IfMatch          string        `json:"if_match"`
+	IdempotencyKey   string        `json:"idempotency_key"`
+	State            string        `json:"state"`
+	Routes           []routeRecord `json:"routes"`
+	CreatedAt        string        `json:"created_at"`
+	UpdatedAt        string        `json:"updated_at"`
 }
+
+// Job is the neutral durable projection shared with the composition adapters.
+type Job = jobRecord
 
 type receiptRecord struct {
 	Kind   string `json:"kind"`
@@ -116,6 +121,7 @@ func decodeJob(record contracts.Record, jobID, pageID string) (jobRecord, error)
 		index.State != job.State || job.Kind != recordTypeJob ||
 		job.ID != jobID || !uuidPattern.MatchString(job.ID) ||
 		!uuidPattern.MatchString(job.PageID) || !idempotentKey.MatchString(job.IdempotencyKey) ||
+		job.ExpectedRevision < 1 || job.IfMatch == "" ||
 		len(job.Routes) == 0 || len(job.Routes) > maxRoutes ||
 		(job.State != stateRunning && job.State != stateSucceeded && job.State != stateRetryable) {
 		return jobRecord{}, fmt.Errorf("%w: invalid retirement job record", ErrUnavailable)

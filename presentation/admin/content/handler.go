@@ -11,8 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Zubrium/cdn/engines/content/domain"
-	engine "github.com/Zubrium/cdn/engines/content/presentation"
+	engine "github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
 )
@@ -27,14 +26,14 @@ type Config struct {
 }
 
 type Handler struct {
-	api       engine.API
+	api       engine.AdminContentAPI
 	schemas   SchemaSnapshots
 	cfg       Config
 	transport *adminhttpauth.Transport
 	mux       *http.ServeMux
 }
 
-func NewHandler(api engine.API, schemas SchemaSnapshots, config Config) (*Handler, error) {
+func NewHandler(api engine.AdminContentAPI, schemas SchemaSnapshots, config Config) (*Handler, error) {
 	if nilInterface(api) || nilInterface(schemas) {
 		return nil, errors.New("Content API and schema projection provider are required")
 	}
@@ -63,19 +62,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-func (h *Handler) projections(ctx context.Context, pageSnapshotID, locale string) (engine.Projections, error) {
+func (h *Handler) projections(ctx context.Context, pageSnapshotID, locale string) (engine.AdminContentProjections, error) {
 	if nilInterface(h.schemas) {
-		return engine.Projections{}, engine.ErrUnavailable
+		return engine.AdminContentProjections{}, engine.ErrAdminContentUnavailable
 	}
 	projections, err := h.schemas.GetContentProjections(ctx, pageSnapshotID)
 	if err != nil {
 		// Preserve typed authorization/scope failures; writeEngineError maps
 		// unknown provider errors to 503 without exposing their details.
-		return engine.Projections{}, err
+		return engine.AdminContentProjections{}, err
 	}
 	projections.Locale = locale
 	if !projections.VerifyScope(pageSnapshotID) {
-		return engine.Projections{}, engine.ErrUnavailable
+		return engine.AdminContentProjections{}, engine.ErrAdminContentUnavailable
 	}
 	return projections, nil
 }
@@ -104,7 +103,7 @@ func (h *Handler) replaceLocaleConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	var request domain.ReplaceLocaleConfigRequest
+	var request engine.AdminContentReplaceLocaleConfigRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -156,7 +155,7 @@ func (h *Handler) saveWorkspaceDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var request engine.SaveWorkspaceDraftRequest
+	var request engine.AdminContentSaveWorkspaceDraftRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &request); err != nil {
 		writeDecodeError(w, err)
 		return
@@ -223,7 +222,7 @@ func (h *Handler) publishWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	workspace, err := h.api.PublishWorkspace(ctx, projection, engine.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision, ExpectedSelectionRevision: body.ExpectedSelectionRevision})
+	workspace, err := h.api.PublishWorkspace(ctx, projection, engine.AdminContentPublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision, ExpectedSelectionRevision: body.ExpectedSelectionRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -262,7 +261,7 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if page.Items == nil {
-		page.Items = []engine.HistoryItem{}
+		page.Items = []engine.AdminContentHistoryItem{}
 	}
 	writeJSON(w, http.StatusOK, page)
 }
@@ -296,7 +295,7 @@ func (h *Handler) restoreHistory(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	workspace, err := h.api.RestoreHistory(ctx, projection, engine.RestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision, ExpectedSelectionRevision: body.ExpectedSelectionRevision})
+	workspace, err := h.api.RestoreHistory(ctx, projection, engine.AdminContentRestoreHistoryRequest{SnapshotID: snapshotID, HistoryID: historyID, IdempotencyKey: idempotencyKey, ExpectedRevision: body.ExpectedRevision, ExpectedSelectionRevision: body.ExpectedSelectionRevision})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -308,7 +307,7 @@ func (h *Handler) restoreHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workspace)
 }
 
-func validWorkspaceInput(request engine.SaveWorkspaceDraftRequest) bool {
+func validWorkspaceInput(request engine.AdminContentSaveWorkspaceDraftRequest) bool {
 	ids := make(map[string]struct{}, len(request.Records))
 	clientKeys := make(map[string]struct{}, len(request.Records))
 	for _, record := range request.Records {
@@ -458,16 +457,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, target any)
 	err := httpjson.DecodeRequest(w, r, limit, target)
 	switch {
 	case errors.Is(err, httpjson.ErrTooLarge):
-		return engine.ErrTooLarge
+		return engine.ErrAdminContentTooLarge
 	case errors.Is(err, httpjson.ErrInvalid):
-		return engine.ErrInvalid
+		return engine.ErrAdminContentInvalid
 	default:
 		return err
 	}
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, engine.ErrTooLarge) {
+	if errors.Is(err, engine.ErrAdminContentTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
 		return
 	}
@@ -476,17 +475,17 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, engine.ErrUnauthorized):
+	case errors.Is(err, engine.ErrAdminContentUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-	case errors.Is(err, engine.ErrForbidden):
+	case errors.Is(err, engine.ErrAdminContentForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
-	case errors.Is(err, engine.ErrNotFound):
+	case errors.Is(err, engine.ErrAdminContentNotFound):
 		writeError(w, http.StatusNotFound, "not_found")
-	case errors.Is(err, engine.ErrConflict):
+	case errors.Is(err, engine.ErrAdminContentConflict):
 		writeError(w, http.StatusConflict, "conflict")
-	case errors.Is(err, engine.ErrInvalid):
+	case errors.Is(err, engine.ErrAdminContentInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request")
-	case errors.Is(err, engine.ErrTooLarge):
+	case errors.Is(err, engine.ErrAdminContentTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
 	default:
 		writeError(w, http.StatusServiceUnavailable, "unavailable")

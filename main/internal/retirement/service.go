@@ -2,64 +2,70 @@ package retirement
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
-	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
-	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
-// RetirePage starts or resumes the durable withdrawal for one server-owned
-// page identity. The visitor never supplies a page ID: the trusted Admin
-// handler resolves it from the URL after authorization.
-func (s *Service) RetirePage(ctx context.Context, request contracts.RetirePageRequest) (contracts.PageRetirement, error) {
-	return s.retire(ctx, request)
-}
-
-// GetPageRetirement reads the durable status addressed by the Location header.
-func (s *Service) GetPageRetirement(ctx context.Context, query contracts.PageRetirementQuery) (contracts.PageRetirement, error) {
-	if s == nil || ctx == nil || !uuidPattern.MatchString(query.PageID) || !uuidPattern.MatchString(query.JobID) {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid retirement query", ErrInvalid)
+// FindReceipt returns the durable job already committed for an identical
+// server-owned trigger. It lets the composition adapter check Website state
+// only for first-time requests without weakening retry idempotency.
+func (s *Service) FindReceipt(ctx context.Context, request contracts.RetirePageRequest) (Job, bool, error) {
+	if s == nil || ctx == nil {
+		return Job{}, false, ErrUnavailable
 	}
-	return s.status(ctx, query.JobID, query.PageID)
-}
-
-// Retry resumes a retryable job after the underlying Router dependency has
-// recovered. Completed jobs are returned unchanged.
-func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetirement, error) {
-	if s == nil || ctx == nil || !uuidPattern.MatchString(jobID) {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid job identity", ErrInvalid)
+	if err := contracts.RetirePageOperation().Validate(request); err != nil {
+		return Job{}, false, err
 	}
-	job, err := s.loadJob(ctx, jobID, "")
+	record, err := s.config.Store.Get(ctx, withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), s.config.BranchID))
+	if errors.Is(err, contracts.ErrRecordNotFound) {
+		return Job{}, false, nil
+	}
 	if err != nil {
-		return contracts.PageRetirement{}, err
+		return Job{}, false, mapStoreError(err)
 	}
-	if job.State == stateSucceeded {
-		return jobView(job), nil
+	var receipt receiptRecord
+	if record.PayloadVersion != dataVersion || jsonUnmarshal(record.Payload, &receipt) != nil ||
+		receipt.Kind != recordTypeReceipt || receipt.PageID != request.PageID || !uuidPattern.MatchString(receipt.JobID) {
+		return Job{}, false, fmt.Errorf("%w: invalid retirement receipt", ErrUnavailable)
 	}
-	if job.State != stateRetryable {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: job is not retryable", ErrConflict)
-	}
-	job, err = s.updateJob(ctx, job.ID, func(current *jobRecord) error {
-		current.State = stateRunning
-		current.UpdatedAt = timestamp()
-		return nil
-	})
+	job, err := s.LoadJob(ctx, receipt.JobID, request.PageID)
 	if err != nil {
-		return contracts.PageRetirement{}, err
+		return Job{}, false, err
 	}
-	return s.advance(ctx, job)
+	return job, true, nil
 }
 
-func (s *Service) retire(ctx context.Context, request contracts.RetirePageRequest) (contracts.PageRetirement, error) {
-	if s == nil || ctx == nil || !uuidPattern.MatchString(request.PageID) ||
-		!ifMatchPattern.MatchString(request.IfMatch) || !idempotentKey.MatchString(request.IdempotencyKey) {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid retirement trigger", ErrInvalid)
+// PageIsRetired reports whether the durable identity tombstone already
+// forbids reuse of this page identity.
+func (s *Service) PageIsRetired(ctx context.Context, pageID string) (bool, error) {
+	if s == nil || ctx == nil || !contracts.ValidWorkflowID(pageID) {
+		return false, ErrInvalid
+	}
+	_, err := s.config.Store.Get(ctx, withBranch(tombstoneKey(pageID), s.config.BranchID))
+	if errors.Is(err, contracts.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, mapStoreError(err)
+	}
+	return true, nil
+}
+
+// Prepare validates the server-owned trigger and commits the durable job,
+// receipt and page-identity tombstone. It does not start any engine work.
+func (s *Service) Prepare(ctx context.Context, request contracts.RetirePageRequest) (Job, error) {
+	if s == nil || ctx == nil {
+		return Job{}, ErrUnavailable
+	}
+	if err := contracts.RetirePageOperation().Validate(request); err != nil {
+		return Job{}, err
 	}
 	expected, err := parseIfMatch(request.IfMatch)
 	if err != nil {
-		return contracts.PageRetirement{}, err
+		return Job{}, err
 	}
 	branch := s.config.BranchID
 	// Receipts are checked before the identity tombstone so an identical retry
@@ -68,178 +74,173 @@ func (s *Service) retire(ctx context.Context, request contracts.RetirePageReques
 		var receipt receiptRecord
 		if record.PayloadVersion != dataVersion || jsonUnmarshal(record.Payload, &receipt) != nil ||
 			receipt.Kind != recordTypeReceipt || receipt.PageID != request.PageID || !uuidPattern.MatchString(receipt.JobID) {
-			return contracts.PageRetirement{}, fmt.Errorf("%w: invalid retirement receipt", ErrUnavailable)
+			return Job{}, fmt.Errorf("%w: invalid retirement receipt", ErrUnavailable)
 		}
-		return s.status(ctx, receipt.JobID, request.PageID)
+		return s.LoadJob(ctx, receipt.JobID, request.PageID)
 	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
-		return contracts.PageRetirement{}, mapStoreError(err)
+		return Job{}, mapStoreError(err)
 	}
 	if _, err := s.config.Store.Get(ctx, withBranch(tombstoneKey(request.PageID), branch)); err == nil {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: page identity is retired and cannot be reused", ErrConflict)
+		return Job{}, fmt.Errorf("%w: page identity is retired and cannot be reused", ErrConflict)
 	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
-		return contracts.PageRetirement{}, mapStoreError(err)
+		return Job{}, mapStoreError(err)
 	}
 	routes, registered := s.config.Routes[request.PageID]
-	if !registered {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: no registered route targets", ErrInvalid)
-	}
-	websiteCtx, err := s.config.Website.Authenticate(ctx, s.config.WebsiteCredential)
-	if err != nil {
-		return contracts.PageRetirement{}, ErrUnavailable
-	}
-	page, err := s.config.Website.GetPage(websiteCtx, request.PageID)
-	if err != nil || page.ID != request.PageID {
-		if err == nil {
-			return contracts.PageRetirement{}, ErrUnavailable
-		}
-		return contracts.PageRetirement{}, mapWebsiteError(err)
-	}
-	if page.LifecycleState == "retired" || page.LifecycleState != "active" || page.Revision != expected {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: page revision or lifecycle mismatch", ErrConflict)
+	if !registered || len(routes) == 0 {
+		return Job{}, fmt.Errorf("%w: no registered route targets", ErrInvalid)
 	}
 	job := jobRecord{
 		Kind: recordTypeJob, ID: newUUID(), PageID: request.PageID, BranchID: branch,
-		IdempotencyKey: request.IdempotencyKey, State: stateRunning,
-		CreatedAt: timestamp(), UpdatedAt: timestamp(),
+		ExpectedRevision: expected, IfMatch: request.IfMatch, IdempotencyKey: request.IdempotencyKey,
+		State: stateRunning, CreatedAt: timestamp(), UpdatedAt: timestamp(),
 	}
 	for _, routeID := range routes {
 		job.Routes = append(job.Routes, routeRecord{RouteID: routeID, State: routeStatePending})
 	}
 	mutations, err := jobCreationMutations(branch, request, job)
 	if err != nil {
-		return contracts.PageRetirement{}, err
+		return Job{}, err
 	}
 	if err := s.config.Store.Batch(ctx, mutations); err != nil {
 		if errors.Is(err, contracts.ErrRecordConflict) {
-			// A concurrent start with the same key committed first; the
-			// durable receipt is authoritative.
 			if record, readErr := s.config.Store.Get(ctx, withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), branch)); readErr == nil {
 				var receipt receiptRecord
 				if record.PayloadVersion == dataVersion && jsonUnmarshal(record.Payload, &receipt) == nil && receipt.PageID == request.PageID {
-					return s.status(ctx, receipt.JobID, request.PageID)
+					return s.LoadJob(ctx, receipt.JobID, request.PageID)
 				}
 			}
 		}
-		return contracts.PageRetirement{}, mapStoreError(err)
+		return Job{}, mapStoreError(err)
 	}
-	// Website lifecycle is durable but secondary to the job record: a failure
-	// here leaves the job retryable and the page active, never a retired page
-	// with live route targets.
-	if _, err := s.config.Website.RetirePage(websiteCtx, websiteapi.RetirePageRequest{
-		PageID: page.ID, ExpectedRevision: page.Revision, LifecycleState: "retiring",
-		RetirementJobID: job.ID, IdempotencyKey: request.IdempotencyKey,
-	}); err != nil {
-		if _, putErr := s.updateJob(ctx, job.ID, func(current *jobRecord) error {
-			current.State = stateRetryable
-			current.UpdatedAt = timestamp()
-			return nil
-		}); putErr != nil {
-			return contracts.PageRetirement{}, putErr
-		}
-		return contracts.PageRetirement{}, mapWebsiteError(err)
-	}
-	return s.advance(ctx, job)
+	return job, nil
 }
 
-func (s *Service) advance(ctx context.Context, job jobRecord) (contracts.PageRetirement, error) {
-	routerCtx, err := s.config.Router.Authenticate(ctx, s.config.RouterCredential)
-	if err != nil {
+// Launch starts the class-scoped root task. Its idempotency key is derived
+// from the durable job identity, so a retry cannot create a second workflow.
+func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement, error) {
+	if s == nil || ctx == nil {
 		return contracts.PageRetirement{}, ErrUnavailable
 	}
-	for index := range job.Routes {
-		if job.Routes[index].State == routeStateRemoved {
-			continue
-		}
-		routeID := job.Routes[index].RouteID
-		route, err := s.config.Router.GetRoute(routerCtx, routeID)
-		if errors.Is(err, routerapi.ErrNotFound) {
-			err = s.recordRoute(ctx, job.ID, routeID, routeStateRemoved, 0, "")
-		} else if err != nil {
-			err = s.recordRoute(ctx, job.ID, routeID, routeStateRetryable, 0, routeErrorCode(err))
-		} else {
-			deleteErr := s.config.Router.DeleteRoute(routerCtx, routerapi.DeleteRouteRequest{
-				RouteID: routeID, ExpectedRevision: route.Revision,
-			})
-			switch {
-			case deleteErr == nil, errors.Is(deleteErr, routerapi.ErrNotFound):
-				err = s.recordRoute(ctx, job.ID, routeID, routeStateRemoved, route.Revision, "")
-			default:
-				err = s.recordRoute(ctx, job.ID, routeID, routeStateRetryable, route.Revision, routeErrorCode(deleteErr))
-			}
-		}
-		if err != nil {
-			return contracts.PageRetirement{}, err
-		}
+	if s.config.Starter == nil {
+		return contracts.PageRetirement{}, ErrUnavailable
 	}
-	job, err = s.loadJob(ctx, job.ID, job.PageID)
+	routes := make([]string, 0, len(job.Routes))
+	for _, route := range job.Routes {
+		routes = append(routes, route.RouteID)
+	}
+	payload := contracts.RetirementWorkflowPayload{
+		JobID: job.ID, PageID: job.PageID, BranchID: s.config.BranchID,
+		ExpectedRevision: job.ExpectedRevision, IfMatch: job.IfMatch,
+		IdempotencyKey: job.IdempotencyKey, Routes: routes,
+	}
+	if err := contracts.ValidateRetirementWorkflowPayload(payload); err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	if _, err := s.config.Starter.Start(ctx, retirementWorkflowStartInput(payload)); err != nil {
+		if _, updateErr := s.SetJobState(ctx, job.ID, stateRetryable); updateErr != nil {
+			return contracts.PageRetirement{}, updateErr
+		}
+		return contracts.PageRetirement{}, err
+	}
+	return s.status(ctx, job.ID, job.PageID)
+}
+
+func retirementWorkflowStartInput(payload contracts.RetirementWorkflowPayload) contracts.WorkflowStartInput {
+	encoded, _ := json.Marshal(payload)
+	return contracts.WorkflowStartInput{
+		OperationID:     contracts.RetirementStartOperationID,
+		ContractVersion: contracts.RetirementStartContractVersion,
+		IdempotencyKey:  "retirement:" + payload.JobID + ":" + payload.IdempotencyKey,
+		Payload:         encoded,
+	}
+}
+
+// RetirePage is the tractable process-local entry point. The composition root
+// marks the page "retiring" between Prepare and Launch so no route child can
+// run while the page is still active.
+func (s *Service) RetirePage(ctx context.Context, request contracts.RetirePageRequest) (contracts.PageRetirement, error) {
+	job, err := s.Prepare(ctx, request)
 	if err != nil {
 		return contracts.PageRetirement{}, err
 	}
-	for _, route := range job.Routes {
-		if route.State != routeStateRemoved {
-			job, err = s.updateJob(ctx, job.ID, func(current *jobRecord) error {
-				current.State = stateRetryable
-				current.UpdatedAt = timestamp()
-				return nil
-			})
-			if err != nil {
-				return contracts.PageRetirement{}, err
-			}
-			return jobView(job), nil
-		}
-	}
-	websiteCtx, err := s.config.Website.Authenticate(ctx, s.config.WebsiteCredential)
-	if err != nil {
-		return contracts.PageRetirement{}, ErrUnavailable
-	}
-	page, err := s.config.Website.GetPage(websiteCtx, job.PageID)
-	if err != nil {
-		return contracts.PageRetirement{}, mapWebsiteError(err)
-	}
-	if page.LifecycleState == "retired" && page.RetirementJobID == job.ID {
-		return s.finish(ctx, job)
-	}
-	if page.LifecycleState != "retiring" || page.RetirementJobID != job.ID {
-		job, err = s.updateJob(ctx, job.ID, func(current *jobRecord) error {
-			current.State = stateRetryable
-			current.UpdatedAt = timestamp()
-			return nil
-		})
-		if err != nil {
-			return contracts.PageRetirement{}, err
-		}
-		return jobView(job), nil
-	}
-	if _, err := s.config.Website.RetirePage(websiteCtx, websiteapi.RetirePageRequest{
-		PageID: page.ID, ExpectedRevision: page.Revision, LifecycleState: "retired",
-		RetirementJobID: job.ID, IdempotencyKey: job.IdempotencyKey,
-	}); err != nil {
-		job, err = s.updateJob(ctx, job.ID, func(current *jobRecord) error {
-			current.State = stateRetryable
-			current.UpdatedAt = timestamp()
-			return nil
-		})
-		if err != nil {
-			return contracts.PageRetirement{}, err
-		}
-		return jobView(job), nil
-	}
-	return s.finish(ctx, job)
+	return s.Launch(ctx, job)
 }
 
-func (s *Service) finish(ctx context.Context, job jobRecord) (contracts.PageRetirement, error) {
-	updated, err := s.updateJob(ctx, job.ID, func(current *jobRecord) error {
-		current.State = stateSucceeded
+// GetPageRetirement reads the durable status addressed by the Location header.
+func (s *Service) GetPageRetirement(ctx context.Context, query contracts.PageRetirementQuery) (contracts.PageRetirement, error) {
+	if s == nil || ctx == nil || !contracts.ValidWorkflowID(query.PageID) || !contracts.ValidWorkflowID(query.JobID) {
+		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid retirement query", ErrInvalid)
+	}
+	return s.status(ctx, query.JobID, query.PageID)
+}
+
+// Retry resumes a retryable job after the underlying Router dependency has
+// recovered. Completed jobs are returned unchanged.
+func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetirement, error) {
+	if s == nil || ctx == nil || !contracts.ValidWorkflowID(jobID) {
+		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid job identity", ErrInvalid)
+	}
+	job, err := s.LoadJob(ctx, jobID, "")
+	if err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	if job.State == stateSucceeded || job.State == stateRunning {
+		return JobView(job), nil
+	}
+	if job.State != stateRetryable {
+		return contracts.PageRetirement{}, fmt.Errorf("%w: job is not retryable", ErrConflict)
+	}
+	job, err = s.SetJobState(ctx, job.ID, stateRunning)
+	if err != nil {
+		return contracts.PageRetirement{}, err
+	}
+	return s.Launch(ctx, job)
+}
+
+// LoadJob returns the durable job projection for a composition adapter.
+func (s *Service) LoadJob(ctx context.Context, jobID, pageID string) (Job, error) {
+	if s == nil || ctx == nil || !contracts.ValidWorkflowID(jobID) {
+		return Job{}, fmt.Errorf("%w: invalid job identity", ErrInvalid)
+	}
+	record, err := s.config.Store.Get(ctx, withBranch(jobKey(jobID), s.config.BranchID))
+	if err != nil {
+		return Job{}, mapStoreError(err)
+	}
+	job, err := decodeJob(record, jobID, pageID)
+	if err != nil {
+		return Job{}, err
+	}
+	if job.BranchID != s.config.BranchID {
+		return Job{}, fmt.Errorf("%w: job belongs to another branch", ErrUnavailable)
+	}
+	return job, nil
+}
+
+// SetJobState persists a bounded job state transition with a CAS retry loop.
+func (s *Service) SetJobState(ctx context.Context, jobID, state string) (Job, error) {
+	if state != stateRunning && state != stateSucceeded && state != stateRetryable {
+		return Job{}, ErrInvalid
+	}
+	return s.updateJob(ctx, jobID, func(current *jobRecord) error {
+		current.State = state
 		current.UpdatedAt = timestamp()
 		return nil
 	})
-	if err != nil {
-		return contracts.PageRetirement{}, err
-	}
-	return jobView(updated), nil
 }
 
-func (s *Service) recordRoute(ctx context.Context, jobID, routeID, state string, revision int64, errorCode string) error {
+// MarkRetryable records a failed Website lifecycle closure without losing the
+// already-withdrawn routes.
+func (s *Service) MarkRetryable(ctx context.Context, jobID string) error {
+	_, err := s.SetJobState(ctx, jobID, stateRetryable)
+	return err
+}
+
+// RecordRoute persists one route outcome. A retry may record the same removed
+// route again; that is a no-op for the durable projection.
+func (s *Service) RecordRoute(ctx context.Context, jobID, routeID, state string, revision int64, errorCode string) error {
+	if state != routeStatePending && state != routeStateRemoved && state != routeStateRetryable {
+		return ErrInvalid
+	}
 	_, err := s.updateJob(ctx, jobID, func(job *jobRecord) error {
 		for index := range job.Routes {
 			if job.Routes[index].RouteID != routeID {
@@ -256,56 +257,45 @@ func (s *Service) recordRoute(ctx context.Context, jobID, routeID, state string,
 	return err
 }
 
-func (s *Service) loadJob(ctx context.Context, jobID, pageID string) (jobRecord, error) {
-	record, err := s.config.Store.Get(ctx, withBranch(jobKey(jobID), s.config.BranchID))
-	if err != nil {
-		return jobRecord{}, mapStoreError(err)
-	}
-	job, err := decodeJob(record, jobID, pageID)
-	if err != nil {
-		return jobRecord{}, err
-	}
-	return job, nil
-}
-
-func (s *Service) updateJob(ctx context.Context, jobID string, mutate func(*jobRecord) error) (jobRecord, error) {
+func (s *Service) updateJob(ctx context.Context, jobID string, mutate func(*jobRecord) error) (Job, error) {
 	key := withBranch(jobKey(jobID), s.config.BranchID)
 	for attempt := 0; attempt < 8; attempt++ {
 		record, err := s.config.Store.Get(ctx, key)
 		if err != nil {
-			return jobRecord{}, mapStoreError(err)
+			return Job{}, mapStoreError(err)
 		}
 		job, err := decodeJob(record, jobID, "")
 		if err != nil {
-			return jobRecord{}, err
+			return Job{}, err
 		}
 		if err := mutate(&job); err != nil {
-			return jobRecord{}, err
+			return Job{}, err
 		}
 		value, err := encodeRecord(job, jobIndex(job))
 		if err != nil {
-			return jobRecord{}, err
+			return Job{}, err
 		}
 		if _, err := s.config.Store.Put(ctx, key, *value, record.Revision); err != nil {
 			if errors.Is(err, contracts.ErrRecordConflict) && attempt+1 < 8 {
 				continue
 			}
-			return jobRecord{}, mapStoreError(err)
+			return Job{}, mapStoreError(err)
 		}
 		return job, nil
 	}
-	return jobRecord{}, ErrConflict
+	return Job{}, ErrConflict
 }
 
 func (s *Service) status(ctx context.Context, jobID, pageID string) (contracts.PageRetirement, error) {
-	job, err := s.loadJob(ctx, jobID, pageID)
+	job, err := s.LoadJob(ctx, jobID, pageID)
 	if err != nil {
 		return contracts.PageRetirement{}, err
 	}
-	return jobView(job), nil
+	return JobView(job), nil
 }
 
-func jobView(job jobRecord) contracts.PageRetirement {
+// JobView converts the durable job into the stable process-local contract.
+func JobView(job Job) contracts.PageRetirement {
 	view := contracts.PageRetirement{ID: job.ID, PageID: job.PageID, State: job.State, Routes: make([]contracts.PageRetirementRoute, 0, len(job.Routes))}
 	for _, route := range job.Routes {
 		view.Routes = append(view.Routes, contracts.PageRetirementRoute{
@@ -313,32 +303,4 @@ func jobView(job jobRecord) contracts.PageRetirement {
 		})
 	}
 	return view
-}
-
-func routeErrorCode(err error) string {
-	switch {
-	case errors.Is(err, routerapi.ErrNotFound):
-		return "not_found"
-	case errors.Is(err, routerapi.ErrConflict):
-		return "revision_conflict"
-	case errors.Is(err, routerapi.ErrUnavailable):
-		return "unavailable"
-	default:
-		return "unavailable"
-	}
-}
-
-func mapWebsiteError(err error) error {
-	switch {
-	case err == nil:
-		return ErrUnavailable
-	case errors.Is(err, websiteapi.ErrInvalid):
-		return ErrInvalid
-	case errors.Is(err, websiteapi.ErrConflict):
-		return ErrConflict
-	case errors.Is(err, websiteapi.ErrNotFound):
-		return ErrNotFound
-	default:
-		return ErrUnavailable
-	}
 }

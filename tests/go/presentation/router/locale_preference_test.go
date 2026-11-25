@@ -2,34 +2,32 @@ package router
 
 import (
 	"context"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/Zubrium/cdn/engines/router/features/routes/model"
-	engine "github.com/Zubrium/cdn/engines/router/presentation"
 )
 
-type localePreferenceResolver func(context.Context, string, string) (model.Route, error)
+type localePreferenceResolver func(context.Context, string, string) (contracts.Route, error)
 
-func (resolve localePreferenceResolver) ResolveRoute(ctx context.Context, host, path string) (model.Route, error) {
+func (resolve localePreferenceResolver) ResolveRoute(ctx context.Context, host, path string) (contracts.Route, error) {
 	return resolve(ctx, host, path)
 }
 
-func localePreferenceTestRoute(locale string) model.Route {
-	return model.Route{BranchID: "main", State: model.StateActive, Target: model.Target{
-		Kind:          model.TargetStaticSiteArtifact,
+func localePreferenceTestRoute(locale string) contracts.Route {
+	return contracts.Route{BranchID: "main", State: contracts.RouteStateActive, Target: contracts.Target{
+		Kind:          contracts.TargetStaticSiteArtifact,
 		DefaultLocale: "en-US",
-		LocaleTargets: []model.LocaleArtifactTarget{{Locale: locale, ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301"}},
+		LocaleTargets: []contracts.LocaleArtifactTarget{{Locale: locale, ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301"}},
 	}}
 }
 
 func localePreferenceTestHandler(t *testing.T, enabled bool) *Handler {
 	t.Helper()
-	handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(context.Context, engine.DeliveryRequest) (engine.DeliveryResponse, error) {
-		return engine.DeliveryResponse{}, nil
+	handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(context.Context, contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
+		return contracts.DeliveryResponse{}, nil
 	}}, Config{
 		BranchID:        "main",
 		MaxJSONBytes:    1024,
@@ -40,7 +38,7 @@ func localePreferenceTestHandler(t *testing.T, enabled bool) *Handler {
 			Secure:  true,
 			MaxAge:  24 * time.Hour,
 		},
-		LocaleResolver: localePreferenceResolver(func(_ context.Context, _, path string) (model.Route, error) {
+		LocaleResolver: localePreferenceResolver(func(_ context.Context, _, path string) (contracts.Route, error) {
 			if path != "/site/" {
 				t.Fatalf("resolver path = %q, want /site/", path)
 			}
@@ -113,10 +111,10 @@ func TestLocalePreferenceRejectsInvalidRequestsWithoutCookie(t *testing.T) {
 }
 
 func TestLocalePreferenceRequiresExplicitConfig(t *testing.T) {
-	api := cacheScenarioHandlerAPI{deliver: func(context.Context, engine.DeliveryRequest) (engine.DeliveryResponse, error) {
-		return engine.DeliveryResponse{}, nil
+	api := cacheScenarioHandlerAPI{deliver: func(context.Context, contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
+		return contracts.DeliveryResponse{}, nil
 	}}
-	resolver := localePreferenceResolver(func(context.Context, string, string) (model.Route, error) {
+	resolver := localePreferenceResolver(func(context.Context, string, string) (contracts.Route, error) {
 		return localePreferenceTestRoute("de-DE"), nil
 	})
 	for _, item := range []struct {

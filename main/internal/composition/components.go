@@ -20,8 +20,9 @@ import (
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
-	"github.com/Zubrium/cdn/presentation/admin/base/transport"
+	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
 	adminnotification "github.com/Zubrium/cdn/presentation/admin/base/notification"
+	"github.com/Zubrium/cdn/presentation/admin/base/transport"
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/Zubrium/cdn/workers/media"
@@ -655,47 +656,109 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("build Admin coordinator access client: %w", err)
 	}
+	authorizeWorkflowSession := func(ctx context.Context, credential, permission string) error {
+		session, _, err := identity.AuthenticateSession(ctx, credential)
+		if err != nil {
+			return err
+		}
+		level := contracts.AccessLevelRead
+		switch permission {
+		case string(coordinatoradmin.RetryTasks):
+			level = contracts.AccessLevelWrite
+		case string(coordinatoradmin.ReadWorkflows):
+		default:
+			return contracts.ErrAccessForbidden
+		}
+		return adminCoordinatorAuthorization{access: coordinatorAccess}.RequireGroupLevel(ctx, session,
+			c.config.Coordinator.WorkflowAccessGroup, level)
+	}
 	dependencies := transport.AdminDependencies{
-		CoreReady: c.core.runtime.CoordinatorReady, Identity: identity, Sessions: identity,
-		GroupAccess:              adminGroupAccessResolver{access: identityAccess, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
-		CoordinatorAuthorization: adminCoordinatorAuthorization{access: coordinatorAccess},
-		Files:                    c.loader.service, WorkflowControl: c.workflowControl,
-		SnapshotForkWorkflow: snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "admin.api")},
+		CoreReady: c.core.runtime.CoordinatorReady, AuthorizeWorkflowSession: authorizeWorkflowSession,
+	}
+	sources := adminMountSources{
+		config: adminConfig, files: c.loader.service,
+		identity: identity, sessions: identity,
+		groupAccess:              adminGroupAccessResolver{access: identityAccess, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
+		coordinatorAuthorization: adminCoordinatorAuthorization{access: coordinatorAccess},
+		workflowControl:          c.workflowControl, notifications: c.notifications,
+		routerOperations: routerOperations,
+		identityEnabled:  c.identityAdmin, routerAdminEnabled: c.routerAdminEnabled,
+		syntheticData: c.developmentFixtures, observer: c.observer,
 	}
 	if c.notifications != nil {
-		notificationHandler, err := adminnotification.NewHandler(c.notifications, identity, identity, adminConfig.AllowedOrigins)
-		if err != nil {
-			return fmt.Errorf("build Admin notification handler: %w", err)
-		}
-		dependencies.NotificationHandler = notificationHandler
+		sources.notifications = c.notifications
 	}
 	if c.config.Retirement.Enabled {
 		// The Admin listener may start before the retirement component's Start
 		// initializes its service. The bus client needs only the already-built
 		// dispatcher, so construct it here instead of carrying a nil pointer.
-		dependencies.Retirement = &retirementClient{dispatcher: c.dispatcher}
+		sources.retirement = &retirementClient{dispatcher: c.dispatcher}
 	}
-	if fixtureAPIs != nil {
-		dependencies.Website, dependencies.Content, dependencies.Forms = fixtureAPIs.website, fixtureAPIs.content, fixtureAPIs.forms
-		dependencies.ContentSchemas = fixtureAPIs.content
-	} else {
-		if c.websiteAdminEnabled && c.websiteEngine != nil {
-			dependencies.Website = c.websiteEngine.service
-		}
-		if c.contentEngine != nil && c.contentEngine.engine != nil {
-			dependencies.Content = c.contentEngine.engine
-			if c.config.Publication.Enabled {
-				dependencies.Content = contentPublicationAPI{API: dependencies.Content, client: publicationClient{dispatcher: c.dispatcher}}
+	sources.snapshotFork = snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "admin.api")}
+	// Admin feature modules never receive an engine handle. All calls to
+	// Content, Forms, Website and Loader go through this dedicated DataBus;
+	// composition is the only place that resolves a provider to an engine.
+	providers := bus.AdminEngineProviders{
+		Content: func() bus.AdminContentEngine {
+			if fixtureAPIs != nil {
+				return fixtureAPIs.content
 			}
-			dependencies.ContentSchemas = c.contentEngine.projections
+			if c.contentEngine == nil {
+				return nil
+			}
+			if c.config.Publication.Enabled {
+				return contentPublicationAPI{API: c.contentEngine.engine, client: publicationClient{dispatcher: c.dispatcher}}
+			}
+			return c.contentEngine.engine
+		},
+		Forms: func() bus.AdminFormsEngine {
+			if fixtureAPIs != nil {
+				return fixtureAPIs.forms
+			}
+			if c.formsEngine == nil {
+				return nil
+			}
+			return c.formsEngine.engine
+		},
+		Website: func() bus.AdminWebsiteEngine {
+			if fixtureAPIs != nil {
+				return fixtureAPIs.website
+			}
+			if c.websiteEngine == nil {
+				return nil
+			}
+			return c.websiteEngine.service
+		},
+		Files: func() contracts.AdminFilesAPI { return c.loader.service },
+	}
+	adminEngineBus, err := bus.NewAdminEngineBus(bus.ConcurrencyLimits{MaxInFlight: c.config.Scales.Bus.MaxInFlight}, providers)
+	if err != nil {
+		return fmt.Errorf("build Admin engine DataBus: %w", err)
+	}
+	sources.files = &adminFilesAdapter{dispatcher: adminEngineBus}
+	sources.content = &adminContentAdapter{dispatcher: adminEngineBus}
+	sources.forms = &adminFormsAdapter{dispatcher: adminEngineBus}
+	sources.website = &adminWebsiteAdapter{dispatcher: adminEngineBus}
+	if fixtureAPIs != nil {
+		sources.contentSchemas = fixtureAPIs.content
+	} else {
+		if c.contentEngine == nil {
+			sources.content = nil
+		} else {
+			sources.contentSchemas = c.contentEngine.projections
 		}
-		if c.formsAdminEnabled && c.formsEngine != nil {
-			dependencies.Forms = c.formsEngine.engine
+		if !c.formsAdminEnabled {
+			sources.forms = nil
+		}
+		if !c.websiteAdminEnabled {
+			sources.website = nil
 		}
 	}
 	if c.routerAdminEnabled && c.routerEngine != nil {
-		dependencies.Router, dependencies.RouterOperations = c.routerEngine.api, c.routerEngine.registry
+		sources.router = c.routerEngine.api
+		sources.routerOperations = c.routerEngine.registry
 	}
+	dependencies.HandlerMounts = sources.handlerMounts
 	server, err := transport.NewAdminServer(adminConfig, dependencies)
 	if err != nil {
 		return err
@@ -910,6 +973,9 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			"engine.website":        coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.website"},
 			"engine.website.import": coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: archive.DataModuleID},
 		}
+		if _, ok := selected["engine.content"]; ok {
+			workflowOperations["engine.content"] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.content"}
+		}
 		for _, moduleID := range []string{"engine.publication", "composition.retirement", "admin.coordinator", "worker.archive", "worker.media", "worker.prerender"} {
 			if _, ok := selected[moduleID]; ok {
 				workflowOperations[moduleID] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: moduleID}
@@ -980,7 +1046,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		if websiteEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
-		contentEngine = newContentEngineComponent(core, resolved, nil)
+		contentEngine = newContentEngineComponent(core, resolved)
 		fileAPI.contentEngine = contentEngine
 		if _, enabled := selected["public.content-runtime"]; enabled {
 			if err := bus.RegisterPublishedContent(dispatcher, func(ctx context.Context, pageSnapshotID, locale string) (json.RawMessage, error) {
@@ -994,13 +1060,10 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			}
 		}
 		if err := register(platform.RuntimeComponent{ID: "engine.content", Requires: []string{"core", "engine.website"}, New: func(context.Context) (platform.ManagedComponent, error) {
-			contentEngine.website = websiteEngine.service
 			return contentEngine, nil
 		}}); err != nil {
 			return nil, nil, nil, nil, err
 		}
-		contentEngine.buildLocaleCatalog = websiteEngine.localeCatalog
-		contentEngine.buildProjection = websiteEngine.contentBuildView
 	}
 	if _, enabled := selected["admin.website"]; enabled && !fileAPI.developmentFixtures {
 		if websiteEngine == nil {
@@ -1307,7 +1370,7 @@ func configuredGroupNames(groups map[string]platform.AccessLevel) []string {
 
 func hasWorkflowConsumers(selected map[string]struct{}) bool {
 	for _, id := range []string{
-		"engine.website", "engine.publication", "composition.retirement",
+		"engine.content", "engine.website", "engine.publication", "composition.retirement",
 		"admin.coordinator", "worker.archive", "worker.media", "worker.prerender",
 	} {
 		if _, ok := selected[id]; ok {

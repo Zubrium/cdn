@@ -8,8 +8,6 @@ import (
 	"context"
 	"regexp"
 
-	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
-	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
@@ -59,7 +57,7 @@ func ModuleDataDescriptor() contracts.RecordDescriptor {
 	}
 }
 
-// Module satisfies Core's generic component registry without exposing an
+// Module satisfies Core's generic component registration without exposing an
 // engine-specific operation to other modules.
 type Module struct{}
 
@@ -67,32 +65,20 @@ func (Module) ComponentDescriptor() contracts.ComponentDescriptor {
 	return contracts.ComponentDescriptor{ID: moduleID, Kind: "composition", Version: 1}
 }
 
-// Website is the narrow, authenticated lifecycle facade. Route selection and
-// withdrawal never enter this interface.
-type Website interface {
-	Authenticate(context.Context, string) (context.Context, error)
-	GetPage(context.Context, string) (websiteapi.Page, error)
-	RetirePage(context.Context, websiteapi.RetirePageRequest) (websiteapi.Page, error)
-}
-
-// Router is the narrow, authenticated route-CAS facade used only by the
-// trusted composition root.
-type Router interface {
-	Authenticate(context.Context, string) (context.Context, error)
-	GetRoute(context.Context, string) (routerapi.Route, error)
-	DeleteRoute(context.Context, routerapi.DeleteRouteRequest) error
+// WorkflowStarter is the narrow, module-scoped port used to start the root
+// task. It carries no Core runtime, capability or engine handle.
+type WorkflowStarter interface {
+	Start(context.Context, contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error)
 }
 
 // Config is complete only when the static composition root supplies every
 // trusted capability and the page-to-route registry.
 type Config struct {
-	BranchID          string
-	Store             contracts.RecordDataStore
-	Routes            map[string][]string
-	Website           Website
-	WebsiteCredential string
-	Router            Router
-	RouterCredential  string
+	BranchID    string
+	Store       contracts.RecordDataStore
+	Starter     WorkflowStarter
+	Routes      map[string][]string
+	MaxAttempts int
 }
 
 // Service coordinates durable route withdrawal and page lifecycle closure.
@@ -101,17 +87,17 @@ type Service struct {
 }
 
 func NewService(config Config) (*Service, error) {
-	if config.BranchID == "" || config.Store == nil || config.Website == nil || config.Router == nil ||
-		config.WebsiteCredential == "" || config.RouterCredential == "" || len(config.Routes) == 0 {
+	if config.BranchID == "" || config.Store == nil || len(config.Routes) == 0 ||
+		config.MaxAttempts < 1 || config.MaxAttempts > 100 {
 		return nil, ErrUnavailable
 	}
 	seen := make(map[string]struct{}, len(config.Routes))
 	for pageID, routes := range config.Routes {
-		if !uuidPattern.MatchString(pageID) || len(routes) == 0 || len(routes) > maxRoutes {
+		if len(routes) == 0 || len(routes) > maxRoutes || !validID(pageID) {
 			return nil, ErrInvalid
 		}
 		for _, routeID := range routes {
-			if !uuidPattern.MatchString(routeID) {
+			if !validID(routeID) {
 				return nil, ErrInvalid
 			}
 			key := pageID + "\x00" + routeID
@@ -122,4 +108,10 @@ func NewService(config Config) (*Service, error) {
 		}
 	}
 	return &Service{config: config}, nil
+}
+
+func validID(value string) bool {
+	// The same strict identifier grammar is shared with the root payload
+	// validator; no engine package is imported to obtain it.
+	return contracts.ValidWorkflowID(value)
 }

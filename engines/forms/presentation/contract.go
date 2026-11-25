@@ -4,10 +4,9 @@ package presentation
 
 import (
 	"context"
-	"errors"
-	"github.com/Zubrium/cdn/pkg/contracts"
 	"time"
 
+	"github.com/Zubrium/cdn/pkg/contracts"
 	schemapodel "github.com/Zubrium/cdn/engines/forms/features/schemas/model"
 )
 
@@ -17,17 +16,26 @@ const (
 )
 
 var (
-	ErrUnauthorized = errors.New("unauthorized")
-	ErrForbidden    = errors.New("forbidden")
-	ErrNotFound     = errors.New("not found")
-	ErrConflict     = errors.New("revision conflict")
-	ErrInvalid      = errors.New("invalid request")
-	ErrTooLarge     = errors.New("request too large")
-	ErrUnavailable  = errors.New("Forms dependency unavailable")
-	ErrExpired      = errors.New("form session expired")
+	ErrUnauthorized = contracts.ErrAdminFormsUnauthorized
+	ErrForbidden    = contracts.ErrAdminFormsForbidden
+	ErrNotFound     = contracts.ErrAdminFormsNotFound
+	ErrConflict     = contracts.ErrAdminFormsConflict
+	ErrInvalid      = contracts.ErrAdminFormsInvalid
+	ErrTooLarge     = contracts.ErrAdminFormsTooLarge
+	ErrUnavailable  = contracts.ErrAdminFormsUnavailable
+	ErrExpired      = contracts.ErrAdminFormsExpired
 )
 
 type FieldDefinition = schemapodel.FieldDefinition
+
+type Schema = contracts.AdminFormsSchema
+type SchemaPage = contracts.AdminFormsSchemaPage
+type SaveSchemaRequest = contracts.AdminFormsSaveSchemaRequest
+type Submission = contracts.AdminFormsSubmission
+type ListSubmissionsRequest = contracts.AdminFormsListSubmissionsRequest
+type SubmissionPage = contracts.AdminFormsSubmissionPage
+type SetSubmissionStatusRequest = contracts.AdminFormsSetSubmissionStatusRequest
+type DeleteSubmissionRequest = contracts.AdminFormsDeleteSubmissionRequest
 
 type Contract interface {
 	API
@@ -52,36 +60,6 @@ type API interface {
 	AbortVisitorUpload(context.Context, AbortVisitorUploadRequest) error
 	SubmitVisitorResponse(context.Context, SubmitVisitorResponseRequest) (VisitorSubmissionReceipt, error)
 	CancelVisitorSession(context.Context, CancelVisitorSessionRequest) error
-}
-
-type Schema struct {
-	ID       string         `json:"id"`
-	Key      string         `json:"key"`
-	Version  int64          `json:"version"`
-	Fields   map[string]any `json:"fields"`
-	Revision int64          `json:"revision"`
-}
-
-type SchemaPage struct {
-	Items      []Schema `json:"items"`
-	NextCursor string   `json:"next_cursor,omitempty"`
-}
-
-type SaveSchemaRequest struct {
-	SchemaID         string         `json:"schema_id,omitempty"`
-	Key              string         `json:"key"`
-	Fields           map[string]any `json:"fields"`
-	ExpectedRevision int64          `json:"expected_revision"`
-}
-
-type Submission struct {
-	ID            string         `json:"id"`
-	FormID        string         `json:"form_id"`
-	SchemaVersion int64          `json:"schema_version"`
-	State         string         `json:"state"`
-	Values        map[string]any `json:"values"`
-	CreatedAt     time.Time      `json:"created_at"`
-	Revision      int64          `json:"revision"`
 }
 
 // PublicFormBinding is copied from a server-side Router route configuration.
@@ -200,30 +178,6 @@ type VisitorSubmissionReceipt struct {
 type CancelVisitorSessionRequest struct {
 	PublicFormBinding
 	Token string
-}
-
-type ListSubmissionsRequest struct {
-	FormID string `json:"form_id"`
-	Key    string `json:"key,omitempty"`
-	State  string `json:"state,omitempty"`
-	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit"`
-}
-
-type SubmissionPage struct {
-	Items      []Submission `json:"items"`
-	NextCursor string       `json:"next_cursor,omitempty"`
-}
-
-type SetSubmissionStatusRequest struct {
-	SubmissionID     string `json:"submission_id"`
-	Status           string `json:"status"`
-	ExpectedRevision int64  `json:"expected_revision"`
-}
-
-type DeleteSubmissionRequest struct {
-	SubmissionID     string `json:"submission_id"`
-	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type Descriptor struct{}
