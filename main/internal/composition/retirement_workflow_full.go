@@ -216,9 +216,7 @@ func validateRetirementFinalization(payload contracts.RetirementPageFinalizePayl
 	}
 }
 
-// markPageRetiring advances Website lifecycle only after the durable job has
-// been committed and only for a first-time trigger. A retry must not overwrite
-// the lifecycle token that the durable job already owns.
+// markPageRetiring ensures the durable job owns the page before any route work.
 func markPageRetiring(ctx context.Context, component *coreComponent, job retirement.Job) error {
 	if component == nil || component.config.Retirement.WebsiteCredential == "" {
 		return retirement.ErrUnavailable
@@ -231,22 +229,42 @@ func markPageRetiring(ctx context.Context, component *coreComponent, job retirem
 	if err != nil {
 		return retirement.ErrUnavailable
 	}
-	page, err := website.service.GetPage(websiteCtx, job.PageID)
+	return ensureRetiringPage(websiteCtx, job, website.service.GetPage, website.service.RetirePage)
+}
+
+func ensureRetiringPage(ctx context.Context, job retirement.Job,
+	read func(context.Context, string) (websiteapi.Page, error),
+	write func(context.Context, websiteapi.RetirePageRequest) (websiteapi.Page, error),
+) error {
+	page, err := read(ctx, job.PageID)
 	if err != nil {
 		return fmt.Errorf("retirement page read: %w", err)
+	}
+	owned := func(page websiteapi.Page) bool {
+		return page.ID == job.PageID && page.RetirementJobID == job.ID && page.Revision > job.ExpectedRevision &&
+			(page.LifecycleState == contracts.RetirementPageStateRetiring || page.LifecycleState == contracts.RetirementPageStateRetired)
+	}
+	if owned(page) {
+		return nil
 	}
 	if page.ID != job.PageID || page.Revision != job.ExpectedRevision ||
 		page.LifecycleState != contracts.RetirementPageStateActive || page.RetirementJobID != "" {
 		return retirement.ErrConflict
 	}
-	_, err = website.service.RetirePage(websiteCtx, websiteapi.RetirePageRequest{
+	_, err = write(ctx, websiteapi.RetirePageRequest{
 		PageID: page.ID, ExpectedRevision: page.Revision,
 		LifecycleState: contracts.RetirementPageStateRetiring, RetirementJobID: job.ID,
 		IdempotencyKey: job.IdempotencyKey,
 	})
 	if err != nil {
-		if _, updateErr := retirementWorkflowService.Load().SetJobState(ctx, job.ID, contracts.RetirementJobStateRetryable); updateErr != nil {
-			return updateErr
+		if errors.Is(err, websiteapi.ErrConflict) {
+			current, readErr := read(ctx, job.PageID)
+			if readErr != nil {
+				return fmt.Errorf("retirement page read after conflict: %w", readErr)
+			}
+			if owned(current) {
+				return nil
+			}
 		}
 		if errors.Is(err, websiteapi.ErrInvalid) {
 			return retirement.ErrInvalid

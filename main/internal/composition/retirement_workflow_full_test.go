@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
+	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	"github.com/Zubrium/cdn/main/internal/bus"
 	"github.com/Zubrium/cdn/main/internal/retirement"
@@ -55,6 +56,44 @@ func TestRetirementRootClassIsNotExecutableByRouterOrWebsitePools(t *testing.T) 
 		if !errors.As(err, &failure) || failure.Code != "operation_unavailable" {
 			t.Fatalf("%s pool root error = %v, want operation_unavailable", classID, err)
 		}
+	}
+}
+
+func TestEnsureRetiringPageRecoversAndHandlesConcurrentTransition(t *testing.T) {
+	job := retirement.Job{ID: "job", PageID: "page", ExpectedRevision: 10, IdempotencyKey: "key"}
+	for _, tc := range []struct {
+		name         string
+		page         websiteapi.Page
+		concurrent   bool
+		wantWrites   int
+		wantConflict bool
+	}{
+		{"resume before transition", websiteapi.Page{ID: "page", Revision: 10, LifecycleState: "active"}, false, 1, false},
+		{"resume after transition", websiteapi.Page{ID: "page", Revision: 25, LifecycleState: "retiring", RetirementJobID: "job"}, false, 0, false},
+		{"resume after completion", websiteapi.Page{ID: "page", Revision: 30, LifecycleState: "retired", RetirementJobID: "job"}, false, 0, false},
+		{"concurrent transition", websiteapi.Page{ID: "page", Revision: 10, LifecycleState: "active"}, true, 1, false},
+		{"changed active page", websiteapi.Page{ID: "page", Revision: 11, LifecycleState: "active"}, false, 0, true},
+		{"other job", websiteapi.Page{ID: "page", Revision: 25, LifecycleState: "retiring", RetirementJobID: "other"}, false, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page, writes := tc.page, 0
+			read := func(context.Context, string) (websiteapi.Page, error) { return page, nil }
+			write := func(_ context.Context, req websiteapi.RetirePageRequest) (websiteapi.Page, error) {
+				writes++
+				if req.ExpectedRevision != 10 || req.RetirementJobID != "job" {
+					t.Fatalf("bad write: %+v", req)
+				}
+				page = websiteapi.Page{ID: "page", Revision: 25, LifecycleState: "retiring", RetirementJobID: "job"}
+				if tc.concurrent {
+					return websiteapi.Page{}, websiteapi.ErrConflict
+				}
+				return page, nil
+			}
+			err := ensureRetiringPage(context.Background(), job, read, write)
+			if errors.Is(err, retirement.ErrConflict) != tc.wantConflict || (!tc.wantConflict && err != nil) || writes != tc.wantWrites {
+				t.Fatalf("writes=%d err=%v", writes, err)
+			}
+		})
 	}
 }
 

@@ -87,6 +87,9 @@ func (component *retirementComponent) retirePage(ctx context.Context, request co
 		return contracts.PageRetirement{}, err
 	}
 	if exists {
+		if err := markPageRetiring(ctx, component.core, job); err != nil {
+			return contracts.PageRetirement{}, err
+		}
 		return component.service.Launch(ctx, job)
 	}
 	retired, err := component.service.PageIsRetired(ctx, request.PageID)
