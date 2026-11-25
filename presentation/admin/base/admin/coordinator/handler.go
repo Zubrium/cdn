@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/auth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
 	"github.com/google/uuid"
 )
 

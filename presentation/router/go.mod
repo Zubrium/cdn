@@ -8,6 +8,7 @@ require (
 	github.com/Zubrium/cdn/engines/loader v0.0.0
 	github.com/Zubrium/cdn/engines/router v0.0.0
 	github.com/Zubrium/cdn/pkg v0.0.0
+	github.com/Zubrium/cdn/presentation/httpauth v0.0.0
 	github.com/google/uuid v1.6.0
 )
 
@@ -20,4 +21,5 @@ replace (
 	github.com/Zubrium/cdn/engines/router v0.0.0 => ../../engines/router
 	github.com/Zubrium/cdn/pkg v0.0.0 => ../../pkg
 	github.com/Zubrium/cdn/presentation/admin/base v0.0.0 => ../admin/base
+	github.com/Zubrium/cdn/presentation/httpauth v0.0.0 => ../httpauth
 )

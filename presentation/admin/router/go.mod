@@ -9,6 +9,7 @@ require (
 
 require (
 	github.com/Zubrium/cdn/pkg v0.0.0 // indirect
+	github.com/Zubrium/cdn/presentation/httpauth v0.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 )
 
@@ -26,6 +27,7 @@ replace (
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ../forms
 	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ../ui
 	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ../files
+	github.com/Zubrium/cdn/presentation/httpauth v0.0.0 => ../../httpauth
 	github.com/Zubrium/cdn/presentation/router v0.0.0 => ../../router
 	github.com/Zubrium/cdn/presentation/sitesapi v0.0.0 => ../sites
 	github.com/Zubrium/cdn/workers/archive v0.0.0 => ../../../workers/archive

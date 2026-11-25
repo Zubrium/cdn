@@ -21,7 +21,7 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
-	adminnotification "github.com/Zubrium/cdn/presentation/admin/notification"
+	adminnotification "github.com/Zubrium/cdn/presentation/admin/base/notification"
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/Zubrium/cdn/workers/media"

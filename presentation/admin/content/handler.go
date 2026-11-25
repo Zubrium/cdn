@@ -14,7 +14,7 @@ import (
 	"github.com/Zubrium/cdn/engines/content/domain"
 	engine "github.com/Zubrium/cdn/engines/content/presentation"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/auth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
 )
 
 const apiPrefix = "/api/admin/content"

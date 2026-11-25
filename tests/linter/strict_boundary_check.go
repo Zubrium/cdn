@@ -65,7 +65,6 @@ var strictBoundaryBaseline = map[string]bool{
 	"presentation-engine-import|presentation/router/publicupload/upload.go|github.com/Zubrium/cdn/engines/router/presentation":                                true,
 	"presentation-engine-import|presentation/router/publicupload/upload.go|github.com/Zubrium/cdn/engines/loader/features/files/pkg":                          true,
 	"presentation-engine-import|presentation/router/warmup.go|github.com/Zubrium/cdn/engines/router/presentation":                                             true,
-	"public-router-admin-auth|presentation/router/handler.go":                                                                                                 true,
 	"router-fs-staging|presentation/router/publicupload/upload.go":                                                                                            true,
 	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/content":                                           true,
 	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/forms":                                             true,
@@ -77,7 +76,7 @@ var strictBoundaryBaseline = map[string]bool{
 
 const (
 	corePresentationImportPath = "github.com/Zubrium/cdn/core/presentation"
-	adminAuthImportPath        = "github.com/Zubrium/cdn/presentation/admin/auth"
+	adminPresentationPrefix    = "github.com/Zubrium/cdn/presentation/admin/"
 	engineImportPrefix         = "github.com/Zubrium/cdn/engines/"
 )
 
@@ -276,18 +275,18 @@ func checkPublicRouterAdminAuth(root string) []string {
 	var violations []string
 	err := walkGoFiles(base, true, func(path string, file *ast.File, fset *token.FileSet, imports map[string]string) error {
 		for _, importPath := range imports {
-			if importPath != adminAuthImportPath {
+			if !strings.HasPrefix(importPath, adminPresentationPrefix) {
 				continue
 			}
 			relativeFile := relative(root, path)
 			violations = strictViolation(violations,
 				"public-router-admin-auth|"+relativeFile,
-				relativeFile+" imports Admin auth; public Router must own its browser transport")
+				relativeFile+" imports an Admin Presentation module; public Router must not depend on Admin")
 		}
 		return nil
 	})
 	if err != nil {
-		return append(violations, fmt.Sprintf("scan public Router auth imports: %v", err))
+		return append(violations, fmt.Sprintf("scan public Router Admin imports: %v", err))
 	}
 	return violations
 }

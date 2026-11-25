@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/Zubrium/cdn/engines/content v0.0.0
 	github.com/Zubrium/cdn/pkg v0.0.0
-	github.com/Zubrium/cdn/presentation/admin/auth v0.0.0
+	github.com/Zubrium/cdn/presentation/httpauth v0.0.0
 )
 
 require (
@@ -22,11 +22,11 @@ replace (
 	github.com/Zubrium/cdn/engines/website v0.0.0 => ../../../engines/website
 	github.com/Zubrium/cdn/main v0.0.0 => ../../../main
 	github.com/Zubrium/cdn/pkg v0.0.0 => ../../../pkg
-	github.com/Zubrium/cdn/presentation/admin/auth v0.0.0 => ../auth
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ../forms
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ../router
 	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ../ui
 	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ../files
+	github.com/Zubrium/cdn/presentation/httpauth v0.0.0 => ../../httpauth
 	github.com/Zubrium/cdn/presentation/router v0.0.0 => ../../router
 	github.com/Zubrium/cdn/presentation/sitesapi v0.0.0 => ../sites
 	github.com/Zubrium/cdn/workers/archive v0.0.0 => ../../../workers/archive

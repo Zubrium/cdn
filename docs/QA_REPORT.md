@@ -30,16 +30,17 @@
 
 ### Разделение Presentation-модулей Admin и публичного Router
 
-- Admin browser transport вынесен в отдельный Go module `presentation/admin/auth`;
-  публичный Router получил собственный `presentation/router/browserauth` и
-  больше не импортирует Admin auth. Linter-константа обновлена на новый путь.
+- Browser transport (cookies, CSRF, Origin) вынесен в нейтральный Go module
+  `presentation/httpauth`; Admin и публичный Router используют его напрямую,
+  не импортируя Admin-модули друг друга. Linter теперь запрещает любые импорты
+  `presentation/admin/*` из публичного Router.
 - SSE-узел уведомлений вынесен в отдельный module
-  `presentation/admin/notification`. `presentation/admin/base/transport`
+  `presentation/admin/base/notification`. `presentation/admin/base/transport`
   теперь только монтирует переданный `http.Handler` и не знает тип хаба;
   composition root создаёт hub/handler и связывает их с identity adapter.
-- Module-scoped зависимости переведены с `admin/base` на `admin/auth` для
-  content/files/forms/sites и admin router; публичный Router больше не требует
-  `admin/base`.
+- Module-scoped зависимости переведены с `admin/base` на `presentation/httpauth`
+  для content/files/forms/sites и admin router; публичный Router больше не
+  требует `admin/base`.
 - Проверено: `go test` всех затронутых Presentation-модулей, `go test`/`go vet`
   `main` в профилях `default`, `full`, `router`, `development-fixtures` через
   overlay, `go test`/`go run ./tests/linter`, `git diff --check`. Все exit 0;

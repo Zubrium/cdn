@@ -17,7 +17,7 @@ import (
 	loaderapi "github.com/Zubrium/cdn/engines/loader/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/auth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
 )
 
 const apiPrefix = "/api/files"
