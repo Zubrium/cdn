@@ -15,7 +15,7 @@ import (
 
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/auth"
 	"github.com/google/uuid"
 )
 

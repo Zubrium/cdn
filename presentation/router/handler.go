@@ -20,7 +20,7 @@ import (
 
 	engine "github.com/Zubrium/cdn/engines/router/presentation"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
+	browserauth "github.com/Zubrium/cdn/presentation/router/browserauth"
 	"github.com/google/uuid"
 )
 
@@ -65,7 +65,7 @@ type Config struct {
 type Handler struct {
 	api       API
 	cfg       Config
-	auth      *adminhttpauth.Transport
+	auth      *browserauth.Transport
 	adminMux  *http.ServeMux
 	publicMux *http.ServeMux
 }
@@ -91,10 +91,10 @@ func NewHandler(api API, cfg Config) (*Handler, error) {
 	if cfg.LocalePreference.Enabled && (cfg.LocalePreference.MaxAge <= 0 || cfg.LocalePreference.MaxAge%time.Second != 0 || isNilAPI(cfg.LocaleResolver)) {
 		return nil, errors.New("invalid Router locale preference configuration")
 	}
-	var auth *adminhttpauth.Transport
+	var auth *browserauth.Transport
 	if len(cfg.AllowedOrigins) > 0 {
 		var err error
-		auth, err = adminhttpauth.New(cfg.AllowedOrigins)
+		auth, err = browserauth.New(cfg.AllowedOrigins)
 		if err != nil {
 			return nil, err
 		}
@@ -690,9 +690,9 @@ func (h *Handler) setFormSessionCookie(w http.ResponseWriter, change engine.Form
 }
 
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (context.Context, bool) {
-	credential, err := adminhttpauth.Resolve(r)
+	credential, err := browserauth.Resolve(r)
 	if err != nil {
-		if errors.Is(err, adminhttpauth.ErrAmbiguous) {
+		if errors.Is(err, browserauth.ErrAmbiguous) {
 			writeError(w, http.StatusBadRequest, "ambiguous_authentication")
 		} else {
 			writeError(w, http.StatusUnauthorized, "unauthorized")

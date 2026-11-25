@@ -28,6 +28,23 @@
 - Проверено: `go test`/`go vet`/`go build` модуля
   `presentation/admin/base`, `go test`/`go run ./tests/linter`. Все exit 0.
 
+### Разделение Presentation-модулей Admin и публичного Router
+
+- Admin browser transport вынесен в отдельный Go module `presentation/admin/auth`;
+  публичный Router получил собственный `presentation/router/browserauth` и
+  больше не импортирует Admin auth. Linter-константа обновлена на новый путь.
+- SSE-узел уведомлений вынесен в отдельный module
+  `presentation/admin/notification`. `presentation/admin/base/transport`
+  теперь только монтирует переданный `http.Handler` и не знает тип хаба;
+  composition root создаёт hub/handler и связывает их с identity adapter.
+- Module-scoped зависимости переведены с `admin/base` на `admin/auth` для
+  content/files/forms/sites и admin router; публичный Router больше не требует
+  `admin/base`.
+- Проверено: `go test` всех затронутых Presentation-модулей, `go test`/`go vet`
+  `main` в профилях `default`, `full`, `router`, `development-fixtures` через
+  overlay, `go test`/`go run ./tests/linter`, `git diff --check`. Все exit 0;
+  linter сообщил `Architecture boundaries OK` для 22 модулей.
+
 ### Snapshot fork как изолированные workflow tasks
 
 - `snapshot.fork.start` больше не вызывает Content и Website: root task

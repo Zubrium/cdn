@@ -21,6 +21,7 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/observability"
 	"github.com/Zubrium/cdn/presentation/admin/base/transport"
+	adminnotification "github.com/Zubrium/cdn/presentation/admin/notification"
 	"github.com/Zubrium/cdn/presentation/router"
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/Zubrium/cdn/workers/media"
@@ -592,7 +593,7 @@ type fileAPIComponent struct {
 	formsAdminEnabled   bool
 	websiteAdminEnabled bool
 	identityAdmin       bool
-	notifications       *transport.NotificationHub
+	notifications       *adminnotification.Hub
 	developmentFixtures bool
 	routerAdminEnabled  bool
 	uiHandler           http.Handler
@@ -659,7 +660,14 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		GroupAccess:              adminGroupAccessResolver{access: identityAccess, groups: configuredGroupNames(c.core.config.Core.AccessGroups)},
 		CoordinatorAuthorization: adminCoordinatorAuthorization{access: coordinatorAccess},
 		Files:                    c.loader.service, WorkflowControl: c.workflowControl,
-		Notifications: c.notifications, SnapshotForkWorkflow: snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "admin.api")},
+		SnapshotForkWorkflow: snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "admin.api")},
+	}
+	if c.notifications != nil {
+		notificationHandler, err := adminnotification.NewHandler(c.notifications, identity, identity, adminConfig.AllowedOrigins)
+		if err != nil {
+			return fmt.Errorf("build Admin notification handler: %w", err)
+		}
+		dependencies.NotificationHandler = notificationHandler
 	}
 	if c.config.Retirement.Enabled {
 		// The Admin listener may start before the retirement component's Start
@@ -920,7 +928,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	fileAPI := &fileAPIComponent{loader: loader, core: core, dispatcher: dispatcher, config: resolved, observer: observer}
 	_, fileAPI.developmentFixtures = selected["development.fixtures"]
 	if _, enabled := selected["admin.notifications"]; enabled {
-		fileAPI.notifications = transport.NewNotificationHub()
+		fileAPI.notifications = adminnotification.NewHub()
 	}
 	_, fileAPI.formsAdminEnabled = selected["admin.forms"]
 	_, fileAPI.websiteAdminEnabled = selected["admin.website"]

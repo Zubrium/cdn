@@ -18,7 +18,7 @@ import (
 	website "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/auth"
 )
 
 const importPath = "/api/admin/feature-imports"

@@ -77,7 +77,7 @@ var strictBoundaryBaseline = map[string]bool{
 
 const (
 	corePresentationImportPath = "github.com/Zubrium/cdn/core/presentation"
-	adminAuthImportPath        = "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
+	adminAuthImportPath        = "github.com/Zubrium/cdn/presentation/admin/auth"
 	engineImportPrefix         = "github.com/Zubrium/cdn/engines/"
 )
 

@@ -8,6 +8,7 @@ require (
 	github.com/Zubrium/cdn/engines/router v0.0.0
 	github.com/Zubrium/cdn/engines/website v0.0.0
 	github.com/Zubrium/cdn/pkg v0.0.0
+	github.com/Zubrium/cdn/presentation/admin/auth v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/content v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0
@@ -55,6 +56,7 @@ replace (
 	github.com/Zubrium/cdn/engines/website v0.0.0 => ../../../engines/website
 	github.com/Zubrium/cdn/main v0.0.0 => ../../../main
 	github.com/Zubrium/cdn/pkg v0.0.0 => ../../../pkg
+	github.com/Zubrium/cdn/presentation/admin/auth v0.0.0 => ../auth
 	github.com/Zubrium/cdn/presentation/admin/content v0.0.0 => ../content
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ../forms
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ../router

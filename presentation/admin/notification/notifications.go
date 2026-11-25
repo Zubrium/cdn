@@ -1,7 +1,7 @@
-// Package notifications owns the Admin notification hub and its SSE endpoint.
-// It is a separate Presentation component from Admin identity and must not
+// Package notification owns the Admin notification hub and its SSE endpoint.
+// It is a separate Presentation module from Admin identity and must not
 // register or serve any other Admin API paths.
-package notifications
+package notification
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
-	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
+	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/auth"
 	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
 	"github.com/google/uuid"
 )
@@ -44,16 +44,16 @@ type notificationSubscriber struct {
 	events      chan NotificationEvent
 }
 
-type NotificationHub struct {
+type Hub struct {
 	mu          sync.Mutex
 	subscribers map[*notificationSubscriber]struct{}
 }
 
-func NewNotificationHub() *NotificationHub {
-	return &NotificationHub{subscribers: make(map[*notificationSubscriber]struct{})}
+func NewHub() *Hub {
+	return &Hub{subscribers: make(map[*notificationSubscriber]struct{})}
 }
 
-func (h *NotificationHub) Publish(principalID string, event NotificationEvent) error {
+func (h *Hub) Publish(principalID string, event NotificationEvent) error {
 	if h == nil || !validNotification(principalID, event) {
 		return errors.New("invalid Admin notification")
 	}
@@ -73,7 +73,7 @@ func (h *NotificationHub) Publish(principalID string, event NotificationEvent) e
 	return nil
 }
 
-func (h *NotificationHub) subscribe(principalID string) (<-chan NotificationEvent, func()) {
+func (h *Hub) subscribe(principalID string) (<-chan NotificationEvent, func()) {
 	subscriber := &notificationSubscriber{principalID: principalID, events: make(chan NotificationEvent, notificationQueueSize)}
 	h.mu.Lock()
 	h.subscribers[subscriber] = struct{}{}
@@ -130,14 +130,14 @@ func validProfileDigest(value string) bool {
 }
 
 type Handler struct {
-	hub       *NotificationHub
+	hub       *Hub
 	sessions  adminapi.SessionAdminAPI
 	identity  adminapi.IdentityAdminAPI
 	transport *adminhttpauth.Transport
 	mux       *http.ServeMux
 }
 
-func NewHandler(hub *NotificationHub, sessions adminapi.SessionAdminAPI, identity adminapi.IdentityAdminAPI, allowedOrigins []string) (*Handler, error) {
+func NewHandler(hub *Hub, sessions adminapi.SessionAdminAPI, identity adminapi.IdentityAdminAPI, allowedOrigins []string) (*Handler, error) {
 	if hub == nil || sessions == nil || identity == nil {
 		return nil, errors.New("Admin notification dependencies are incomplete")
 	}

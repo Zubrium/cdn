@@ -42,14 +42,14 @@ type openAPIParameter struct {
 }
 
 type openAPIBuildSchema struct {
-	Type                 string                 `yaml:"type"`
-	Ref                  string                 `yaml:"$ref"`
-	AdditionalProperties bool                   `yaml:"additionalProperties"`
-	Required             []string               `yaml:"required"`
-	Properties           map[string]yaml.Node   `yaml:"properties"`
-	AllOf                []openAPIBuildSchema   `yaml:"allOf"`
-	OneOf                []openAPIBuildSchema   `yaml:"oneOf"`
-	AnyOf                []openAPIBuildSchema   `yaml:"anyOf"`
+	Type                 string               `yaml:"type"`
+	Ref                  string               `yaml:"$ref"`
+	AdditionalProperties bool                 `yaml:"additionalProperties"`
+	Required             []string             `yaml:"required"`
+	Properties           map[string]yaml.Node `yaml:"properties"`
+	AllOf                []openAPIBuildSchema `yaml:"allOf"`
+	OneOf                []openAPIBuildSchema `yaml:"oneOf"`
+	AnyOf                []openAPIBuildSchema `yaml:"anyOf"`
 }
 
 type openAPIPath struct {
@@ -140,7 +140,7 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 		src  string
 	}{
 		{name: "admin-identity.yaml", src: "presentation/admin/base/admin/main/handler.go"},
-		{name: "admin-notifications.yaml", src: "presentation/admin/base/admin/notifications/notifications.go"},
+		{name: "admin-notifications.yaml", src: "presentation/admin/notification/notifications.go"},
 		{name: "content.yaml", src: "presentation/admin/content/handler.go"},
 		{name: "coordinator.yaml", src: "presentation/admin/base/admin/coordinator/handler.go"},
 		{name: "files.yaml", src: "presentation/admin/files/handler.go"},

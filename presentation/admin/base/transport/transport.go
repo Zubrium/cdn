@@ -18,7 +18,6 @@ import (
 	"github.com/Zubrium/cdn/pkg/observability"
 	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
 	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
-	adminnotifications "github.com/Zubrium/cdn/presentation/admin/base/admin/notifications"
 	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
 	formsadmin "github.com/Zubrium/cdn/presentation/admin/forms"
 	adminrouter "github.com/Zubrium/cdn/presentation/admin/router"
@@ -26,10 +25,6 @@ import (
 	routerhttp "github.com/Zubrium/cdn/presentation/router"
 	sitesapi "github.com/Zubrium/cdn/presentation/sitesapi"
 )
-
-func NewNotificationHub() *NotificationHub { return adminnotifications.NewNotificationHub() }
-
-type NotificationHub = adminnotifications.NotificationHub
 
 type ServerConfig struct {
 	Address           string
@@ -82,7 +77,7 @@ type AdminDependencies struct {
 	Forms                    formsengine.API
 	Router                   *routerenginepresentation.APIAdapter
 	RouterOperations         *routerhttp.PublicOperationRegistry
-	Notifications            *adminnotifications.NotificationHub
+	NotificationHandler      http.Handler
 }
 
 type Readiness interface {
@@ -114,7 +109,7 @@ func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, e
 	if config.IdentityEnabled && (deps.Identity == nil || deps.Sessions == nil || deps.GroupAccess == nil) {
 		return nil, errors.New("Admin identity dependencies are incomplete")
 	}
-	if deps.Notifications != nil && (!config.IdentityEnabled || deps.Identity == nil || deps.Sessions == nil) {
+	if deps.NotificationHandler != nil && (!config.IdentityEnabled || deps.Identity == nil || deps.Sessions == nil) {
 		return nil, errors.New("Admin notification dependencies are incomplete")
 	}
 	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
@@ -243,12 +238,8 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 			}
 		}
 	}
-	if s.deps.Notifications != nil {
-		handler, err := adminnotifications.NewHandler(s.deps.Notifications, s.deps.Sessions, s.deps.Identity, append([]string(nil), s.config.AllowedOrigins...))
-		if err != nil {
-			return nil, err
-		}
-		if err := mount("/api/admin/notifications", guard(handler)); err != nil {
+	if s.deps.NotificationHandler != nil {
+		if err := mount("/api/admin/notifications", guard(s.deps.NotificationHandler)); err != nil {
 			return nil, err
 		}
 	}

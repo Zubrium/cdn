@@ -13,6 +13,7 @@ require (
 	github.com/Zubrium/cdn/presentation/admin/base v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/content v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0
+	github.com/Zubrium/cdn/presentation/admin/notification v0.0.0
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0
 	github.com/Zubrium/cdn/presentation/adminui v0.0.0
 	github.com/Zubrium/cdn/presentation/fileapi v0.0.0
@@ -27,6 +28,7 @@ require (
 
 require (
 	ariga.io/atlas v1.3.0 // indirect
+	github.com/Zubrium/cdn/presentation/admin/auth v0.0.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.36.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.10 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.29.9 // indirect
@@ -86,9 +88,11 @@ replace (
 	github.com/Zubrium/cdn/engines/router v0.0.0 => ../engines/router
 	github.com/Zubrium/cdn/engines/website v0.0.0 => ../engines/website
 	github.com/Zubrium/cdn/pkg v0.0.0 => ../pkg
+	github.com/Zubrium/cdn/presentation/admin/auth v0.0.0 => ../presentation/admin/auth
 	github.com/Zubrium/cdn/presentation/admin/base v0.0.0 => ../presentation/admin/base
 	github.com/Zubrium/cdn/presentation/admin/content v0.0.0 => ../presentation/admin/content
 	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ../presentation/admin/forms
+	github.com/Zubrium/cdn/presentation/admin/notification v0.0.0 => ../presentation/admin/notification
 	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ../presentation/admin/router
 	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ../presentation/admin/ui
 	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ../presentation/admin/files

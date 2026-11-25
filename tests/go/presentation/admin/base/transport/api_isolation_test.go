@@ -55,7 +55,11 @@ func apiIsolationMux(t *testing.T, notifications bool) http.Handler {
 		Forms:          &isolationForms{},
 	}
 	if notifications {
-		deps.Notifications = NewNotificationHub()
+		deps.NotificationHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+		})
 	}
 	server, err := NewAdminServer(config, deps)
 	if err != nil {
