@@ -50,65 +50,6 @@ browser/E2E в этой волне не выполнялись — для них
 не изменялся, поэтому `pnpm typecheck/test/build` и ESLint повторно не
 запускались.
 
-## Промежуточные чекпоинты strict boundary (2026-11-25)
-
-Работы ведутся в отдельном checkout ветки `readiness-20261123`; рабочий стек
-`zubriumprod205553`, его PostgreSQL/MinIO и пользовательские uncommitted-файлы
-не изменялись.
-
-### Точный DataBus allowlist и HTTP ingress
-
-- Новые тесты фиксируют точный набор операций для всех скомпилированных module
-  identity и для профилей `default`, `full`, `router`, `development-fixtures`;
-  `Dispatcher.AllowedKeys()` добавлен только как read-only снимок реестра.
-- `operation_id_ingress_test.go` проверяет все request body OpenAPI-контрактов
-  на отсутствие `operation_id`/`operationId`, включая `$ref`, `allOf`, `oneOf`
-  и `anyOf`.
-- Проверено: `go test` для `main` во всех четырёх профилях через overlay,
-  `go vet` во всех профилях, `go test`/`go run ./tests/linter`, `git diff --check`.
-  Все команды exit 0; linter сообщил `Architecture boundaries OK` для 20 модулей.
-
-### Instance-scoped transport state
-
-- Глобальная карта `publishedSets` в `presentation/admin/base/transport`
-  заменена на `concurrencyContractPublisher`, хранящийся в каждом
-  `AdminServer`/`PublicServer`. Linter-тест отдельно проверяет, что глобальный
-  mutex отклоняется, а struct field — нет.
-- Проверено: `go test`/`go vet`/`go build` модуля
-  `presentation/admin/base`, `go test`/`go run ./tests/linter`. Все exit 0.
-
-### Разделение Presentation-модулей Admin и публичного Router
-
-- Browser transport (cookies, CSRF, Origin) вынесен в нейтральный Go module
-  `presentation/httpauth`; Admin и публичный Router используют его напрямую,
-  не импортируя Admin-модули друг друга. Linter теперь запрещает любые импорты
-  `presentation/admin/*` из публичного Router.
-- SSE-узел уведомлений вынесен в отдельный module
-  `presentation/admin/base/notification`. `presentation/admin/base/transport`
-  теперь только монтирует переданный `http.Handler` и не знает тип хаба;
-  composition root создаёт hub/handler и связывает их с identity adapter.
-- Module-scoped зависимости переведены с `admin/base` на `presentation/httpauth`
-  для content/files/forms/sites и admin router; публичный Router больше не
-  требует `admin/base`.
-- Проверено: `go test` всех затронутых Presentation-модулей, `go test`/`go vet`
-  `main` в профилях `default`, `full`, `router`, `development-fixtures` через
-  overlay, `go test`/`go run ./tests/linter`, `git diff --check`. Все exit 0;
-  linter сообщил `Architecture boundaries OK` для 22 модулей.
-
-### Snapshot fork как изолированные workflow tasks
-
-- `snapshot.fork.start` больше не вызывает Content и Website: root task
-  валидирует payload и порождает `snapshot.fork.copy-content` (class
-  `engine.content`) и `snapshot.fork.finalize` (class `engine.website`) с
-  зависимостью finalize ← copy по emission key.
-- Старт workflow из Admin переведён на `contracts.CallWorkflowStart` с
-  module-scoped dispatcher `admin.api`; прямой `*core/presentation.Runtime`
-  в starter удалён. Baseline-ключ `composition-runtime|snapshot_fork_full.go`
-  снят.
-- Проверено: `go test`/`go vet` модуля `engines/website`, `go test`/`go vet`
-  `main` во всех четырёх профилях через overlay, `go test`/`go run
-  ./tests/linter`, `git diff --check`. Все exit 0.
-
 ## Изоляция HTTP/OpenAPI API-модулей (2026-11-25)
 
 Проверялись HTTP-адаптеры Admin и публикация контрактов OpenAPI в текущем checkout. Рабочий стек `zubriumprod205553` не использовался; живые запросы выполнялись только к отдельному продукту `zubrium-obs-20261125` на `127.0.0.1:18080`. Секреты загружались из приватного env-файла `0600` вне репозитория; в отчёт и коммит не включены.

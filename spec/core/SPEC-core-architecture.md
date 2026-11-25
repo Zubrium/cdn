@@ -1,6 +1,6 @@
 # Core: слои, данные и автоматизация
 
-Статус: целевой контракт. По решению владельца проекта от 2026-11-23 Core остаётся независимым от engines, workers и Presentation; runtime-доступ всех внешних модулей к Core проходит только через DataBus в `main`. Текущая реализация ещё нарушает это требование и не готова к приёмке. Evidence и открытые нарушения: [QA_REPORT.md](../../docs/QA_REPORT.md) и [ACCEPTANCE-MATRIX.md](../../tests/ACCEPTANCE-MATRIX.md).
+Статус: целевой контракт. По решению владельца проекта от 2026-11-23 Core остаётся независимым от engines, workers и Presentation; runtime-доступ всех внешних модулей к Core проходит только через DataBus в `main`. Последний зафиксированный sweep границ прошёл 2026-11-25; его результаты не заменяют полную приёмку Core. Evidence и открытые сценарии: [QA_REPORT.md](../../docs/QA_REPORT.md) и [ACCEPTANCE-MATRIX.md](../../tests/ACCEPTANCE-MATRIX.md).
 
 ## Назначение и границы
 
