@@ -314,6 +314,7 @@ type AdminWebsiteBuildJob struct {
 type AdminWebsiteCreateDerivativeRequest struct {
 	SnapshotID     string `json:"snapshot_id"`
 	PlacementID    string `json:"placement_id"`
+	SchemaKind     string `json:"schema_kind"`
 	FieldPath      string `json:"field_path"`
 	SourceFileID   string `json:"source_file_id"`
 	IdempotencyKey string `json:"-"`

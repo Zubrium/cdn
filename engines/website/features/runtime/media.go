@@ -81,23 +81,50 @@ func validateArgumentMediaProfiles(schema map[string]any, depth int) error {
 
 // ResolveMediaProfile returns the canonical x-media declaration pinned by the
 // exact feature version in a ready snapshot. A client can only supply the
-// snapshot, placement and field path; it cannot select a profile or preset.
-func ResolveMediaProfile(data []byte, files map[string]struct{}, fieldPath string) (mediaprofile.Profile, error) {
+// snapshot, placement, schema kind and field path; it cannot select a profile or preset.
+func ResolveMediaProfile(data []byte, files map[string]struct{}, schemaKind, fieldPath string) (mediaprofile.Profile, error) {
 	if fieldPath == "" || len(fieldPath) > mediaFieldPathMax || !strings.HasPrefix(fieldPath, "/") {
 		return mediaprofile.Profile{}, fmt.Errorf("%w: field path", ErrMediaProfile)
 	}
 	segments := strings.Split(strings.TrimPrefix(fieldPath, "/"), "/")
-	if len(segments) < 1 || len(segments) > 2 {
+	if len(segments) < 1 || len(segments) > 128 {
 		return mediaprofile.Profile{}, fmt.Errorf("%w: field path", ErrMediaProfile)
-	}
-	for _, segment := range segments {
-		if !mediaFieldSegment.MatchString(segment) || strings.Contains(segment, "..") {
-			return mediaprofile.Profile{}, fmt.Errorf("%w: field path", ErrMediaProfile)
-		}
 	}
 	manifest, err := ValidateManifest(data, files)
 	if err != nil {
 		return mediaprofile.Profile{}, fmt.Errorf("%w: %v", ErrMediaProfile, err)
+	}
+	if schemaKind == "arguments" {
+		schema := manifest.Arguments
+		for _, raw := range segments {
+			if raw == "" || strings.Contains(strings.ReplaceAll(strings.ReplaceAll(raw, "~0", ""), "~1", ""), "~") {
+				return mediaprofile.Profile{}, fmt.Errorf("%w: field path", ErrMediaProfile)
+			}
+			segment := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
+			var next any
+			if schema["type"] == "array" && segment == "items" {
+				next = schema["items"]
+			} else if props, ok := schema["properties"].(map[string]any); ok {
+				next = props[segment]
+			}
+			var ok bool
+			schema, ok = next.(map[string]any)
+			if !ok {
+				return mediaprofile.Profile{}, fmt.Errorf("%w: field has no pinned declaration", ErrMediaProfile)
+			}
+		}
+		if schema["type"] != "string" || schema["format"] != "media" {
+			return mediaprofile.Profile{}, fmt.Errorf("%w: field is not a media argument", ErrMediaProfile)
+		}
+		return decodePinnedProfile(schema)
+	}
+	if schemaKind != "dataInputs" || len(segments) > 2 {
+		return mediaprofile.Profile{}, fmt.Errorf("%w: schema kind or field path", ErrMediaProfile)
+	}
+	for _, segment := range segments {
+		if !ValidMediaFieldSegment(segment) {
+			return mediaprofile.Profile{}, fmt.Errorf("%w: field path", ErrMediaProfile)
+		}
 	}
 	for _, raw := range manifest.DataInputs {
 		var input struct {

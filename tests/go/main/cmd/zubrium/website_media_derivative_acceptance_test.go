@@ -320,7 +320,7 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		}
 
 		baseRequest := websiteapi.CreateDerivativeRequest{
-			SnapshotID: snapshotID, PlacementID: web019PlacementID,
+			SnapshotID: snapshotID, PlacementID: web019PlacementID, SchemaKind: "dataInputs",
 			FieldPath: web019FieldPath, SourceFileID: source,
 		}
 		web019PreflightMediaInputs(t, ctx, writeCtx, service, websiteData, files, serviceSession,
@@ -612,7 +612,7 @@ func (f *web019V2Files) StatFile(ctx context.Context, id string) (contracts.File
 
 func web019AssertClientOverridesRejected(t *testing.T) {
 	t.Helper()
-	base := `"snapshot_id":"00000000-0000-4000-8000-000000000001","placement_id":"hero","field_path":"/hero/image","source_file_id":"00000000-0000-4000-8000-000000000002"`
+	base := `"snapshot_id":"00000000-0000-4000-8000-000000000001","placement_id":"hero","schema_kind":"dataInputs","field_path":"/hero/image","source_file_id":"00000000-0000-4000-8000-000000000002"`
 	overrides := []string{
 		`"profile_digest":"0000000000000000000000000000000000000000000000000000000000000000"`,
 		`"processor_version":"attacker-processor"`,
@@ -884,7 +884,7 @@ func web019Manifest(t *testing.T) ([]byte, mediaprofile.Profile, []byte) {
 		"runtime": map[string]any{"abi": featureruntime.ABI, "entry": "assets/app.js", "styles": []string{}},
 	})
 	files := map[string]struct{}{"assets/app.js": {}}
-	if _, err := featureruntime.ResolveMediaProfile(manifest, files, web019FieldPath); err != nil {
+	if _, err := featureruntime.ResolveMediaProfile(manifest, files, "dataInputs", web019FieldPath); err != nil {
 		t.Fatalf("manifest fixture has no pinned media profile: %v", err)
 	}
 	return manifest, profile, raw
@@ -997,7 +997,7 @@ func web019PreflightMediaInputs(t *testing.T, ctx, writeCtx context.Context, ser
 	for name := range catalog.Files {
 		fileNames[name] = struct{}{}
 	}
-	profile, err := featureruntime.ResolveMediaProfile(catalog.Manifest, fileNames, fieldPath)
+	profile, err := featureruntime.ResolveMediaProfile(catalog.Manifest, fileNames, "dataInputs", fieldPath)
 	if err != nil {
 		t.Fatalf("preflight pinned media profile: %v", err)
 	}

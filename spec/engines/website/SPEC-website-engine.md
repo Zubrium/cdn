@@ -254,9 +254,8 @@ Prerender детерминируем для неизменных входов, �
 
 ## 7. Декларативные media-профили и производные файлы
 
-Контракт `schema_kind` ниже согласован как целевой; синхронное внедрение в
-HTTP/OpenAPI и Admin ещё не завершено. Текущий `website.yaml` не объявляет это
-поле, поэтому наличие данного текста не подтверждает его доступность в API.
+Контракт `schema_kind` ниже реализован в HTTP/OpenAPI и resolver; подключение
+Admin и сквозная приёмка media workflow ещё не завершены.
 
 Media-поле объявляет профиль в pinned feature manifest под `x-media`, как в схеме аргументов feature, так и в `dataInputs`; значения UI/Content содержат только Core ID исходного файла. Допустимая форма профиля:
 
@@ -286,7 +285,7 @@ sequenceDiagram
     participant F as worker.media
     participant C as Core
 
-    A->>W: select file(source_file_id, snapshot, placement, field_path)
+    A->>W: select file(source_file_id, snapshot, placement, schema_kind, field_path)
     W->>W: resolve x-media from pinned manifest
     W->>D: create durable derivative workflow(profile_digest)
     D->>F: registered derivative/v1 task

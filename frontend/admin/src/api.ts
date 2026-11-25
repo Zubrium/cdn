@@ -1073,6 +1073,7 @@ export const api = {
     createMediaDerivative(input: {
       snapshot_id: string;
       placement_id: string;
+      schema_kind: "arguments" | "dataInputs";
       field_path: string;
       source_file_id: string;
     }, idempotencyKey: string): Promise<WebsiteMediaJob> {

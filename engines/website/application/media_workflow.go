@@ -155,7 +155,7 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	placementID := strings.ToLower(strings.TrimSpace(request.PlacementID))
 	sourceID := strings.ToLower(strings.TrimSpace(request.SourceFileID))
 	if !snapshotIDPattern.MatchString(snapshotID) || !identifierPattern.MatchString(placementID) ||
-		!validMediaFieldPath(request.FieldPath) || !snapshotIDPattern.MatchString(sourceID) ||
+		(request.SchemaKind != "arguments" && request.SchemaKind != "dataInputs") || !validMediaFieldPath(request.FieldPath) || !snapshotIDPattern.MatchString(sourceID) ||
 		!snapshotIdempotencyKeyPattern.MatchString(request.IdempotencyKey) {
 		return websiteapi.MediaJob{}, websiteapi.ErrInvalid
 	}
@@ -200,7 +200,7 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	for name := range catalog.Files {
 		files[name] = struct{}{}
 	}
-	profile, err := featureruntime.ResolveMediaProfile(catalog.Manifest, files, request.FieldPath)
+	profile, err := featureruntime.ResolveMediaProfile(catalog.Manifest, files, request.SchemaKind, request.FieldPath)
 	if err != nil {
 		return websiteapi.MediaJob{}, websiteapi.ErrInvalid
 	}
@@ -228,7 +228,7 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	if source.ID != sourceID || !sha256HexPattern.MatchString(source.SHA256) || source.Size <= 0 {
 		return websiteapi.MediaJob{}, websiteapi.ErrInvalid
 	}
-	fingerprint, err := mediaFingerprint(sourceID, strings.ToLower(source.SHA256), snapshotID, placementID, request.FieldPath, profileDigest, s.config.MediaProcessorVersion)
+	fingerprint, err := mediaFingerprint(sourceID, strings.ToLower(source.SHA256), snapshotID, placementID, request.SchemaKind, request.FieldPath, profileDigest, s.config.MediaProcessorVersion)
 	if err != nil {
 		return websiteapi.MediaJob{}, websiteapi.ErrUnavailable
 	}
@@ -471,18 +471,18 @@ func (s *Service) GetMediaJob(ctx context.Context, jobID string) (websiteapi.Med
 	return mediaJobFromRecord(updated), nil
 }
 
-// validMediaFieldPath matches the declaration path accepted by the manifest
-// resolver: /input or /input/field, without traversal or control characters.
+// validMediaFieldPath applies common size limits; the manifest resolver
+// validates schema-specific path syntax and verifies every declaration.
 func validMediaFieldPath(path string) bool {
 	if path == "" || len(path) > 512 || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\x00\r\n") {
 		return false
 	}
 	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(segments) < 1 || len(segments) > 2 {
+	if len(segments) < 1 || len(segments) > 128 {
 		return false
 	}
 	for _, segment := range segments {
-		if !featureruntime.ValidMediaFieldSegment(segment) {
+		if segment == "" || len(segment) > 128 {
 			return false
 		}
 	}

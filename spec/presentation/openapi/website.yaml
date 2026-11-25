@@ -459,15 +459,17 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [snapshot_id, placement_id, field_path, source_file_id]
+              required: [snapshot_id, placement_id, schema_kind, field_path, source_file_id]
               properties:
                 snapshot_id: { type: string, format: uuid }
                 placement_id: { type: string, minLength: 1, maxLength: 128 }
+                schema_kind: { type: string, enum: [arguments, dataInputs] }
                 field_path: { type: string, minLength: 1, maxLength: 512 }
                 source_file_id: { type: string, format: uuid }
-              description: Website resolves the exact profile from the pinned feature manifest; clients cannot provide profile or processor parameters.
+              description: Website resolves the exact profile from the selected schema area of the pinned feature manifest; arguments use property paths with items for arrays and JSON Pointer escaping. Clients cannot provide profile or processor parameters.
       responses:
         '202': { description: Derivative workflow accepted from the pinned manifest profile; the editor must keep the previous field value until all outputs are ready., headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/MediaJob' } } } }
+        '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }

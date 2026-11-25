@@ -15,8 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	website "github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	website "github.com/Zubrium/cdn/pkg/contracts"
 	httpjson "github.com/Zubrium/cdn/pkg/json"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/httpauth"
 )
@@ -511,8 +511,8 @@ func (h *Handler) createPageTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Name          string                            `json:"name"`
-		Description   string                            `json:"description"`
+		Name          string                                        `json:"name"`
+		Description   string                                        `json:"description"`
 		Configuration website.AdminWebsitePageTemplateConfiguration `json:"configuration"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
@@ -556,8 +556,8 @@ func (h *Handler) updatePageTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Name          string                            `json:"name"`
-		Description   string                            `json:"description"`
+		Name          string                                        `json:"name"`
+		Description   string                                        `json:"description"`
 		Configuration website.AdminWebsitePageTemplateConfiguration `json:"configuration"`
 	}
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
@@ -1039,7 +1039,7 @@ func (h *Handler) createMediaDerivative(w http.ResponseWriter, r *http.Request) 
 		writeDecodeError(w, err)
 		return
 	}
-	if !validUUID(input.SnapshotID) || !validID(input.PlacementID) || !validFieldPath(input.FieldPath) || !validUUID(input.SourceFileID) {
+	if !validUUID(input.SnapshotID) || !validID(input.PlacementID) || (input.SchemaKind != "arguments" && input.SchemaKind != "dataInputs") || !validFieldPath(input.FieldPath) || !validUUID(input.SourceFileID) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -1243,22 +1243,20 @@ func validUUID(value string) bool {
 
 func validFieldPath(value string) bool {
 	if value == "" || len(value) > 512 || value[0] != '/' || strings.Contains(value, "//") ||
-		strings.Contains(value, "..") || strings.ContainsAny(value, "\x00\r\n\\") {
+		strings.ContainsAny(value, "\x00\r\n\\") {
 		return false
 	}
 	segments := strings.Split(strings.TrimPrefix(value, "/"), "/")
-	if len(segments) == 0 || len(segments) > 2 {
+	if len(segments) == 0 || len(segments) > 128 {
 		return false
 	}
 	for _, segment := range segments {
-		if segment == "" || !fieldPathSegmentPattern.MatchString(segment) {
+		if segment == "" || len(segment) > 128 {
 			return false
 		}
 	}
 	return true
 }
-
-var fieldPathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 
 var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var ifMatchPattern = regexp.MustCompile(`^"[1-9][0-9]*"$`)

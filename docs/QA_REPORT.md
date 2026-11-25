@@ -1,5 +1,20 @@
 # QA-отчёт
 
+## Media schema kind и ограничение acceptance (2026-11-26)
+
+Для Website media resolver проверены одинаковые пути в `arguments` и
+`dataInputs`, вложенные массивы и экранирование ключей. `go test`, `go vet`,
+`go build` с централизованным overlay для `pkg`, `engines/website`,
+`presentation/admin/sites` и `main` с `-tags=full` прошли; Admin typecheck
+прошёл. Полный Admin media workflow и живой media acceptance не пройдены.
+
+`go test -overlay=/tmp/website-media-overlay.json -tags='full website_acceptance'
+./cmd/zubrium -run '^TestWebsiteMediaDerivativeAcceptance$' -count=1 -v`
+из `main` не компилируется: тесты publication/retirement используют удалённые
+поля старой workflow composition. Запуск без `website_acceptance` выдал
+`no tests to run` и не считается проверкой. Overlay создан командой
+`python3 tests/go-overlay.py` из корня.
+
 ## Проверка media-деклараций в аргументах (2026-11-26)
 
 `TestManifestRejectsInvalidArgumentMediaProfile` до изменения подтверждённо
