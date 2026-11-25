@@ -18,7 +18,6 @@ import (
 
 var (
 	retirementWorkflowService atomic.Pointer[retirement.Service]
-	retirementHandlerCore     atomic.Pointer[coreComponent]
 	retirementHandlerRouter   atomic.Pointer[routerEngineComponent]
 )
 
@@ -26,15 +25,9 @@ func setRetirementWorkflowService(service *retirement.Service) {
 	retirementWorkflowService.Store(service)
 }
 
-func setRetirementHandlerCore(component *coreComponent) {
-	retirementHandlerCore.Store(component)
-}
-
 func setRetirementHandlerRouter(router *routerEngineComponent) {
 	retirementHandlerRouter.Store(router)
 }
-
-func currentRetirementHandlerCore() *coreComponent { return retirementHandlerCore.Load() }
 
 type retirementWorkflowStarter struct{ dispatcher contracts.Dispatcher }
 

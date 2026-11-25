@@ -140,10 +140,10 @@ func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resol
 	if err := registerContentBridgeWorkerHandlers(register, selected, config, component); err != nil {
 		return nil, err
 	}
-	if err := registerPublicationWorkflowWorkerHandlers(register, selected, config); err != nil {
+	if err := registerPublicationWorkflowWorkerHandlers(register, selected, config, component); err != nil {
 		return nil, err
 	}
-	if err := registerRetirementWorkflowWorkerHandlers(register, selected, config); err != nil {
+	if err := registerRetirementWorkflowWorkerHandlers(register, selected, config, component); err != nil {
 		return nil, err
 	}
 	workflowTaskOperations = make(map[contracts.Key]TaskOperationBinding, len(operations))
@@ -227,7 +227,7 @@ func workerTaskPools(config appconfig.Resolved, dispatcher *bus.Dispatcher, oper
 	return NewDataBusTaskPools(dispatcher, operations, specs)
 }
 
-func registerPublicationWorkflowWorkerHandlers(register func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error, selected map[string]struct{}, config appconfig.Resolved) error {
+func registerPublicationWorkflowWorkerHandlers(register func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error, selected map[string]struct{}, config appconfig.Resolved, component *coreComponent) error {
 	if _, compiled := selected["engine.publication"]; !compiled {
 		return nil
 	}
@@ -242,7 +242,9 @@ func registerPublicationWorkflowWorkerHandlers(register func(classID, operationI
 	}
 	if _, compiled := selected[websiteworkflow.ComponentID]; compiled {
 		if err := register(websiteworkflow.ComponentID, contracts.PublicationBuildOperationID, contracts.PublicationChildContractVersion,
-			enabled, publicationBuildHandler{component: currentPublicationHandlerCore()}.WorkerHandler); err != nil {
+			enabled, bindWorkflowCore(component, func(ctx context.Context, task contracts.OperationTask, core *coreComponent) (contracts.OperationOutcome, error) {
+				return (publicationBuildHandler{component: core}).WorkerHandler(ctx, task)
+			})); err != nil {
 			return err
 		}
 		if err := register(websiteworkflow.ComponentID, contracts.PublicationFinalizeOperationID, contracts.PublicationChildContractVersion,
@@ -252,14 +254,16 @@ func registerPublicationWorkflowWorkerHandlers(register func(classID, operationI
 	}
 	if _, compiled := selected["engine.router"]; compiled {
 		if err := register("engine.router", contracts.PublicationActivateOperationID, contracts.PublicationChildContractVersion,
-			enabled, publicationActivateHandler{component: currentPublicationHandlerCore()}.WorkerHandler); err != nil {
+			enabled, bindWorkflowCore(component, func(ctx context.Context, task contracts.OperationTask, core *coreComponent) (contracts.OperationOutcome, error) {
+				return (publicationActivateHandler{component: core}).WorkerHandler(ctx, task)
+			})); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func registerRetirementWorkflowWorkerHandlers(register func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error, selected map[string]struct{}, config appconfig.Resolved) error {
+func registerRetirementWorkflowWorkerHandlers(register func(classID, operationID string, version uint32, enabled bool, handler bus.TaskOperationHandler) error, selected map[string]struct{}, config appconfig.Resolved, component *coreComponent) error {
 	if _, compiled := selected["composition.retirement"]; !compiled {
 		return nil
 	}
@@ -274,17 +278,27 @@ func registerRetirementWorkflowWorkerHandlers(register func(classID, operationID
 	}
 	if _, compiled := selected["engine.router"]; compiled {
 		if err := register("engine.router", contracts.RetirementRouteRemoveOperationID, contracts.RetirementChildContractVersion,
-			enabled, retirementRouteRemoveHandler{component: currentRetirementHandlerCore()}.WorkerHandler); err != nil {
+			enabled, bindWorkflowCore(component, func(ctx context.Context, task contracts.OperationTask, core *coreComponent) (contracts.OperationOutcome, error) {
+				return (retirementRouteRemoveHandler{component: core}).WorkerHandler(ctx, task)
+			})); err != nil {
 			return err
 		}
 	}
 	if _, compiled := selected[websiteworkflow.ComponentID]; compiled {
 		if err := register(websiteworkflow.ComponentID, contracts.RetirementPageFinalizeOperationID, contracts.RetirementChildContractVersion,
-			enabled, retirementFinalizeHandler{component: currentRetirementHandlerCore()}.WorkerHandler); err != nil {
+			enabled, bindWorkflowCore(component, func(ctx context.Context, task contracts.OperationTask, core *coreComponent) (contracts.OperationOutcome, error) {
+				return (retirementFinalizeHandler{component: core}).WorkerHandler(ctx, task)
+			})); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func bindWorkflowCore(component *coreComponent, handler func(context.Context, contracts.OperationTask, *coreComponent) (contracts.OperationOutcome, error)) bus.TaskOperationHandler {
+	return func(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+		return handler(ctx, task, component)
+	}
 }
 
 func configuredOperation(classID string, enabled bool, handler bus.TaskOperationHandler) bus.TaskOperationHandler {

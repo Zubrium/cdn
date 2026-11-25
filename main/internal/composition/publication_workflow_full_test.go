@@ -63,3 +63,30 @@ func TestPublicationAndRetirementTaskClassesAreScopedToTheirPools(t *testing.T) 
 		t.Fatal("root class must not be executable by website pool")
 	}
 }
+
+func TestWorkflowHandlerKeepsOwningCoreAcrossInitialization(t *testing.T) {
+	component := &coreComponent{}
+	other := &coreComponent{}
+	var received *coreComponent
+	handler := bindWorkflowCore(component, func(_ context.Context, _ contracts.OperationTask, core *coreComponent) (contracts.OperationOutcome, error) {
+		received = core
+		return contracts.OperationOutcome{}, nil
+	})
+	// Registration precedes component startup; handler execution happens later.
+	if _, err := handler(context.Background(), contracts.OperationTask{}); err != nil {
+		t.Fatal(err)
+	}
+	if received != component {
+		t.Fatal("registered task did not retain the owning Core instance")
+	}
+	otherHandler := bindWorkflowCore(other, func(_ context.Context, _ contracts.OperationTask, core *coreComponent) (contracts.OperationOutcome, error) {
+		received = core
+		return contracts.OperationOutcome{}, nil
+	})
+	if _, err := otherHandler(context.Background(), contracts.OperationTask{}); err != nil || received != other {
+		t.Fatal("second registration did not retain its own Core instance")
+	}
+	if _, err := handler(context.Background(), contracts.OperationTask{}); err != nil || received != component {
+		t.Fatal("second registration changed the first handler's Core instance")
+	}
+}

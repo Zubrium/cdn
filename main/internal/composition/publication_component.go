@@ -55,7 +55,6 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 	}
 	component.service = service
 	setPublicationWorkflowService(service)
-	setPublicationHandlerCore(component.core)
 	setPublicationHandlerRouter(component.router)
 	return nil
 }

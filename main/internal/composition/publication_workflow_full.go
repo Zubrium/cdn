@@ -29,7 +29,6 @@ import (
 // handlers here; the domain service sees neither.
 var (
 	publicationWorkflowService atomic.Pointer[publication.Service]
-	publicationHandlerCore     atomic.Pointer[coreComponent]
 	publicationHandlerRouter   atomic.Pointer[routerEngineComponent]
 )
 
@@ -37,15 +36,9 @@ func setPublicationWorkflowService(service *publication.Service) {
 	publicationWorkflowService.Store(service)
 }
 
-func setPublicationHandlerCore(component *coreComponent) {
-	publicationHandlerCore.Store(component)
-}
-
 func setPublicationHandlerRouter(router *routerEngineComponent) {
 	publicationHandlerRouter.Store(router)
 }
-
-func currentPublicationHandlerCore() *coreComponent { return publicationHandlerCore.Load() }
 
 type publicationWorkflowStarter struct{ dispatcher contracts.Dispatcher }
 

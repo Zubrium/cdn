@@ -20,7 +20,6 @@ func (publicationWorkflowStarter) Start(context.Context, contracts.WorkflowStart
 }
 
 func setPublicationWorkflowService(*publication.Service) {}
-func setPublicationHandlerCore(*coreComponent)           {}
 func setPublicationHandlerRouter(*routerEngineComponent) {}
 
 type retirementWorkflowStarter struct{ dispatcher contracts.Dispatcher }
@@ -30,7 +29,6 @@ func (retirementWorkflowStarter) Start(context.Context, contracts.WorkflowStartI
 }
 
 func setRetirementWorkflowService(*retirement.Service)  {}
-func setRetirementHandlerCore(*coreComponent)           {}
 func setRetirementHandlerRouter(*routerEngineComponent) {}
 
 func markPageRetiring(context.Context, *coreComponent, retirement.Job) error {

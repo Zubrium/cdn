@@ -49,7 +49,6 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 	}
 	component.service = service
 	setRetirementWorkflowService(service)
-	setRetirementHandlerCore(component.core)
 	setRetirementHandlerRouter(component.router)
 	component.client = &retirementClient{dispatcher: component.dispatcher}
 	return nil
