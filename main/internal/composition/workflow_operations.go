@@ -13,14 +13,23 @@ import (
 // DataBus DTOs. It is registered only for statically selected module owners.
 type coreWorkflowOperations struct {
 	runtime *platform.Runtime
+	resolve func() *platform.Runtime
 	owner   string
 }
 
+func (adapter coreWorkflowOperations) currentRuntime() *platform.Runtime {
+	if adapter.resolve != nil {
+		return adapter.resolve()
+	}
+	return adapter.runtime
+}
+
 func (adapter coreWorkflowOperations) client() (*platform.WorkflowClient, error) {
-	if adapter.runtime == nil || adapter.owner == "" {
+	runtime := adapter.currentRuntime()
+	if runtime == nil || adapter.owner == "" {
 		return nil, contracts.ErrWorkflowUnavailable
 	}
-	client, err := adapter.runtime.NewWorkflowClient(adapter.owner)
+	client, err := runtime.NewWorkflowClient(adapter.owner)
 	if err != nil {
 		return nil, mapWorkflowError(err)
 	}
@@ -77,7 +86,11 @@ func (adapter coreWorkflowOperations) ResolveTaskID(ctx context.Context, workflo
 	if ctx == nil || workflowID == uuid.Nil || emissionKey == "" {
 		return uuid.Nil, contracts.ErrInvalidOperation
 	}
-	control, err := adapter.runtime.NewWorkflowControl()
+	runtime := adapter.currentRuntime()
+	if runtime == nil || adapter.owner == "" {
+		return uuid.Nil, contracts.ErrWorkflowUnavailable
+	}
+	control, err := runtime.NewWorkflowControl()
 	if err != nil {
 		return uuid.Nil, mapWorkflowError(err)
 	}

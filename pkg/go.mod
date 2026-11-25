@@ -3,6 +3,7 @@ module github.com/Zubrium/cdn/pkg
 go 1.26.4
 
 require (
+	github.com/google/uuid v1.6.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.23.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.47.0
@@ -22,7 +23,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
@@ -32,4 +32,25 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/grpc v1.83.2 // indirect
+)
+
+replace (
+	github.com/Zubrium/cdn/core v0.0.0 => ../core
+	github.com/Zubrium/cdn/engines/content v0.0.0 => ../engines/content
+	github.com/Zubrium/cdn/engines/forms v0.0.0 => ../engines/forms
+	github.com/Zubrium/cdn/engines/loader v0.0.0 => ../engines/loader
+	github.com/Zubrium/cdn/engines/router v0.0.0 => ../engines/router
+	github.com/Zubrium/cdn/engines/website v0.0.0 => ../engines/website
+	github.com/Zubrium/cdn/main v0.0.0 => ../main
+	github.com/Zubrium/cdn/presentation/admin/base v0.0.0 => ../presentation/admin/base
+	github.com/Zubrium/cdn/presentation/admin/content v0.0.0 => ../presentation/admin/content
+	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ../presentation/admin/forms
+	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ../presentation/admin/router
+	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ../presentation/admin/ui
+	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ../presentation/admin/files
+	github.com/Zubrium/cdn/presentation/router v0.0.0 => ../presentation/router
+	github.com/Zubrium/cdn/presentation/sitesapi v0.0.0 => ../presentation/admin/sites
+	github.com/Zubrium/cdn/workers/archive v0.0.0 => ../workers/archive
+	github.com/Zubrium/cdn/workers/media v0.0.0 => ../workers/media
+	github.com/Zubrium/cdn/workers/prerender v0.0.0 => ../workers/prerender
 )

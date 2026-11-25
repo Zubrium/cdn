@@ -11,7 +11,6 @@ require (
 	github.com/aws/smithy-go v1.22.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.2
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -34,4 +33,25 @@ require (
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
+)
+
+replace (
+	github.com/Zubrium/cdn/engines/content v0.0.0 => ../engines/content
+	github.com/Zubrium/cdn/engines/forms v0.0.0 => ../engines/forms
+	github.com/Zubrium/cdn/engines/loader v0.0.0 => ../engines/loader
+	github.com/Zubrium/cdn/engines/router v0.0.0 => ../engines/router
+	github.com/Zubrium/cdn/engines/website v0.0.0 => ../engines/website
+	github.com/Zubrium/cdn/main v0.0.0 => ../main
+	github.com/Zubrium/cdn/pkg v0.0.0 => ../pkg
+	github.com/Zubrium/cdn/presentation/admin/base v0.0.0 => ../presentation/admin/base
+	github.com/Zubrium/cdn/presentation/admin/content v0.0.0 => ../presentation/admin/content
+	github.com/Zubrium/cdn/presentation/admin/forms v0.0.0 => ../presentation/admin/forms
+	github.com/Zubrium/cdn/presentation/admin/router v0.0.0 => ../presentation/admin/router
+	github.com/Zubrium/cdn/presentation/adminui v0.0.0 => ../presentation/admin/ui
+	github.com/Zubrium/cdn/presentation/fileapi v0.0.0 => ../presentation/admin/files
+	github.com/Zubrium/cdn/presentation/router v0.0.0 => ../presentation/router
+	github.com/Zubrium/cdn/presentation/sitesapi v0.0.0 => ../presentation/admin/sites
+	github.com/Zubrium/cdn/workers/archive v0.0.0 => ../workers/archive
+	github.com/Zubrium/cdn/workers/media v0.0.0 => ../workers/media
+	github.com/Zubrium/cdn/workers/prerender v0.0.0 => ../workers/prerender
 )

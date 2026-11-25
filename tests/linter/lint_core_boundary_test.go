@@ -104,6 +104,35 @@ func TestPresentationEngineInternalImportRule(t *testing.T) {
 	}
 }
 
+func TestGoModRequireIgnoresReplaceDirectives(t *testing.T) {
+	data := []byte("module example\n\ngo 1.26\n\nrequire github.com/Zubrium/cdn/pkg v0.0.0\n\nreplace (\n\tgithub.com/Zubrium/cdn/core v0.0.0 => ../core\n\tgithub.com/Zubrium/cdn/pkg v0.0.0 => ../pkg\n)\n")
+	paths := goModRequirePaths(data)
+	if !paths["github.com/Zubrium/cdn/pkg"] {
+		t.Fatal("require directive was not parsed")
+	}
+	if paths["github.com/Zubrium/cdn/core"] {
+		t.Fatal("local replace directive was mistaken for a dependency")
+	}
+}
+
+func TestStrictBoundaryBaselineHidesOnlyKnownDebt(t *testing.T) {
+	var baselineKey string
+	for key := range strictBoundaryBaseline {
+		baselineKey = key
+		break
+	}
+	if baselineKey == "" {
+		t.Fatal("strict boundary baseline is empty during migration")
+	}
+	if got := strictViolation(nil, baselineKey, "known"); len(got) != 0 {
+		t.Fatalf("known baseline debt was reported: %v", got)
+	}
+	got := strictViolation(nil, "unknown|debt", "new violation")
+	if len(got) != 1 || !strings.Contains(got[0], "new violation") {
+		t.Fatalf("new violation was hidden: %v", got)
+	}
+}
+
 func TestRuntimeModulesUseDataBusInsteadOfImportingCore(t *testing.T) {
 	root, err := repositoryRoot()
 	if err != nil {
@@ -124,7 +153,8 @@ func TestRuntimeModulesUseDataBusInsteadOfImportingCore(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if strings.Contains(string(data), coreModule) || strings.Contains(string(data), compositionModule) {
+			requires := goModRequirePaths(data)
+			if requires[coreModule] || requires[compositionModule] {
 				t.Errorf("%s declares Core/composition as a module dependency; depend on pkg/contracts and use DataBus through main", path)
 			}
 			return nil

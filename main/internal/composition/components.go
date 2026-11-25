@@ -805,6 +805,14 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 			contracts.AccessRequireGroupOperation().Key,
 		)
 	}
+	if hasWorkflowConsumers(selected) {
+		keys = append(keys,
+			contracts.WorkflowStartOperation().Key,
+			contracts.WorkflowStateOperation().Key,
+			contracts.WorkflowTaskResultOperation().Key,
+			contracts.WorkflowTaskIDResolveOperation().Key,
+		)
+	}
 	perOperation := bus.PerOperationLimits{}
 	if limits := resolved.Scales.Bus.PerOperation; limits.Enabled {
 		overrides := make([]bus.OperationLimit, 0, len(limits.Overrides))
@@ -837,6 +845,19 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		}
 		if err := bus.RegisterTaskOperations(dispatcher, handlers); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("register DataBus task operations: %w", err)
+		}
+	}
+	if hasWorkflowConsumers(selected) {
+		workflowOperations := map[string]bus.WorkflowOperations{
+			"engine.website": coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.website"},
+		}
+		for _, moduleID := range []string{"engine.publication", "composition.retirement", "admin.coordinator", "worker.archive", "worker.media", "worker.prerender"} {
+			if _, ok := selected[moduleID]; ok {
+				workflowOperations[moduleID] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: moduleID}
+			}
+		}
+		if err := bus.RegisterWorkflowOperations(dispatcher, workflowOperations); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("register workflow DataBus operations: %w", err)
 		}
 	}
 	dispatcher.WithObserver(observer)
@@ -1223,4 +1244,16 @@ func configuredGroupNames(groups map[string]platform.AccessLevel) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func hasWorkflowConsumers(selected map[string]struct{}) bool {
+	for _, id := range []string{
+		"engine.website", "engine.publication", "composition.retirement",
+		"admin.coordinator", "worker.archive", "worker.media", "worker.prerender",
+	} {
+		if _, ok := selected[id]; ok {
+			return true
+		}
+	}
+	return false
 }

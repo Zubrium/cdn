@@ -42,16 +42,20 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	coreRequires := goModRequirePaths(coreMod)
 	for _, candidate := range localModules {
 		if candidate.dir == core.dir {
 			continue
 		}
-		if strings.Contains(string(coreMod), candidate.path) {
-			violations = append(violations, fmt.Sprintf("core/go.mod references repository module %q", candidate.path))
+		if coreRequires[candidate.path] {
+			violations = append(violations, fmt.Sprintf("core/go.mod requires repository module %q", candidate.path))
 		}
 	}
 
 	for _, owner := range localModules {
+		if owner.dir == filepath.Join(root, "main") {
+			continue
+		}
 		err := filepath.WalkDir(owner.dir, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -85,8 +89,8 @@ func main() {
 					continue
 				}
 
-				if hasModulePrefix(importPath, core.path) && importPath != core.path+"/presentation" {
-					violations = append(violations, fmt.Sprintf("%s imports private Core package %q; use %s/presentation", relative(root, path), importPath, core.path))
+				if hasModulePrefix(importPath, core.path) {
+					violations = append(violations, fmt.Sprintf("%s imports private Core package %q; Core is reachable only through main DataBus adapters", relative(root, path), importPath))
 				}
 				if strings.Contains(owner.path, "/engines/") || strings.Contains(owner.path, "/workers/") {
 					for _, dependency := range localModules {
@@ -110,6 +114,7 @@ func main() {
 	}
 
 	violations = append(violations, checkRuntimeBusIsolation(root, localModules)...)
+	violations = append(violations, checkStrictBoundaries(root, localModules)...)
 	violations = append(violations, checkIsolationProfiles(root)...)
 
 	if len(violations) > 0 {
@@ -272,6 +277,54 @@ func isEngineModule(modulePath string) bool {
 
 func hasModulePrefix(importPath, modulePath string) bool {
 	return importPath == modulePath || strings.HasPrefix(importPath, modulePath+"/")
+}
+
+// goModRequirePaths returns module paths from require directives only. Local
+// replace directives are needed for standalone GOWORK=off builds and do not
+// create a dependency edge, so they are intentionally ignored by boundary
+// checks.
+func goModRequirePaths(data []byte) map[string]bool {
+	paths := make(map[string]bool)
+	inRequire, inReplace := false, false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(strings.SplitN(raw, "//", 2)[0])
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if inReplace {
+			if fields[0] == ")" {
+				inReplace = false
+			}
+			continue
+		}
+		if inRequire {
+			if fields[0] == ")" {
+				inRequire = false
+				continue
+			}
+			if len(fields) >= 2 {
+				paths[strings.Trim(fields[0], "\"")] = true
+			}
+			continue
+		}
+		if fields[0] == "replace" {
+			if len(fields) > 1 && fields[1] == "(" {
+				inReplace = true
+			}
+			continue
+		}
+		if fields[0] == "require" {
+			if len(fields) > 1 && fields[1] == "(" {
+				inRequire = true
+				continue
+			}
+			if len(fields) >= 2 {
+				paths[strings.Trim(fields[1], "\"")] = true
+			}
+		}
+	}
+	return paths
 }
 
 func relative(root, path string) string {

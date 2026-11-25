@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
@@ -35,6 +36,22 @@ func TestModuleDispatcherRejectsEmptyOwner(t *testing.T) {
 	dispatcher := NewModuleDispatcher(nil, " ")
 	if dispatcher != nil {
 		t.Fatal("dispatcher accepted an empty module identity")
+	}
+}
+
+func TestModuleDispatcherRejectsOperationOutsideModuleAllowlist(t *testing.T) {
+	dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 1},
+		contracts.CoreReadinessOperation().Key, contracts.WorkflowListOperation().Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	client := NewModuleDispatcher(dispatcher, "engine.website")
+	_, err = contracts.Call(context.Background(), client, contracts.WorkflowListOperation(), contracts.WorkflowListRequest{})
+	if !errors.Is(err, ErrOperationNotAllowedForModule) {
+		t.Fatalf("error = %v, want ErrOperationNotAllowedForModule", err)
 	}
 }
 
