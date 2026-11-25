@@ -1,5 +1,20 @@
 # QA-отчёт
 
+## Core: disposable PostgreSQL (2026-11-26)
+
+На checkout `5201427` использован отдельный проект `website-qa-codex261126a`:
+PostgreSQL `127.0.0.1:37431`, S3 `127.0.0.1:37432`, временные данные в
+контейнерах; рабочие сервисы и данные не использовались. Тесты запускались
+из `core/` с overlay `/tmp/website-acceptance-audit-overlay.json`, созданным
+`python3 tests/go-overlay.py` из корня, и переменными только из private env
+этого проекта. `go test -count=1 -v -overlay=... -run
+'^TestDisposableOwnerScopedTaskResult$' ./infrastructure/postgres` подтвердил
+`CORE-001`, включая отказ чтения чужого результата и неизвестных идентификаторов.
+Аналогичный запуск с `-run '^TestDisposableCoordinatorLifecycleSuite$'` на
+отдельной пустой disposable БД подтвердил восемь подсценариев: регистрацию,
+конкурентный claim, зависимости и барьеры, rollback и отказы store. Это не
+полный concurrency/recovery или Website acceptance; они остаются открытыми.
+
 ## Content: media в проекции (2026-11-26)
 
 Trusted projection извлекает `media_accept` из проверенного закреплённого
