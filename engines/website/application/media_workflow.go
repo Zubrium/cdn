@@ -234,15 +234,10 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	}
 	fingerprintKey := websiterepo.MediaIdempotencyKey("fingerprint/" + fingerprint)
 	callerKey := websiterepo.MediaIdempotencyKey("caller/" + request.IdempotencyKey)
-	if existingID, found, err := s.readMediaReceipt(ctx, fingerprintKey, fingerprint, profileDigest, s.config.MediaProcessorVersion); err != nil {
+	if existingID, found, err := s.lookupMediaRequest(ctx, callerKey, fingerprintKey, fingerprint, profileDigest, s.config.MediaProcessorVersion); err != nil {
 		return websiteapi.MediaJob{}, err
 	} else if found {
 		return s.loadMediaJob(ctx, existingID)
-	}
-	if _, found, err := s.readMediaReceipt(ctx, callerKey, "", profileDigest, s.config.MediaProcessorVersion); err != nil {
-		return websiteapi.MediaJob{}, err
-	} else if found {
-		return websiteapi.MediaJob{}, websiteapi.ErrUnavailable
 	}
 	if s.store.MaxBatchSize() < 3 {
 		return websiteapi.MediaJob{}, websiteapi.ErrTooLarge
@@ -277,7 +272,9 @@ func (s *Service) CreateMediaDerivative(ctx context.Context, request websiteapi.
 	if err := s.store.Batch(ctx, mutations); err != nil {
 		mapped := mapCoreError(err)
 		if errors.Is(mapped, websiteapi.ErrConflict) {
-			if existingID, found, readErr := s.readMediaReceipt(ctx, fingerprintKey, fingerprint, profileDigest, s.config.MediaProcessorVersion); readErr == nil && found {
+			if existingID, found, readErr := s.lookupMediaRequest(ctx, callerKey, fingerprintKey, fingerprint, profileDigest, s.config.MediaProcessorVersion); readErr != nil {
+				return websiteapi.MediaJob{}, readErr
+			} else if found {
 				return s.loadMediaJob(ctx, existingID)
 			}
 		}
@@ -603,6 +600,57 @@ func (s *Service) failMedia(ctx context.Context, state mediaState, code string) 
 	return mediaJobFromRecord(updated), nil
 }
 
+// lookupMediaRequest first validates the caller key, then binds a new key to
+// any already-existing matching job. Caller receipts from earlier versions
+// omit the fingerprint; the immutable job record is authoritative for both.
+func (s *Service) lookupMediaRequest(ctx context.Context, callerKey, fingerprintKey recorddata.RecordKey, fingerprint, profileDigest, processorVersion string) (string, bool, error) {
+	id, found, err := s.lookupMediaCaller(ctx, callerKey, fingerprint, profileDigest, processorVersion)
+	if err != nil || found {
+		return id, found, err
+	}
+	id, found, err = s.readMediaReceipt(ctx, fingerprintKey, fingerprint, profileDigest, processorVersion)
+	if err != nil || !found {
+		return "", false, err
+	}
+	state, err := s.loadMediaState(ctx, id)
+	if err != nil {
+		return "", false, err
+	}
+	if state.record.Fingerprint != fingerprint || state.record.ProfileDigest != profileDigest || state.record.ProcessorVersion != processorVersion {
+		return "", false, websiteapi.ErrUnavailable
+	}
+	receipt, err := mediaReceiptValue(fingerprint, id, profileDigest, processorVersion)
+	if err != nil {
+		return "", false, err
+	}
+	if err := s.store.Batch(ctx, []recorddata.RecordMutation{{Key: callerKey, ExpectedRevision: 0, Value: receipt}}); err != nil {
+		if errors.Is(err, recorddata.ErrRecordConflict) {
+			id, found, lookupErr := s.lookupMediaCaller(ctx, callerKey, fingerprint, profileDigest, processorVersion)
+			if lookupErr != nil || found {
+				return id, found, lookupErr
+			}
+			return "", false, websiteapi.ErrUnavailable
+		}
+		return "", false, mapCoreError(err)
+	}
+	return id, true, nil
+}
+
+func (s *Service) lookupMediaCaller(ctx context.Context, key recorddata.RecordKey, fingerprint, profileDigest, processorVersion string) (string, bool, error) {
+	id, found, err := s.readMediaReceipt(ctx, key, "", profileDigest, processorVersion)
+	if err != nil || !found {
+		return "", found, err
+	}
+	state, err := s.loadMediaState(ctx, id)
+	if err != nil {
+		return "", false, err
+	}
+	if state.record.Fingerprint != fingerprint || state.record.ProfileDigest != profileDigest || state.record.ProcessorVersion != processorVersion {
+		return "", false, websiteapi.ErrConflict
+	}
+	return id, true, nil
+}
+
 func (s *Service) readMediaReceipt(ctx context.Context, key recorddata.RecordKey, fingerprint, profileDigest, processorVersion string) (string, bool, error) {
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
@@ -617,10 +665,10 @@ func (s *Service) readMediaReceipt(ctx context.Context, key recorddata.RecordKey
 	var receipt mediaReceipt
 	if json.Unmarshal(record.Payload, &receipt) != nil || receipt.RecordType != "media_job_idempotency" ||
 		!snapshotIDPattern.MatchString(receipt.JobID) || !sha256HexPattern.MatchString(receipt.ProfileDigest) ||
-		receipt.ProcessorVersion != processorVersion {
+		receipt.ProcessorVersion == "" {
 		return "", false, websiteapi.ErrUnavailable
 	}
-	if receipt.ProfileDigest != profileDigest {
+	if receipt.ProfileDigest != profileDigest || receipt.ProcessorVersion != processorVersion {
 		return "", false, websiteapi.ErrConflict
 	}
 	if fingerprint != "" && receipt.Fingerprint != fingerprint {

@@ -1,5 +1,17 @@
 # QA-отчёт
 
+## Media: idempotency key (2026-11-26)
+
+Исправлена проверка caller key перед повторным использованием готовой или
+выполняющейся job: новый ключ атомарно закрепляется за совпадающей job,
+использованный с другим fingerprint ключ возвращает conflict. Unit-проверки
+охватывают прежний формат caller receipts, совпадение, конфликт версии
+обработчика и имитацию конкурентного присваивания ключа. `go test`, `go vet`
+с `/tmp/website-idempotency-overlay.json` и `go build ./...` в
+`engines/website` прошли; overlay создан через `python3 tests/go-overlay.py`.
+Живая проверка конкурентных транзакций на disposable PostgreSQL/S3 не
+выполнена и остаётся частью заблокированного WEB-019.
+
 ## Website integration ledger (2026-11-26)
 
 `go test -overlay=/tmp/website-acceptance-audit-overlay.json -tags='full
