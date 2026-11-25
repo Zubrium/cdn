@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	featureruntime "github.com/Zubrium/cdn/engines/website/features/runtime"
@@ -136,6 +137,10 @@ func (provider *websiteContentProjectionProvider) buildPlacements(ctx context.Co
 		if err != nil {
 			return nil, err
 		}
+		mediaAccepts, err := dataInputMediaAccepts(manifest.DataInputs)
+		if err != nil {
+			return nil, err
+		}
 		inputs := make([]contentapi.PlacementInput, 0, len(placement.Bindings))
 		for _, binding := range placement.Bindings {
 			kind, known := kinds[binding.InputKey]
@@ -148,7 +153,7 @@ func (provider *websiteContentProjectionProvider) buildPlacements(ctx context.Co
 				if binding.FieldID == "" || len(binding.Fields) != 0 || binding.Lookup != nil {
 					return nil, fmt.Errorf("%w: scalar input %q must bind one direct field", contentapi.ErrInvalid, binding.InputKey)
 				}
-				input.Fields = []contentapi.PlacementField{{InputPath: "value", FieldID: binding.FieldID}}
+				input.Fields = []contentapi.PlacementField{{InputPath: "value", FieldID: binding.FieldID, MediaAccept: mediaAccepts[binding.InputKey+"\x00"]}}
 			case "record", "collection":
 				if binding.FieldID != "" || len(binding.Fields) == 0 {
 					return nil, fmt.Errorf("%w: %s input %q requires field bindings", contentapi.ErrInvalid, kind, binding.InputKey)
@@ -158,7 +163,7 @@ func (provider *websiteContentProjectionProvider) buildPlacements(ctx context.Co
 					if field.InputPath == "" || field.FieldID == "" {
 						return nil, fmt.Errorf("%w: incomplete field binding for %q", contentapi.ErrInvalid, binding.InputKey)
 					}
-					input.Fields = append(input.Fields, contentapi.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID})
+					input.Fields = append(input.Fields, contentapi.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID, MediaAccept: mediaAccepts[binding.InputKey+"\x00"+strings.TrimPrefix(field.InputPath, "/")]})
 				}
 				if binding.Lookup != nil {
 					input.Lookup = &contentapi.PlacementInputLookup{Argument: binding.Lookup.Argument, FieldID: binding.Lookup.FieldID}
@@ -205,3 +210,38 @@ func dataInputKinds(rawInputs []json.RawMessage) (map[string]string, error) {
 }
 
 var _ contentapi.ProjectionsProvider = (*websiteContentProjectionProvider)(nil)
+
+// dataInputMediaAccepts is populated only from a validated, pinned manifest.
+func dataInputMediaAccepts(rawInputs []json.RawMessage) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, raw := range rawInputs {
+		var input struct {
+			Key     string `json:"key"`
+			Profile struct {
+				Media *struct {
+					Accept string `json:"accept"`
+				} `json:"x-media"`
+			} `json:"profile"`
+			Fields []struct {
+				Path    string `json:"path"`
+				Profile struct {
+					Media *struct {
+						Accept string `json:"accept"`
+					} `json:"x-media"`
+				} `json:"profile"`
+			} `json:"fields"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return nil, fmt.Errorf("%w: invalid input media metadata", contentapi.ErrInvalid)
+		}
+		if input.Profile.Media != nil {
+			result[input.Key+"\x00"] = input.Profile.Media.Accept
+		}
+		for _, field := range input.Fields {
+			if field.Profile.Media != nil {
+				result[input.Key+"\x00"+strings.TrimPrefix(field.Path, "/")] = field.Profile.Media.Accept
+			}
+		}
+	}
+	return result, nil
+}

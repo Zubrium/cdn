@@ -3,8 +3,7 @@ import type { MediaRenditionContext, WebsiteMediaJob } from "@/types";
 import { prepareMediaRenditions, type MediaRenditionClient } from "../../../../../../frontend/admin/src/domains/media/rendition-preparation";
 
 const context: MediaRenditionContext = {
-  snapshotId: "snapshot-1", placementId: "placement-1", featureKey: "catalog",
-  buildVersion: "2.0.0", schemaKind: "dataInputs", fieldPath: "/products/imageSrc", buildDigest: "digest-1",
+  snapshotId: "snapshot-1", placementId: "placement-1", schemaKind: "dataInputs", fieldPath: "/products/imageSrc",
 };
 function job(state: WebsiteMediaJob["state"]): WebsiteMediaJob {
   return { id: "job-1", source_file_id: "media-1", profile_digest: "digest", processor_version: "v1", state, ...(state === "ready" ? { outputs: { original: "output-id" } } : {}), created_at: "", updated_at: "" };

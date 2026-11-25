@@ -278,3 +278,29 @@ func TestPublishedContentReaderUsesSealedBusOperation(t *testing.T) {
 		t.Fatalf("bus request = %+v", dispatcher.request)
 	}
 }
+
+func TestContentProjectionIncludesPinnedMediaRequirements(t *testing.T) {
+	fixture := contentTestFixture()
+	feature := fixture.features["hero@1.2.3"]
+	feature.Manifest = []byte(strings.Replace(string(feature.Manifest), `{"path": "title", "type": "text"}`, `{"path":"title","type":"media","profile":{"x-media":{"accept":"raster-image","renditions":[{"name":"card","width":100,"height":100,"fit":"cover"}]}}}`, 1))
+	fixture.features["hero@1.2.3"] = feature
+	provider, err := newWebsiteContentProjectionProvider(fixture, context.WithValue(context.Background(), contentTestContextKey{}, "trusted"), "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := provider.GetContentProjections(context.Background(), contentTestSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(encodeContentProjection(projection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"media_accept":"raster-image"`) {
+		t.Fatalf("pinned media requirement lost in projection: %s", encoded)
+	}
+	decoded := decodeContentProjection(encodeContentProjection(projection))
+	if !decoded.VerifyScope(contentTestSnapshotID) {
+		t.Fatal("transport changed digest-covered projection")
+	}
+}

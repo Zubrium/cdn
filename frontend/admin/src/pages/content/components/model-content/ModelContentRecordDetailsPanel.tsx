@@ -11,7 +11,7 @@ export interface ModelContentRecordDetailsPanelProps {
   selectedRecord: ModelContentRecord;
   validation: ModelContentRecordValidation[];
   mediaPreparationsByFieldId: Record<string, MediaRenditionContext[]>;
-  mediaAcceptByFieldId: Record<string, "image" | "raster-image" | "video" | "all">;
+  mediaAcceptByFieldId: Record<string, "image" | "raster-image" | "video" | "all" | "none">;
   disabled: boolean;
   deletePending: boolean;
   onDeleteRecord: (record: ModelContentRecord) => void;

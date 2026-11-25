@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { validateEntryFields } from "@/domains/content-editor/EntryForm";
-import type { MediaRenditionContext, ModelContentPlacementField, ModelContentWorkspace } from "@/types";
+import type { MediaRenditionContext, ModelContentWorkspace } from "@/types";
 import type { ModelContentDraft } from "../model-content/types";
 import {
   duplicateUniqueModelValueIssues,
@@ -11,23 +11,29 @@ import {
   selectedModelRecord,
 } from "../../model-content-workspace";
 
-type DeclaredMediaPreparation = NonNullable<ModelContentPlacementField["preparations"]>[number];
-
-/** Keep manifest-only picker metadata out of the rendition API context. */
-export function mediaRenditionContext(
-  item: DeclaredMediaPreparation,
-  snapshotId: string,
-  placementId: string,
-): MediaRenditionContext {
-  return {
-    snapshotId,
-    placementId,
-    featureKey: item.featureKey,
-    buildVersion: item.buildVersion,
-    schemaKind: item.schemaKind,
-    fieldPath: item.fieldPath,
-    buildDigest: item.buildDigest,
-  };
+/** Derive each job target from the trusted projection for the pinned snapshot. */
+export function contentMediaRequirements(workspace: ModelContentWorkspace) {
+  const preparations: Record<string, MediaRenditionContext[]> = {};
+  const accepts: Record<string, "image" | "raster-image" | "video" | "all" | "none"> = {};
+  for (const placement of workspace.placements) {
+    for (const input of placement.inputs) {
+      for (const field of input.fields) {
+        if (field.type !== "media" || !field.mediaAccept) continue;
+        const fieldPath = `/${input.inputKey}${input.kind === "scalar" ? "" : `/${field.inputPath.replace(/^\//, "")}`}`;
+        const context: MediaRenditionContext = { snapshotId: workspace.snapshot.id, placementId: placement.id, schemaKind: "dataInputs", fieldPath };
+        const current = preparations[field.fieldId] ?? [];
+        if (!current.some((item) => JSON.stringify(item) === JSON.stringify(context))) current.push(context);
+        preparations[field.fieldId] = current;
+        const accept = field.mediaAccept === "file" ? "all" : field.mediaAccept;
+        const previous = accepts[field.fieldId];
+        if (!previous || previous === "all") accepts[field.fieldId] = accept;
+        else if (accept === "all" || previous === accept) accepts[field.fieldId] = previous;
+        else if ((previous === "image" && accept === "raster-image") || (previous === "raster-image" && accept === "image")) accepts[field.fieldId] = "raster-image";
+        else accepts[field.fieldId] = "none";
+      }
+    }
+  }
+  return { preparations, accepts };
 }
 
 /** Derives the active entity, validation, media rules and visible record list. */
@@ -40,31 +46,7 @@ export function useModelContentEditorModel(
 ) {
   const model = workspace.dataModel;
   const entities = useMemo(() => model?.entities ?? [], [model?.entities]);
-  const mediaEditorProps = useMemo(() => {
-    const preparations: Record<string, MediaRenditionContext[]> = {};
-    const accepts: Record<string, "image" | "raster-image" | "video" | "all"> = {};
-    for (const placement of workspace.placements) {
-      for (const input of placement.inputs) {
-        for (const field of input.fields) {
-          if (field.type !== "media") continue;
-          const contexts = (field.preparations ?? []).map((item) => mediaRenditionContext(item, workspace.snapshot.id, placement.id));
-          const current = preparations[field.fieldId] ?? [];
-          const byKey = new Map(current.map((item) => [JSON.stringify(item), item]));
-          contexts.forEach((item) => byKey.set(JSON.stringify(item), item));
-          preparations[field.fieldId] = [...byKey.values()];
-          const declared = contexts.map((item) => field.preparations?.find((candidate) => candidate.featureKey === item.featureKey && candidate.buildVersion === item.buildVersion && candidate.fieldPath === item.fieldPath)?.accept ?? "image");
-          const combined = !declared.length ? "image"
-            : declared.every((item) => item === "video") ? "video"
-              : declared.every((item) => item === "raster-image") ? "raster-image"
-                : declared.every((item) => item === "image" || item === "raster-image") ? (declared.includes("raster-image") ? "raster-image" : "image")
-                  : "all";
-          const previous = accepts[field.fieldId];
-          accepts[field.fieldId] = previous && previous !== combined ? "all" : combined;
-        }
-      }
-    }
-    return { preparations, accepts };
-  }, [workspace.placements, workspace.snapshot.id]);
+  const mediaEditorProps = useMemo(() => contentMediaRequirements(workspace), [workspace]);
   const recordsForEntity = useMemo(
     () => draft.records.filter((record) => record.entityId === entityId).sort((left, right) => left.sortOrder - right.sortOrder),
     [draft.records, entityId],

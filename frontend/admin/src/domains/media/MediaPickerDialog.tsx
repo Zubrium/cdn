@@ -124,7 +124,7 @@ export function MediaPickerDialog({
   };
 
   const confirm = async () => {
-    if (isPreparing) return;
+    if (isPreparing || selectedMedia.length !== selectedIds.length || selectedMedia.some((media) => !acceptsMedia(media, accept))) return;
     const selection = selectedMedia;
     const contexts = [...preparations, ...(preparation ? [preparation] : [])]
       .filter((item, index, all) => all.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(item)) === index);
@@ -152,7 +152,9 @@ export function MediaPickerDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {accept === "zip"
+            {accept === "none"
+              ? "У связанных размещений несовместимые типы файлов. Измените их настройки, чтобы выбрать медиа."
+              : accept === "zip"
               ? "Выберите готовый ZIP-файл из Core. Если архива ещё нет, сначала загрузите его в медиатеке."
               : "Выбираются ID медиаобъектов, а не URL. После выбора блок сохраняет ссылку на файл. Новые файлы добавляются отдельно в медиатеке."}
           </DialogDescription>
@@ -272,7 +274,7 @@ export function MediaPickerDialog({
             <Button variant="outline" onClick={onClose} disabled={isPreparing}>
               Отмена
             </Button>
-            <Button onClick={() => void confirm()} disabled={selectedIds.length === 0 || isPreparing}>
+            <Button onClick={() => void confirm()} disabled={selectedIds.length === 0 || selectedMedia.length !== selectedIds.length || selectedMedia.some((media) => !acceptsMedia(media, accept)) || isPreparing}>
               {isPreparing ? <span>Подготовка…</span> : <><Check />Выбрать</>}
             </Button>
           </div>

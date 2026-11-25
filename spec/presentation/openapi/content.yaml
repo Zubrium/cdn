@@ -218,7 +218,7 @@ components:
         input_key: { type: string }
         kind: { type: string, enum: [scalar, record, collection] }
         entity_id: { type: string }
-        fields: { type: array, items: { type: object, required: [input_path, field_id], properties: { input_path: { type: string }, field_id: { type: string } } } }
+        fields: { type: array, items: { type: object, required: [input_path, field_id], properties: { input_path: { type: string }, field_id: { type: string }, media_accept: { type: string, enum: [image, raster-image, video, file], description: Declared media type from the exact pinned feature manifest, present only for a media profile. } } } }
         lookup: { type: object, required: [argument, field_id], properties: { argument: { type: string }, field_id: { type: string } } }
     SaveWorkspaceDraft:
       type: object

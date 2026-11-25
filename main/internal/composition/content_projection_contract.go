@@ -69,7 +69,7 @@ func encodeContentPlacementInputs(source []contentapi.PlacementInput) []contract
 			Fields: make([]contracts.ContentPlacementField, 0, len(input.Fields)),
 		}
 		for _, field := range input.Fields {
-			encoded.Fields = append(encoded.Fields, contracts.ContentPlacementField{InputPath: field.InputPath, FieldID: field.FieldID})
+			encoded.Fields = append(encoded.Fields, contracts.ContentPlacementField{InputPath: field.InputPath, FieldID: field.FieldID, MediaAccept: field.MediaAccept})
 		}
 		if input.Lookup != nil {
 			encoded.Lookup = &contracts.ContentPlacementLookup{Argument: input.Lookup.Argument, FieldID: input.Lookup.FieldID}
@@ -87,7 +87,7 @@ func decodeContentPlacementInputs(source []contracts.ContentPlacementInput) []co
 			Fields: make([]contentapi.PlacementField, 0, len(input.Fields)),
 		}
 		for _, field := range input.Fields {
-			decoded.Fields = append(decoded.Fields, contentapi.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID})
+			decoded.Fields = append(decoded.Fields, contentapi.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID, MediaAccept: field.MediaAccept})
 		}
 		if input.Lookup != nil {
 			decoded.Lookup = &contentapi.PlacementInputLookup{Argument: input.Lookup.Argument, FieldID: input.Lookup.FieldID}

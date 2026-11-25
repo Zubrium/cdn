@@ -179,8 +179,9 @@ type AdminContentPlacementInput struct {
 }
 
 type AdminContentPlacementField struct {
-	InputPath string `json:"input_path"`
-	FieldID   string `json:"field_id"`
+	InputPath   string `json:"input_path"`
+	FieldID     string `json:"field_id"`
+	MediaAccept string `json:"media_accept,omitempty"`
 }
 
 type AdminContentPlacementInputLookup struct {

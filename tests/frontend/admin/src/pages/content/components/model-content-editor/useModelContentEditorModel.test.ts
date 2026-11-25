@@ -1,26 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { mediaRenditionContext } from "../../../../../../../../frontend/admin/src/pages/content/components/model-content-editor/useModelContentEditorModel";
+import type { ModelContentWorkspace } from "@/types";
+import { contentMediaRequirements } from "../../../../../../../../frontend/admin/src/pages/content/components/model-content-editor/useModelContentEditorModel";
 
-describe("mediaRenditionContext", () => {
-  it("keeps the rendition API context free of manifest picker filters", () => {
-    const declared = {
-      featureKey: "product-card",
-      buildVersion: "2.1.0",
-      schemaKind: "dataInputs" as const,
-      fieldPath: "/product/image",
-      buildDigest: "sha256:build",
-      accept: "raster-image",
-    };
-
-    expect(mediaRenditionContext(declared, "snapshot-1", "placement-1")).toEqual({
-      snapshotId: "snapshot-1",
-      placementId: "placement-1",
-      featureKey: "product-card",
-      buildVersion: "2.1.0",
-      schemaKind: "dataInputs",
-      fieldPath: "/product/image",
-      buildDigest: "sha256:build",
+describe("contentMediaRequirements", () => {
+  it("prepares each pinned placement that uses a shared media field", () => {
+    const workspace = {
+      snapshot: { id: "snapshot-1" },
+      placements: [
+        { id: "first", inputs: [{ inputKey: "products", kind: "record", fields: [{ inputPath: "/image", fieldId: "field-1", type: "media", mediaAccept: "raster-image" }] }] },
+        { id: "second", inputs: [{ inputKey: "cover", kind: "scalar", fields: [{ inputPath: "value", fieldId: "field-1", type: "media", mediaAccept: "video" }] }] },
+      ],
+    } as unknown as ModelContentWorkspace;
+    expect(contentMediaRequirements(workspace)).toEqual({
+      preparations: { "field-1": [
+        { snapshotId: "snapshot-1", placementId: "first", schemaKind: "dataInputs", fieldPath: "/products/image" },
+        { snapshotId: "snapshot-1", placementId: "second", schemaKind: "dataInputs", fieldPath: "/cover" },
+      ] },
+      accepts: { "field-1": "none" },
     });
-    expect(mediaRenditionContext(declared, "snapshot-1", "placement-1")).not.toHaveProperty("accept");
   });
 });

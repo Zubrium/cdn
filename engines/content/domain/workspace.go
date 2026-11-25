@@ -27,8 +27,9 @@ type PlacementInput struct {
 }
 
 type PlacementField struct {
-	InputPath string
-	FieldID   string
+	InputPath   string
+	FieldID     string
+	MediaAccept string
 }
 
 type PlacementInputLookup struct {

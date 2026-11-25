@@ -309,3 +309,23 @@ func cloneEngineRecord(record recorddata.Record) recorddata.Record {
 	record.IndexData = append(json.RawMessage(nil), record.IndexData...)
 	return record
 }
+
+func TestWorkspacePreservesPinnedMediaRequirements(t *testing.T) {
+	engine := newTestEngine(t, &testAuthorization{level: recorddata.AccessLevelRead}, newEngineStore())
+	ctx, err := engine.Authenticate(context.Background(), "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := schemaSnapshot("ready")
+	projection.ContentModel.DataModel = json.RawMessage(`{"formatVersion":1,"entities":[{"id":"11111111-1111-4111-8111-111111111111","key":"article","name":"Article","cardinality":"many","fields":[{"id":"22222222-2222-4222-8222-222222222222","key":"image","name":"Image","type":"media"}]}]}`)
+	projection.ContentModel.Digest, _ = projection.ContentModel.ComputeDigest()
+	projection.Page.Placements = []contentapi.Placement{{ID: "hero", PageID: "page-1", FeatureKey: "hero", Version: "1.2.3", Inputs: []contentapi.PlacementInput{{InputKey: "product", Kind: "record", EntityID: "11111111-1111-4111-8111-111111111111", Fields: []contentapi.PlacementField{{InputPath: "image", FieldID: "22222222-2222-4222-8222-222222222222", MediaAccept: "raster-image"}}}}}}
+	projection.Page.Digest, _ = projection.Page.ComputeDigest()
+	workspace, err := engine.GetWorkspace(ctx, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := workspace.Placements[0].Inputs[0].Fields[0].MediaAccept; got != "raster-image" {
+		t.Fatalf("media requirement = %q", got)
+	}
+}

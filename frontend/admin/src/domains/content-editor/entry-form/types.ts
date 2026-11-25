@@ -10,7 +10,7 @@ export interface EntryFormIssue {
 export interface MediaPickTarget {
   label: string;
   single: boolean;
-  accept?: "image" | "raster-image" | "video" | "all";
+  accept?: "image" | "raster-image" | "video" | "all" | "none";
   preparations?: MediaRenditionContext[];
   fieldPath: string;
   apply: (media: Media[]) => void;

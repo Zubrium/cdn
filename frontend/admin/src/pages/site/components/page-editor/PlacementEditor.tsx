@@ -71,7 +71,7 @@ export function PlacementEditor({ page, placement, builds, config, dataModel, sn
       {(pageInputs > 0 || uniqueCaptures.length > 0) && <details open className="border-t border-border/70 pt-4">
         <summary className="cursor-pointer text-sm font-medium">Параметры страницы и постоянные значения</summary>
         <p className="mt-1 text-xs text-muted-foreground">Значения можно взять из параметров маршрута или query, либо задать вручную. Для каждого источника показан пример использования.</p>
-        <div className="mt-3">{Object.entries(fields).length > 0 && <FeatureArgumentsEditor fields={fields} requiredKeys={requiredArgumentKeys} arguments={placement.arguments} captures={uniqueCaptures} preparation={build && snapshotId ? { snapshotId, placementId: placement.id, featureKey: build.key, buildVersion: build.version, schemaKind: "arguments", buildDigest: build.digest } : undefined} routeSuggestions={routeHints} formSchemas={formSchemasQuery.data?.items ?? []} onChange={(key, binding) => patchBinding(key, binding)} />}</div>
+        <div className="mt-3">{Object.entries(fields).length > 0 && <FeatureArgumentsEditor fields={fields} requiredKeys={requiredArgumentKeys} arguments={placement.arguments} captures={uniqueCaptures} preparation={build && snapshotId ? { snapshotId, placementId: placement.id, schemaKind: "arguments" } : undefined} routeSuggestions={routeHints} formSchemas={formSchemasQuery.data?.items ?? []} onChange={(key, binding) => patchBinding(key, binding)} />}</div>
       </details>}
 
       {contentInputs > 0 && <details open className="border-t border-border/70 pt-4">

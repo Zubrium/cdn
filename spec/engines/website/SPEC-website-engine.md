@@ -275,6 +275,12 @@ Website разрешает профиль только из manifest точно�
 
 Редактор создаёт durable job, ждёт готовности всех требуемых выходов и сохраняет новое значение поля только после успешного результата. Пока job выполняется или завершилась ошибкой, предыдущее значение поля остаётся неизменным; частичный output не становится доступным. На успехе Website связывает исходный Core file ID с rendition names и immutable derivative IDs; original сохраняется, все derivatives наследуют актуальные статические access groups и добавляются в те же FileSet memberships, что и original. FileSet остаётся индексом, а не правом доступа. Content сохраняет ссылку на original, а prerender разрешает outputs только по совпадающим `profile_digest` и processor version; при несовпадении сборка завершается ошибкой, а не использует неподходящий derivative.
 
+Content workspace получает для каждой media-привязки `media_accept` только из
+проверенного manifest точной версии feature, закреплённой snapshot. Для одного
+поля, связанного с несколькими placements, редактор применяет пересечение
+допустимых типов и ожидает успешной подготовки для каждого placement. Если
+пересечение пусто, выбор недоступен до исправления привязок.
+
 Job/cache identity включает original checksum, canonical profile digest и processor version. Изменение feature profile или processor version создаёт новые derivatives; ранее созданные immutable файлы не перезаписываются и удаляются только отдельной ссылочной cleanup-операцией. Состояния: `queued -> probing -> processing -> validating -> storing -> ready`, а также `retryable_failed`, `rejected`, `cancelled`. Отмена или ошибка очищает только временные данные, принадлежащие конкретной job, и не меняет original, прежнее значение поля или ранее готовые outputs.
 
 ```mermaid

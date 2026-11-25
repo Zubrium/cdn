@@ -361,11 +361,8 @@ export interface AccessGroup {
 export interface MediaRenditionContext {
   snapshotId: string;
   placementId: string;
-  featureKey: string;
-  buildVersion: string;
   schemaKind: "arguments" | "dataInputs";
   fieldPath: string;
-  buildDigest: string;
 }
 
 export interface FileLimits { maxBytes: number; partBytes: number; maxUploadParts: number }
@@ -616,14 +613,14 @@ export interface ModelContentFieldProjection {
   path: string;
   fieldId: string;
   type: DataModelFieldType;
-  preparations?: Array<Omit<MediaRenditionContext, "snapshotId" | "placementId"> & { accept: string }>;
+  mediaAccept?: "image" | "raster-image" | "video" | "file";
 }
 
 export interface ModelContentPlacementField {
   inputPath: string;
   fieldId: string;
   type: DataModelFieldType;
-  preparations?: ModelContentFieldProjection["preparations"];
+  mediaAccept?: ModelContentFieldProjection["mediaAccept"];
 }
 
 export interface ModelContentPlacementInput {

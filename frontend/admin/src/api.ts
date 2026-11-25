@@ -610,7 +610,11 @@ function parseContentWorkspace(value: unknown, snapshotID: string): ModelContent
         }
         const type = modelFieldTypes.get(field.field_id);
         if (!type) throw new ApiError(502, "invalid_response", "Сервер связал вход фичи с отсутствующим полем модели");
-        return { inputPath: field.input_path, fieldId: field.field_id, type };
+        const mediaAccept = field.media_accept;
+        if (mediaAccept !== undefined && (type !== "media" || !["image", "raster-image", "video", "file"].includes(String(mediaAccept)))) {
+          throw new ApiError(502, "invalid_response", "Сервер вернул некорректный профиль медиа");
+        }
+        return { inputPath: field.input_path, fieldId: field.field_id, type, ...(mediaAccept === undefined ? {} : { mediaAccept: mediaAccept as "image" | "raster-image" | "video" | "file" }) };
       });
       let lookup: ModelContentPlacement["inputs"][number]["lookup"];
       if (input.lookup !== undefined) {

@@ -27,5 +27,6 @@ describe("media picker filters", () => {
     expect(acceptsMedia(media("movie.mp4", "video/mp4"), "video")).toBe(true);
     expect(acceptsMedia(media("font.woff2", "font/woff2"), "font")).toBe(true);
     expect(acceptsMedia(media("data.bin", "application/octet-stream"), "all")).toBe(true);
+    expect(acceptsMedia(media("photo.jpg", "image/jpeg"), "none")).toBe(false);
   });
 });

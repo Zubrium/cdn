@@ -1,5 +1,17 @@
 # QA-отчёт
 
+## Content: media в проекции (2026-11-26)
+
+Trusted projection извлекает `media_accept` из проверенного закреплённого
+manifest и передаёт его через Content workspace; редактор формирует отдельные
+задания для связанных placements и ограничивает выбор пересечением типов.
+Проверены сохранение метаданных и digest при передаче проекции, выдача из
+Content и преобразование в Admin. `go test`, `go vet`, `go build` с overlay
+прошли для `pkg`, `engines/content` и `main` (`-tags=full`); архитектурный
+линтер прошёл. Admin typecheck, lint и test (61 файл, 284 теста), а также
+Vite build в отдельный временный каталог прошли. Это не live browser или
+PostgreSQL/S3 приёмка; media TODO остаётся открытым.
+
 ## Идентичность media receipts (2026-11-26)
 
 `TestMediaRequestFingerprintPreservesExistingInputIdentity` проверяет, что
@@ -21,9 +33,8 @@ Picker вызывает Website derivative API с `schema_kind`, snapshot, place
 (61 файл, 284 теста); Vite production build прошёл с выходом в отдельный
 `/tmp/website-admin-media-build`, без перезаписи существующего `pkg/static/dist`.
 Тесты покрывают запрос, ожидание, ошибку и отмену; реальные браузер, worker и
-PostgreSQL/S3 не запускались. Content projection пока не поставляет сведения о
-media-профилях; новые несохранённые placements и полный workflow требуют
-отдельной реализации и приёмки. Пункт TODO остаётся открытым.
+PostgreSQL/S3 не запускались. Новые несохранённые placements и полный workflow
+требуют отдельной реализации и приёмки. Пункт TODO остаётся открытым.
 
 ## Media schema kind и ограничение acceptance (2026-11-26)
 

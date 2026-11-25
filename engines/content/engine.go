@@ -334,7 +334,7 @@ func (engine *Engine) resolveSchema(ctx context.Context, projections contentapi.
 		for inputIndex, input := range placement.Inputs {
 			fields := make([]domain.PlacementField, len(input.Fields))
 			for fieldIndex, field := range input.Fields {
-				fields[fieldIndex] = domain.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID}
+				fields[fieldIndex] = domain.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID, MediaAccept: field.MediaAccept}
 			}
 			var lookup *domain.PlacementInputLookup
 			if input.Lookup != nil {
@@ -356,7 +356,7 @@ func toAPIWorkspace(workspace domain.WorkspaceView) contentapi.Workspace {
 		for inputIndex, input := range placement.Inputs {
 			fields := make([]contentapi.PlacementField, len(input.Fields))
 			for fieldIndex, field := range input.Fields {
-				fields[fieldIndex] = contentapi.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID}
+				fields[fieldIndex] = contentapi.PlacementField{InputPath: field.InputPath, FieldID: field.FieldID, MediaAccept: field.MediaAccept}
 			}
 			var lookup *contentapi.PlacementInputLookup
 			if input.Lookup != nil {

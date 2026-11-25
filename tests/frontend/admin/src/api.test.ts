@@ -469,7 +469,7 @@ describe("Content workspace API", () => {
       }] },
       revision: 0, published_revision: 0, records: [], selections: [],
       placements: [{ id: "placement-1", page_id: "page-1", page_name: "Home", feature_key: "hero", feature_name: "Hero", version: "1.0.0",
-        inputs: [{ input_key: "article", kind: "record", entity_id: "33333333-3333-4333-8333-333333333333", fields: [{ input_path: "image", field_id: fieldID }] }],
+        inputs: [{ input_key: "article", kind: "record", entity_id: "33333333-3333-4333-8333-333333333333", fields: [{ input_path: "image", field_id: fieldID, media_accept: "raster-image" }] }],
       }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     stubAdminBrowser(fetchMock);
@@ -477,6 +477,7 @@ describe("Content workspace API", () => {
     const workspace = await api.contentEngine.workspace(snapshotID, "ru");
 
     expect(workspace.placements[0]?.inputs[0]?.fields[0]?.type).toBe("media");
+    expect(workspace.placements[0]?.inputs[0]?.fields[0]?.mediaAccept).toBe("raster-image");
   });
 
   it("preserves history cursors for the next request", async () => {
