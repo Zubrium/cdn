@@ -50,6 +50,35 @@ func validateMediaProfiles(profile map[string]any, requireMediaType bool, mediaT
 	return nil
 }
 
+// validateArgumentMediaProfiles walks the argument schema, never its data
+// values, and validates the same pinned profile contract as data inputs.
+func validateArgumentMediaProfiles(schema map[string]any, depth int) error {
+	if depth > 128 {
+		return fmt.Errorf("%w: argument schema depth", ErrMediaProfile)
+	}
+	if raw, ok := schema["x-media"]; ok {
+		if schema["type"] != "string" || schema["format"] != "media" {
+			return fmt.Errorf("%w: x-media requires a media argument", ErrMediaProfile)
+		}
+		if err := validateMediaProfiles(map[string]any{"x-media": raw}, false, ""); err != nil {
+			return err
+		}
+	}
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for _, value := range properties {
+			if child, ok := value.(map[string]any); ok {
+				if err := validateArgumentMediaProfiles(child, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if child, ok := schema["items"].(map[string]any); ok {
+		return validateArgumentMediaProfiles(child, depth+1)
+	}
+	return nil
+}
+
 // ResolveMediaProfile returns the canonical x-media declaration pinned by the
 // exact feature version in a ready snapshot. A client can only supply the
 // snapshot, placement and field path; it cannot select a profile or preset.

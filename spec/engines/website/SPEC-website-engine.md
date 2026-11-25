@@ -254,7 +254,11 @@ Prerender детерминируем для неизменных входов, �
 
 ## 7. Декларативные media-профили и производные файлы
 
-Media-поле объявляет профиль в pinned feature manifest под `x-media`; значения UI/Content содержат только Core ID исходного файла. Допустимая форма профиля:
+Контракт `schema_kind` ниже согласован как целевой; синхронное внедрение в
+HTTP/OpenAPI и Admin ещё не завершено. Текущий `website.yaml` не объявляет это
+поле, поэтому наличие данного текста не подтверждает его доступность в API.
+
+Media-поле объявляет профиль в pinned feature manifest под `x-media`, как в схеме аргументов feature, так и в `dataInputs`; значения UI/Content содержат только Core ID исходного файла. Допустимая форма профиля:
 
 ```json
 {
@@ -268,7 +272,7 @@ Media-поле объявляет профиль в pinned feature manifest по
 
 `accept` принимает только `image`, `raster-image`, `video` или `file`. `renditions` разрешён только для `raster-image`; каждая rendition имеет уникальное имя `^[a-z][a-z0-9_-]{0,31}$`, `width`/`height` от 1 до 8192 и `fit` `contain` или `cover`. Профиль `video` вместо `renditions` требует `video.maxWidth`, `video.maxHeight` (1–8192) и `video.poster` с rendition name `poster`; `video` запрещён для других `accept`. Ограничение количества renditions задаётся явной schema/config limit и проверяется при старте. Для остальных `accept` преобразование не объявляется, и оригинал остаётся единственным выходом. Manifest validator отклоняет неизвестные поля и несовместимые комбинации; `x-media` не принимает команды, фильтры, executable, пути, URL или пределы ресурсов.
 
-Website разрешает профиль только из manifest точной feature version, закреплённой snapshot. `profile_digest` вычисляется от канонической декларации вместе с processor version; он и checksum original образуют idempotency/fingerprint ключ. Клиент выбирает файл и указывает только snapshot, placement и field path; Website сам извлекает и валидирует профиль из pinned manifest. Подмена profile/feature identity или запуск для поля без media declaration отклоняются. Media worker исполняется как `worker.media` operation, в отдельном supervised process/container с явными CPU, memory, filesystem, network, input/output и wall-clock limits; фиксированный FFmpeg запускается без shell, с отключёнными сетевыми protocols и без пользовательских аргументов.
+Website разрешает профиль только из manifest точной feature version, закреплённой snapshot. `profile_digest` вычисляется от канонической декларации вместе с processor version; он и checksum original образуют idempotency/fingerprint ключ. Клиент выбирает файл и указывает snapshot, placement, field path и обязательный `schema_kind` (`arguments` или `dataInputs`); Website сам извлекает и валидирует профиль из выбранной области pinned manifest. Одинаковые пути в разных областях независимы. Подмена profile/feature identity или запуск для поля без media declaration отклоняются. Media worker исполняется как `worker.media` operation, в отдельном supervised process/container с явными CPU, memory, filesystem, network, input/output и wall-clock limits; фиксированный FFmpeg запускается без shell, с отключёнными сетевыми protocols и без пользовательских аргументов.
 
 Редактор создаёт durable job, ждёт готовности всех требуемых выходов и сохраняет новое значение поля только после успешного результата. Пока job выполняется или завершилась ошибкой, предыдущее значение поля остаётся неизменным; частичный output не становится доступным. На успехе Website связывает исходный Core file ID с rendition names и immutable derivative IDs; original сохраняется, все derivatives наследуют актуальные статические access groups и добавляются в те же FileSet memberships, что и original. FileSet остаётся индексом, а не правом доступа. Content сохраняет ссылку на original, а prerender разрешает outputs только по совпадающим `profile_digest` и processor version; при несовпадении сборка завершается ошибкой, а не использует неподходящий derivative.
 

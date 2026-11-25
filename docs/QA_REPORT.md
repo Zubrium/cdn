@@ -1,5 +1,16 @@
 # QA-отчёт
 
+## Проверка media-деклараций в аргументах (2026-11-26)
+
+`TestManifestRejectsInvalidArgumentMediaProfile` до изменения подтверждённо
+завершался ошибкой: некорректный `x-media` в аргументе принимался. После
+добавления проверки вложенных схем `go test -overlay=/tmp/website-media-overlay.json
+./...`, `go vet -overlay=/tmp/website-media-overlay.json ./...` и `go build ./...`
+в `engines/website` прошли; overlay создан командой `python3 tests/go-overlay.py`
+из корня. Проверены валидный вложенный профиль, лишний параметр обработки и
+профиль на не-media поле. Это не приёмка media workflow: `schema_kind`,
+разрешение профилей аргументов, клиент и end-to-end обработка ещё не реализованы.
+
 ## Финальный sweep строгих границ модулей (2026-11-25)
 
 Статусы `ARCH-001..ARCH-006` в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md)

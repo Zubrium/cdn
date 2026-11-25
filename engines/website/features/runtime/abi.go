@@ -108,6 +108,9 @@ func validateManifestFields(manifest Manifest, files map[string]struct{}) error 
 	if err := rejectSecretKeys(manifest.Arguments); err != nil {
 		return err
 	}
+	if err := validateArgumentMediaProfiles(manifest.Arguments, 0); err != nil {
+		return err
+	}
 	if manifest.DataInputs == nil || len(manifest.DataInputs) > maxDataInputs {
 		return fmt.Errorf("%w: dataInputs", ErrManifest)
 	}

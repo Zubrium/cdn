@@ -44,3 +44,36 @@ func TestManifestValidationRejectsInvalidMediaDeclarations(t *testing.T) {
 		})
 	}
 }
+
+func TestManifestRejectsInvalidArgumentMediaProfile(t *testing.T) {
+	manifest := []byte(`{
+		"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3",
+		"engineApi":"v1","slots":["main"],
+		"arguments":{"type":"object","properties":{"image":{"type":"string","format":"media","x-media":{"accept":"raster-image","preset":"untrusted"}}}},
+		"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js","styles":[]}
+	}`)
+	if _, err := featureruntime.ValidateManifest(manifest, map[string]struct{}{"assets/app.js": {}}); err == nil {
+		t.Fatal("argument media profile with an undeclared processing option must be rejected")
+	}
+}
+
+func TestManifestValidatesNestedArgumentMediaProfiles(t *testing.T) {
+	cases := []struct {
+		name      string
+		arguments string
+		wantError bool
+	}{
+		{"valid nested profile", `{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"image":{"type":"string","format":"media","x-media":{"accept":"image"}}}}}}}`, false},
+		{"profile on non-media", `{"type":"object","properties":{"name":{"type":"string","x-media":{"accept":"file"}}}}`, true},
+		{"invalid nested profile", `{"type":"object","properties":{"image":{"type":"string","format":"media","x-media":{"accept":"image","processor":"external"}}}}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := []byte(fmt.Sprintf(`{"formatVersion":2,"key":"hero","name":"Hero","version":"1.2.3","engineApi":"v1","slots":["main"],"arguments":%s,"dataInputs":[],"runtime":{"abi":"static-lifecycle","entry":"assets/app.js","styles":[]}}`, tc.arguments))
+			_, err := featureruntime.ValidateManifest(manifest, map[string]struct{}{"assets/app.js": {}})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("ValidateManifest error = %v, wantError %v", err, tc.wantError)
+			}
+		})
+	}
+}
