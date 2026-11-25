@@ -1,4 +1,7 @@
-package adminapi
+// Package notifications owns the Admin notification hub and its SSE endpoint.
+// It is a separate Presentation component from Admin identity and must not
+// register or serve any other Admin API paths.
+package notifications
 
 import (
 	"context"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/Zubrium/cdn/pkg/contracts"
 	adminhttpauth "github.com/Zubrium/cdn/presentation/admin/base/admin/auth"
+	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
 	"github.com/google/uuid"
 )
 
@@ -19,6 +23,7 @@ const (
 	NotificationSnapshotStateChanged       = "snapshot.state_changed"
 	NotificationFeatureImportStateChanged  = "feature_import.state_changed"
 	NotificationMediaRenditionStateChanged = "media_rendition.state_changed"
+	notificationsPath                      = "/api/admin/notifications"
 	notificationQueueSize                  = 16
 	notificationHeartbeat                  = 10 * time.Second
 	notificationWriteTimeout               = 30 * time.Second
@@ -124,7 +129,63 @@ func validProfileDigest(value string) bool {
 	return true
 }
 
-func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, requireOrigin bool) (contracts.Principal, func(), bool) {
+type Handler struct {
+	hub       *NotificationHub
+	sessions  adminapi.SessionAdminAPI
+	identity  adminapi.IdentityAdminAPI
+	transport *adminhttpauth.Transport
+	mux       *http.ServeMux
+}
+
+func NewHandler(hub *NotificationHub, sessions adminapi.SessionAdminAPI, identity adminapi.IdentityAdminAPI, allowedOrigins []string) (*Handler, error) {
+	if hub == nil || sessions == nil || identity == nil {
+		return nil, errors.New("Admin notification dependencies are incomplete")
+	}
+	var transport *adminhttpauth.Transport
+	if len(allowedOrigins) > 0 {
+		var err error
+		transport, err = adminhttpauth.New(allowedOrigins)
+		if err != nil {
+			return nil, err
+		}
+	}
+	h := &Handler{hub: hub, sessions: sessions, identity: identity, transport: transport, mux: http.NewServeMux()}
+	h.mux.HandleFunc("HEAD "+notificationsPath, h.probeNotifications)
+	h.mux.HandleFunc("GET "+notificationsPath, h.streamNotifications)
+	return h, nil
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	h.mux.ServeHTTP(w, r)
+}
+
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) bool {
+	credential, err := adminhttpauth.Resolve(r)
+	if err != nil {
+		if errors.Is(err, adminhttpauth.ErrAmbiguous) {
+			writeCodeError(w, http.StatusBadRequest, "ambiguous_authentication")
+		} else {
+			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
+		}
+		return false
+	}
+	if credential.Session {
+		if _, _, err := h.sessions.AuthenticateSession(r.Context(), credential.Value); err != nil {
+			writeError(w, err)
+			return false
+		}
+		return true
+	}
+	if _, err := h.identity.Authenticate(r.Context(), credential.Value); err != nil {
+		writeError(w, err)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request) (contracts.Principal, func(), bool) {
 	credential, err := adminhttpauth.Resolve(r)
 	if err != nil {
 		if errors.Is(err, adminhttpauth.ErrAmbiguous) {
@@ -135,11 +196,7 @@ func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, 
 		return contracts.Principal{}, nil, false
 	}
 	if credential.Session {
-		if h.sessions == nil {
-			writeCodeError(w, http.StatusUnauthorized, "unauthorized")
-			return contracts.Principal{}, nil, false
-		}
-		if requireOrigin && !h.trustedReadOrigin(r) {
+		if !h.trustedReadOrigin(r) {
 			writeCodeError(w, http.StatusForbidden, "origin_forbidden")
 			return contracts.Principal{}, nil, false
 		}
@@ -158,14 +215,18 @@ func (h *Handler) notificationPrincipal(w http.ResponseWriter, r *http.Request, 
 	return created.Principal, func() { _ = h.sessions.RevokeSession(context.Background(), created.Token) }, true
 }
 
+func (h *Handler) trustedReadOrigin(r *http.Request) bool {
+	return h.transport != nil && h.transport.TrustedReadOrigin(r)
+}
+
 func (h *Handler) probeNotifications(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authenticate(w, r); ok {
+	if h.authenticate(w, r) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 func (h *Handler) streamNotifications(w http.ResponseWriter, r *http.Request) {
-	principal, release, ok := h.notificationPrincipal(w, r, true)
+	principal, release, ok := h.notificationPrincipal(w, r)
 	if !ok {
 		return
 	}
@@ -179,7 +240,7 @@ func (h *Handler) streamNotifications(w http.ResponseWriter, r *http.Request) {
 		writeCodeError(w, http.StatusInternalServerError, "stream_unavailable")
 		return
 	}
-	events, unsubscribe := h.cfg.Notifications.subscribe(principal.ID)
+	events, unsubscribe := h.hub.subscribe(principal.ID)
 	defer unsubscribe()
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -230,4 +291,25 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, value string) error {
 
 func setNotificationWriteDeadline(w http.ResponseWriter) error {
 	return http.NewResponseController(w).SetWriteDeadline(time.Now().Add(notificationWriteTimeout))
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, contracts.ErrAccessUnauthorized):
+		w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
+		writeCodeError(w, http.StatusUnauthorized, "unauthorized")
+	case errors.Is(err, contracts.ErrAccessForbidden):
+		writeCodeError(w, http.StatusForbidden, "forbidden")
+	case errors.Is(err, contracts.ErrRecordConflict):
+		writeCodeError(w, http.StatusConflict, "conflict")
+	default:
+		writeCodeError(w, http.StatusServiceUnavailable, "unavailable")
+	}
+}
+
+func writeCodeError(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }

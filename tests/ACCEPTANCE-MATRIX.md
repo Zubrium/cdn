@@ -45,6 +45,17 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 | ROUTER-DISP-005 | Legacy route record без `disposition`; Admin редактирует такой роут. | Модель валидируется; GET использует дефолт inline только для безопасного MIME; Admin builder не добавляет поле, пока не выбран `inline`/`attachment`. | pass |
 | ROUTER-DISP-006 | File route в `/site/pages` и `/site/pages/files/:routeId`. | Нет контрола режима и поля `fileDisposition` в новых draft/snapshots; переключатель доступен только в Router Admin. | pass |
 
+## Изоляция HTTP/OpenAPI API-модулей (2026-11-25)
+
+Контракты: [`spec/presentation/openapi/`](../spec/presentation/openapi/). Каждый Presentation-модуль владеет своим префиксом; неизвестный Admin-путь не обслуживается соседним адаптером. Статусы `pass` выставлены после реального прогона контрактных/роутинговых тестов и живого smoke-прогона на отдельном стеке `zubrium-obs-20261125`; команды и результаты — в [QA report](../docs/QA_REPORT.md). Запрет write-запросов в рабочий стек соблюдён.
+
+| ID | Вход и предусловия | Ожидаемый результат | Статус |
+| -- | ------------------ | ------------------- | ------ |
+| API-ISO-001 | Все 8 OpenAPI-контрактов загружены и проверены AST-тестом против регистраций `ServeMux`. | `operationId` уникальны; каждый путь принадлежит префиксу владельца; нет внешних `$ref`; каждая объявленная операция имеет обработчик и наоборот. | pass |
+| API-ISO-002 | Admin mux собран с включёнными Identity/Content/Forms/Notifications, Core не готов. | Identity обслуживает только явные шаблоны; `/api/admin/unknown-module-route` → 404; `/api/admin/content` и `/api/admin/forms` → 404 без `307`; регистрации детерминированно отсортированы. | pass |
+| API-ISO-003 | Notifications включён/выключен при наличии Identity и сессий. | Включён: отдельный адаптер на `/api/admin/notifications`, авторизованный SSE с доверенным Origin → 200; выключен: путь → 404. | pass |
+| API-ISO-004 | Router process получает публичный и Admin handler раздельно. | Публичный listener возвращает 404 для `/api/admin/router/*` и чужих Admin-путей; Admin handler остаётся доступен только на авторизованном Admin listener. | pass |
+
 ## Admin UI/UX polish browser scenarios (2026-11-23)
 
 Статусы ниже относятся только к исполненным input/result проверкам в изолированном стеке `ui-polish-20261122t211824z-b7cfbb`; подробные команды, артефакты и ограничения — в [QA report](../docs/QA_REPORT.md). Статус `pass` не распространяется на нестатикальные проверки Content/Feature runtime, заблокированные недоступными engine capabilities.

@@ -66,7 +66,6 @@ type Handler struct {
 	api       API
 	cfg       Config
 	auth      *adminhttpauth.Transport
-	mux       *http.ServeMux
 	adminMux  *http.ServeMux
 	publicMux *http.ServeMux
 }
@@ -100,21 +99,17 @@ func NewHandler(api API, cfg Config) (*Handler, error) {
 			return nil, err
 		}
 	}
-	h := &Handler{api: api, cfg: cfg, auth: auth, mux: http.NewServeMux(), adminMux: http.NewServeMux(), publicMux: http.NewServeMux()}
+	h := &Handler{api: api, cfg: cfg, auth: auth, adminMux: http.NewServeMux(), publicMux: http.NewServeMux()}
 	h.adminMux.HandleFunc("GET "+operationsPath, h.listOperations)
 	h.adminMux.HandleFunc("GET "+routesPath, h.listRoutes)
 	h.adminMux.HandleFunc("POST "+routesPath, h.createRoute)
 	h.adminMux.HandleFunc("GET "+routesPath+"/{id}", h.getRoute)
 	h.adminMux.HandleFunc("PUT "+routesPath+"/{id}/target", h.replaceTarget)
 	h.adminMux.HandleFunc("DELETE "+routesPath+"/{id}", h.deleteRoute)
-	h.adminMux.HandleFunc("/api/admin/{path...}", h.adminNotFound)
+	h.adminMux.HandleFunc("/api/admin/router/{path...}", h.adminNotFound)
 	h.publicMux.HandleFunc("POST "+localePreferencePath, h.setLocalePreference)
-	h.mux.HandleFunc("POST "+localePreferencePath, h.setLocalePreference)
 	h.publicMux.HandleFunc("/{$}", h.deliver)
 	h.publicMux.HandleFunc("/{path...}", h.deliver)
-	h.mux.Handle("/api/admin/", h.adminMux)
-	h.mux.HandleFunc("/{$}", h.deliver)
-	h.mux.HandleFunc("/{path...}", h.deliver)
 	return h, nil
 }
 
@@ -203,8 +198,7 @@ func isNilAPI(value any) bool {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	secureResponseHeaders(w)
-	h.mux.ServeHTTP(w, r)
+	h.PublicHTTPHandler().ServeHTTP(w, r)
 }
 
 // AdminHTTPHandler is mounted only on the authenticated Admin API listener.

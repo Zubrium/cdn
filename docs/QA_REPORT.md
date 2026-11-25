@@ -1,5 +1,41 @@
 # QA-отчёт
 
+## Изоляция HTTP/OpenAPI API-модулей (2026-11-25)
+
+Проверялись HTTP-адаптеры Admin и публикация контрактов OpenAPI в текущем checkout. Рабочий стек `zubriumprod205553` не использовался; живые запросы выполнялись только к отдельному продукту `zubrium-obs-20261125` на `127.0.0.1:18080`. Секреты загружались из приватного env-файла `0600` вне репозитория; в отчёт и коммит не включены.
+
+### Исправленные нарушения
+
+- `presentation/admin/base/transport/transport.go`: вместо identity catch-all `/api/admin/` теперь монтируются только явные шаблоны `/api/admin/session`, `/api/admin/principals`, `/api/admin/principals/`, `/api/admin/credentials/`, `/api/admin/access-groups`. Добавлен terminal `NotFoundHandler` на `/api/admin/`, а также точные 404-якоря `/api/admin/content` и `/api/admin/forms`, чтобы Go `ServeMux` не создавал скрытые `307` на несуществующие корни поддеревьев. Все регистрации собираются в `map`, проверяются на дубликаты и registrations выводятся в отсортированном порядке.
+- `presentation/admin/base/admin/notifications/notifications.go`: SSE-хаб и endpoint вынесены из Identity в отдельный компонент; `/api/admin/notifications` монтируется только при включённом NotificationHub и доступных Identity/Session зависимостях. Origin проверяется для браузерных read-запросов.
+- `presentation/router/handler.go`: публичный `ServeHTTP` больше не содержит admin mux; Admin-поверхность доступна только через `AdminHTTPHandler()`. Router-админ catch-all сужен до `/api/admin/router/{path...}`, чужие Admin-пути на публичном listener не обслуживаются.
+- `spec/presentation/openapi/admin-notifications.yaml`:scheme name `BearerCredential` приведён к общему для контрактов виду. `spec/presentation/openapi/router.yaml`: внешняя `$ref` на `forms.yaml` заменена локальной копией `PublicFieldDefinition`; эквивалентность полей Forms проверяется тестом.
+- `tests/go/main/cmd/zubrium/openapi_contract_test.go`: проверка spec→handler теперь выполняется per-contract, а не против union всех YAML; добавлены проверки уникальности `operationId`, принадлежности префиксов, отсутствия внешних `$ref`, эквивалентности копии поля и ownership монтирований Admin transport.
+- Новые runtime-тесты: `tests/go/presentation/admin/base/transport/api_isolation_test.go` и `tests/go/presentation/router/admin_boundary_test.go`.
+
+### Команды и результат
+
+```sh
+seed=/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/opencode/zubrium-obs-20261125
+python3 tests/go-overlay.py > "$seed/api-isolation-overlay.json"
+git diff --check
+(cd presentation/admin/base && go test -count=1 -overlay="$seed/api-isolation-overlay.json" ./... && go vet -overlay="$seed/api-isolation-overlay.json" ./... && go build ./...)
+(cd presentation/router && go test -count=1 -overlay="$seed/api-isolation-overlay.json" ./... && go vet -overlay="$seed/api-isolation-overlay.json" ./... && go build ./...)
+(cd main && go test -count=1 -overlay="$seed/api-isolation-overlay.json" ./... && go vet -overlay="$seed/api-isolation-overlay.json" ./... && go build ./... && go build -tags=full ./...)
+```
+
+Все команды завершились exit 0; новые тесты `API-ISO` прошли. Product-бинарник был пересобран с `-tags=full`, изолированный Admin перезапущен: `pid=40983`, `GET /healthz` → 204.
+
+Анонимный GET-матрица после фикса: owned Admin-префиксы → 401; `/api/admin/content`, `/api/admin/content/`, `/api/admin/forms`, `/api/admin/forms/`, `/api/admin/unknown-module-route` → 404; `/api/files` и `/api/coordinator/workflows` → 401; `/api/admin/router/operations` → 401 на Admin listener. До добавления terminal fallback и 404-якорей `/api/admin/content` и `/api/admin/forms` давали скрытый `307`.
+
+Авторизованные проверки в изолированном стеке: `POST /api/admin/session` → 201; `GET /api/admin/session`, `/api/admin/access-groups`, `/api/admin/principals` → 200; `/api/admin/notifications` без browser same-origin signals → 403, с `Accept: text/event-stream`, `Sec-Fetch-Site: same-origin` и доверенным `Referer` → 200 SSE. Ни один write-запрос не отправлялся в рабочий стек или его БД/buckets.
+
+Полный machine-readable протокол: [`output/api-isolation-20261125/api-isolation-evidence.txt`](../output/api-isolation-20261125/api-isolation-evidence.txt). Статусы сценариев `API-ISO-001..API-ISO-004` выставлены в [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md) только после этого прогона.
+
+### Найденный, но не исправленный в этой волне дефект
+
+`frontend/admin/src/api.ts` в `media.prepareRenditions()` вызывает несуществующий маршрут `${ADMIN_ROOT}/media/{id}/renditions/prepare`, тогда как контракт объявляет только `POST /api/admin/media/derivatives` и `GET /api/admin/media/jobs/{jobID}`. Исправление требует расширить `MediaRenditionContext` полем `placement_id`, передать его из Site editor и Content model editor и добавить опрос состояния job в Admin SPA. Это изменение UI workflow, а не изоляции HTTP-модулей, поэтому оставлено вне текущей волны и не отмечено как `pass`.
+
 ## Observability: живой OTLP-прогон (2026-11-25)
 
 Целевой стек: отдельный compose-проект `zubrium-obs-20261125`, profile `observability`.

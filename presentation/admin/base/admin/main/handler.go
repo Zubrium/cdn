@@ -30,7 +30,6 @@ type Config struct {
 	SessionCookieSecure bool
 	AllowedOrigins      []string
 	GroupAccess         SessionGroupAccessResolver
-	Notifications       *NotificationHub
 }
 
 type IdentityAdminAPI interface {
@@ -61,9 +60,9 @@ type SessionGroupAccessResolver interface {
 }
 
 type CreatePrincipalRequest struct {
-	Name                    string                          `json:"name"`
-	ExpiresAt               *time.Time                      `json:"expires_at,omitempty"`
-	CanManageAdministrators bool                            `json:"can_manage_administrators"`
+	Name                    string                           `json:"name"`
+	ExpiresAt               *time.Time                       `json:"expires_at,omitempty"`
+	CanManageAdministrators bool                             `json:"can_manage_administrators"`
 	GroupAccess             map[string]contracts.AccessLevel `json:"group_access,omitempty"`
 }
 
@@ -89,8 +88,8 @@ type credentialResponse struct {
 }
 
 type accessGroupResponse struct {
-	Key    string               `json:"key"`
-	Active bool                 `json:"active"`
+	Key    string                `json:"key"`
+	Active bool                  `json:"active"`
 	Level  contracts.AccessLevel `json:"level"`
 }
 
@@ -129,18 +128,11 @@ func newHandler(api IdentityAdminAPI, sessions SessionAdminAPI, cfg Config) (*Ha
 	if sessions != nil && transport == nil {
 		return nil, errors.New("Admin API allowed_origins must be configured for cookie sessions")
 	}
-	if cfg.Notifications != nil && sessions == nil {
-		return nil, errors.New("Admin notifications require Core session capability")
-	}
 	h := &Handler{api: api, sessions: sessions, groupAccess: cfg.GroupAccess, cfg: cfg, transport: transport, mux: http.NewServeMux()}
 	if sessions != nil {
 		h.mux.HandleFunc("POST "+apiPrefix+"/session", h.createSession)
 		h.mux.HandleFunc("GET "+apiPrefix+"/session", h.currentSession)
 		h.mux.HandleFunc("DELETE "+apiPrefix+"/session", h.deleteSession)
-	}
-	if cfg.Notifications != nil {
-		h.mux.HandleFunc("HEAD "+apiPrefix+"/notifications", h.probeNotifications)
-		h.mux.HandleFunc("GET "+apiPrefix+"/notifications", h.streamNotifications)
 	}
 	h.mux.HandleFunc("GET "+apiPrefix+"/principals", h.listPrincipals)
 	h.mux.HandleFunc("POST "+apiPrefix+"/principals", h.createPrincipal)
@@ -162,10 +154,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type principalResponse struct {
-	ID                      string                          `json:"id"`
-	Name                    string                          `json:"name"`
-	Active                  bool                            `json:"active"`
-	CanManageAdministrators bool                            `json:"can_manage_administrators"`
+	ID                      string                           `json:"id"`
+	Name                    string                           `json:"name"`
+	Active                  bool                             `json:"active"`
+	CanManageAdministrators bool                             `json:"can_manage_administrators"`
 	GroupAccess             map[string]contracts.AccessLevel `json:"group_access"`
 }
 

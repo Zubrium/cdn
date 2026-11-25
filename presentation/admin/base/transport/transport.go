@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/Zubrium/cdn/pkg/observability"
 	coordinatoradmin "github.com/Zubrium/cdn/presentation/admin/base/admin/coordinator"
 	adminapi "github.com/Zubrium/cdn/presentation/admin/base/admin/main"
+	adminnotifications "github.com/Zubrium/cdn/presentation/admin/base/admin/notifications"
 	contentadmin "github.com/Zubrium/cdn/presentation/admin/content"
 	formsadmin "github.com/Zubrium/cdn/presentation/admin/forms"
 	adminrouter "github.com/Zubrium/cdn/presentation/admin/router"
@@ -25,9 +27,9 @@ import (
 	sitesapi "github.com/Zubrium/cdn/presentation/sitesapi"
 )
 
-func NewNotificationHub() *NotificationHub { return adminapi.NewNotificationHub() }
+func NewNotificationHub() *NotificationHub { return adminnotifications.NewNotificationHub() }
 
-type NotificationHub = adminapi.NotificationHub
+type NotificationHub = adminnotifications.NotificationHub
 
 type ServerConfig struct {
 	Address           string
@@ -80,7 +82,7 @@ type AdminDependencies struct {
 	Forms                    formsengine.API
 	Router                   *routerenginepresentation.APIAdapter
 	RouterOperations         *routerhttp.PublicOperationRegistry
-	Notifications            *adminapi.NotificationHub
+	Notifications            *adminnotifications.NotificationHub
 }
 
 type Readiness interface {
@@ -110,6 +112,9 @@ func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, e
 	}
 	if config.IdentityEnabled && (deps.Identity == nil || deps.Sessions == nil || deps.GroupAccess == nil) {
 		return nil, errors.New("Admin identity dependencies are incomplete")
+	}
+	if deps.Notifications != nil && (!config.IdentityEnabled || deps.Identity == nil || deps.Sessions == nil) {
+		return nil, errors.New("Admin notification dependencies are incomplete")
 	}
 	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
 		return nil, errors.New("Admin coordinator dependencies are incomplete")
@@ -170,6 +175,14 @@ func (s *AdminServer) Start(ctx context.Context) error {
 
 func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 	mux := http.NewServeMux()
+	mounts := make(map[string]http.Handler)
+	mount := func(pattern string, handler http.Handler) error {
+		if _, exists := mounts[pattern]; exists {
+			return fmt.Errorf("duplicate Admin route pattern %s", pattern)
+		}
+		mounts[pattern] = handler
+		return nil
+	}
 	guard := func(handler http.Handler) http.Handler { return s.requireCoreRuntime(handler) }
 	fileConfig := s.config.FileAPI
 	fileConfig.AllowedOrigins = append([]string(nil), s.config.AllowedOrigins...)
@@ -177,8 +190,12 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle("/api/files", guard(fileHandler))
-	mux.Handle("/api/files/", guard(fileHandler))
+	if err := mount("/api/files", guard(fileHandler)); err != nil {
+		return nil, err
+	}
+	if err := mount("/api/files/", guard(fileHandler)); err != nil {
+		return nil, err
+	}
 	if s.deps.WorkflowControl != nil {
 		authorize, err := coordinatoradmin.NewGroupAuthorizer(s.deps.CoordinatorAuthorization, s.config.WorkflowAccessGroup)
 		if err != nil {
@@ -192,15 +209,18 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		if err != nil {
 			return nil, err
 		}
-		mux.Handle("/api/coordinator/workflows", guard(handler))
-		mux.Handle("/api/coordinator/workflows/", guard(handler))
+		if err := mount("/api/coordinator/workflows", guard(handler)); err != nil {
+			return nil, err
+		}
+		if err := mount("/api/coordinator/workflows/", guard(handler)); err != nil {
+			return nil, err
+		}
 	}
 	if s.config.IdentityEnabled {
 		handler, err := adminapi.NewHandlerWithSessions(s.deps.Identity, s.deps.Sessions, adminapi.Config{
 			MaxJSONBytes: s.config.MaxJSONBytes, SessionCookieSecure: s.config.SessionCookieSecure,
 			AllowedOrigins: append([]string(nil), s.config.AllowedOrigins...),
 			GroupAccess:    s.deps.GroupAccess,
-			Notifications:  s.deps.Notifications,
 		})
 		if err != nil {
 			return nil, err
@@ -209,8 +229,26 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		if s.config.SyntheticData {
 			sessionHandler = syntheticDataMode(sessionHandler)
 		}
-		mux.Handle("/api/admin/session", sessionHandler)
-		mux.Handle("/api/admin/", guard(handler))
+		for _, pattern := range []string{
+			"/api/admin/session",
+			"/api/admin/principals",
+			"/api/admin/principals/",
+			"/api/admin/credentials/",
+			"/api/admin/access-groups",
+		} {
+			if err := mount(pattern, sessionHandler); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if s.deps.Notifications != nil {
+		handler, err := adminnotifications.NewHandler(s.deps.Notifications, s.deps.Sessions, s.deps.Identity, append([]string(nil), s.config.AllowedOrigins...))
+		if err != nil {
+			return nil, err
+		}
+		if err := mount("/api/admin/notifications", guard(handler)); err != nil {
+			return nil, err
+		}
 	}
 	if s.deps.Website != nil {
 		handler, err := sitesapi.NewHandler(s.deps.Website, sitesapi.Config{
@@ -243,7 +281,9 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 			"/api/admin/media",
 			"/api/admin/media/",
 		} {
-			mux.Handle(pattern, wrapped)
+			if err := mount(pattern, wrapped); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if s.deps.Content != nil {
@@ -258,7 +298,9 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		if s.config.SyntheticData {
 			wrapped = syntheticDataMode(wrapped)
 		}
-		mux.Handle("/api/admin/content/", wrapped)
+		if err := mount("/api/admin/content/", wrapped); err != nil {
+			return nil, err
+		}
 	}
 	if s.deps.Forms != nil {
 		handler, err := formsadmin.NewHandler(s.deps.Forms, formsadmin.Config{
@@ -274,7 +316,9 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		if s.config.SyntheticData {
 			wrapped = syntheticDataMode(wrapped)
 		}
-		mux.Handle("/api/admin/forms/", wrapped)
+		if err := mount("/api/admin/forms/", wrapped); err != nil {
+			return nil, err
+		}
 	}
 	if s.config.RouterAdminEnabled {
 		if s.deps.Router == nil || s.deps.RouterOperations == nil {
@@ -287,21 +331,31 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		if err != nil {
 			return nil, err
 		}
-		mux.Handle("/api/admin/router", guard(handler))
-		mux.Handle("/api/admin/router/", guard(handler))
+		if err := mount("/api/admin/router", guard(handler)); err != nil {
+			return nil, err
+		}
+		if err := mount("/api/admin/router/", guard(handler)); err != nil {
+			return nil, err
+		}
 	}
 	if s.config.UIHandler != nil {
-		mux.Handle("/admin", s.config.UIHandler)
-		mux.Handle("/admin/", s.config.UIHandler)
+		if err := mount("/admin", s.config.UIHandler); err != nil {
+			return nil, err
+		}
+		if err := mount("/admin/", s.config.UIHandler); err != nil {
+			return nil, err
+		}
 	}
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	if err := mount("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if s.config.BuildIdentity != "" {
 			w.Header().Set("X-Zubrium-Build-Identity", s.config.BuildIdentity)
 		}
 		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+	})); err != nil {
+		return nil, err
+	}
+	if err := mount("GET /readyz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if !s.readyForRequests() {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Retry-After", "1")
@@ -310,7 +364,29 @@ func (s *AdminServer) adminMux() (*http.ServeMux, error) {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusNoContent)
-	})
+	})); err != nil {
+		return nil, err
+	}
+	// Exact anchors prevent ServeMux from redirecting subtree roots such as
+	// /api/admin/content to /api/admin/content/. Those roots are not routes.
+	for _, pattern := range []string{"/api/admin/content", "/api/admin/forms"} {
+		if err := mount(pattern, http.NotFoundHandler()); err != nil {
+			return nil, err
+		}
+	}
+	// Register in a deterministic order so route ownership is reviewable;
+	// ServeMux still resolves by pattern specificity, not by this order.
+	patterns := make([]string, 0, len(mounts))
+	for pattern := range mounts {
+		patterns = append(patterns, pattern)
+	}
+	sort.Strings(patterns)
+	for _, pattern := range patterns {
+		mux.Handle(pattern, mounts[pattern])
+	}
+	// Unknown Admin paths belong to no module. Keep the ownership boundary
+	// explicit instead of letting one adapter serve another adapter's namespace.
+	mux.Handle("/api/admin/", http.NotFoundHandler())
 	return mux, nil
 }
 

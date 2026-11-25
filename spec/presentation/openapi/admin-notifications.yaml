@@ -10,7 +10,7 @@ servers:
   - url: /
 security:
   - AdminSession: []
-  - AdminBearer: []
+  - BearerCredential: []
 x-reject-cookie-and-bearer-together: true
 x-notification-component: admin.notifications
 paths:
@@ -84,7 +84,7 @@ components:
       type: apiKey
       in: cookie
       name: zubrium_admin_session
-    AdminBearer:
+    BearerCredential:
       type: http
       scheme: bearer
   responses:

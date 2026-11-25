@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -93,7 +94,7 @@ type openAPISecurityScheme struct {
 
 func TestOpenAPIContractsAreVersionedAndStructurallyValid(t *testing.T) {
 	for _, name := range []string{
-		"admin-identity.yaml", "content.yaml", "coordinator.yaml", "files.yaml", "forms.yaml", "router.yaml", "website.yaml",
+		"admin-identity.yaml", "admin-notifications.yaml", "content.yaml", "coordinator.yaml", "files.yaml", "forms.yaml", "router.yaml", "website.yaml",
 	} {
 		t.Run(name, func(t *testing.T) {
 			contract := loadOpenAPIContract(t, name)
@@ -138,6 +139,7 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 		src  string
 	}{
 		{name: "admin-identity.yaml", src: "presentation/admin/base/admin/main/handler.go"},
+		{name: "admin-notifications.yaml", src: "presentation/admin/base/admin/notifications/notifications.go"},
 		{name: "content.yaml", src: "presentation/admin/content/handler.go"},
 		{name: "coordinator.yaml", src: "presentation/admin/base/admin/coordinator/handler.go"},
 		{name: "files.yaml", src: "presentation/admin/files/handler.go"},
@@ -146,34 +148,10 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 		{name: "website.yaml", src: "presentation/admin/sites/handler.go"},
 	}
 
-	// One handler file can serve several contracts (for example identity and
-	// optional notifications), so compare registrations against the union of
-	// all published contracts.
-	allDocumented := make(map[string]bool)
-	entries, err := os.ReadDir(filepath.Join("..", "..", "..", "spec", "presentation", "openapi"))
-	if err != nil {
-		t.Fatalf("read OpenAPI contracts: %v", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
-			continue
-		}
-		contract := loadOpenAPIContract(t, entry.Name())
-		for path, pathItem := range contract.Paths {
-			if path == "/" {
-				continue
-			}
-			for method, operation := range pathItem.operations() {
-				if operation != nil {
-					allDocumented[method+" "+path] = true
-				}
-			}
-		}
-	}
-
 	for _, item := range contracts {
 		t.Run(item.name, func(t *testing.T) {
 			contract := loadOpenAPIContract(t, item.name)
+			documented := documentedOperations(contract)
 			registered := registeredHTTPOperations(t, filepath.Join("..", "..", "..", item.src))
 			for path, pathItem := range contract.Paths {
 				// The public Router document describes the registered catch-all
@@ -196,12 +174,275 @@ func TestOpenAPIOperationsMatchRegisteredHTTPHandlers(t *testing.T) {
 				if strings.Contains(operation, "{path...}") {
 					continue // catch-all pattern; explicit paths are checked above
 				}
-				if !allDocumented[operation] {
-					t.Errorf("ServeMux registers %s but no OpenAPI contract documents it", operation)
+				normalized := strings.ReplaceAll(operation, "/{$}", "/")
+				if !documented[normalized] {
+					t.Errorf("ServeMux registers %s but %s does not document it", operation, item.name)
 				}
 			}
 		})
 	}
+}
+
+// Each published contract owns a disjoint set of canonical HTTP prefixes.
+// A path outside its prefixes means one Presentation module is claiming an
+// endpoint that belongs to another module.
+var openAPIModulePrefixes = map[string][]string{
+	"admin-identity.yaml":      {"/api/admin/session", "/api/admin/principals", "/api/admin/credentials", "/api/admin/access-groups"},
+	"admin-notifications.yaml": {"/api/admin/notifications"},
+	"content.yaml":             {"/api/admin/content"},
+	"coordinator.yaml":         {"/api/coordinator/"},
+	"files.yaml":               {"/api/files"},
+	"forms.yaml":               {"/api/admin/forms"},
+	"router.yaml":              {"/api/admin/router", "/api/locale-preference", "/"},
+	"website.yaml":             {"/api/admin/model", "/api/admin/pages", "/api/admin/templates", "/api/admin/snapshots", "/api/admin/builds", "/api/admin/features", "/api/admin/feature-imports", "/api/admin/media"},
+}
+
+func pathOwnedByPrefixes(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix == "/" {
+			if path == "/" {
+				return true
+			}
+			continue
+		}
+		if path == prefix || strings.HasPrefix(path, prefix+"/") || (strings.HasSuffix(prefix, "/") && strings.HasPrefix(path, prefix)) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOpenAPIModulesOwnOnlyTheirPrefixes(t *testing.T) {
+	for name, prefixes := range openAPIModulePrefixes {
+		t.Run(name, func(t *testing.T) {
+			contract := loadOpenAPIContract(t, name)
+			for path := range contract.Paths {
+				if !pathOwnedByPrefixes(path, prefixes) {
+					t.Errorf("%s declares %s outside its owned prefixes %v", name, path, prefixes)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAPIContractsUseOnlyLocalReferences(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join("..", "..", "..", "spec", "presentation", "openapi"))
+	if err != nil {
+		t.Fatalf("read OpenAPI contracts: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		raw := openAPIRawContract(t, entry.Name())
+		var refs []string
+		collectExternalRefs(raw, &refs)
+		if len(refs) != 0 {
+			t.Errorf("%s imports another contract: %v", entry.Name(), refs)
+		}
+	}
+}
+
+func TestRouterAndFormsFieldDefinitionsStayEquivalent(t *testing.T) {
+	routerSchema := openAPIComponentSchema(t, "router.yaml", "PublicFieldDefinition")
+	formsSchema := openAPIComponentSchema(t, "forms.yaml", "FieldDefinition")
+	routerJSON, err := json.Marshal(routerSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formsJSON, err := json.Marshal(formsSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(routerJSON) != string(formsJSON) {
+		t.Errorf("Router public field schema diverged from Forms field schema:\nrouter: %s\nforms:  %s", routerJSON, formsJSON)
+	}
+}
+
+func openAPIRawContract(t *testing.T, name string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "spec", "presentation", "openapi", name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	return document
+}
+
+func openAPIComponentSchema(t *testing.T, name, schema string) any {
+	t.Helper()
+	document := openAPIRawContract(t, name)
+	components, ok := document["components"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no components", name)
+	}
+	schemas, ok := components["schemas"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no component schemas", name)
+	}
+	value, ok := schemas[schema]
+	if !ok {
+		t.Fatalf("%s has no schema %s", name, schema)
+	}
+	return value
+}
+
+func collectExternalRefs(value any, refs *[]string) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if key == "$ref" {
+				if reference, ok := item.(string); ok && !strings.HasPrefix(reference, "#/") {
+					*refs = append(*refs, reference)
+				}
+			}
+			collectExternalRefs(item, refs)
+		}
+	case []any:
+		for _, item := range typed {
+			collectExternalRefs(item, refs)
+		}
+	}
+}
+
+func TestAdminTransportMountsOnlyOwnedPrefixes(t *testing.T) {
+	source := filepath.Join("..", "..", "..", "presentation", "admin", "base", "transport", "transport.go")
+	mounts := transportMountPatterns(t, source)
+	var owned []string
+	for _, prefixes := range openAPIModulePrefixes {
+		owned = append(owned, prefixes...)
+	}
+	fallbackOnly := map[string]bool{
+		"/api/admin/":        true,
+		"/api/admin/content": true,
+		"/api/admin/forms":   true,
+	}
+	for pattern, notFoundOnly := range mounts {
+		if !strings.HasPrefix(pattern, "/api/admin") {
+			continue
+		}
+		if fallbackOnly[pattern] {
+			if !notFoundOnly {
+				t.Errorf("Admin transport must not mount an adapter on %s; only a terminal NotFoundHandler is allowed", pattern)
+			}
+			continue
+		}
+		if !pathOwnedByPrefixes(strings.TrimSuffix(pattern, "/"), owned) {
+			t.Errorf("Admin transport mounts %s outside every published contract prefix", pattern)
+		}
+	}
+}
+
+func transportMountPatterns(t *testing.T, source string) map[string]bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), source, nil, 0)
+	if err != nil {
+		t.Fatalf("parse Admin transport registrations in %s: %v", source, err)
+	}
+	constants := parseStringConstants(file)
+	mounts := make(map[string]bool)
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		if !isAdminMountCall(call.Fun) {
+			return true
+		}
+		pattern, ok := evaluateString(call.Args[0], constants, make(map[string]bool))
+		if !ok {
+			return true
+		}
+		if _, path, found := strings.Cut(pattern, " "); found {
+			pattern = path
+		}
+		mounts[pattern] = isNotFoundHandler(call.Args[1])
+		return true
+	})
+	return mounts
+}
+
+func parseStringConstants(file *ast.File) map[string]ast.Expr {
+	constants := make(map[string]ast.Expr)
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		for _, specification := range group.Specs {
+			values, ok := specification.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, name := range values.Names {
+				if index < len(values.Values) {
+					constants[name.Name] = values.Values[index]
+				}
+			}
+		}
+	}
+	return constants
+}
+
+func isAdminMountCall(function ast.Expr) bool {
+	if identifier, ok := function.(*ast.Ident); ok {
+		return identifier.Name == "mount"
+	}
+	selector, ok := function.(*ast.SelectorExpr)
+	if !ok || (selector.Sel.Name != "Handle" && selector.Sel.Name != "HandleFunc") {
+		return false
+	}
+	receiver, ok := selector.X.(*ast.Ident)
+	return ok && receiver.Name == "mux"
+}
+
+func isNotFoundHandler(expression ast.Expr) bool {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && selector.Sel.Name == "NotFoundHandler"
+}
+
+func TestOpenAPIOperationIDsAreUniqueAcrossModules(t *testing.T) {
+	owners := make(map[string]string)
+	entries, err := os.ReadDir(filepath.Join("..", "..", "..", "spec", "presentation", "openapi"))
+	if err != nil {
+		t.Fatalf("read OpenAPI contracts: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		contract := loadOpenAPIContract(t, entry.Name())
+		for path, pathItem := range contract.Paths {
+			for method, operation := range pathItem.operations() {
+				if operation == nil {
+					continue
+				}
+				if owner, exists := owners[operation.OperationID]; exists && owner != entry.Name() {
+					t.Errorf("operationId %s (%s %s) is declared by both %s and %s", operation.OperationID, method, path, owner, entry.Name())
+				}
+				owners[operation.OperationID] = entry.Name()
+			}
+		}
+	}
+}
+
+func documentedOperations(contract openAPIDocument) map[string]bool {
+	documented := make(map[string]bool)
+	for path, pathItem := range contract.Paths {
+		for method, operation := range pathItem.operations() {
+			if operation != nil {
+				documented[method+" "+path] = true
+			}
+		}
+	}
+	return documented
 }
 
 func matchesRegisteredOperation(operation string, registered map[string]bool) bool {

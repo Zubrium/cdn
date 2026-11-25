@@ -442,6 +442,72 @@ components:
         enabled: { const: true }
         form_id: { type: string, format: uuid, description: Globally unique schema ID selected by the deployment. }
         schema_version: { type: integer, minimum: 1 }
+    # Local copy of the Forms field contract: Router must not import another
+    # module's OpenAPI document. Equivalence is enforced by the isolation test.
+    PublicFieldDefinition:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, required]
+          properties:
+            type: { const: text }
+            required: { type: boolean }
+            min_length: { type: integer, minimum: 0, maximum: 1048576 }
+            max_length: { type: integer, minimum: 1, maximum: 1048576 }
+            pattern: { type: string, maxLength: 256, description: Go RE2 regular expression. }
+        - type: object
+          additionalProperties: false
+          required: [type, required]
+          properties:
+            type: { const: email }
+            required: { type: boolean }
+            min_length: { type: integer, minimum: 0, maximum: 1048576 }
+            max_length: { type: integer, minimum: 1, maximum: 1048576 }
+            pattern: { type: string, maxLength: 256, description: Go RE2 regular expression. }
+        - type: object
+          additionalProperties: false
+          required: [type, required]
+          properties:
+            type: { const: number }
+            required: { type: boolean }
+            minimum: { type: number }
+            maximum: { type: number }
+        - type: object
+          additionalProperties: false
+          required: [type, required]
+          properties:
+            type: { const: boolean }
+            required: { type: boolean }
+        - type: object
+          additionalProperties: false
+          required: [type, required, options]
+          properties:
+            type: { const: select }
+            required: { type: boolean }
+            options:
+              type: array
+              minItems: 1
+              maxItems: 128
+              uniqueItems: true
+              items: { type: string, minLength: 1, maxLength: 256 }
+        - type: object
+          additionalProperties: false
+          required: [type, required, max_files, max_file_bytes, allowed_content_types]
+          properties:
+            type: { const: file }
+            required: { type: boolean }
+            max_files: { type: integer, minimum: 1, maximum: 20 }
+            max_file_bytes: { type: integer, minimum: 1 }
+            allowed_content_types:
+              type: array
+              minItems: 1
+              maxItems: 32
+              uniqueItems: true
+              items:
+                type: string
+                pattern: '^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$'
+              description: Exact non-active MIME type. Active types are rejected case-insensitively by the server.
+              not: { enum: [application/ecmascript, application/javascript, application/x-httpd-php, application/xhtml+xml, application/xml, image/svg+xml, text/css, text/html, text/javascript, text/xml] }
     PublicFormSession:
       type: object
       additionalProperties: false
@@ -452,7 +518,7 @@ components:
         schema_version: { type: integer, minimum: 1 }
         fields:
           type: object
-          additionalProperties: { $ref: './forms.yaml#/components/schemas/FieldDefinition' }
+          additionalProperties: { $ref: '#/components/schemas/PublicFieldDefinition' }
         expires_at: { type: string, format: date-time }
         completed: { type: boolean }
     PublicFormSubmissionInput:
