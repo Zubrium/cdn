@@ -11,6 +11,7 @@ import (
 	platform "github.com/Zubrium/cdn/core/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	"github.com/Zubrium/cdn/main/internal/bus"
+	"github.com/Zubrium/cdn/main/internal/retirement"
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -54,5 +55,32 @@ func TestRetirementRootClassIsNotExecutableByRouterOrWebsitePools(t *testing.T) 
 		if !errors.As(err, &failure) || failure.Code != "operation_unavailable" {
 			t.Fatalf("%s pool root error = %v, want operation_unavailable", classID, err)
 		}
+	}
+}
+
+func TestRetirementFinalizationChecksJobAndCurrentPageRevision(t *testing.T) {
+	job := retirement.Job{ID: "job", PageID: "page", ExpectedRevision: 10, IdempotencyKey: "key"}
+	payload := contracts.RetirementPageFinalizePayload{JobID: "job", PageID: "page", ExpectedRevision: 10, IdempotencyKey: "key"}
+	page := contracts.AdminWebsitePage{ID: "page", Revision: 23, LifecycleState: "retiring", RetirementJobID: "job"}
+	if done, err := validateRetirementFinalization(payload, job, page); err != nil || done {
+		t.Fatalf("retiring page with later revision: done=%v err=%v", done, err)
+	}
+	page.LifecycleState = "retired"
+	if done, err := validateRetirementFinalization(payload, job, page); err != nil || !done {
+		t.Fatalf("already retired page should resume idempotently: done=%v err=%v", done, err)
+	}
+	page.LifecycleState = "retiring"
+	for name, change := range map[string]func(){
+		"foreign job":       func() { page.RetirementJobID = "other" },
+		"original revision": func() { payload.ExpectedRevision = 11 },
+		"idempotency key":   func() { payload.IdempotencyKey = "other" },
+		"stale page":        func() { page.Revision = 10 },
+	} {
+		p, j, v := payload, job, page
+		change()
+		if _, err := validateRetirementFinalization(payload, job, page); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+		payload, job, page = p, j, v
 	}
 }

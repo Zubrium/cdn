@@ -183,9 +183,9 @@ func (handler retirementFinalizeHandler) finalizePage(ctx context.Context, paylo
 	if err != nil {
 		return fmt.Errorf("retirement page read: %w", err)
 	}
-	if page.ID != payload.PageID || page.RetirementJobID != payload.JobID ||
-		page.LifecycleState != contracts.RetirementPageStateRetiring || page.Revision != payload.ExpectedRevision {
-		return retirement.ErrInvalid
+	done, err := validateRetirementFinalization(payload, job, page)
+	if err != nil || done {
+		return err
 	}
 	_, err = website.service.RetirePage(websiteCtx, websiteapi.RetirePageRequest{
 		PageID: payload.PageID, ExpectedRevision: page.Revision,
@@ -196,6 +196,24 @@ func (handler retirementFinalizeHandler) finalizePage(ctx context.Context, paylo
 		return fmt.Errorf("retirement page finalize: %w", err)
 	}
 	return nil
+}
+
+// The request revision belongs to the active page before retirement began.
+// Entering retiring writes the page and assigns a new global record revision.
+func validateRetirementFinalization(payload contracts.RetirementPageFinalizePayload, job retirement.Job, page websiteapi.Page) (bool, error) {
+	if job.ID != payload.JobID || job.PageID != payload.PageID ||
+		job.ExpectedRevision != payload.ExpectedRevision || job.IdempotencyKey != payload.IdempotencyKey ||
+		page.ID != payload.PageID || page.RetirementJobID != payload.JobID || page.Revision <= job.ExpectedRevision {
+		return false, retirement.ErrInvalid
+	}
+	switch page.LifecycleState {
+	case contracts.RetirementPageStateRetiring:
+		return false, nil
+	case contracts.RetirementPageStateRetired:
+		return true, nil
+	default:
+		return false, retirement.ErrInvalid
+	}
 }
 
 // markPageRetiring advances Website lifecycle only after the durable job has
