@@ -67,7 +67,6 @@ var strictBoundaryBaseline = map[string]bool{
 	"presentation-engine-import|presentation/router/publicupload/upload.go|github.com/Zubrium/cdn/engines/loader/features/files/pkg":                          true,
 	"presentation-engine-import|presentation/router/warmup.go|github.com/Zubrium/cdn/engines/router/presentation":                                             true,
 	"public-router-admin-auth|presentation/router/handler.go":                                                                                                 true,
-	"presentation-global-state|presentation/admin/base/transport/concurrency_metrics.go":                                                                      true,
 	"router-fs-staging|presentation/router/publicupload/upload.go":                                                                                            true,
 	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/content":                                           true,
 	"module-cycle|github.com/Zubrium/cdn/presentation/admin/base|github.com/Zubrium/cdn/presentation/admin/forms":                                             true,

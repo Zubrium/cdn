@@ -93,6 +93,7 @@ type AdminServer struct {
 	config      AdminConfig
 	deps        AdminDependencies
 	ingress     *ingressLimiter
+	contracts   *concurrencyContractPublisher
 	mu          sync.RWMutex
 	server      *http.Server
 	listener    net.Listener
@@ -119,8 +120,9 @@ func NewAdminServer(config AdminConfig, deps AdminDependencies) (*AdminServer, e
 	if deps.WorkflowControl != nil && (deps.CoordinatorAuthorization == nil || deps.Sessions == nil) {
 		return nil, errors.New("Admin coordinator dependencies are incomplete")
 	}
-	publishConcurrencyContract(config.Observer, "admin")
-	return &AdminServer{config: config, deps: deps, ingress: ingress}, nil
+	publisher := newConcurrencyContractPublisher()
+	publisher.publish(config.Observer, "admin")
+	return &AdminServer{config: config, deps: deps, ingress: ingress, contracts: publisher}, nil
 }
 
 func (s *AdminServer) SetApplicationReadiness(readiness Readiness) {
@@ -493,16 +495,17 @@ type PublicConfig struct {
 }
 
 type PublicServer struct {
-	config   PublicConfig
-	api      *routerenginepresentation.APIAdapter
-	readyFn  func() bool
-	ingress  *ingressLimiter
-	mu       sync.RWMutex
-	server   *http.Server
-	listener net.Listener
-	done     chan struct{}
-	failures chan error
-	ready    bool
+	config    PublicConfig
+	api       *routerenginepresentation.APIAdapter
+	readyFn   func() bool
+	ingress   *ingressLimiter
+	contracts *concurrencyContractPublisher
+	mu        sync.RWMutex
+	server    *http.Server
+	listener  net.Listener
+	done      chan struct{}
+	failures  chan error
+	ready     bool
 }
 
 func NewPublicServer(config PublicConfig, api *routerenginepresentation.APIAdapter, ready func() bool) (*PublicServer, error) {
@@ -517,8 +520,9 @@ func NewPublicServer(config PublicConfig, api *routerenginepresentation.APIAdapt
 	if err != nil {
 		return nil, err
 	}
-	publishConcurrencyContract(config.Observer, "public-router")
-	return &PublicServer{config: config, api: api, readyFn: ready, ingress: ingress}, nil
+	publisher := newConcurrencyContractPublisher()
+	publisher.publish(config.Observer, "public-router")
+	return &PublicServer{config: config, api: api, readyFn: ready, ingress: ingress, contracts: publisher}, nil
 }
 
 func (s *PublicServer) Start(ctx context.Context) error {

@@ -20,34 +20,39 @@ var (
 	workerOutcomes     = []string{"OK", "ERROR"}
 )
 
-var (
-	publishedMu   sync.Mutex
-	publishedSets = make(map[struct {
-		observer *observability.Observer
-		pool     string
-	}]struct{})
-)
+type concurrencyContractKey struct {
+	observer *observability.Observer
+	pool     string
+}
 
-// publishConcurrencyContract makes disabled or not-yet-wired groups visible as
-// zero-valued series, as required by SPEC-concurrency.md §11. Live admission
-// paths keep updating the same series through the Observer API. It is safe to
-// call from both transport constructors: each observer/pool pair is initialised
-// once, so a repeated construction cannot reset an active gauge.
-func publishConcurrencyContract(observer *observability.Observer, pool string) {
-	if observer == nil {
+// concurrencyContractPublisher keeps the set of initialised metric contracts
+// scoped to a transport instance. Admin and Public servers must not share
+// process-global synchronized state.
+type concurrencyContractPublisher struct {
+	mu        sync.Mutex
+	published map[concurrencyContractKey]struct{}
+}
+
+func newConcurrencyContractPublisher() *concurrencyContractPublisher {
+	return &concurrencyContractPublisher{published: make(map[concurrencyContractKey]struct{})}
+}
+
+// publish makes disabled or not-yet-wired groups visible as zero-valued
+// series, as required by SPEC-concurrency.md §11. Live admission paths keep
+// updating the same series through the Observer API. Each observer/pool pair
+// is initialised once within this server instance.
+func (publisher *concurrencyContractPublisher) publish(observer *observability.Observer, pool string) {
+	if publisher == nil || observer == nil {
 		return
 	}
-	key := struct {
-		observer *observability.Observer
-		pool     string
-	}{observer, pool}
-	publishedMu.Lock()
-	if _, done := publishedSets[key]; done {
-		publishedMu.Unlock()
+	key := concurrencyContractKey{observer: observer, pool: pool}
+	publisher.mu.Lock()
+	if _, done := publisher.published[key]; done {
+		publisher.mu.Unlock()
 		return
 	}
-	publishedSets[key] = struct{}{}
-	publishedMu.Unlock()
+	publisher.published[key] = struct{}{}
+	publisher.mu.Unlock()
 
 	httpContext := observer.WithIdentity(context.Background(), observability.Identity{
 		ModuleKind: observability.ModuleKindPresentation, ModuleID: pool, ComponentID: "http-server",

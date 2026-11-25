@@ -115,6 +115,41 @@ func TestGoModRequireIgnoresReplaceDirectives(t *testing.T) {
 	}
 }
 
+func TestGlobalPresentationStateDetectorIsInstanceScoped(t *testing.T) {
+	root := t.TempDir()
+	for _, owner := range []string{"presentation/admin", "presentation/router"} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(owner)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	global := `package router
+
+import "sync"
+
+var sharedMu sync.Mutex
+`
+	instance := `package router
+
+import "sync"
+
+type publisher struct {
+	mu sync.Mutex
+}
+`
+	if err := os.WriteFile(filepath.Join(root, "presentation", "router", "fixture.go"), []byte(global), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkGlobalPresentationState(root); len(got) != 1 || !strings.Contains(got[0], "presentation/router/fixture.go") {
+		t.Fatalf("global mutex was not reported: %v", got)
+	}
+	if err := os.WriteFile(filepath.Join(root, "presentation", "router", "fixture.go"), []byte(instance), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkGlobalPresentationState(root); len(got) != 0 {
+		t.Fatalf("instance-scoped mutex was reported: %v", got)
+	}
+}
+
 func TestStrictBoundaryBaselineHidesOnlyKnownDebt(t *testing.T) {
 	var baselineKey string
 	for key := range strictBoundaryBaseline {
