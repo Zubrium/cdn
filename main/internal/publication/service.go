@@ -372,11 +372,19 @@ func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string,
 	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
 		return ErrInvalid
 	}
-	return s.updateTarget(ctx, runID, routeID, locale, func(target *targetRecord) {
-		target.State = stateFailed
-		target.Revision++
-		target.ErrorCode = errorCode(err)
-	})
+	key := targetDataKey(s.config.BranchID, runID, routeID, locale)
+	current, target, loadErr := s.loadTarget(ctx, key, runID)
+	if loadErr != nil {
+		return loadErr
+	}
+	if target.State == stateSuccess {
+		return nil
+	}
+	target.State = stateFailed
+	target.Revision++
+	target.ErrorCode = errorCode(err)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return s.putTarget(ctx, key, current.Revision, target)
 }
 
 func (s *Service) updateTarget(ctx context.Context, runID, routeID, locale string, mutate func(*targetRecord)) error {

@@ -9,6 +9,75 @@ import (
 	workflow "github.com/Zubrium/cdn/pkg/contracts"
 )
 
+func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Publish(ctx, Trigger{Locale: testLocale, ContentPublicationRevision: 4, IdempotencyKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.updateTarget(ctx, run.RunID, testRouteA, testLocale, func(target *targetRecord) { target.State = stateSuccess }); err != nil {
+		t.Fatal(err)
+	}
+	key := targetDataKey(testBranchID, run.RunID, testRouteA, testLocale)
+	before, _, err := service.loadTarget(ctx, key, run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, errors.New("late failure")); err != nil {
+		t.Fatal(err)
+	}
+	after, target, err := service.loadTarget(ctx, key, run.RunID)
+	if err != nil || target.State != stateSuccess || target.ErrorCode != "" || after.Revision != before.Revision {
+		t.Fatalf("successful target regressed: %+v, revisions %d -> %d, err=%v", target, before.Revision, after.Revision, err)
+	}
+}
+
+type publicationRaceStore struct {
+	*memoryRecordStore
+	afterRead func(contractsKey workflow.RecordKey)
+}
+
+func (store *publicationRaceStore) Get(ctx context.Context, key workflow.RecordKey) (workflow.Record, error) {
+	record, err := store.memoryRecordStore.Get(ctx, key)
+	if store.afterRead != nil {
+		hook := store.afterRead
+		store.afterRead = nil
+		hook(key)
+	}
+	return record, err
+}
+
+func TestPublicationFailureCASDoesNotOverwriteConcurrentSuccess(t *testing.T) {
+	ctx := context.Background()
+	store := &publicationRaceStore{memoryRecordStore: newMemoryRecordStore()}
+	service, err := NewService(Config{BranchID: testBranchID, Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Publish(ctx, Trigger{Locale: testLocale, ContentPublicationRevision: 4, IdempotencyKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.afterRead = func(_ workflow.RecordKey) {
+		if err := service.updateTarget(ctx, run.RunID, testRouteA, testLocale, func(target *targetRecord) { target.State = stateSuccess }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, errors.New("late failure")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want CAS conflict: %v", err)
+	}
+	_, target, err := service.loadTarget(ctx, targetDataKey(testBranchID, run.RunID, testRouteA, testLocale), run.RunID)
+	if err != nil || target.State != stateSuccess {
+		t.Fatalf("concurrent success lost: %+v %v", target, err)
+	}
+}
+
 func TestFinishBuildRejectsConflictingExistingArtifactWithoutChangingTarget(t *testing.T) {
 	ctx := context.Background()
 	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,

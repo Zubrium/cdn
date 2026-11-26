@@ -28,6 +28,13 @@ durable-записи и сверкой trigger; unit-тест моделируе
 `go vet ./internal/publication` и `go build ./internal/publication`. Реальная
 конкуренция на PostgreSQL этим тестом не подтверждается.
 
+Запоздавший `FailTarget` не изменяет успешно активированную цель; при
+конкурентной записи успеха CAS отклоняет устаревшую ошибку. Unit-тесты
+проверили оба случая с тестовым хранилищем; из `main` прошли
+`go test ./internal/publication -count=1`, `go vet ./internal/publication` и
+`go build ./internal/publication`. Остальные переходы и реальные конкурентные
+транзакции ещё требуют проверки.
+
 ## Retirement: восстановление перехода страницы (2026-11-26)
 
 Повтор по сохранённому receipt перед запуском workflow подтверждает либо
