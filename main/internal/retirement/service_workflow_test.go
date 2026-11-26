@@ -67,6 +67,48 @@ func TestRetirementLaunchPreservesCompletionAndRecoversStartFailure(t *testing.T
 	}
 }
 
+type raceRetirementStore struct {
+	*retirementMemoryStore
+	afterRead func()
+}
+
+func (store *raceRetirementStore) Get(ctx context.Context, key contracts.RecordKey) (contracts.Record, error) {
+	record, err := store.retirementMemoryStore.Get(ctx, key)
+	if store.afterRead != nil {
+		hook := store.afterRead
+		store.afterRead = nil
+		hook()
+	}
+	return record, err
+}
+
+func TestRetirementRetryDoesNotOverwriteConcurrentCompletion(t *testing.T) {
+	ctx := context.Background()
+	store := &raceRetirementStore{retirementMemoryStore: newRetirementMemoryStore()}
+	starter := &retirementStarter{}
+	service, err := NewService(Config{BranchID: retireBranchID, Store: store, Starter: starter, MaxAttempts: 3,
+		Routes: map[string][]string{retirePageID: {retireRouteA}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.Prepare(ctx, contracts.RetirePageRequest{PageID: retirePageID, IfMatch: retireIfMatch, IdempotencyKey: retireIdemKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetJobState(ctx, job.ID, stateRetryable); err != nil {
+		t.Fatal(err)
+	}
+	store.afterRead = func() {
+		if _, err := service.SetJobState(ctx, job.ID, stateSucceeded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := service.Retry(ctx, job.ID)
+	if err != nil || result.State != stateSucceeded || len(starter.inputs) != 0 {
+		t.Fatalf("concurrent completion: result=%+v starts=%d err=%v", result, len(starter.inputs), err)
+	}
+}
+
 type retirementMemoryStore struct {
 	records map[contracts.RecordKey]contracts.Record
 }

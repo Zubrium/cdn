@@ -53,6 +53,12 @@ retirement/composition и сборка прошли также с `-tags=full`. 
 `go build ./internal/retirement`; реальный конкурентный запуск и restart не
 проверены.
 
+`Retry` проверяет состояние внутри CAS-петли и при конфликте перечитывает job;
+unit-тест моделирует завершение между чтением и записью и проверяет отсутствие
+повторного запуска. Из `main` прошли `go test ./internal/retirement -count=1`,
+`go vet ./internal/retirement` и `go build ./internal/retirement`. Реальная
+конкуренция на PostgreSQL не проверялась.
+
 ## Retirement: ревизия финализации (2026-11-26)
 
 Финализатор сверяет payload с durable job и владельцем страницы, а текущую

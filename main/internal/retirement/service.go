@@ -219,22 +219,35 @@ func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetire
 	if s == nil || ctx == nil || !contracts.ValidWorkflowID(jobID) {
 		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid job identity", ErrInvalid)
 	}
-	job, err := s.LoadJob(ctx, jobID, "")
-	if err != nil {
-		return contracts.PageRetirement{}, err
+	job, err := s.updateJob(ctx, jobID, func(current *jobRecord) error {
+		if current.BranchID != s.config.BranchID {
+			return ErrUnavailable
+		}
+		switch current.State {
+		case stateSucceeded, stateRunning:
+			return errRetryAlreadySettled
+		case stateRetryable:
+			current.State = stateRunning
+			current.UpdatedAt = timestamp()
+			return nil
+		default:
+			return fmt.Errorf("%w: job is not retryable", ErrConflict)
+		}
+	})
+	if errors.Is(err, errRetryAlreadySettled) {
+		current, loadErr := s.LoadJob(ctx, jobID, "")
+		if loadErr != nil {
+			return contracts.PageRetirement{}, loadErr
+		}
+		return JobView(current), nil
 	}
-	if job.State == stateSucceeded || job.State == stateRunning {
-		return JobView(job), nil
-	}
-	if job.State != stateRetryable {
-		return contracts.PageRetirement{}, fmt.Errorf("%w: job is not retryable", ErrConflict)
-	}
-	job, err = s.SetJobState(ctx, job.ID, stateRunning)
 	if err != nil {
 		return contracts.PageRetirement{}, err
 	}
 	return s.Launch(ctx, job)
 }
+
+var errRetryAlreadySettled = errors.New("retirement retry already settled")
 
 // LoadJob returns the durable job projection for a composition adapter.
 func (s *Service) LoadJob(ctx context.Context, jobID, pageID string) (Job, error) {
