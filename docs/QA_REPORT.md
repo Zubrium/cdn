@@ -191,6 +191,13 @@ overlay `/tmp/content-publication-key-overlay.json` и `go build ./...` в
 `main`, а также test/vet composition и сборка с `-tags=full` прошли. Живой
 Content-to-publication workflow на PostgreSQL не проверялся.
 
+Composition отклоняет publication до записи Content при отсутствии
+dispatcher и не считает успешным результат без опубликованной revision.
+Unit-тесты подтверждают оба случая; `main` прошёл `go test`, `go vet` с
+overlay `/tmp/content-fanout-required-overlay.json`, `go build ./...` и
+test/vet composition и сборку с `-tags=full`. Durable доставка при crash после
+commit Content и до dispatch остаётся открытой.
+
 ## Идентичность media receipts (2026-11-26)
 
 `TestMediaRequestFingerprintPreservesExistingInputIdentity` проверяет, что

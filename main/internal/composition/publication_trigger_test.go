@@ -117,3 +117,22 @@ func TestContentPublicationDoesNotStartFanoutWithoutCommit(t *testing.T) {
 		t.Fatalf("fan-out called %d times after a failed publication", bus.calls)
 	}
 }
+
+func TestContentPublicationRejectsMissingFanoutBeforeCommit(t *testing.T) {
+	content := &publicationTriggerContent{workspace: contentapi.Workspace{Locale: "en-US", PublishedRevision: 1}}
+	api := contentPublicationAPI{API: content}
+	_, err := api.PublishWorkspace(context.Background(), contentapi.Projections{}, contentapi.PublishWorkspaceRequest{IdempotencyKey: "x"})
+	if !errors.Is(err, contracts.ErrDispatcherUnavailable) || content.calls != 0 {
+		t.Fatalf("missing fanout: err=%v content calls=%d", err, content.calls)
+	}
+}
+
+func TestContentPublicationRejectsMissingPublishedRevision(t *testing.T) {
+	content := &publicationTriggerContent{workspace: contentapi.Workspace{Locale: "en-US"}}
+	bus := &publicationTriggerBus{}
+	api := contentPublicationAPI{API: content, client: publicationClient{dispatcher: bus}}
+	_, err := api.PublishWorkspace(context.Background(), contentapi.Projections{}, contentapi.PublishWorkspaceRequest{IdempotencyKey: "x"})
+	if err == nil || bus.calls != 0 {
+		t.Fatalf("missing revision: err=%v fanout calls=%d", err, bus.calls)
+	}
+}

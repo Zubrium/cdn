@@ -33,9 +33,15 @@ type contentPublicationAPI struct {
 
 func (api contentPublicationAPI) PublishWorkspace(ctx context.Context, projection contentapi.Projections,
 	request contentapi.PublishWorkspaceRequest) (contentapi.Workspace, error) {
+	if api.client.dispatcher == nil {
+		return contentapi.Workspace{}, contracts.ErrDispatcherUnavailable
+	}
 	workspace, err := api.API.PublishWorkspace(ctx, projection, request)
-	if err != nil || api.client.dispatcher == nil || workspace.PublishedRevision < 1 {
+	if err != nil {
 		return workspace, err
+	}
+	if workspace.PublishedRevision < 1 {
+		return workspace, contentapi.ErrUnavailable
 	}
 	if err := api.client.Publish(ctx, contracts.PublicationPublishRequest{
 		Locale:                     workspace.Locale,
