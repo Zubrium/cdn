@@ -50,6 +50,26 @@ Content publication commits one locale's records/selections and then starts a du
 
 Content publication itself succeeds when its atomic Content commit succeeds; route activation is an asynchronous durable workflow with per-route/per-locale results. A build or CAS failure does not roll back Content publication or remove prior artifacts. Successful independent route targets may switch while failed targets remain unchanged; the workflow reports each outcome and supports safe retry. Duplicate work is idempotent by publication revision, page, route, and locale. A stale build is rejected when a newer publication for that locale supersedes it. Draft-only saves do not start rebuilds.
 
+The same atomic Content commit must persist a Content-owned, versioned delivery
+intent for the fan-out. It pins the locale, committed Content publication
+revision, trusted system-model revision and a server-derived stable identity;
+it does not contain credentials, Router operations or client-selected targets.
+The intent and publication history are distinct: delivery state can advance
+without mutating immutable history. Commit failure leaves neither a new
+publication nor its intent. A successful commit is returned as success even
+if a later dispatch is unavailable.
+
+Trusted composition recovers pending intents after restart and submits the
+registered workflow through the typed process-local bus. Recovery is bounded
+and uses explicitly configured operational limits; duplicate submit, lost
+acknowledgement, concurrent recovery and process termination cannot lose an
+intent or create duplicate logical fan-out. Completion of delivery means the
+durable workflow start is confirmed, not that route activation succeeded.
+Outcomes of the latter remain in the publication workflow. A newer publication
+must prevent a delayed older build from replacing its route target. Existing
+uncompleted publications and receipts are preserved and reconciled before any
+format migration; they must not be silently deleted or assumed delivered.
+
 ## Создание дочернего page snapshot
 
 Page snapshot fork выполняется durable workflow, запущенным внешним Presentation через Coordinator:
@@ -72,6 +92,7 @@ Content не принимает публичные отправки и влож�
 - Website `dataModel` и structural bindings отображаются read-only в Content, а mutation Content API не меняет Website config.
 - Locale catalog CAS, canonical BCP 47 validation, default membership, locale removal guards, per-locale workspace/revision/publication/history, one record per locale in a translation group, and same-locale selection validation.
 - Publishing one locale starts only that locale's page rebuilds; independent route/locale CAS results include partial failures and preserve each failed prior target.
+- Crash after Content commit but before fan-out submission, lost start acknowledgement, restart and concurrent recovery preserve the intent and produce one logical workflow; Content response follows the commit result. Test failed Content commit, dispatcher outage, duplicate recovery, newer-publication stale protection, and existing in-flight data on disposable PostgreSQL.
 - Создание, изменение, сортировка и удаление записей проверяют типы, orphaned данные, CAS-конфликты, idempotency и group levels `0/1/2`.
 - Пустая singleton-сущность получает одну пустую запись, повторная инициализация не создаёт вторую, очистка сохраняет ID.
 - Выборы `all` и `ids` проверяют наличие placement/input, связанную сущность, порядок ID и удаление записи с очисткой ссылок.
