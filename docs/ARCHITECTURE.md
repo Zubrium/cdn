@@ -67,3 +67,23 @@ locale, Content и другие необходимые версии. Router хр
 компиляцией tagged integration fixtures. Детали и evidence — в
 [QA report](QA_REPORT.md), открытые задачи — в [активном плане](TODO-admin-snapshots-content-files.md),
 сценарии и их статусы — в [ledger](../tests/qa/website-scenarios.json).
+
+## Оценка по имеющимся реестрам
+
+В таблице — доля записей со статусом `pass` в указанном реестре, а не процент
+готовности всего модуля. Статус записи не означает, что сценарий повторно
+исполнен на текущем checkout; уровень и ограничения проверки нужно сверять с
+реестром и QA-отчётом. Для полной оценки нужны исполняемые сценарии на текущем
+коде и применимая изолированная приёмка.
+
+| Часть | Доля `pass` в указанном реестре | Граница оценки |
+| --- | --- | --- |
+| Website | 23/29 — 79,3% | [Website](../tests/qa/website-scenarios.json): 6 integration-сценариев blocked, включая media, prerender, publication и retirement. |
+| Content | 4/5 — 80% | [Content](../tests/qa/content-scenarios.json): четыре contract-сценария и один заблокированный E2E; полная приёмка Content не подтверждена. |
+| Forms | 4/5 — 80% | [Forms](../tests/qa/forms-scenarios.json): четыре contract-сценария и один заблокированный E2E; это не оценка всех workflows Forms. |
+| Loader | 4/5 — 80% | [Loader](../tests/qa/loader-scenarios.json): четыре contract-сценария и один заблокированный E2E; это не оценка всех workflows Loader. |
+| Router cache | 5/6 — 83,3% | [Router cache](../tests/qa/cache-router-scenarios.json): ограниченный набор проверок cache, один E2E blocked; не оценка Router целиком. |
+| Core | 1/1 — 100% | [Core](../tests/qa/core-scenarios.json): только `CORE-001`, owner-scoped доступ к результату task. Это не означает 100% готовности Core или Coordinator. |
+| Workers | Не определена | Общего подтверждённого набора для всех workers нет; Website integration-сценарии media и prerender blocked. |
+| Admin и HTTP Presentation | Не определена | Имеются отдельные unit и browser-проверки, но полного согласованного набора для расчёта готовности нет. |
+| Композиция и полная система | Не определена | Требуются актуальные сквозные проверки всех profiles и интеграции; исторический E2E не подтверждает текущий checkout. |
