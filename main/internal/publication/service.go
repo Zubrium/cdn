@@ -232,9 +232,25 @@ func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationB
 	if err != nil {
 		return err
 	}
+	if target.PageSnapshotID != payload.PageSnapshotID || target.Locale != payload.Locale ||
+		target.ContentPublicationRevision != payload.ContentPublicationRevision || target.SystemModelRevision != payload.SystemModelRevision {
+		return fmt.Errorf("%w: build payload does not match durable target", ErrInvalid)
+	}
 	if target.InputDigest != "" && target.InputDigest != result.InputDigest {
 		return ErrStale
 	}
+	artifact := artifactRecord{
+		Kind: recordTypeArtifact, RunID: payload.RunID, RouteID: payload.RouteID, Locale: payload.Locale,
+		SnapshotID: payload.PageSnapshotID, InputDigest: result.InputDigest, ArtifactManifestFileID: result.ArtifactManifestFileID,
+	}
+	existing, err := s.loadArtifact(ctx, payload.RunID, payload.RouteID, payload.Locale)
+	if err == nil && existing != artifact {
+		return ErrStale
+	}
+	if err != nil && !errors.Is(err, workflow.ErrRecordNotFound) {
+		return err
+	}
+	artifactExists := err == nil
 	target.State = stateBuilt
 	target.Revision++
 	target.InputDigest = result.InputDigest
@@ -242,13 +258,21 @@ func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationB
 	target.ArtifactManifestFileID = result.ArtifactManifestFileID
 	target.ErrorCode = ""
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.putTarget(ctx, key, current.Revision, target); err != nil {
+	if artifactExists {
+		return s.putTarget(ctx, key, current.Revision, target)
+	}
+	targetValue, err := encodeModuleData(target, targetIndex(target))
+	if err != nil {
 		return err
 	}
-	return s.putArtifact(ctx, artifactRecord{
-		Kind: recordTypeArtifact, RunID: payload.RunID, RouteID: payload.RouteID, Locale: payload.Locale,
-		SnapshotID: payload.PageSnapshotID, InputDigest: result.InputDigest, ArtifactManifestFileID: result.ArtifactManifestFileID,
-	})
+	artifactValue, err := encodeModuleData(artifact, artifactIndex(artifact))
+	if err != nil {
+		return err
+	}
+	return mapStoreError(s.config.Store.Batch(ctx, []workflow.RecordMutation{
+		{Key: key, ExpectedRevision: current.Revision, Value: targetValue},
+		{Key: artifactDataKey(s.config.BranchID, artifact.RunID, artifact.RouteID, artifact.Locale), ExpectedRevision: 0, Value: artifactValue},
+	}))
 }
 
 // TargetSnapshot returns the server-owned snapshot bound to one run slot. The

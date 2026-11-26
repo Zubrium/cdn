@@ -145,18 +145,6 @@ func (s *Service) putTarget(ctx context.Context, key contracts.RecordKey, expect
 	return nil
 }
 
-func (s *Service) putArtifact(ctx context.Context, artifact artifactRecord) error {
-	key := artifactDataKey(s.config.BranchID, artifact.RunID, artifact.RouteID, artifact.Locale)
-	value, err := encodeModuleData(artifact, artifactIndex(artifact))
-	if err != nil {
-		return err
-	}
-	if _, err := s.config.Store.Put(ctx, key, *value, 0); err != nil && !errors.Is(err, contracts.ErrRecordConflict) {
-		return mapStoreError(err)
-	}
-	return nil
-}
-
 func (s *Service) loadArtifact(ctx context.Context, runID, routeID, locale string) (artifactRecord, error) {
 	record, err := s.config.Store.Get(ctx, artifactDataKey(s.config.BranchID, runID, routeID, locale))
 	if err != nil {
