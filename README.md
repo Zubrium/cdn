@@ -17,22 +17,27 @@
 
 ## Разработка
 
-Из корня репозитория:
+Из корня создайте overlay централизованных тестов:
 
 ```bash
-make test
-make vet
-make build
-make build-full
+python3 tests/go-overlay.py > /tmp/website-engine-overlay.json
+```
+
+Затем выполните для каждого Go-модуля workspace из его каталога:
+
+```bash
+go test -overlay=/tmp/website-engine-overlay.json ./...
+go vet -overlay=/tmp/website-engine-overlay.json ./...
+go build ./...
 ```
 
 Из `frontend/`:
 
 ```bash
-pnpm typecheck
+pnpm --filter @website-engine/admin typecheck
 pnpm lint
-pnpm test
-pnpm build
+pnpm --filter @website-engine/admin test
+pnpm --filter @website-engine/admin build
 ```
 
 Интеграционные проверки требуют отдельных disposable PostgreSQL/S3 ресурсов. Не направляйте их на рабочие данные. Публичный Router listener должен быть размещён за внешним proxy; конфигурация и admission policy proxy принадлежат deployer.

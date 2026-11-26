@@ -1,6 +1,6 @@
 # Durable build workflow Website — согласованный контракт
 
-Статус: контракт согласован пользователем 2026-11-22; реализация durable build и kernel-enforced prerender sandbox подключены в `main`-композицию по TDD. Документ фиксирует согласованное поведение и фактическую границу: root handler, reconciliation и Chromium prerender работают, Router-активация по-прежнему не подключена.
+Статус: документ описывает согласованный контракт durable build. Root handler, prerender и отдельная orchestration Router-активации подключены в `main`; полнота поведения и текущая приёмка не подтверждены. Текущие статусы — в [acceptance ledger](../tests/qa/website-scenarios.json) и [QA report](QA_REPORT.md).
 
 ## Контекст и доказательство нарушения
 
@@ -57,17 +57,17 @@
 
 ### 7. Фактическая композиция
 
-- `main/internal/composition/website_component.go` создаёт `Runtime.NewWorkflowClient("engine.website")`, owner-scoped reader и `NewWorkflowControl`, затем инъектирует их в `websiteapp.Service` вместе с `BuildOperationID = build-page` и `BuildContractVersion = 1`.
+- `main/internal/composition/website_component.go` создаёт scoped DataBus clients для Core files и workflow; `websiteBuildWorkflowClient` вызывает типизированные операции запуска и owner-scoped чтения результатов через composition.
 - `main/internal/composition/worker_handlers_full.go` регистрирует `engine.website/build-page/v1`, реальные configured handlers для `worker.archive`, `worker.media`, `worker.prerender`; без доверенной конфигурации handle остаётся fail-closed.
 - Locale catalog resolver получает только доверенный service context Content через `contentEngineComponent.Activate`; контекст посетителя не передаётся. Для locale вне зарегистрированного каталога build fail-closed.
 - `main/internal/composition/website_build_input.go` собирает полный trusted input через late-bound Content capability; HTTP-запрос не может выбрать catalog revision, publication revision, feature pin или render document.
-- `corePrerenderArtifactWriter` пишет document и manifest только через `EngineFilesCapability.CreateFileVerified` с детерминированным UUID request key от task identity/path; worker не получает DSN, bucket, path или URL.
+- Prerender использует scoped Core file operations для записи результатов; worker не получает DSN, bucket или прямой доступ к Core infrastructure.
 - `websiteBuildEnabled` гарантирует, что не-full сборки не получают durable workflow capability.
 
 ## Acceptance-связь
 
-- `WEB-020` — locale-bound full trusted input digest, `render-plan/v2`, kernel-enforced Chromium sandbox/network policy, stale result, Core-only artifact verification (disposable sandbox); исполнен REAL-тестом `TestWebsitePrerenderAcceptance/WEB-020`.
-- `WEB-021` — rebuild fan-out, независимые Router target CAS, retry только failed и stale protection (disposable orchestration); исполнен REAL-тестом `TestWebsitePublicationFanoutAcceptance/WEB-021`.
+- `WEB-020` — locale-bound full trusted input digest, `render-plan/v2`, sandbox, stale result и Core-only artifact verification. Текущая integration-приёмка blocked.
+- `WEB-021` — rebuild fan-out, независимые Router target CAS, retry только failed и stale protection. Текущая integration-приёмка blocked; независимость частичных отказов требует исправления.
 - `WEB-014`, `WEB-026` — валидация artifact manifest и trusted file metadata.
 - `WEB-010` — отсутствие route/URL/branch/record values в structural/build DTO.
 - Новый Core regression test — владелец видит result child task, посторонний components/networks — нет.
@@ -75,5 +75,5 @@
 ## Ограничения, которые не снимаются этим решением
 
 - Реальный OS-supervised Chromium/network sandbox предоставляется trusted startup-конфигурацией static composition; вне full-профиля `worker.prerender/render-page/v1` остаётся fail-closed, поэтому сквозной build не доходит до готового artifact.
-- Disposable PostgreSQL/S3 обязательны для integration-приёмки; unit/contract checks их не заменяют. `WEB-020` исполнен на изолированном sandbox; `WEB-021` исполнен в живом disposable стеке с fault injection, но полный публичный E2E locale routing и crash recovery отдельно не прогонялись.
+- Disposable PostgreSQL/S3 обязательны для integration-приёмки; unit/contract checks их не заменяют. Tagged пакет сейчас не компилируется из-за устаревших fixtures publication/retirement; исторические прогоны не подтверждают текущий checkout.
 - Core API расширяется только в описанной owner-scoped части; общий доступ к task payload/results не открывается. SQL-путь `GetTaskResult` проверен static/unit и реальным integration-прогоном `CORE-001` на disposable PostgreSQL.

@@ -2,7 +2,7 @@
 
 > **Актуальное решение:** по устройству Core, Coordinator, PostgreSQL schemas и междвижковых durable workflows приоритет имеет [SPEC-core-architecture.md](../core/SPEC-core-architecture.md). Она заменяет прежние решения о single-schema Core, внешнем Coordinator и route-specific persistence внутри Core.
 
-> **Модульная платформа:** [SPEC-coordinator-platform.md](SPEC-coordinator-platform.md) описывает profiles, независимые runtime modules и общие durable workflows. Core остаётся независимым от engines, workers и Presentation: все внешние обращения к Core проходят через DataBus, связанный с Core только в `main`. Реализация этого boundary ещё требует миграции и полной проверки.
+> **Модульная платформа:** [SPEC-coordinator-platform.md](SPEC-coordinator-platform.md) описывает profiles, независимые runtime modules и общие durable workflows. Core остаётся независимым от engines, workers и Presentation: все внешние обращения к Core проходят через DataBus, связанный с Core только в `main`. Текущие проверки границы и оставшиеся ограничения указаны в QA-отчёте.
 
 Статус: целевая архитектура модульной платформы. Текущая реализация и границы её проверки указаны в [QA_REPORT.md](../../docs/QA_REPORT.md); открытая работа перечислена в [TODO](../../docs/TODO-admin-snapshots-content-files.md).
 
