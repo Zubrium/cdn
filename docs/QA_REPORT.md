@@ -35,6 +35,12 @@ durable-записи и сверкой trigger; unit-тест моделируе
 `go build ./internal/publication`. Остальные переходы и реальные конкурентные
 транзакции ещё требуют проверки.
 
+Ошибки publication сохраняются как ограниченные коды: неизвестная ошибка
+зависимости отображается как `publication_failed`, её исходный текст не попадает
+в результат. Unit-тест проверяет известные ошибки и строки с внутренними
+параметрами; из `main` прошли `go test ./internal/publication -count=1`,
+`go vet ./internal/publication` и `go build ./internal/publication`.
+
 ## Retirement: восстановление перехода страницы (2026-11-26)
 
 Повтор по сохранённому receipt перед запуском workflow подтверждает либо

@@ -9,6 +9,24 @@ import (
 	workflow "github.com/Zubrium/cdn/pkg/contracts"
 )
 
+func TestPublicationFailureCodesAreBoundedAndDoNotExposeDependencyErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{nil, ""},
+		{ErrStale, "stale_build_input"},
+		{ErrConflict, "router_cas_conflict"},
+		{ErrInvalid, "invalid_target"},
+		{errors.New("postgres password=secret host=internal"), "publication_failed"},
+		{errors.New("/private/path/with/customer/data: read failed"), "publication_failed"},
+	} {
+		if got := errorCode(tc.err); got != tc.want {
+			t.Errorf("error code = %q, want %q", got, tc.want)
+		}
+	}
+}
+
 func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
 	ctx := context.Background()
 	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,

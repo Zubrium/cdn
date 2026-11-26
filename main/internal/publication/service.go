@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	workflow "github.com/Zubrium/cdn/pkg/contracts"
@@ -469,10 +468,6 @@ func errorCode(err error) string {
 	case errors.Is(err, ErrInvalid):
 		return "invalid_target"
 	default:
-		message := err.Error()
-		if index := strings.Index(message, ":"); index > 0 {
-			message = strings.TrimSpace(message[:index])
-		}
-		return message
+		return "publication_failed"
 	}
 }
