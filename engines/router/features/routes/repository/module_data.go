@@ -273,7 +273,22 @@ func (repository *ModuleDataRepository) ReplaceTarget(ctx context.Context, branc
 // revisions of sibling locales or requiring the whole route target to be
 // replaced. The idempotency receipt makes a retried activation safe after a
 // restart or an ambiguous Core write.
+var errConcurrentOtherLocale = errors.New("Router route changed while locale remained unchanged")
+
 func (repository *ModuleDataRepository) ReplaceLocaleTarget(ctx context.Context, branchID, id string, update LocaleTargetUpdate, now time.Time) (model.Route, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		route, err := repository.replaceLocaleTargetOnce(ctx, branchID, id, update, now)
+		if !errors.Is(err, errConcurrentOtherLocale) {
+			return route, err
+		}
+		if err := ctx.Err(); err != nil {
+			return model.Route{}, err
+		}
+	}
+	return model.Route{}, ErrConflict
+}
+
+func (repository *ModuleDataRepository) replaceLocaleTargetOnce(ctx context.Context, branchID, id string, update LocaleTargetUpdate, now time.Time) (model.Route, error) {
 	if repository == nil || repository.data == nil || ctx == nil || branchID == "" || id == "" ||
 		update.Locale == "" || update.ArtifactManifestFileID == "" || update.ExpectedRevision < 1 ||
 		update.ExpectedRevision == math.MaxInt64 || update.IdempotencyKey == "" || now.IsZero() {
@@ -315,6 +330,9 @@ func (repository *ModuleDataRepository) ReplaceLocaleTarget(ctx context.Context,
 	if now.Before(current.CreatedAt) {
 		return model.Route{}, ErrInvalid
 	}
+	if now.Before(current.UpdatedAt) {
+		now = current.UpdatedAt
+	}
 	updated := current
 	updated.Target.LocaleTargets = append([]model.LocaleArtifactTarget(nil), current.Target.LocaleTargets...)
 	updated.Target.LocaleTargets[index].ArtifactManifestFileID = update.ArtifactManifestFileID
@@ -352,6 +370,15 @@ func (repository *ModuleDataRepository) ReplaceLocaleTarget(ctx context.Context,
 			return persisted, nil
 		} else if !errors.Is(readErr, ErrNotFound) {
 			return model.Route{}, readErr
+		}
+		_, _, latest, readErr := repository.findRecord(ctx, branchID, id)
+		if readErr != nil {
+			return model.Route{}, readErr
+		}
+		latestSlot, found := latest.Target.LocaleTarget(update.Locale)
+		if found && latest.Revision == current.Revision && latest.Target.Kind == model.TargetStaticSiteArtifact &&
+			latestSlot.Revision == update.ExpectedRevision {
+			return model.Route{}, errConcurrentOtherLocale
 		}
 		return model.Route{}, ErrConflict
 	}

@@ -58,6 +58,15 @@ Router repository теперь читает locale-CAS receipt по тому ж�
 `go test` и `go vet` с `/tmp/router-cas-replay-overlay.json`, а также
 `go build ./...`. Реальная PostgreSQL и сквозная publication не проверены.
 
+Конфликт общей записи Router при одновременном изменении другой locale
+обрабатывается ограниченным повтором только при неизменной ревизии нужной
+locale и маршрута. Тесты проверяют сохранение обеих locale, отказ при конфликте
+той же locale, монотонность времени и отсутствие отката по старому receipt.
+В `engines/router` прошли `go test`, `go vet` с overlay
+`/tmp/router-locale-conflict-overlay.json` и `go build ./...`; после дополнения
+теста повторно прошли test/vet repository. Межпроцессная проверка на PostgreSQL
+остаётся открытой.
+
 ## Retirement: восстановление перехода страницы (2026-11-26)
 
 Повтор по сохранённому receipt перед запуском workflow подтверждает либо

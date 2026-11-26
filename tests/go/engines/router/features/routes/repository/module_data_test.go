@@ -277,6 +277,21 @@ func TestReplaceLocaleTargetReplaysOriginalCASWithoutAdvancingRevision(t *testin
 	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC()); !errors.Is(err, ErrConflict) {
 		t.Fatalf("same key with different precondition = %v, want conflict", err)
 	}
+	newer := update
+	newer.IdempotencyKey = "activate-route-00002"
+	newer.ArtifactManifestFileID = "01938f7a-68af-7c10-a51d-78b6ca125398"
+	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, newer, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	update.ExpectedRevision = 1
+	current, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, _ := current.Target.LocaleTarget("en-US")
+	if slot.Revision != 3 || slot.ArtifactManifestFileID != newer.ArtifactManifestFileID {
+		t.Fatalf("old receipt overwrote newer target: %+v", slot)
+	}
 }
 
 func TestReplaceLocaleTargetRecoversConcurrentIdenticalCAS(t *testing.T) {
@@ -303,6 +318,79 @@ func TestReplaceLocaleTargetRecoversConcurrentIdenticalCAS(t *testing.T) {
 	slot, _ := replayed.Target.LocaleTarget("en-US")
 	if slot.Revision != 2 || slot.ArtifactManifestFileID != update.ArtifactManifestFileID {
 		t.Fatalf("unexpected concurrent result: %+v", slot)
+	}
+}
+
+func TestReplaceLocaleTargetAllowsConcurrentDifferentLocaleCAS(t *testing.T) {
+	ctx := context.Background()
+	data := &concurrentModuleData{memoryModuleData: newMemoryModuleData()}
+	repo, err := NewModuleDataRepository(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := testRouteWithMatch(t, "01938f7a-68af-7c10-a51d-78b6ca125310", "example.com", "/page", model.MatchPrefix)
+	route.Target, err = model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
+		{Locale: "en-US", Revision: 1, ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301"},
+		{Locale: "fr-FR", Revision: 1, ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125302"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, route, "create-route-00000001", "fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	en := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-route-en-0001"}
+	fr := LocaleTargetUpdate{Locale: "fr-FR", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125398", ExpectedRevision: 1, IdempotencyKey: "activate-route-fr-0001"}
+	firstTime := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	secondTime := firstTime.Add(time.Minute)
+	data.beforeBatch = func() {
+		if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, fr, secondTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, en, firstTime)
+	if err != nil {
+		t.Fatalf("independent locale CAS: %v", err)
+	}
+	enSlot, _ := updated.Target.LocaleTarget("en-US")
+	frSlot, _ := updated.Target.LocaleTarget("fr-FR")
+	if enSlot.Revision != 2 || enSlot.ArtifactManifestFileID != en.ArtifactManifestFileID ||
+		frSlot.Revision != 2 || frSlot.ArtifactManifestFileID != fr.ArtifactManifestFileID {
+		t.Fatalf("locale outcomes: en=%+v fr=%+v", enSlot, frSlot)
+	}
+	if updated.UpdatedAt.Before(secondTime) {
+		t.Fatalf("update time regressed to %s", updated.UpdatedAt)
+	}
+}
+
+func TestReplaceLocaleTargetRejectsConcurrentSameLocaleCAS(t *testing.T) {
+	ctx := context.Background()
+	data := &concurrentModuleData{memoryModuleData: newMemoryModuleData()}
+	repo, err := NewModuleDataRepository(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := testRouteWithMatch(t, "01938f7a-68af-7c10-a51d-78b6ca125310", "example.com", "/page", model.MatchPrefix)
+	if _, err := repo.Create(ctx, route, "create-route-00000001", "fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	winner := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125398", ExpectedRevision: 1, IdempotencyKey: "activate-winner-0001"}
+	loser := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-loser-00001"}
+	data.beforeBatch = func() {
+		if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, winner, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, loser, time.Now().UTC()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same locale conflict = %v", err)
+	}
+	current, err := repo.GetByID(ctx, "main", route.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, _ := current.Target.LocaleTarget("en-US")
+	if slot.Revision != 2 || slot.ArtifactManifestFileID != winner.ArtifactManifestFileID {
+		t.Fatalf("winner overwritten: %+v", slot)
 	}
 }
 
