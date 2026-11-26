@@ -38,6 +38,7 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 | --- | --- | --- |
 | Content publication с допустимым HTTP `Idempotency-Key` длиной 1–15 символов и повтором запроса. | Composition передаёт стабильный допустимый ключ publication workflow; ранее допустимые ключи длиной 16–128 сохраняются без изменения. | Unit: `TestContentPublicationAcceptsShortHTTPIdempotencyKey`, `TestPublicationTriggerKeyKeepsPreviouslyValidKeys`; сквозной запуск с PostgreSQL не проверен. |
 | Publication включён, но dispatcher отсутствует; отдельно Content возвращает успех без опубликованной revision. | При отсутствии dispatcher Content не вызывается; некорректный ответ Content не считается успешным fan-out. | Unit: `TestContentPublicationRejectsMissingFanoutBeforeCommit`, `TestContentPublicationRejectsMissingPublishedRevision`; восстановление после commit и сбоя dispatch остаётся открытым. |
+| Повтор publication страницы A после более поздней publication страницы B той же locale. | Старый receipt не возвращает revision новой публикации и не инициирует fan-out с неверной идентичностью. | Unit: `TestOldPagePublicationReplayDoesNotUseNewerGlobalPublication`; проверка с PostgreSQL остаётся открытой. |
 
 ## Router core-file disposition scenarios (2026-11-25)
 

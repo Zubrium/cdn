@@ -775,6 +775,18 @@ func (service *Service) replay(ctx context.Context, session contracts.Authorizat
 	if receipt.Operation != operation || receipt.Fingerprint != fingerprint {
 		return domain.WorkspaceView{}, true, domain.ErrConflict
 	}
+	if operation == "publish" {
+		if receipt.HistoryID == "" {
+			return domain.WorkspaceView{}, true, domain.ErrUnavailable
+		}
+		publication, err := service.repository.GetHistoryByContentRevision(ctx, schema.Locale, stored.Aggregate.PublishedRevision)
+		if err != nil {
+			return domain.WorkspaceView{}, true, err
+		}
+		if publication.ID != receipt.HistoryID {
+			return domain.WorkspaceView{}, true, domain.ErrConflict
+		}
+	}
 	if err := service.validateMediaReferences(ctx, session, schema.Model, stored.Aggregate.Records); err != nil {
 		return domain.WorkspaceView{}, true, err
 	}

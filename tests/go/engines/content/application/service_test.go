@@ -137,6 +137,40 @@ func TestPageSelectionWritesAreIndependentAndReplayWithinPageScope(t *testing.T)
 	}
 }
 
+func TestOldPagePublicationReplayDoesNotUseNewerGlobalPublication(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	service, err := application.New(repo, inertFiles{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaA := readySchema(false)
+	schemaB := schemaA
+	schemaB.PageSnapshotID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	initialA, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schemaA, schemaA.PageSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialB, err := service.GetWorkspace(ctx, contracts.AuthorizationSubject{}, schemaB, schemaB.PageSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestA := contentapi.PublishWorkspaceRequest{SnapshotID: schemaA.PageSnapshotID, IdempotencyKey: "publish-page-a", ExpectedRevision: initialA.Revision, ExpectedSelectionRevision: initialA.SelectionRevision}
+	first, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schemaA, requestA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schemaB, contentapi.PublishWorkspaceRequest{
+		SnapshotID: schemaB.PageSnapshotID, IdempotencyKey: "publish-page-b", ExpectedRevision: first.Revision, ExpectedSelectionRevision: initialB.SelectionRevision,
+	})
+	if err != nil || second.PublishedRevision <= first.PublishedRevision {
+		t.Fatalf("publish B: %+v %v", second, err)
+	}
+	if replay, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schemaA, requestA); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("old receipt returned newer publication: revision=%d err=%v", replay.PublishedRevision, err)
+	}
+}
+
 func TestPublishCreatesImmutableHistoryAndRestoreOnlyChangesDraft(t *testing.T) {
 	repo := newMemoryRepository()
 	service, err := application.New(repo, inertFiles{})

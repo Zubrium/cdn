@@ -191,6 +191,12 @@ overlay `/tmp/content-publication-key-overlay.json` и `go build ./...` в
 `main`, а также test/vet composition и сборка с `-tags=full` прошли. Живой
 Content-to-publication workflow на PostgreSQL не проверялся.
 
+Повтор старой публикации страницы после более поздней публикации другой
+страницы той же locale проверяет закреплённую историю и возвращает conflict,
+вместо передачи чужой revision в fan-out. Регрессионный unit-тест и `go test`,
+`go vet` с `/tmp/content-old-publish-overlay.json`, `go build ./...` для
+`engines/content` прошли; проверка на PostgreSQL не выполнялась.
+
 Composition отклоняет publication до записи Content при отсутствии
 dispatcher и не считает успешным результат без опубликованной revision.
 Unit-тесты подтверждают оба случая; `main` прошёл `go test`, `go vet` с
