@@ -51,6 +51,13 @@ revision и artifact, а не по общей revision маршрута. Unit-т
 реальном Router/PostgreSQL и старые незавершённые jobs не проверены; WEB-021
 остаётся blocked.
 
+Router repository теперь читает locale-CAS receipt по тому же хешированному
+ключу, под которым он записан. Тесты с настоящим repository и тестовым
+хранилищем проверяют повтор после сохранения и конкурентное создание receipt;
+повтор с другой исходной revision отклоняется. В `engines/router` прошли
+`go test` и `go vet` с `/tmp/router-cas-replay-overlay.json`, а также
+`go build ./...`. Реальная PostgreSQL и сквозная publication не проверены.
+
 ## Retirement: восстановление перехода страницы (2026-11-26)
 
 Повтор по сохранённому receipt перед запуском workflow подтверждает либо

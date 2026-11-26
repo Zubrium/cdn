@@ -16,6 +16,20 @@ type memoryModuleData struct {
 	values map[recorddata.RecordKey]recorddata.Record
 }
 
+type concurrentModuleData struct {
+	*memoryModuleData
+	beforeBatch func()
+}
+
+func (store *concurrentModuleData) Batch(ctx context.Context, mutations []recorddata.RecordMutation) error {
+	if store.beforeBatch != nil {
+		hook := store.beforeBatch
+		store.beforeBatch = nil
+		hook()
+	}
+	return store.memoryModuleData.Batch(ctx, mutations)
+}
+
 func newMemoryModuleData() *memoryModuleData {
 	return &memoryModuleData{values: make(map[recorddata.RecordKey]recorddata.Record)}
 }
@@ -232,6 +246,63 @@ func TestCreateIsAtomicAndIdempotentButRejectsKeyReuse(t *testing.T) {
 	}
 	if got := len(data.values); got != 2 {
 		t.Fatalf("expected exactly route and idempotency records after conflict, got %d", got)
+	}
+}
+
+func TestReplaceLocaleTargetReplaysOriginalCASWithoutAdvancingRevision(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewModuleDataRepository(newMemoryModuleData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := testRouteWithMatch(t, "01938f7a-68af-7c10-a51d-78b6ca125310", "example.com", "/page", model.MatchPrefix)
+	if _, err := repo.Create(ctx, route, "create-route-00000001", "fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	update := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-route-00001"}
+	first, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("same CAS replay: %v", err)
+	}
+	firstSlot, _ := first.Target.LocaleTarget("en-US")
+	replayedSlot, _ := replayed.Target.LocaleTarget("en-US")
+	if firstSlot.Revision != 2 || replayedSlot != firstSlot {
+		t.Fatalf("replay advanced or changed target: first=%+v replay=%+v", firstSlot, replayedSlot)
+	}
+	update.ExpectedRevision = 2
+	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same key with different precondition = %v, want conflict", err)
+	}
+}
+
+func TestReplaceLocaleTargetRecoversConcurrentIdenticalCAS(t *testing.T) {
+	ctx := context.Background()
+	data := &concurrentModuleData{memoryModuleData: newMemoryModuleData()}
+	repo, err := NewModuleDataRepository(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := testRouteWithMatch(t, "01938f7a-68af-7c10-a51d-78b6ca125310", "example.com", "/page", model.MatchPrefix)
+	if _, err := repo.Create(ctx, route, "create-route-00000001", "fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	update := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-route-00001"}
+	data.beforeBatch = func() {
+		if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replayed, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("concurrent CAS replay: %v", err)
+	}
+	slot, _ := replayed.Target.LocaleTarget("en-US")
+	if slot.Revision != 2 || slot.ArtifactManifestFileID != update.ArtifactManifestFileID {
+		t.Fatalf("unexpected concurrent result: %+v", slot)
 	}
 }
 

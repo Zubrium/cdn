@@ -291,7 +291,7 @@ func (repository *ModuleDataRepository) ReplaceLocaleTarget(ctx context.Context,
 	if err != nil {
 		return model.Route{}, err
 	}
-	if prior, err := repository.readIdempotency(ctx, branchID, update.IdempotencyKey); err == nil {
+	if prior, err := repository.readIdempotency(ctx, branchID, idempotencyRecordKey(update.IdempotencyKey)); err == nil {
 		if prior.Fingerprint != fingerprint || prior.RouteKey != localeReceiptRouteKey(id, update.Locale) {
 			return model.Route{}, ErrConflict
 		}
@@ -341,7 +341,7 @@ func (repository *ModuleDataRepository) ReplaceLocaleTarget(ctx context.Context,
 		if !errors.Is(err, recorddata.ErrRecordConflict) {
 			return model.Route{}, mapDataError(err)
 		}
-		if prior, readErr := repository.readIdempotency(ctx, branchID, update.IdempotencyKey); readErr == nil {
+		if prior, readErr := repository.readIdempotency(ctx, branchID, idempotencyRecordKey(update.IdempotencyKey)); readErr == nil {
 			if prior.Fingerprint != fingerprint || prior.RouteKey != localeReceiptRouteKey(id, update.Locale) {
 				return model.Route{}, ErrConflict
 			}
