@@ -73,11 +73,11 @@ func TestContentPublicationAcceptsShortHTTPIdempotencyKey(t *testing.T) {
 
 func TestPublicationTriggerKeyKeepsPreviouslyValidKeys(t *testing.T) {
 	for _, key := range []string{strings.Repeat("a", 16), strings.Repeat("b", 128)} {
-		if got := publicationTriggerKey(key); got != key {
+		if got := contracts.ContentPublicationTriggerKey(key); got != key {
 			t.Fatalf("existing key changed: %q", got)
 		}
 	}
-	if publicationTriggerKey(strings.Repeat("a", 15)) == strings.Repeat("a", 15) {
+	if contracts.ContentPublicationTriggerKey(strings.Repeat("a", 15)) == strings.Repeat("a", 15) {
 		t.Fatal("short key was not normalized")
 	}
 }

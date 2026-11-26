@@ -204,6 +204,15 @@ overlay `/tmp/content-fanout-required-overlay.json`, `go build ./...` и
 test/vet composition и сборку с `-tags=full`. Durable доставка при crash после
 commit Content и до dispatch остаётся открытой.
 
+Content теперь добавляет pending publication intent в тот же Batch, что
+workspace и immutable history; locale, publication revision, model revision и
+workflow key передаются из application. Unit-тесты проверяют содержимое intent
+и отказ Batch с тестовым хранилищем. Для `engines/content`, `pkg` и `main`
+прошли `go test`, `go vet` с `/tmp/content-intent-overlay.json` и `go build`;
+для composition прошёл test и сборка `main` с `-tags=full`. Восстановитель,
+подтверждение доставки, restart и реальная атомарность на PostgreSQL ещё не
+проверены; pending records пока не обрабатываются автоматически.
+
 ## Идентичность media receipts (2026-11-26)
 
 `TestMediaRequestFingerprintPreservesExistingInputIdentity` проверяет, что

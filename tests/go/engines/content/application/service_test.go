@@ -195,6 +195,10 @@ func TestPublishCreatesImmutableHistoryAndRestoreOnlyChangesDraft(t *testing.T) 
 	if err != nil || publishedA.Revision != 2 || publishedA.PublishedRevision != 1 {
 		t.Fatalf("Publish A = %#v, err %v", publishedA, err)
 	}
+	if repo.lastIntent == nil || repo.lastIntent.Locale != schema.Locale || repo.lastIntent.ContentRevision != 1 ||
+		repo.lastIntent.SystemModelRevision != schema.ModelRevision || repo.lastIntent.WorkflowKey != contracts.ContentPublicationTriggerKey("publish-a") || repo.lastIntent.State != "pending" {
+		t.Fatalf("publication intent = %+v", repo.lastIntent)
+	}
 	replayedPublish, err := service.PublishWorkspace(ctx, contracts.AuthorizationSubject{}, schema, contentapi.PublishWorkspaceRequest{SnapshotID: snapshotID, IdempotencyKey: "publish-a", ExpectedRevision: savedA.Revision, ExpectedSelectionRevision: savedA.SelectionRevision})
 	if err != nil || replayedPublish.Revision != publishedA.Revision {
 		t.Fatalf("idempotent Publish A = %#v, err %v", replayedPublish, err)
@@ -473,6 +477,7 @@ type memoryRepository struct {
 	histories    map[string]map[string]domain.Publication
 	markers      map[string]domain.StoredCopyMarker
 	localeConfig domain.LocaleConfig
+	lastIntent   *domain.PublicationIntent
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -521,6 +526,11 @@ func (repo *memoryRepository) Commit(_ context.Context, expected int64, value do
 		return domain.StoredWorkspace{}, domain.ErrConflict
 	}
 	if publication != nil {
+		if value.PublicationIntent == nil {
+			return domain.StoredWorkspace{}, domain.ErrInvalid
+		}
+		intent := *value.PublicationIntent
+		repo.lastIntent = &intent
 		if repo.histories[locale] == nil {
 			repo.histories[locale] = map[string]domain.Publication{}
 		}

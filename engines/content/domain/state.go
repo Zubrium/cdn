@@ -34,6 +34,18 @@ type StoredWorkspace struct {
 	PageSelections map[string]StoredPageSelections
 	// ChangedPageSelectionIDs is transient: repository writes only these pages.
 	ChangedPageSelectionIDs []string
+	// PublicationIntent is transient input to the atomic publish commit.
+	PublicationIntent *PublicationIntent
+}
+
+// PublicationIntent is a Content-owned durable delivery record. Its key is
+// derived from locale and publication revision; the workflow key is stable.
+type PublicationIntent struct {
+	Locale              string `json:"locale"`
+	ContentRevision     int64  `json:"content_revision"`
+	SystemModelRevision int64  `json:"system_model_revision"`
+	WorkflowKey         string `json:"workflow_key"`
+	State               string `json:"state"`
 }
 
 type StoredPageSelections struct {

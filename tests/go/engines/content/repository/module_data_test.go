@@ -30,6 +30,8 @@ func TestCommitStoresPublicationWithWorkspaceRevisionAtomically(t *testing.T) {
 	next := cloneRepositoryStored(created)
 	next.Aggregate.Revision = 1
 	next.Aggregate.PublishedRevision = 1
+	next.PublicationIntent = &domain.PublicationIntent{Locale: "en-US", ContentRevision: 1, SystemModelRevision: 9,
+		WorkflowKey: "publish-key-0000001", State: "pending"}
 	publication := domain.Publication{
 		ID: "22222222-2222-4222-8222-222222222222", Locale: "en-US", DraftRevision: 0, ContentRevision: 1,
 		CreatedAt:  time.Date(2026, time.November, 18, 10, 0, 0, 0, time.UTC),
@@ -39,6 +41,15 @@ func TestCommitStoresPublicationWithWorkspaceRevisionAtomically(t *testing.T) {
 	committed, err := repo.Commit(ctx, created.StoreRevision, next, &publication)
 	if err != nil || committed.StoreRevision != 2 {
 		t.Fatalf("Commit() = revision %d, err %v", committed.StoreRevision, err)
+	}
+	intentKey := recorddata.RecordKey{Namespace: "content/workspaces", ScopeType: "global", ScopeID: domain.GlobalScopeID, RecordKey: "publication-intent/en-US/00000000000000000001"}
+	intentRecord, err := store.Get(ctx, intentKey)
+	if err != nil {
+		t.Fatalf("missing committed intent: %v", err)
+	}
+	var intent domain.PublicationIntent
+	if err := json.Unmarshal(intentRecord.Payload, &intent); err != nil || intent != *next.PublicationIntent {
+		t.Fatalf("intent = %+v, err %v", intent, err)
 	}
 	history, err := repo.GetHistoryByID(ctx, "en-US", publication.ID)
 	if err != nil || history.ContentRevision != 1 || history.Records[0].Values["title"] != "Published" {
@@ -53,6 +64,63 @@ func TestCommitStoresPublicationWithWorkspaceRevisionAtomically(t *testing.T) {
 	current, err := repo.Get(ctx, "en-US")
 	if err != nil || current.Aggregate.Revision != 1 || current.Aggregate.PublishedRevision != 1 {
 		t.Fatalf("stale commit changed workspace: %#v, err %v", current, err)
+	}
+}
+
+type failPublicationBatchStore struct {
+	*memoryStore
+	fail bool
+}
+
+func (store *failPublicationBatchStore) Batch(ctx context.Context, mutations []recorddata.RecordMutation) error {
+	if store.fail {
+		return recorddata.ErrRecordConflict
+	}
+	return store.memoryStore.Batch(ctx, mutations)
+}
+
+func TestPublicationIntentIsNotStoredWhenCommitFails(t *testing.T) {
+	ctx := context.Background()
+	store := &failPublicationBatchStore{memoryStore: newMemoryStore()}
+	repo, err := repository.New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repo.Create(ctx, domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := cloneRepositoryStored(created)
+	next.Aggregate.Revision, next.Aggregate.PublishedRevision = 1, 1
+	next.PublicationIntent = &domain.PublicationIntent{Locale: "en-US", ContentRevision: 1, WorkflowKey: "publish-key-0000001", State: "pending"}
+	publication := domain.Publication{ID: "22222222-2222-4222-8222-222222222222", Locale: "en-US", ContentRevision: 1,
+		CreatedAt: time.Now().UTC(), Records: []domain.Record{}, Selections: []domain.Selection{}}
+	missingIntent := next
+	missingIntent.PublicationIntent = nil
+	if _, err := repo.Commit(ctx, created.StoreRevision, missingIntent, &publication); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("publication without intent = %v", err)
+	}
+	wrongIntent := *next.PublicationIntent
+	wrongIntent.ContentRevision = 2
+	wrong := next
+	wrong.PublicationIntent = &wrongIntent
+	if _, err := repo.Commit(ctx, created.StoreRevision, wrong, &publication); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("publication with mismatched intent = %v", err)
+	}
+	store.fail = true
+	if _, err := repo.Commit(ctx, created.StoreRevision, next, &publication); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("commit error = %v", err)
+	}
+	key := recorddata.RecordKey{Namespace: "content/workspaces", ScopeType: "global", ScopeID: domain.GlobalScopeID, RecordKey: "publication-intent/en-US/00000000000000000001"}
+	if _, err := store.Get(ctx, key); !errors.Is(err, recorddata.ErrRecordNotFound) {
+		t.Fatalf("intent visible after failed commit: %v", err)
+	}
+	if _, err := repo.GetHistoryByContentRevision(ctx, "en-US", 1); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("history visible after failed commit: %v", err)
+	}
+	current, err := repo.Get(ctx, "en-US")
+	if err != nil || current.Aggregate.PublishedRevision != 0 {
+		t.Fatalf("workspace changed: %+v %v", current.Aggregate, err)
 	}
 }
 
@@ -254,6 +322,8 @@ func TestHistoryListUsesBoundedCursorAndReturnsImmutableRecords(t *testing.T) {
 		next := cloneRepositoryStored(created)
 		next.Aggregate.Revision = int64(revision + 1)
 		next.Aggregate.PublishedRevision = int64(revision + 1)
+		next.PublicationIntent = &domain.PublicationIntent{Locale: "en-US", ContentRevision: int64(revision + 1),
+			WorkflowKey: "publish-key-0000001", State: "pending"}
 		created, err = repo.Commit(ctx, created.StoreRevision, next, &publication)
 		if err != nil {
 			t.Fatalf("Commit(%d) error = %v", revision, err)

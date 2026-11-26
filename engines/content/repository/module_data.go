@@ -303,11 +303,24 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 		if publication.ContentRevision != stored.Aggregate.PublishedRevision || publication.ID == "" || publication.ContentRevision < 1 || publication.DraftRevision < 0 {
 			return domain.StoredWorkspace{}, domain.ErrInvalid
 		}
+		intent := stored.PublicationIntent
+		if intent == nil || intent.Locale != publication.Locale || intent.Locale != stored.Aggregate.Locale ||
+			intent.ContentRevision != publication.ContentRevision || intent.SystemModelRevision < 0 || intent.State != "pending" ||
+			recorddata.ContentPublicationTriggerKey(intent.WorkflowKey) != intent.WorkflowKey {
+			return domain.StoredWorkspace{}, domain.ErrInvalid
+		}
 		historyValue, err := encodePublication(*publication)
 		if err != nil {
 			return domain.StoredWorkspace{}, err
 		}
 		mutations = append(mutations, recorddata.RecordMutation{Key: historyKeyForRevision(publication.Locale, publication.ContentRevision), ExpectedRevision: 0, Value: &historyValue})
+		intentValue, err := encodePayload(intent, map[string]any{"record_type": "publication-intent", "content_revision": intent.ContentRevision, "locale": intent.Locale})
+		if err != nil {
+			return domain.StoredWorkspace{}, err
+		}
+		mutations = append(mutations, recorddata.RecordMutation{Key: publicationIntentKey(intent.Locale, intent.ContentRevision), ExpectedRevision: 0, Value: &intentValue})
+	} else if stored.PublicationIntent != nil {
+		return domain.StoredWorkspace{}, domain.ErrInvalid
 	}
 	if len(mutations) > repo.store.MaxBatchSize() {
 		return domain.StoredWorkspace{}, domain.ErrTooLarge
@@ -618,6 +631,10 @@ func markerKey() recorddata.RecordKey {
 }
 func historyKeyForRevision(locale string, revision int64) recorddata.RecordKey {
 	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: fmt.Sprintf("history/%s/%020d", locale, revision)}
+}
+
+func publicationIntentKey(locale string, revision int64) recorddata.RecordKey {
+	return recorddata.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: globalScopeID, RecordKey: fmt.Sprintf("publication-intent/%s/%020d", locale, revision)}
 }
 
 func encodeAggregate(aggregate domain.Aggregate) (recorddata.RecordValue, error) {

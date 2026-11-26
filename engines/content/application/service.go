@@ -229,6 +229,10 @@ func (service *Service) PublishWorkspace(ctx context.Context, session contracts.
 	next.PageSelections[schema.PageSnapshotID] = page
 	next.ChangedPageSelectionIDs = []string{schema.PageSnapshotID}
 	next.Aggregate.LastMutation = receipt
+	next.PublicationIntent = &domain.PublicationIntent{
+		Locale: schema.Locale, ContentRevision: publication.ContentRevision,
+		SystemModelRevision: schema.ModelRevision, WorkflowKey: contracts.ContentPublicationTriggerKey(request.IdempotencyKey), State: "pending",
+	}
 	committed, err := service.repository.Commit(ctx, stored.StoreRevision, next, &publication)
 	if errors.Is(err, domain.ErrConflict) {
 		return service.replayAfterConflict(ctx, session, schema, "publish", keyHash, fingerprint)
@@ -885,6 +889,7 @@ func workspaceData(stored domain.StoredWorkspace, pageID string) domain.Workspac
 }
 
 func cloneStoredWorkspace(stored domain.StoredWorkspace) domain.StoredWorkspace {
+	stored.PublicationIntent = nil
 	stored.Aggregate.Records = cloneRecords(stored.Aggregate.Records)
 	if stored.Aggregate.LastMutation != nil {
 		receipt := *stored.Aggregate.LastMutation
