@@ -39,6 +39,7 @@ type targetRecord struct {
 	InputDigest                string `json:"input_digest,omitempty"`
 	BuildID                    string `json:"build_id,omitempty"`
 	ArtifactManifestFileID     string `json:"artifact_manifest_file_id,omitempty"`
+	ActivationExpectedRevision int64  `json:"activation_expected_revision,omitempty"`
 	ErrorCode                  string `json:"error_code,omitempty"`
 	CreatedAt                  string `json:"created_at"`
 	UpdatedAt                  string `json:"updated_at"`

@@ -374,9 +374,13 @@ func (handler publicationActivateHandler) activate(ctx context.Context, payload 
 	if !found || slot.Revision < 1 {
 		return result, fmt.Errorf("publication route locale: %w", publication.ErrInvalid)
 	}
+	expectedRevision, err := service.ReserveActivationRevision(ctx, payload, slot.Revision)
+	if err != nil {
+		return result, err
+	}
 	updated, err := publicationHandlerRouter.Load().api.ReplaceLocaleTarget(routerCtx, routerapi.ReplaceLocaleTargetRequest{
 		RouteID: payload.RouteID, Locale: payload.Locale, ArtifactManifestFileID: payload.ArtifactManifestFileID,
-		ExpectedRevision: slot.Revision, IdempotencyKey: contracts.PublicationActivateIdempotencyKey(payload),
+		ExpectedRevision: expectedRevision, IdempotencyKey: contracts.PublicationActivateIdempotencyKey(payload),
 	})
 	if err != nil {
 		if errors.Is(err, routerapi.ErrConflict) {
@@ -384,11 +388,20 @@ func (handler publicationActivateHandler) activate(ctx context.Context, payload 
 		}
 		return result, fmt.Errorf("publication router cas: %w", err)
 	}
-	if updated.ID != payload.RouteID || updated.Revision <= slot.Revision {
-		return result, publication.ErrInvalid
+	activatedRevision, err := publicationActivatedRevision(updated, payload, expectedRevision)
+	if err != nil {
+		return result, err
 	}
-	result.Revision = updated.Revision
+	result.Revision = activatedRevision
 	return result, nil
+}
+
+func publicationActivatedRevision(route routerapi.Route, payload contracts.PublicationActivatePayload, expected int64) (int64, error) {
+	slot, found := route.Target.LocaleTarget(payload.Locale)
+	if route.ID != payload.RouteID || !found || slot.Revision != expected+1 || slot.ArtifactManifestFileID != payload.ArtifactManifestFileID {
+		return 0, publication.ErrStale
+	}
+	return slot.Revision, nil
 }
 
 type publicationFinalizeHandler struct{}

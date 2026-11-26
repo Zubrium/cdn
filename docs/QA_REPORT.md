@@ -41,6 +41,16 @@ durable-записи и сверкой trigger; unit-тест моделируе
 параметрами; из `main` прошли `go test ./internal/publication -count=1`,
 `go vet ./internal/publication` и `go build ./internal/publication`.
 
+Для Router CAS publication закрепляет исходную locale revision в target до
+вызова; повтор сохраняет её для использования того же fingerprint. Явный
+повтор после CAS-конфликта требует отдельного durable attempt. Ответ проверяется по locale
+revision и artifact, а не по общей revision маршрута. Unit-тесты проверяют
+закрепление и отбрасывание несовпадающих результатов; прошли
+`go test` и `go vet` пакета publication, аналогичные проверки composition с
+`-tags=full` и `go build -tags=full ./...` в `main`. Потеря подтверждения на
+реальном Router/PostgreSQL и старые незавершённые jobs не проверены; WEB-021
+остаётся blocked.
+
 ## Retirement: восстановление перехода страницы (2026-11-26)
 
 Повтор по сохранённому receipt перед запуском workflow подтверждает либо

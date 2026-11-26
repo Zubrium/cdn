@@ -27,6 +27,33 @@ func TestPublicationFailureCodesAreBoundedAndDoNotExposeDependencyErrors(t *test
 	}
 }
 
+func TestPublicationActivationRevisionIsStableAcrossRetry(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Publish(ctx, Trigger{Locale: testLocale, ContentPublicationRevision: 4, IdempotencyKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := workflow.PublicationActivatePayload{RunID: run.RunID, RouteID: testRouteA, Locale: testLocale,
+		ArtifactManifestFileID: workflow.PublicationArtifactFileID(run.RunID, testRouteA, testLocale), IdempotencyKey: testKey}
+	if err := service.updateTarget(ctx, run.RunID, testRouteA, testLocale, func(target *targetRecord) {
+		target.State = stateBuilt
+		target.ArtifactManifestFileID = payload.ArtifactManifestFileID
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, observed := range []int64{7, 8, 12} {
+		revision, err := service.ReserveActivationRevision(ctx, payload, observed)
+		if err != nil || revision != 7 {
+			t.Fatalf("observed=%d reserved=%d err=%v", observed, revision, err)
+		}
+	}
+}
+
 func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
 	ctx := context.Background()
 	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,

@@ -319,6 +319,32 @@ func (s *Service) ArtifactDigest(ctx context.Context, runID, routeID, locale str
 	return artifact.InputDigest, nil
 }
 
+// ReserveActivationRevision pins the Router CAS precondition before the
+// external operation. Retries must use the same precondition and key.
+func (s *Service) ReserveActivationRevision(ctx context.Context, payload workflow.PublicationActivatePayload, observed int64) (int64, error) {
+	if workflow.ValidatePublicationActivatePayload(payload) != nil || observed < 1 {
+		return 0, ErrInvalid
+	}
+	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	current, target, err := s.loadTarget(ctx, key, payload.RunID)
+	if err != nil {
+		return 0, err
+	}
+	if target.ArtifactManifestFileID != payload.ArtifactManifestFileID ||
+		(target.State != stateBuilt && target.State != stateRunning && target.State != stateFailed && target.State != stateSuccess) {
+		return 0, ErrStale
+	}
+	if target.ActivationExpectedRevision > 0 {
+		return target.ActivationExpectedRevision, nil
+	}
+	target.ActivationExpectedRevision = observed
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.putTarget(ctx, key, current.Revision, target); err != nil {
+		return 0, err
+	}
+	return observed, nil
+}
+
 // BeginActivation checks that the artifact belongs to the exact server-owned
 // slot before Router is allowed to switch its locale target.
 func (s *Service) BeginActivation(ctx context.Context, payload workflow.PublicationActivatePayload) error {
