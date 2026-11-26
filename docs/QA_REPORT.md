@@ -33,6 +33,13 @@ composition/publication и сборка также прошли с `-tags=full`.
 и реальные конкурентные транзакции на disposable PostgreSQL не проверены;
 интеграционная приёмка WEB-022 остаётся заблокированной.
 
+Успешное удаление route сохраняется при запоздавшем ошибочном или повторном
+успешном результате: unit-тест проверяет state, route revision и отсутствие
+лишней записи job. В `main` прошли `go test`, `go vet` с overlay
+`/tmp/website-retirement-outcome-overlay.json` и `go build ./...`; проверки
+retirement/composition и сборка прошли также с `-tags=full`. Реальная
+конкуренция на PostgreSQL и независимость целей ещё не подтверждены.
+
 ## Retirement: ревизия финализации (2026-11-26)
 
 Финализатор сверяет payload с durable job и владельцем страницы, а текущую

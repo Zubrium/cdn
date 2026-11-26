@@ -246,6 +246,9 @@ func (s *Service) RecordRoute(ctx context.Context, jobID, routeID, state string,
 			if job.Routes[index].RouteID != routeID {
 				continue
 			}
+			if job.Routes[index].State == routeStateRemoved {
+				return errRouteAlreadyRemoved
+			}
 			job.Routes[index].State = state
 			job.Routes[index].Revision = revision
 			job.Routes[index].ErrorCode = errorCode
@@ -254,8 +257,13 @@ func (s *Service) RecordRoute(ctx context.Context, jobID, routeID, state string,
 		}
 		return fmt.Errorf("%w: unknown retirement route", ErrUnavailable)
 	})
+	if errors.Is(err, errRouteAlreadyRemoved) {
+		return nil
+	}
 	return err
 }
+
+var errRouteAlreadyRemoved = errors.New("retirement route already removed")
 
 func (s *Service) updateJob(ctx context.Context, jobID string, mutate func(*jobRecord) error) (Job, error) {
 	key := withBranch(jobKey(jobID), s.config.BranchID)

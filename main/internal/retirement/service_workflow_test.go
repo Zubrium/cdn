@@ -7,7 +7,9 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
-type retirementMemoryStore struct{ records map[contracts.RecordKey]contracts.Record }
+type retirementMemoryStore struct {
+	records map[contracts.RecordKey]contracts.Record
+}
 
 func newRetirementMemoryStore() *retirementMemoryStore {
 	return &retirementMemoryStore{records: make(map[contracts.RecordKey]contracts.Record)}
@@ -65,7 +67,9 @@ func (store *retirementMemoryStore) MaxPayloadBytes() int { return 1 << 20 }
 func (store *retirementMemoryStore) MaxIndexBytes() int   { return 1 << 16 }
 func (store *retirementMemoryStore) MaxBatchBytes() int   { return 4 << 20 }
 
-type retirementStarter struct{ inputs []contracts.WorkflowStartInput }
+type retirementStarter struct {
+	inputs []contracts.WorkflowStartInput
+}
 
 func (starter *retirementStarter) Start(_ context.Context, input contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	starter.inputs = append(starter.inputs, input)
@@ -150,5 +154,43 @@ func TestRetirementRouteAndFinalizeStateTransitions(t *testing.T) {
 		if route.State != routeStateRemoved {
 			t.Fatalf("route %s = %s", route.RouteID, route.State)
 		}
+	}
+}
+
+func TestRetirementRouteSuccessSurvivesLateFailure(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(Config{BranchID: retireBranchID, Store: newRetirementMemoryStore(), Starter: &retirementStarter{}, MaxAttempts: 3,
+		Routes: map[string][]string{retirePageID: {retireRouteA, retireRouteB}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.Prepare(ctx, contracts.RetirePageRequest{PageID: retirePageID, IfMatch: retireIfMatch, IdempotencyKey: retireIdemKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRemoved, 42, ""); err != nil {
+		t.Fatal(err)
+	}
+	key := withBranch(jobKey(job.ID), retireBranchID)
+	before, err := service.config.Store.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRetryable, 0, "late_error"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRemoved, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	after, err := service.config.Store.Get(ctx, key)
+	if err != nil || before.Revision != after.Revision {
+		t.Fatalf("duplicate outcomes changed record revision: %d -> %d (%v)", before.Revision, after.Revision, err)
+	}
+	current, err := service.LoadJob(ctx, job.ID, retirePageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route := current.Routes[0]; route.State != routeStateRemoved || route.Revision != 42 || route.ErrorCode != "" {
+		t.Fatalf("successful route regressed after a late outcome: %+v", route)
 	}
 }
