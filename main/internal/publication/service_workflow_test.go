@@ -46,6 +46,30 @@ func TestFinishBuildRejectsConflictingExistingArtifactWithoutChangingTarget(t *t
 
 type workflowStartFunc func(context.Context, workflow.WorkflowStartInput) (workflow.WorkflowStartReceipt, error)
 
+type concurrentPublicationStore struct{ *memoryRecordStore }
+
+func (store *concurrentPublicationStore) Batch(ctx context.Context, mutations []workflow.RecordMutation) error {
+	if err := store.memoryRecordStore.Batch(ctx, mutations); err != nil {
+		return err
+	}
+	// Model a competing request committing the same run before this call's CAS.
+	return workflow.ErrRecordConflict
+}
+
+func TestPublishRecoversConcurrentIdenticalRunCreation(t *testing.T) {
+	starter := &recordingWorkflowStarter{}
+	service, err := NewService(Config{BranchID: testBranchID, Store: &concurrentPublicationStore{newMemoryRecordStore()}, Starter: starter, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger := Trigger{Locale: testLocale, ContentPublicationRevision: 4, SystemModelRevision: 9, IdempotencyKey: testKey}
+	result, err := service.Publish(context.Background(), trigger)
+	if err != nil || result.RunID == "" || result.State != stateRunning || len(starter.inputs) != 1 {
+		t.Fatalf("concurrent replay = %+v, starts=%d, error=%v", result, len(starter.inputs), err)
+	}
+}
+
 type rejectBuildBatchStore struct {
 	*memoryRecordStore
 	reject bool

@@ -28,10 +28,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		return Result{}, err
 	}
 	if _, _, existing, err := s.loadRun(ctx, runID); err == nil {
-		if existing.State == stateStarting || existing.State == stateFailed {
-			return s.restart(ctx, existing)
-		}
-		return s.result(ctx, existing)
+		return s.resumePublishedRun(ctx, existing, trigger, locale)
 	} else if !errors.Is(err, workflow.ErrRecordNotFound) {
 		return Result{}, err
 	}
@@ -77,6 +74,15 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 	}
 	mutations[0].Value = runValue
 	if err := s.config.Store.Batch(ctx, mutations); err != nil {
+		if errors.Is(err, workflow.ErrRecordConflict) {
+			_, _, existing, readErr := s.loadRun(ctx, runID)
+			if readErr == nil {
+				return s.resumePublishedRun(ctx, existing, trigger, locale)
+			}
+			if !errors.Is(readErr, workflow.ErrRecordNotFound) {
+				return Result{}, readErr
+			}
+		}
 		return Result{}, mapStoreError(err)
 	}
 	if err := s.startWorkflow(ctx, run); err != nil {
@@ -87,6 +93,17 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		return Result{}, err
 	}
 	return s.result(ctx, current)
+}
+
+func (s *Service) resumePublishedRun(ctx context.Context, run runRecord, trigger Trigger, locale string) (Result, error) {
+	if run.Locale != locale || run.ContentPublicationRevision != trigger.ContentPublicationRevision ||
+		run.SystemModelRevision != trigger.SystemModelRevision || run.IdempotencyKey != trigger.IdempotencyKey {
+		return Result{}, ErrConflict
+	}
+	if run.State == stateStarting || run.State == stateFailed {
+		return s.restart(ctx, run)
+	}
+	return s.result(ctx, run)
 }
 
 // Retry resumes an existing durable run with the identical workflow start
