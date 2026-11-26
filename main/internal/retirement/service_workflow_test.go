@@ -109,6 +109,38 @@ func TestRetirementRetryDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	}
 }
 
+func TestRetirementCompletedJobRejectsLateStateRegression(t *testing.T) {
+	ctx := context.Background()
+	store := newRetirementMemoryStore()
+	service, err := NewService(Config{BranchID: retireBranchID, Store: store, Starter: &retirementStarter{}, MaxAttempts: 3,
+		Routes: map[string][]string{retirePageID: {retireRouteA}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.Prepare(ctx, contracts.RetirePageRequest{PageID: retirePageID, IfMatch: retireIfMatch, IdempotencyKey: retireIdemKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetJobState(ctx, job.ID, stateSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	key := withBranch(jobKey(job.ID), retireBranchID)
+	before, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{stateRetryable, stateRunning, stateSucceeded} {
+		current, err := service.SetJobState(ctx, job.ID, state)
+		if err != nil || current.State != stateSucceeded {
+			t.Fatalf("late %s: job=%+v err=%v", state, current, err)
+		}
+	}
+	after, err := store.Get(ctx, key)
+	if err != nil || before.Revision != after.Revision {
+		t.Fatalf("completed job was rewritten: %d -> %d, %v", before.Revision, after.Revision, err)
+	}
+}
+
 type retirementMemoryStore struct {
 	records map[contracts.RecordKey]contracts.Record
 }

@@ -273,12 +273,24 @@ func (s *Service) SetJobState(ctx context.Context, jobID, state string) (Job, er
 	if state != stateRunning && state != stateSucceeded && state != stateRetryable {
 		return Job{}, ErrInvalid
 	}
-	return s.updateJob(ctx, jobID, func(current *jobRecord) error {
+	job, err := s.updateJob(ctx, jobID, func(current *jobRecord) error {
+		if current.BranchID != s.config.BranchID {
+			return ErrUnavailable
+		}
+		if current.State == stateSucceeded || current.State == state {
+			return errJobStateUnchanged
+		}
 		current.State = state
 		current.UpdatedAt = timestamp()
 		return nil
 	})
+	if errors.Is(err, errJobStateUnchanged) {
+		return s.LoadJob(ctx, jobID, "")
+	}
+	return job, err
 }
+
+var errJobStateUnchanged = errors.New("retirement job state unchanged")
 
 // MarkRetryable records a failed Website lifecycle closure without losing the
 // already-withdrawn routes.

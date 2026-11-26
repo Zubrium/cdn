@@ -59,6 +59,11 @@ unit-тест моделирует завершение между чтение�
 `go vet ./internal/retirement` и `go build ./internal/retirement`. Реальная
 конкуренция на PostgreSQL не проверялась.
 
+Завершённая retirement job сохраняет `succeeded` при запоздавших переходах и
+повторах без лишнего изменения ревизии. Unit-тест сначала воспроизвёл откат
+статуса, затем прошёл; из `main` также прошли `go vet ./internal/retirement` и
+`go build ./internal/retirement`. Межпроцессная конкуренция не проверялась.
+
 ## Retirement: ревизия финализации (2026-11-26)
 
 Финализатор сверяет payload с durable job и владельцем страницы, а текущую
