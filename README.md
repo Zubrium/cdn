@@ -42,4 +42,4 @@ pnpm --filter @website-engine/admin build
 
 Интеграционные проверки требуют отдельных disposable PostgreSQL/S3 ресурсов. Не направляйте их на рабочие данные. Публичный Router listener должен быть размещён за внешним proxy; конфигурация и admission policy proxy принадлежат deployer.
 
-Активный статус и критерии реализации: [TODO](docs/TODO-admin-snapshots-content-files.md). Контракты проверки: [acceptance matrix](tests/ACCEPTANCE-MATRIX.md). Результаты QA и ограничения: [QA report](docs/QA_REPORT.md).
+Схема компонентов и зависимостей: [архитектура](docs/ARCHITECTURE.md). Активный статус и критерии реализации: [TODO](docs/TODO-admin-snapshots-content-files.md). Контракты проверки: [acceptance matrix](tests/ACCEPTANCE-MATRIX.md). Результаты QA и ограничения: [QA report](docs/QA_REPORT.md).
