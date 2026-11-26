@@ -184,6 +184,13 @@ Content и преобразование в Admin. `go test`, `go vet`, `go build
 Vite build в отдельный временный каталог прошли. Это не live browser или
 PostgreSQL/S3 приёмка; media TODO остаётся открытым.
 
+Content publication с HTTP idempotency key короче 16 символов получает стабильный
+допустимый ключ workflow; ключи 16–128 символов сохраняются без изменения.
+Unit-тест проверяет короткий ключ, повтор и границы; `go test`, `go vet` с
+overlay `/tmp/content-publication-key-overlay.json` и `go build ./...` в
+`main`, а также test/vet composition и сборка с `-tags=full` прошли. Живой
+Content-to-publication workflow на PostgreSQL не проверялся.
+
 ## Идентичность media receipts (2026-11-26)
 
 `TestMediaRequestFingerprintPreservesExistingInputIdentity` проверяет, что

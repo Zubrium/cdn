@@ -2,6 +2,8 @@ package composition
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	"github.com/Zubrium/cdn/pkg/contracts"
@@ -39,9 +41,19 @@ func (api contentPublicationAPI) PublishWorkspace(ctx context.Context, projectio
 		Locale:                     workspace.Locale,
 		ContentPublicationRevision: workspace.PublishedRevision,
 		SystemModelRevision:        workspace.ModelRevision,
-		IdempotencyKey:             request.IdempotencyKey,
+		IdempotencyKey:             publicationTriggerKey(request.IdempotencyKey),
 	}); err != nil {
 		return workspace, err
 	}
 	return workspace, nil
+}
+
+// Content's HTTP contract accepts keys shorter than the publication workflow
+// contract. Preserve already-valid keys and map short ones deterministically.
+func publicationTriggerKey(key string) string {
+	if len(key) >= 16 {
+		return key
+	}
+	digest := sha256.Sum256([]byte(key))
+	return "content-publish:" + hex.EncodeToString(digest[:])
 }

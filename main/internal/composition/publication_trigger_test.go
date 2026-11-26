@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
@@ -37,6 +38,9 @@ func (bus *publicationTriggerBus) Dispatch(_ context.Context, envelope contracts
 	if err := json.Unmarshal(envelope.Payload, &bus.request); err != nil {
 		return contracts.Envelope{}, err
 	}
+	if err := contracts.PublicationPublishOperation().Validate(bus.request); err != nil {
+		return contracts.Envelope{}, err
+	}
 	if bus.err != nil {
 		return contracts.Envelope{}, bus.err
 	}
@@ -45,6 +49,37 @@ func (bus *publicationTriggerBus) Dispatch(_ context.Context, envelope contracts
 		return contracts.Envelope{}, err
 	}
 	return contracts.Envelope{OperationID: envelope.OperationID, Version: envelope.Version, Payload: payload}, nil
+}
+
+func TestContentPublicationAcceptsShortHTTPIdempotencyKey(t *testing.T) {
+	content := &publicationTriggerContent{workspace: contentapi.Workspace{Locale: "en-US", PublishedRevision: 7, ModelRevision: 4}}
+	bus := &publicationTriggerBus{}
+	api := contentPublicationAPI{API: content, client: publicationClient{dispatcher: bus}}
+	request := contentapi.PublishWorkspaceRequest{IdempotencyKey: "x"}
+	if _, err := api.PublishWorkspace(context.Background(), contentapi.Projections{}, request); err != nil {
+		t.Fatal(err)
+	}
+	first := bus.request.IdempotencyKey
+	if len(first) < 16 || first == request.IdempotencyKey {
+		t.Fatalf("unsafe trigger key: %q", first)
+	}
+	if _, err := api.PublishWorkspace(context.Background(), contentapi.Projections{}, request); err != nil {
+		t.Fatal(err)
+	}
+	if bus.request.IdempotencyKey != first {
+		t.Fatalf("unstable trigger key: %q != %q", bus.request.IdempotencyKey, first)
+	}
+}
+
+func TestPublicationTriggerKeyKeepsPreviouslyValidKeys(t *testing.T) {
+	for _, key := range []string{strings.Repeat("a", 16), strings.Repeat("b", 128)} {
+		if got := publicationTriggerKey(key); got != key {
+			t.Fatalf("existing key changed: %q", got)
+		}
+	}
+	if publicationTriggerKey(strings.Repeat("a", 15)) == strings.Repeat("a", 15) {
+		t.Fatal("short key was not normalized")
+	}
 }
 
 func TestContentPublicationStartsTrustedFanout(t *testing.T) {
