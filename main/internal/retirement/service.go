@@ -124,6 +124,18 @@ func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement
 	if s.config.Starter == nil {
 		return contracts.PageRetirement{}, ErrUnavailable
 	}
+	key := withBranch(jobKey(job.ID), s.config.BranchID)
+	record, err := s.config.Store.Get(ctx, key)
+	if err != nil {
+		return contracts.PageRetirement{}, mapStoreError(err)
+	}
+	job, err = decodeJob(record, job.ID, job.PageID)
+	if err != nil || job.BranchID != s.config.BranchID {
+		return contracts.PageRetirement{}, ErrUnavailable
+	}
+	if job.State == stateSucceeded {
+		return JobView(job), nil
+	}
 	routes := make([]string, 0, len(job.Routes))
 	for _, route := range job.Routes {
 		routes = append(routes, route.RouteID)
@@ -137,12 +149,39 @@ func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement
 		return contracts.PageRetirement{}, err
 	}
 	if _, err := s.config.Starter.Start(ctx, retirementWorkflowStartInput(payload)); err != nil {
-		if _, updateErr := s.SetJobState(ctx, job.ID, stateRetryable); updateErr != nil {
+		if updateErr := s.markLaunchOutcome(ctx, key, record.Revision, job, stateRetryable); updateErr != nil {
 			return contracts.PageRetirement{}, updateErr
 		}
 		return contracts.PageRetirement{}, err
 	}
+	if job.State == stateRetryable {
+		if err := s.markLaunchOutcome(ctx, key, record.Revision, job, stateRunning); err != nil {
+			return contracts.PageRetirement{}, err
+		}
+	}
 	return s.status(ctx, job.ID, job.PageID)
+}
+
+// An asynchronous worker may have changed the job before Start returns.
+// Never overwrite a newer outcome with the start response.
+func (s *Service) markLaunchOutcome(ctx context.Context, key contracts.RecordKey, revision int64, job Job, state string) error {
+	if job.State == state {
+		return nil
+	}
+	job.State = state
+	job.UpdatedAt = timestamp()
+	value, err := encodeRecord(job, jobIndex(job))
+	if err != nil {
+		return err
+	}
+	if _, err := s.config.Store.Put(ctx, key, *value, revision); err != nil {
+		if errors.Is(err, contracts.ErrRecordConflict) {
+			_, readErr := s.LoadJob(ctx, job.ID, job.PageID)
+			return readErr
+		}
+		return mapStoreError(err)
+	}
+	return nil
 }
 
 func retirementWorkflowStartInput(payload contracts.RetirementWorkflowPayload) contracts.WorkflowStartInput {

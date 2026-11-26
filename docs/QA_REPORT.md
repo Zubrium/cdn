@@ -46,6 +46,13 @@ durable-записи и сверкой trigger; unit-тест моделируе
 retirement/composition и сборка прошли также с `-tags=full`. Реальная
 конкуренция на PostgreSQL и независимость целей ещё не подтверждены.
 
+`Launch` использует ревизию job до `Start` и не перезаписывает более новое
+завершение запоздавшей ошибкой; успешный повтор запуска обновляет сохранённый
+`retryable_failed`. Unit-тест воспроизводит оба случая. Из `main` прошли
+`go test ./internal/retirement -count=1`, `go vet ./internal/retirement` и
+`go build ./internal/retirement`; реальный конкурентный запуск и restart не
+проверены.
+
 ## Retirement: ревизия финализации (2026-11-26)
 
 Финализатор сверяет payload с durable job и владельцем страницы, а текущую

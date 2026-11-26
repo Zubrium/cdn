@@ -2,10 +2,70 @@ package retirement
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
+
+type retirementStartFunc func(context.Context, contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error)
+
+func (f retirementStartFunc) Start(ctx context.Context, input contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
+	return f(ctx, input)
+}
+
+func TestRetirementLaunchPreservesCompletionAndRecoversStartFailure(t *testing.T) {
+	for _, completed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "completion before start error", false: "successful retry"}[completed], func(t *testing.T) {
+			ctx := context.Background()
+			var service *Service
+			starter := retirementStartFunc(func(ctx context.Context, input contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
+				if completed {
+					payload, err := contracts.DecodePayload[contracts.RetirementWorkflowPayload](input.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := service.SetJobState(ctx, payload.JobID, stateSucceeded); err != nil {
+						t.Fatal(err)
+					}
+					return contracts.WorkflowStartReceipt{}, errors.New("ambiguous start error")
+				}
+				return contracts.WorkflowStartReceipt{State: "running"}, nil
+			})
+			var err error
+			service, err = NewService(Config{BranchID: retireBranchID, Store: newRetirementMemoryStore(), Starter: starter, MaxAttempts: 3,
+				Routes: map[string][]string{retirePageID: {retireRouteA}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := service.Prepare(ctx, contracts.RetirePageRequest{PageID: retirePageID, IfMatch: retireIfMatch, IdempotencyKey: retireIdemKey})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !completed {
+				job, err = service.SetJobState(ctx, job.ID, stateRetryable)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, launchErr := service.Launch(ctx, job)
+			if (launchErr != nil) != completed {
+				t.Fatalf("Launch error = %v", launchErr)
+			}
+			current, err := service.LoadJob(ctx, job.ID, job.PageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := stateRunning
+			if completed {
+				want = stateSucceeded
+			}
+			if current.State != want {
+				t.Fatalf("state = %s, want %s", current.State, want)
+			}
+		})
+	}
+}
 
 type retirementMemoryStore struct {
 	records map[contracts.RecordKey]contracts.Record
