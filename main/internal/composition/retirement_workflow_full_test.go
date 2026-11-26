@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
+	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	"github.com/Zubrium/cdn/main/internal/bus"
@@ -16,6 +17,22 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 	"github.com/google/uuid"
 )
+
+func TestRetirementRouteOutcomeMapsRouterErrorsWithoutLeakingText(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{routerapi.ErrConflict, "revision_conflict"},
+		{routerapi.ErrUnavailable, "unavailable"},
+		{errors.New("password=secret host=internal"), "route_failed"},
+	} {
+		state, _, code := retirementRouteOutcome(tc.err, 0)
+		if state != contracts.RetirementRouteStateRetryable || code != tc.code {
+			t.Errorf("state=%s code=%q want=%q", state, code, tc.code)
+		}
+	}
+}
 
 func TestRetirementRootClassIsNotExecutableByRouterOrWebsitePools(t *testing.T) {
 	handler := func(context.Context, contracts.OperationTask) (contracts.OperationOutcome, error) {

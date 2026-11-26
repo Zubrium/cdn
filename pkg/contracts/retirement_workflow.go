@@ -2,15 +2,14 @@ package contracts
 
 import (
 	"errors"
-	"strings"
 )
 
 // Durable page-retirement workflow operations. Every route target and the page
 // identity are server-owned; the root payload cannot select a worker class, an
 // engine or a Router operation.
 const (
-	RetirementStartOperationID       = "retirement.retire.start"
-	RetirementRouteRemoveOperationID = "retirement.route.remove"
+	RetirementStartOperationID        = "retirement.retire.start"
+	RetirementRouteRemoveOperationID  = "retirement.route.remove"
 	RetirementPageFinalizeOperationID = "retirement.page.finalize"
 
 	RetirementStartContractVersion = 1
@@ -27,9 +26,9 @@ const (
 	RetirementRouteStateRemoved   = "removed"
 	RetirementRouteStateRetryable = "retryable_failed"
 
-	RetirementJobStateRunning    = "running"
-	RetirementJobStateSucceeded  = "succeeded"
-	RetirementJobStateRetryable  = "retryable_failed"
+	RetirementJobStateRunning   = "running"
+	RetirementJobStateSucceeded = "succeeded"
+	RetirementJobStateRetryable = "retryable_failed"
 )
 
 type RetirementWorkflowPayload struct {
@@ -137,10 +136,6 @@ func RetirementRouteErrorCode(err error) string {
 	if err == nil {
 		return ""
 	}
-	message := err.Error()
-	if index := strings.Index(message, ":"); index > 0 {
-		message = strings.TrimSpace(message[:index])
-	}
 	if errors.Is(err, ErrRetirementNotFound) {
 		return "not_found"
 	}
@@ -150,8 +145,5 @@ func RetirementRouteErrorCode(err error) string {
 	if errors.Is(err, ErrRetirementUnavailable) {
 		return "unavailable"
 	}
-	if len(message) > 64 {
-		message = message[:64]
-	}
-	return message
+	return "route_failed"
 }

@@ -118,6 +118,12 @@ func retirementRouteOutcome(err error, revision int64) (state string, recordedRe
 	if errors.Is(err, retirement.ErrInvalid) {
 		return contracts.RetirementRouteStateRetryable, revision, "invalid_route"
 	}
+	if errors.Is(err, routerapi.ErrConflict) {
+		return contracts.RetirementRouteStateRetryable, revision, "revision_conflict"
+	}
+	if errors.Is(err, routerapi.ErrUnavailable) {
+		return contracts.RetirementRouteStateRetryable, revision, "unavailable"
+	}
 	return contracts.RetirementRouteStateRetryable, revision, contracts.RetirementRouteErrorCode(err)
 }
 
