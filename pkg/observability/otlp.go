@@ -193,7 +193,6 @@ func otlpResourceAttributes(base Identity) []otelattr.KeyValue {
 		{"service.version", base.ServiceVersion},
 		{"service.instance.id", base.InstanceID},
 		{"deployment.profile", base.Profile},
-		{"router.branch", base.BranchID},
 	}
 	attrs := make([]otelattr.KeyValue, 0, len(values))
 	for _, item := range values {

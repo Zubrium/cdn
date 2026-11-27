@@ -78,9 +78,15 @@ func TestCoordinatorFingerprintIncludesConnectionPolicyAndOmitsCredentials(t *te
 	}
 }
 
-func TestCoordinatorFingerprintAllowsPerBranchRouterProcesses(t *testing.T) {
+func TestRouterStartupRejectsLegacyBranchConfiguration(t *testing.T) {
+	content := strings.NewReader("router_api:\n  branch_id: main\n")
+	if _, err := Load(content); err == nil || !strings.Contains(err.Error(), "branch_id") {
+		t.Fatalf("legacy branch configuration error = %v", err)
+	}
+}
+
+func TestCoordinatorFingerprintExcludesRouterListenerAddress(t *testing.T) {
 	firstConfig := validRuntimeConfig()
-	firstConfig.RouterAPI.BranchID = "preview"
 	firstConfig.RouterAPI.PublicListenAddress = "127.0.0.1:8081"
 	first, err := configFingerprint(firstConfig,
 		"postgres://runtime:secret@127.0.0.1:5432/zubrium_core_qa_unit",
@@ -90,7 +96,6 @@ func TestCoordinatorFingerprintAllowsPerBranchRouterProcesses(t *testing.T) {
 	}
 
 	secondConfig := firstConfig
-	secondConfig.RouterAPI.BranchID = "production"
 	secondConfig.RouterAPI.PublicListenAddress = "127.0.0.1:8082"
 	second, err := configFingerprint(secondConfig,
 		"postgres://runtime:rotated@127.0.0.1:5432/zubrium_core_qa_unit",
@@ -99,7 +104,7 @@ func TestCoordinatorFingerprintAllowsPerBranchRouterProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if second != first {
-		t.Fatal("Router processes serving different statically configured branches must share the system fingerprint")
+		t.Fatal("a change to the Router listener address must preserve the system fingerprint")
 	}
 
 	secondConfig.RouterAPI.UploadMaxFileBytes++

@@ -16,7 +16,6 @@ func TestResolveMapsLocalePreferenceStartupContract(t *testing.T) {
 	}
 	secure := true
 	config := validRuntimeConfig()
-	config.RouterAPI.BranchID = "main"
 	config.RouterAPI.ServiceCredentialEnv = "ROUTER_CRED"
 	config.RouterAPI.LocalePreference = RouterLocalePreference{Enabled: true, Secure: &secure, MaxAge: "48h"}
 	resolved, err := config.Resolve(func(key string) string { return values[key] })
@@ -64,7 +63,7 @@ func TestLocalePreferenceProfileMustMatchConfiguration(t *testing.T) {
 	compiled := platform.BuildPlan{Components: []string{"core", "engine.router", "public.router", "public.locale-preference"}}
 	notCompiled := platform.BuildPlan{Components: []string{"core", "engine.router", "public.router"}}
 	enabled := Resolved{RouterAPI: RouterAPISettings{
-		BranchID: "main", ServiceCredential: "router-service-credential", LocalePreferenceEnabled: true,
+		ServiceCredential: "router-service-credential", LocalePreferenceEnabled: true,
 		LocalePreferenceSecure: true, LocalePreferenceMaxAge: time.Hour,
 	}}
 	if err := enabled.ValidateBuildPlan(notCompiled); err == nil {

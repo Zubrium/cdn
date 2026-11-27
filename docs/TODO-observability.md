@@ -7,7 +7,7 @@
 
 ## Незавершённые задачи
 
-- [ ] Зафиксировать и согласовать контракт атрибутов: обязательные `service.*`, `deployment.profile`, `router.branch`, `module.*`, `component.id`, `operation.id`, `trace_id`/`span_id`; типизированные конструкторы и правила redaction; подтвердить имя заголовка `X-Trace-ID` и источник `deployment.profile` (YAML vs composition root).
+- [ ] Зафиксировать и согласовать контракт атрибутов: обязательные `service.*`, `deployment.profile`, `module.*`, `component.id`, `operation.id`, `trace_id`/`span_id`; типизированные конструкторы и правила redaction; подтвердить имя заголовка `X-Trace-ID` и источник `deployment.profile` (YAML vs composition root).
 - [ ] Завершить бэкенд `file`: `logs.jsonl`, `spans.jsonl`, `metrics.jsonl`, ротация по размеру/количеству, безопасные режимы файлов и каталога, проверка потери сигнала без изменения бизнес-ответа.
 - [ ] Завершить набор метрик `zubrium_*` и локальный `/metrics` в Prometheus text format; подтвердить, что health-check'и учитываются в метриках, но не создают обычные логи. Код Core и Router содержит cache-метрики; полноту их фактического экспорта проверить по [SPEC-caching.md](../spec/architecture/SPEC-caching.md).
 - [ ] Проверить испускание `zubrium_cache_operations_total`, `zubrium_cache_entries`, `zubrium_cache_bytes`, `zubrium_cache_warmup_keys_total`, `zubrium_cache_warmup_duration_seconds` и `zubrium_cache_invalidation_lag_seconds` с разрешёнными низкокардинальными метками; закрыть пункт только вместе с `CACHE-010`.

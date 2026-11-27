@@ -587,12 +587,12 @@ func web021OperationCatalog(t *testing.T) *routerpresent.PublicOperationRegistry
 
 func web021RouteKey(branchID, host, path string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(host + "\x00" + path))
-	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "branch", ScopeID: branchID, RecordKey: "route:" + hex.EncodeToString(digest[:])}
+	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: branchID, RecordKey: "route:" + hex.EncodeToString(digest[:])}
 }
 
 func web021IdempotencyKey(branchID, value string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(value))
-	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "branch", ScopeID: branchID, RecordKey: "idem:" + hex.EncodeToString(digest[:])}
+	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: branchID, RecordKey: "idem:" + hex.EncodeToString(digest[:])}
 }
 
 func collectBranchModuleKeys(t *testing.T, ctx context.Context, store contracts.RecordDataStore, namespace, branchID string) []contracts.RecordKey {
@@ -600,7 +600,7 @@ func collectBranchModuleKeys(t *testing.T, ctx context.Context, store contracts.
 	keys := make([]contracts.RecordKey, 0)
 	after := ""
 	for {
-		page, _, cursor, err := store.List(ctx, namespace, "branch", branchID, after, nil, 100)
+		page, _, cursor, err := store.List(ctx, namespace, "global", branchID, after, nil, 100)
 		if err != nil {
 			t.Fatalf("list run-owned %s records: %v", namespace, err)
 		}

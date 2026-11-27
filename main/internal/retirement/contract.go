@@ -14,7 +14,7 @@ import (
 const (
 	moduleID  = "retirement"
 	namespace = "main/retirement"
-	scopeType = "branch"
+	scopeType = "global"
 
 	recordTypeJob       = "retirement_job"
 	recordTypeReceipt   = "retirement_receipt"

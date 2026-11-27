@@ -32,7 +32,6 @@ func TestPublicRouterLeavesListenerExposureToDeployment(t *testing.T) {
 			ModuleData:   platform.ModuleDataLimits{MaxSelectorValues: routermodel.MaxRoutePathSelectorValues},
 		},
 		RouterAPI: RouterAPISettings{
-			BranchID:            "main",
 			ServiceCredential:   "router-service-credential",
 			PublicListenAddress: "0.0.0.0:8081",
 		},

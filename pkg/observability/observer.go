@@ -67,7 +67,7 @@ func New(cfg Config) (*Observer, error) {
 		cfg: cfg,
 		base: Identity{
 			ServiceName: cfg.ServiceName, ServiceVersion: cfg.ServiceVersion,
-			InstanceID: cfg.InstanceID, Profile: cfg.Profile, BranchID: cfg.BranchID,
+			InstanceID: cfg.InstanceID, Profile: cfg.Profile,
 		},
 		metrics: newMetricStore(),
 	}
@@ -111,7 +111,6 @@ func identityAttributes(identity Identity) []Attribute {
 		String("service.version", identity.ServiceVersion),
 		String("service.instance.id", identity.InstanceID),
 		String("deployment.profile", identity.Profile),
-		String("router.branch", identity.BranchID),
 		String("module.kind", string(identity.ModuleKind)),
 		String("module.id", identity.ModuleID),
 		String("component.id", identity.ComponentID),

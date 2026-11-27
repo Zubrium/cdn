@@ -54,7 +54,7 @@ func TestIdentityAttributesOmitEmptyValues(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"service.name", "deployment.profile", "router.branch"} {
+		for _, key := range []string{"service.name", "deployment.profile"} {
 			if value, found := record[key]; found && value == "" {
 				t.Fatalf("empty %s shadows the resource attribute in metric: %s", key, line)
 			}

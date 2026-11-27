@@ -111,7 +111,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		defer stop()
 		observabilityConfig := resolved.Observability
 		observabilityConfig.Profile = composition.ProfileName()
-		observabilityConfig.BranchID = resolved.RouterAPI.BranchID
 		observer, err := observability.New(observabilityConfig)
 		if err != nil {
 			fmt.Fprintln(stderr, "observability initialization failed:", err)
@@ -123,8 +122,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			_ = observer.Close(shutdownCtx)
 		}()
 		observer.Log(ctx, observability.LevelInfo, "application starting",
-			observability.String("deployment.profile", composition.ProfileName()),
-			observability.String("router.branch", resolved.RouterAPI.BranchID))
+			observability.String("deployment.profile", composition.ProfileName()))
 		componentRegistry, components, err := composition.RegisterComponents(resolved, buildPlan, observer)
 		if err != nil {
 			observer.Log(ctx, observability.LevelError, "component registration failed", observability.String("error.message", err.Error()))

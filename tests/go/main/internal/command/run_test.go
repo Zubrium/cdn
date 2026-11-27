@@ -153,7 +153,6 @@ router_api:
   max_json_bytes: 1048576
   default_page_size: 25
   max_page_size: 100
-  branch_id: branch-a
   service_credential_env: TEST_ROUTER_SERVICE
   form_session_cookie_secure: false
   public_listen_address: 127.0.0.1:8081

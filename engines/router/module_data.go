@@ -9,7 +9,7 @@ func RecordDescriptor() recorddata.RecordDescriptor {
 		OwnerID: moduleID,
 		Namespaces: []recorddata.RecordNamespace{{
 			Name:       "router/routes",
-			ScopeTypes: []string{"branch"},
+			ScopeTypes: []string{"global"},
 			Fields: map[string]recorddata.RecordSelectorField{
 				"record_type": {Type: recorddata.RecordSelectorString},
 				"route_id":    {Type: recorddata.RecordSelectorString},

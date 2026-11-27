@@ -39,7 +39,7 @@
 | `core.authorization` | Core | `(principal.ID, object.ID, action)` | `core.cache.access_cache.max_entries`, `.max_bytes`, `.ttl` | `pg_notify('*')`; проверка `revision + access_epoch` на каждом hit; ошибка epoch = miss | `sync.RWMutex` или shardable LRU |
 | `loader.sessions` | Loader | upload session ID | `loader.session_cache_entries`, `.session_cache_max_bytes`, `.session_cache_ttl` | mutation/recovery удаляет точный ключ; hit проверяет principal, fingerprint и revision | `sync.Mutex`, LRU |
 | `router.manifests` | Router | artifact `fileID + digest` | `router.cache.manifests.*` | Core file revision/CAS; при расхождении — miss и fail-closed | `sync.RWMutex`, bounded LRU |
-| `router.routes` | Router | `(branch, host, normalizedPath, method)` | `router.cache.routes.*` | revision route record; публикация и смена assignment меняют revision | `sync.RWMutex`, bounded LRU |
+| `router.routes` | Router | `(host, normalizedPath, method)` | `router.cache.routes.*` | revision route record; публикация и смена assignment меняют revision | `sync.RWMutex`, bounded LRU |
 | `admin.query` | Admin SPA | `queryKeys.*` | `staleTime`, память вкладки | `invalidateQueries` по мутациям и SSE | React/TanStack Query |
 | `admin.static` | Admin UI + browser | URL ассета | hashed-ассеты `public, max-age=<uint>, immutable`, `index.html` `no-store` | смена имени файла при сборке | HTTP-заголовки origin |
 | `deploy.proxy_cdn` | deployer | origin URL + `Vary` keys | политика deployer | строго по origin `Cache-Control`/`ETag` | внешняя инфраструктура |
@@ -116,7 +116,7 @@ Origin и Router обязаны использовать только:
 | `metadata` | `core.metadata` с проверкой `revision` из авторизационного снимка | 2 |
 | `bytes` | `core.bytes`, только если размер не больше `max_object_bytes` | 3 |
 | `router_manifests` | `router.manifests` для artifact file ID | 4 |
-| `router_routes` | `router.routes` для сконфигурированных branches/routes | 5 |
+| `router_routes` | `router.routes` для сконфигурированных маршрутов | 5 |
 
 Порядок значим: authorization возвращает revision, которым валидируется metadata; metadata возвращает размер и state, которые ограничивают byte cache. Router-цели выполняются после Core-целей и используют те же hot keys. Проверка `Authorize` выполняется для каждого ключа независимо от того, включено ли сохранение результата в `core.authorization`: при `targets.authorization: false` она остаётся обязательной валидацией, но warmed запись не создаётся.
 
@@ -138,12 +138,12 @@ Origin и Router обязаны использовать только:
 - Прогрев `bytes` не обходит `max_object_bytes` и не буферизует весь объект, если он больше лимита.
 - Прогрев `metadata` не сохраняет groups без фильтрации по `visibleGroups` из того же `Authorize`.
 - Router manifest cache принимает запись только после сверки `fileID`, digest, size, `Content-Type` и Core file revision.
-- Router route cache принимает запись только после проверки route record revision и активной branch.
+- Router route cache принимает запись только после проверки route record revision.
 - В логах и метриках отсутствуют file ID, principal ID, URL, query, locale и значения ключей.
 
 ### 5.7. Отказные и конкурентные случаи
 
-- Разные процессы/branch с этим YAML прогревают свои локальные кэши независимо; между ними нет общей памяти. Внутри одной branch сохраняется ровно один Router process согласно [SPEC-concurrency.md](SPEC-concurrency.md). Инвалидация приходит через PostgreSQL `pg_notify`.
+- Router прогревает локальный кэш для одного публичного listener согласно [SPEC-concurrency.md](SPEC-concurrency.md). Инвалидация приходит через PostgreSQL `pg_notify`.
 - Если во время прогрева изменился grant, `access_epoch` делает warmed запись непригодной; следующий запрос выполнит полную проверку. При отключённой цели `authorization` гарантию обеспечивает сам обязательный вызов `Authorize` на каждом ключе.
 - Если во время прогрева изменился объект, revision mismatch забрасывает запись и вызывает перечитывание.
 - Если LISTEN-слушатель был отключён, высокий `zubrium_cache_invalidation_lag_seconds` не даёт права использовать старую authorization entry.
@@ -155,7 +155,7 @@ Origin и Router обязаны использовать только:
 ### 6.1. Router manifest и route cache
 
 - Кэш декодированного artifact manifest устраняет повторный JSON parse и повторное чтение Core file на каждом запросе. Ключ содержит `fileID + digest`; hit требует сверки с Core file metadata. При любой рассогласованности — miss и fail-closed.
-- Кэш route match хранит результат разрешения `(branch, host, normalizedPath, method)` до artifact. Ключ включает revision route record и назначения snapshot. Публикация, смена assignment и отзыв группы меняют revision и инвалидируют запись.
+- Кэш route match хранит результат разрешения `(host, normalizedPath, method)` до artifact. Ключ включает revision route record и назначения snapshot. Публикация, смена assignment и отзыв группы меняют revision и инвалидируют запись.
 - Оба кэша bounded по записям и байтам, имеют TTL и метрики. Межпроцессная инвалидация использует тот же принцип, что в Router spec: после commit; недоступность проверки revision закрывает выдачу.
 
 ### 6.2. Admin static

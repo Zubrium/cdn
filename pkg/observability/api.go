@@ -76,7 +76,6 @@ type Identity struct {
 	ServiceVersion string
 	InstanceID     string
 	Profile        string
-	BranchID       string
 	ModuleKind     ModuleKind
 	ModuleID       string
 	ComponentID    string
@@ -99,7 +98,6 @@ type Config struct {
 	ServiceVersion string
 	InstanceID     string
 	Profile        string
-	BranchID       string
 	MetricFlush    time.Duration
 }
 

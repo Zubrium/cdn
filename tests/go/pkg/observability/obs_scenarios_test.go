@@ -37,7 +37,7 @@ func obsFileConfig(dir string) Config {
 		Mode: ModeFile, Directory: dir, MaxFileBytes: 16 << 10, MaxFiles: 3,
 		MinLevel:    LevelDebug,
 		ServiceName: "zubrium", ServiceVersion: "1.2.3", InstanceID: "obs-instance-1",
-		Profile: "full", BranchID: "main",
+		Profile: "full",
 	}
 }
 
@@ -258,7 +258,7 @@ func obsDescribe(records []map[string]any) string {
 
 var obsMandatoryFields = []string{
 	"timestamp", "signal", "service.name", "service.version", "service.instance.id",
-	"deployment.profile", "router.branch", "module.kind", "module.id", "component.id",
+	"deployment.profile", "module.kind", "module.id", "component.id",
 	"operation.id", "trace_id", "span_id",
 }
 
@@ -618,7 +618,7 @@ func TestObsScenario(t *testing.T) {
 			Mode: ModeOTLP, Endpoint: endpoint, Insecure: true,
 			Timeout: 2 * time.Second, MetricFlush: 250 * time.Millisecond,
 			ServiceName: "zubrium", ServiceVersion: "1.2.3", InstanceID: "obs-instance-1",
-			Profile: "full", BranchID: "main",
+			Profile: "full",
 		}
 		observer, err := New(cfg)
 		if err != nil {
@@ -740,7 +740,7 @@ func TestObsScenario(t *testing.T) {
 			observer, err := New(Config{
 				Mode: ModeOTLP, Endpoint: endpoint, Insecure: true, Timeout: 200 * time.Millisecond,
 				MetricFlush: time.Hour, ServiceName: "zubrium", ServiceVersion: "1.2.3",
-				InstanceID: "obs-instance-1", Profile: "full", BranchID: "main",
+				InstanceID: "obs-instance-1", Profile: "full",
 			})
 			if err != nil {
 				return 0, err, time.Since(started)

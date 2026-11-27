@@ -239,7 +239,6 @@ router_api:
   max_page_size: 100
   service_credential_env: ZUBRIUM_ROUTER_SERVICE_CREDENTIAL
   # Один Router process обслуживает одну настроенную branch.
-  branch_id: main
   public_listen_address: 0.0.0.0:8081
   upload_max_file_bytes: 104857600
   upload_max_concurrent: 4
@@ -293,9 +292,7 @@ observability:
   min_level: info             # debug | info | warn | error
   service_version: dev        # не подменять фактическую build identity
   instance_id: zubrium-obs-1  # уникальный instance процесса
-  # Атрибуты deployment.profile и router.branch задаёт composition root:
-  # profile берётся из скомпилированного build profile (в compose — full),
-  # branch — из router_api.branch_id. Эти поля не настраиваются в YAML.
+  # Атрибут deployment.profile берётся из скомпилированного профиля (в compose — full).
   file:
     directory: /var/lib/zubrium/observability
     max_file_bytes: 16777216

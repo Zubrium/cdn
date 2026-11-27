@@ -80,7 +80,6 @@ func testIdentity() Identity {
 		ServiceVersion: "1.2.3",
 		InstanceID:     "instance-1",
 		Profile:        "test",
-		BranchID:       "main",
 	}
 }
 

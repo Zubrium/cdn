@@ -132,7 +132,7 @@ func (repository *ModuleDataRepository) GetByID(ctx context.Context, branchID, i
 	if repository == nil || repository.data == nil || ctx == nil || branchID == "" || id == "" {
 		return model.Route{}, ErrInvalid
 	}
-	keys, records, _, err := repository.data.List(ctx, routeNamespace, "branch", branchID, "", []recorddata.RecordSelector{
+	keys, records, _, err := repository.data.List(ctx, routeNamespace, "global", branchID, "", []recorddata.RecordSelector{
 		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"route"}},
 		{Field: "route_id", Operator: recorddata.RecordSelectorEqual, Values: []any{id}},
 	}, 2)
@@ -160,7 +160,7 @@ func (repository *ModuleDataRepository) List(ctx context.Context, branchID, host
 	if host != "" {
 		selectors = append(selectors, recorddata.RecordSelector{Field: "host", Operator: recorddata.RecordSelectorEqual, Values: []any{host}})
 	}
-	keys, records, next, err := repository.data.List(ctx, routeNamespace, "branch", branchID, cursor, selectors, limit)
+	keys, records, next, err := repository.data.List(ctx, routeNamespace, "global", branchID, cursor, selectors, limit)
 	if err != nil {
 		return nil, "", mapDataError(err)
 	}
@@ -202,7 +202,7 @@ func (repository *ModuleDataRepository) FindMatch(ctx context.Context, branchID,
 	cursor := ""
 	var best model.Route
 	for {
-		keys, records, next, err := repository.data.List(ctx, routeNamespace, "branch", branchID, cursor, selectors, pageSize)
+		keys, records, next, err := repository.data.List(ctx, routeNamespace, "global", branchID, cursor, selectors, pageSize)
 		if err != nil {
 			return model.Route{}, mapDataError(err)
 		}
@@ -400,7 +400,7 @@ func (repository *ModuleDataRepository) Delete(ctx context.Context, branchID, id
 }
 
 func (repository *ModuleDataRepository) findRecord(ctx context.Context, branchID, id string) (recorddata.RecordKey, recorddata.Record, model.Route, error) {
-	keys, records, _, err := repository.data.List(ctx, routeNamespace, "branch", branchID, "", []recorddata.RecordSelector{
+	keys, records, _, err := repository.data.List(ctx, routeNamespace, "global", branchID, "", []recorddata.RecordSelector{
 		{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"route"}},
 		{Field: "route_id", Operator: recorddata.RecordSelectorEqual, Values: []any{id}},
 	}, 2)
@@ -518,7 +518,7 @@ func decodeLocaleRevisions(encoded string) (map[string]int64, error) {
 }
 
 func dataKey(branchID, key string) recorddata.RecordKey {
-	return recorddata.RecordKey{Namespace: routeNamespace, ScopeType: "branch", ScopeID: branchID, RecordKey: key}
+	return recorddata.RecordKey{Namespace: routeNamespace, ScopeType: "global", ScopeID: branchID, RecordKey: key}
 }
 
 func routeRecordKey(host, path string) string {

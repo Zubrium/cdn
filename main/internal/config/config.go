@@ -111,14 +111,11 @@ type AdminAPI struct {
 	AllowedOrigins      []string `yaml:"allowed_origins"`
 }
 
-// RouterAPI carries shared Router policy plus the process-local binding for
-// the single branch served by this process. BranchID and PublicListenAddress
-// are intentionally excluded from the shared Coordinator fingerprint.
+// RouterAPI configures the single public listener and shared routing policy.
 type RouterAPI struct {
 	MaxJSONBytes              int64                  `yaml:"max_json_bytes"`
 	DefaultPageSize           int                    `yaml:"default_page_size"`
 	MaxPageSize               int                    `yaml:"max_page_size"`
-	BranchID                  string                 `yaml:"branch_id"`
 	ServiceCredentialEnv      string                 `yaml:"service_credential_env"`
 	PublicListenAddress       string                 `yaml:"public_listen_address"`
 	UploadMaxFileBytes        int64                  `yaml:"upload_max_file_bytes"`
@@ -288,7 +285,6 @@ type RouterAPISettings struct {
 	MaxJSONBytes               int64
 	DefaultPageSize            int
 	MaxPageSize                int
-	BranchID                   string
 	ServiceCredential          string
 	PublicListenAddress        string
 	UploadMaxFileBytes         int64
@@ -457,8 +453,8 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 		return fmt.Errorf("Router requires Core module_data.max_selector_values >= %d for bounded path resolution", routermodel.MaxRoutePathSelectorValues)
 	}
 	if _, hasRouterEngine := selected["engine.router"]; hasRouterEngine {
-		if !validBranchID(r.RouterAPI.BranchID) || r.RouterAPI.ServiceCredential == "" {
-			return errors.New("Router Engine requires a static branch_id and service credential")
+		if r.RouterAPI.ServiceCredential == "" {
+			return errors.New("Router Engine requires a service credential")
 		}
 	}
 	if _, hasPublicRouter := selected["public.router"]; hasPublicRouter {
@@ -1072,7 +1068,7 @@ func (c Config) Resolve(getenv func(string) string) (Resolved, error) {
 			SessionCookieSecure: *c.AdminAPI.SessionCookieSecure,
 			AllowedOrigins:      append([]string(nil), c.AdminAPI.AllowedOrigins...)},
 		RouterAPI: RouterAPISettings{MaxJSONBytes: c.RouterAPI.MaxJSONBytes, DefaultPageSize: c.RouterAPI.DefaultPageSize, MaxPageSize: c.RouterAPI.MaxPageSize,
-			BranchID: c.RouterAPI.BranchID, ServiceCredential: routerServiceCredential, PublicListenAddress: c.RouterAPI.PublicListenAddress,
+			ServiceCredential: routerServiceCredential, PublicListenAddress: c.RouterAPI.PublicListenAddress,
 			UploadMaxFileBytes: c.RouterAPI.UploadMaxFileBytes, UploadMaxConcurrent: c.RouterAPI.UploadMaxConcurrent,
 			UploadAllowedContentTypes:  append([]string(nil), c.RouterAPI.UploadAllowedContentTypes...),
 			FormSessionCookieSecure:    c.RouterAPI.FormSessionCookieSecure != nil && *c.RouterAPI.FormSessionCookieSecure,
@@ -1220,11 +1216,7 @@ func configFingerprint(config Config, runtimeURL, migrationURL string) (string, 
 	config.Core.S3SecretKeyEnv = ""
 	config.Core.S3InsecureAllowedHosts = nil
 	config.Core.BootstrapSecretEnv = ""
-	// Each public Router process serves exactly one configured branch. Branch
-	// selection and its listener are deployment-local bindings, while
-	// every shared Router policy (credentials, limits, staging, and APIs) must
-	// remain identical for processes sharing the same Core Coordinator.
-	config.RouterAPI.BranchID = ""
+	// The listener address is deployment-local. Shared Router policy remains in the fingerprint.
 	config.RouterAPI.PublicListenAddress = ""
 	config.Publication.WebsiteCredentialEnv = ""
 	config.Retirement.WebsiteCredentialEnv = ""
@@ -1397,18 +1389,6 @@ func validContentLocale(value string) bool {
 			continue
 		}
 		return false
-	}
-	return true
-}
-
-func validBranchID(value string) bool {
-	if value == "" || len(value) > 128 || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, char := range value {
-		if char < 0x21 || char == 0x7f || char == '/' || char == '\\' {
-			return false
-		}
 	}
 	return true
 }

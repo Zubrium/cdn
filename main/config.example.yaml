@@ -227,7 +227,6 @@ router_api:
   service_credential_env: ZUBRIUM_ROUTER_SERVICE_CREDENTIAL
   # Run one Router process per configured branch. These two values select the
   # process-local branch binding; shared Coordinator settings must match.
-  branch_id: main
   # Router has no request-rate limiter. Keep this listener private behind an
   # external proxy; proxy setup and admission policy belong to the deployer.
   public_listen_address: 127.0.0.1:8081

@@ -15,7 +15,7 @@ import (
 const (
 	moduleID  = "publication"
 	namespace = "main/publication"
-	scopeType = "branch"
+	scopeType = "global"
 
 	recordTypeRun      = "publication_run"
 	recordTypeTarget   = "publication_target"

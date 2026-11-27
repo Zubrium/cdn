@@ -22,8 +22,8 @@ Observability даёт единую, безопасную для продакш�
 Границы ответственности:
 
 1. `main` (composition root) один раз задаёт базовую identity процесса:
-   `service.name`, `service.version`, `service.instance.id`, `deployment.profile`,
-   `router.branch`, а также выбирает и валидирует бэкенд по `observability.mode`.
+   `service.name`, `service.version`, `service.instance.id` и `deployment.profile`.
+   Бэкенд задаёт `observability.mode`.
 2. На границах **HTTP ingress**, **bus dispatch**, **worker task** и
    **component lifecycle** доверенный адаптер обогащает identity полями
    `module.kind`, `module.id`, `component.id`, `operation.id` и связывает сигнал с
@@ -99,7 +99,6 @@ Observability даёт единую, безопасную для продакш�
 | `service.version`    | string | build identity / `observability.service_version`                             |
 | `service.instance.id`| string | уникальный instance ID процесса (`observability.instance_id`)                |
 | `deployment.profile` | string | выбранный build profile (`full`, `router`, `development-fixtures`, ...)      |
-| `router.branch`      | string | `router_api.branch_id`; для не-Router процессов — настроенная branch         |
 | `module.kind`        | string | одно из шести фиксированных значений раздела 1                              |
 | `module.id`          | string | зарегистрированный модуль, например `engine.forms`, `worker.media`           |
 | `component.id`       | string | зарегистрированный компонент, например `composition.retirement`             |
@@ -251,8 +250,7 @@ observability:
 `deployment.profile` не настраивается в YAML: его задаёт composition root из
 фактически скомпилированного build profile (`full`, `core`, `router`,
 `development-fixtures`). Это исключает расхождение между конфигом и бинарником.
-`router.branch` берётся из `router_api.branch_id` того же процесса. Рабочий пример
-для compose — [`main/config.observability.yaml.example`](../../main/config.observability.yaml.example).
+Рабочий пример для compose — [`main/config.observability.yaml.example`](../../main/config.observability.yaml.example).
 
 ## 8. Покрытие acceptance-сценариев
 

@@ -699,7 +699,7 @@ func TestCoreCacheScenarios(t *testing.T) {
 			`result="APPLIED"`: true, `result="OVERFLOW"`: true, `result="CLEARED"`: true,
 			`tier="REQUIRED"`: true, `tier="OPTIONAL"`: true,
 		}
-		allowedPrefixes := []string{"le=", "service.name=", "service.version=", "service.instance.id=", "deployment.profile=", "router.branch=", "module.kind=", "module.id=", "component.id=", "operation.id="}
+		allowedPrefixes := []string{"le=", "service.name=", "service.version=", "service.instance.id=", "deployment.profile=", "module.kind=", "module.id=", "component.id=", "operation.id="}
 		for _, line := range strings.Split(metrics, "\n") {
 			if !strings.HasPrefix(line, "zubrium_cache_") || !strings.Contains(line, "{") {
 				continue
