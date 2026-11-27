@@ -59,6 +59,10 @@ without mutating immutable history. Commit failure leaves neither a new
 publication nor its intent. A successful commit is returned as success even
 if a later dispatch is unavailable.
 
+The system has one Router listener and one route registry. Each locale
+publication has a single delivery acknowledgement. The workflow still
+tracks activation separately for each affected route and locale.
+
 Trusted composition recovers pending intents after restart and submits the
 registered workflow through the typed process-local bus. Recovery is bounded
 and uses explicitly configured operational limits; duplicate submit, lost
