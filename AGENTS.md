@@ -30,8 +30,8 @@
 
 ## Продуктовые контракты
 
-- Статические branches задаются startup-конфигурацией. Один Router process обслуживает одну branch; не создавай дополнительные branches вне конфигурации. Изменение topology требует YAML и полного restart.
-- Website snapshots образуют независимые деревья по страницам. Структурные изменения создают child snapshot; snapshots не назначаются Router branches. Router branch — deployment topology, задаваемая при запуске; route-to-artifact mapping принадлежит Router. Защищай корень и непосредственные ссылки дерева согласно Website snapshot contract.
+- Router обслуживает один публичный listener по адресу `public_listen_address` из startup-конфигурации. Все настроенные hosts используют один набор маршрутов. Изменение listener и host policy требует YAML и полного restart.
+- Website snapshots образуют независимые деревья по страницам. Структурные изменения создают child snapshot; route-to-artifact mapping принадлежит Router. Защищай корень и непосредственные ссылки дерева согласно Website snapshot contract.
 - `/site` управляет страницами, маршрутами, размещениями, аргументами фич, flat data model и структурными bindings; `/site` не редактирует record values. `/content` владеет drafts/publication и редакционным выбором/порядком записей. Загрузка файлов остаётся в `/media`.
 - Model entities имеют cardinality `many` или `singleton`. Новый singleton получает одну пустую draft-запись и не публикуется автоматически. Очистка сохраняет record ID; сервер отклоняет изменения cardinality, теряющие records. Typed singleton `record`/`scalar` разрешается автоматически, `collection` остаётся массивом из нуля или одной записи.
 - Feature ZIP содержит `manifest.json`, описывающий metadata, site-editor arguments, typed `dataInputs`, form submission contract, design tokens и runtime metadata. Используй только согласованный target lifecycle ABI из `spec/engines/website/features/SPEC-feature-runtime.md`; не угадывай discriminator/signatures и не запускай несовместимый ABI.

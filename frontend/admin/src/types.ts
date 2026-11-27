@@ -241,7 +241,6 @@ export type RouterRouteMatch = "exact" | "prefix";
 
 export interface RouterRoute {
   id: string;
-  branch_id: string;
   host: string;
   path: string;
   match: RouterRouteMatch;

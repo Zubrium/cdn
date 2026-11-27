@@ -41,6 +41,13 @@ Pages имеют server-generated UUID и независимые snapshot trees 
 | Повтор publication страницы A после более поздней publication страницы B той же locale. | Старый receipt не возвращает revision новой публикации и не инициирует fan-out с неверной идентичностью. | Unit: `TestOldPagePublicationReplayDoesNotUseNewerGlobalPublication`; проверка с PostgreSQL остаётся открытой. |
 | Crash после Content commit до запуска workflow; потерянное подтверждение запуска, параллельное восстановление и более новая публикация. | Атомарно сохранённое намерение переживает restart; создаётся одна логическая задача, устаревший результат не активируется, успешный Content commit не откатывается. | Unit: `TestPublicationDeliveryReplaysAfterLostAcknowledgement`, `TestPublicationIntentDeliveryIsCASProtectedAndIdempotent`, `TestPublishReplayKeepsFinalizedFailure`. PostgreSQL: `TestContentPublicationDeliveryRestart` проверяет потерю ответа после durable Start, перезапуск Core и повторное подтверждение. Crash до Start, параллельная доставка, восстановление при старте full-профиля, миграция и активация маршрутов остаются открытыми. |
 
+## Router с одним публичным listener
+
+| Сценарий | Ожидаемый результат | Статус |
+| --- | --- | --- |
+| Оператор открывает список и детали маршрута, создаёт маршрут и меняет цель. | HTTP-ответы без `branch_id`, сохранены ID и revision. Запрос создания с `branch_id` отклоняется. Admin показывает revision. | HTTP contract и Admin unit. Browser QA открыт. |
+| Запуск продукта после перехода на единую конфигурацию Router. | Один публичный listener обслуживает настроенные hosts. Прежние ID, реплеи и durable jobs доступны. Конфликт при переносе обнаруживается до изменения данных. | Открыто. |
+
 ## Router core-file disposition scenarios (2026-11-25)
 
 Контракт: [SPEC-router-engine](../spec/engines/router/SPEC-router-engine.md) и [router.yaml](../spec/presentation/openapi/router.yaml). `inline` — серверное поле Router target, а не query-параметр посетителя. `/site` не публикует и не хранит этот режим. Статус `pass` выставляется только после реального прогона с командами и результатом в [QA report](../docs/QA_REPORT.md).

@@ -756,7 +756,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
   it("creates and revises Router routes through idempotency and ETag contracts", async () => {
     const routeID = "01938f7a-68af-7c10-a51d-78b6ca125301";
     const route = {
-      id: routeID, branch_id: "main", host: "example.test", path: "/uploads/file",
+      id: routeID, host: "example.test", path: "/uploads/file",
       match: "exact", target: { kind: "core-file", file_id: "01938f7a-68af-7c10-a51d-78b6ca125302" }, state: "active",
       revision: 4, created_at: "2026-11-18T10:00:00Z", updated_at: "2026-11-18T10:00:00Z",
     } as const;
@@ -782,7 +782,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("rejects malformed Router routes before UI code consumes them", async () => {
     const route = {
-      id: "01938f7a-68af-7c10-a51d-78b6ca125301", branch_id: "main", host: "example.test", path: "/uploads/file",
+      id: "01938f7a-68af-7c10-a51d-78b6ca125301", host: "example.test", path: "/uploads/file",
       match: "exact", target: { kind: "core-file", file_id: "01938f7a-68af-7c10-a51d-78b6ca125302" }, state: "active",
       revision: 4, created_at: "2026-11-18T10:00:00Z", updated_at: "2026-11-18T10:00:00Z",
     };
@@ -809,7 +809,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
 
   it("accepts a Loader upload route with an optional FileSet search index", async () => {
     const route = {
-      id: "01938f7a-68af-7c10-a51d-78b6ca125301", branch_id: "main", host: "example.test", path: "/upload",
+      id: "01938f7a-68af-7c10-a51d-78b6ca125301", host: "example.test", path: "/upload",
       match: "exact", target: { kind: "registered-operation", operation_id: "public.form-upload", operation_config: {
         enabled: true, access_group: "uploads", file_set_id: "01938f7a-68af-7c10-a51d-78b6ca125399",
         max_bytes: 1024, allowed_content_types: ["image/png", "application/pdf"],
@@ -832,7 +832,7 @@ describe("modular Website, Content, Forms and Router clients", () => {
       enabled: true, form_id: "44444444-4444-4444-8444-444444444444", schema_version: 3,
     } };
     const route = {
-      id: "01938f7a-68af-7c10-a51d-78b6ca125301", branch_id: "main", host: "forms.example.test", path: "/forms/contact",
+      id: "01938f7a-68af-7c10-a51d-78b6ca125301", host: "forms.example.test", path: "/forms/contact",
       match: "exact", target, state: "active", revision: 4,
       created_at: "2026-11-18T10:00:00Z", updated_at: "2026-11-18T10:00:00Z",
     };

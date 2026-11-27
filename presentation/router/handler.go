@@ -244,6 +244,25 @@ func reservedAdminPath(path string) bool {
 		path == "/api/v2/admin" || strings.HasPrefix(path, "/api/v2/admin/")
 }
 
+type adminRoute struct {
+	ID        string                `json:"id"`
+	Host      string                `json:"host"`
+	Path      string                `json:"path"`
+	Match     string                `json:"match"`
+	Target    contracts.RouteTarget `json:"target"`
+	State     string                `json:"state"`
+	Revision  int64                 `json:"revision"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
+}
+
+func routeForAdmin(route contracts.Route) adminRoute {
+	return adminRoute{
+		ID: route.ID, Host: route.Host, Path: route.Path, Match: route.Match, Target: route.Target,
+		State: route.State, Revision: route.Revision, CreatedAt: route.CreatedAt, UpdatedAt: route.UpdatedAt,
+	}
+}
+
 func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := h.authenticate(w, r)
 	if !ok {
@@ -274,7 +293,14 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	items := make([]adminRoute, 0, len(page.Items))
+	for _, route := range page.Items {
+		items = append(items, routeForAdmin(route))
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Items      []adminRoute `json:"items"`
+		NextCursor string       `json:"next_cursor,omitempty"`
+	}{Items: items, NextCursor: page.NextCursor})
 }
 
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
@@ -290,10 +316,6 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	var input contracts.CreateRouteRequest
 	if err := decodeJSON(w, r, h.cfg.MaxJSONBytes, &input); err != nil {
 		writeDecodeError(w, err)
-		return
-	}
-	if input.BranchID != "" && input.BranchID != h.cfg.BranchID {
-		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if !validTargetMatch(input.Match, input.Target.Kind) {
@@ -317,7 +339,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", routesPath+"/"+route.ID)
 	setRouteETag(w, route.Revision)
-	writeJSON(w, http.StatusCreated, route)
+	writeJSON(w, http.StatusCreated, routeForAdmin(route))
 }
 
 func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +362,7 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setRouteETag(w, route.Revision)
-	writeJSON(w, http.StatusOK, route)
+	writeJSON(w, http.StatusOK, routeForAdmin(route))
 }
 
 func (h *Handler) replaceTarget(w http.ResponseWriter, r *http.Request) {
@@ -395,7 +417,7 @@ func (h *Handler) replaceTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setRouteETag(w, route.Revision)
-	writeJSON(w, http.StatusOK, route)
+	writeJSON(w, http.StatusOK, routeForAdmin(route))
 }
 
 func validTargetMatch(match, targetKind string) bool {

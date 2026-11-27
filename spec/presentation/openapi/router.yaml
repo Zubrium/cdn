@@ -44,7 +44,7 @@ paths:
         - { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
       responses:
-        '200': { description: Routes for the configured branch., content: { application/json: { schema: { $ref: '#/components/schemas/RoutePage' } } } }
+        '200': { description: Configured routes., content: { application/json: { schema: { $ref: '#/components/schemas/RoutePage' } } } }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
@@ -611,7 +611,7 @@ components:
       allOf:
         - { $ref: '#/components/schemas/CreateRoute' }
         - type: object
-          required: [id, branch_id, state, revision, created_at, updated_at]
+          required: [id, state, revision, created_at, updated_at]
           properties:
             id: { type: string, format: uuid }
             state: { type: string }

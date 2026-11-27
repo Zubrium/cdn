@@ -112,10 +112,6 @@ function containsCodePoint(value: string, predicate: (codePoint: number) => bool
   return false;
 }
 
-function hasAsciiControlOrSpace(value: string): boolean {
-  return containsCodePoint(value, (codePoint) => codePoint <= 0x20 || codePoint === 0x7f);
-}
-
 function hasWhitespaceOrAsciiControl(value: string): boolean {
   return /\s/u.test(value) || containsCodePoint(value, (codePoint) => codePoint <= 0x1f || codePoint === 0x7f);
 }
@@ -266,8 +262,6 @@ function validPublicUploadRouteConfig(config: Record<string, unknown>): boolean 
 
 function validateRouterRoute(value: unknown): RouterRoute {
   if (!isRecord(value) || typeof value.id !== "string" || !uuidValuePattern.test(value.id) ||
-    typeof value.branch_id !== "string" || value.branch_id.length === 0 || value.branch_id.length > 128 ||
-    hasAsciiControlOrSpace(value.branch_id) ||
     typeof value.host !== "string" || value.host.length === 0 || value.host.length > 253 ||
     value.host.trim() !== value.host || hasWhitespaceOrAsciiControl(value.host) ||
     typeof value.path !== "string" || !value.path.startsWith("/") || value.path.length > 2048 ||

@@ -24,7 +24,6 @@ import RouterRoutesPage from "../../../../../../frontend/admin/src/pages/router/
 
 const route = {
   id: "route-1",
-  branch_id: "main",
   host: "files.example.test",
   path: "/uploads/consent",
   match: "exact",

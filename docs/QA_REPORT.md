@@ -1,5 +1,13 @@
 # QA-отчёт
 
+## Router Admin без branch ID
+
+HTTP contract проверяет список, детали, создание и замену цели, а также
+отклонение `branch_id` в create request. Router Presentation прошёл
+`go test`, `go vet`, `go build`. Admin прошёл typecheck, unit-тесты,
+сборку и `pnpm lint`. Проверки одного listener и перехода сохранённых
+записей, а также browser QA остаются открытыми.
+
 ## Content publication delivery
 
 Full-профиль восстанавливает очередь Content при старте через внутренние

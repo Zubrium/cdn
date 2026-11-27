@@ -16,7 +16,7 @@
 - `/site` owns the snapshot's structure: pages, routes, placements, SEO, design, the graphical data model, feature arguments, and typed `dataInputs` bindings from each placement to model entities and fields. All feature arguments are configured here.
 - `/content` owns model records, local drafts, publication history, and record selection/order for each placement. It generates forms from the selected snapshot's flat model and edits only each record's own `values`.
 - `/media` owns uploads, file metadata, and deletion. Other editors may pick an existing authorized file; they never upload a file into a feature or record.
-- Router owns configured route mappings and static branch topology. `/site` may select its working snapshot, but it does not assign snapshots to branches or mutate Router route targets.
+- Router owns mappings for its single configured public listener. `/site` selects the working Website snapshot; publishing a route target is a separate Router operation.
 
 ## Target: dynamic pages and template library
 

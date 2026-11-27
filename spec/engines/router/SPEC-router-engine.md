@@ -2,7 +2,7 @@
 
 Статус: согласованный контракт Router v2; код и acceptance-проверки остаются предметом отложенной итоговой проверки. Website snapshots задают одну страницу и не содержат URL; Website prerender создаёт immutable `static-page-artifact/v1`, а Router route явно задаёт `default_locale` и complete locale-to-manifest map. Router не хранит `snapshot_id`, `page_id`, feature manifests, dependency locks или Content revisions; API принимает только готовые artifacts. Route targets также могут быть Core file или зарегистрированной публичной operation. Operations доступны только если входят в скомпилированный профиль и зарегистрированы типизированным контрактом; произвольные callbacks и URL запрещены. `core-file` и registered operations используют exact path; artifact route связывает exact document path и его route-scoped assets. Router подключает отдельно настроенные Forms/Loader routes без прямого доступа к хранилищу. Загрузка закрыта по умолчанию и становится анонимной только для явно включённого маршрута. Загруженный Core file всегда остаётся приватным; публичная выдача требует отдельного явно настроенного GET route. Публичный `core-file` GET route связывается ровно с одним `file_id` из сохранённой конфигурации; посетитель не передаёт ID и не выбирает файл через FileSet. Router не реализует request-rate limiting. Публичный listener держится за внешним proxy, выбор которого и admission policy принадлежат deployer. Внутренние лимиты in-flight, per-route admission и fail-fast `503` при перегрузке описаны в [SPEC-concurrency.md](../../architecture/SPEC-concurrency.md). Coordinator может автоматически переключать file/artifact route после успешной публикации; public operation routes не меняются. Cache по умолчанию `no-store`; fallback неявно не применяется. Полная HTTP-политика, allowlist `Cache-Control`, `Vary`, сжатие и прогрев определяются [SPEC-caching.md](../../architecture/SPEC-caching.md). Общие правила Core и изоляции engine data: [SPEC-core-architecture.md](../../core/SPEC-core-architecture.md), [SPEC-module-data.md](../../core/SPEC-module-data.md); page artifact: [SPEC-static-site-artifact.md](../website/SPEC-static-site-artifact.md); Website: [SPEC-website-engine.md](../website/SPEC-website-engine.md).
 
-Router не зависит от Website и не понимает snapshots или версии фич. Каждый branch обслуживается отдельным Router process; несколько инстансов одной branch не допускаются. Публичный listener следует держать за внешним proxy; Router сам не ограничивает частоту запросов, а выбор и настройка proxy относятся к развёртыванию. Внутренние in-flight лимиты и fail-fast `503` описаны в [SPEC-concurrency.md](../../architecture/SPEC-concurrency.md). Внешний caching proxy/CDN также принадлежит deployer и обязан сохранять `no-store`, ETag и `Vary` origin из [SPEC-caching.md](../../architecture/SPEC-caching.md). Router внутри выбранной branch сопоставляет настроенный path с общим файлом, нейтральным static-page artifact или абстрактной зарегистрированной public operation. Он не реализует бизнес-правила Content/Forms и не вызывает движки по сети: operation предоставляется статическим composition root как типизированная Go capability.
+Router не зависит от Website и не понимает snapshots или версии фич. Router обслуживает один публичный listener на логическую систему. Публичный listener следует держать за внешним proxy; Router сам не ограничивает частоту запросов, а выбор и настройка proxy относятся к развёртыванию. Внутренние in-flight лимиты и fail-fast `503` описаны в [SPEC-concurrency.md](../../architecture/SPEC-concurrency.md). Внешний caching proxy/CDN также принадлежит deployer и обязан сохранять `no-store`, ETag и `Vary` origin из [SPEC-caching.md](../../architecture/SPEC-caching.md). Router сопоставляет настроенные host и path с общим файлом, нейтральным static-page artifact или абстрактной зарегистрированной public operation. Он не реализует бизнес-правила Content/Forms и не вызывает движки по сети: operation предоставляется статическим composition root как типизированная Go capability.
 
 `profiles/router.yaml` собирает самостоятельный production профиль Core + Loader + Router с File, Identity, Coordinator и Router Admin API, публичным Router listener и `public.form-upload`. Он не выбирает Website, Content, Forms или development fixtures: в этом профиле доступна только независимая Loader-загрузка. Form-bound upload и `public.form-session`/`public.form-submit` собираются только при явном выборе Forms и соответствующих public operations. Профиль собирается `make build-router` и проверяется `make test-router`; адрес listener задаётся оператором в Router-конфигурации. Профиль не устанавливает, не выбирает и не настраивает внешний proxy, включая caching proxy/CDN из [SPEC-caching.md](../../architecture/SPEC-caching.md).
 
@@ -10,7 +10,7 @@ Router не зависит от Website и не понимает snapshots ил�
 
 Router является отдельным engine module и предоставляет два раздельных внешних контракта:
 
-1. **Settings API** — авторизованное управление соответствием branch/host/path file, artifact или зарегистрированной operation, проверка конфликтов, чтение revision и атомарное переключение.
+1. **Settings API** — авторизованное управление соответствием host/path и цели file, artifact или зарегистрированной operation, проверка конфликтов, чтение revision и атомарное переключение.
 2. **Delivery API** — публичная выдача только по заранее сохранённым mappings. Route может вызвать лишь operation из неизменяемого каталога текущей сборки. В URL нельзя передать произвольный Core file ID, module-data key, operation name или параметры назначения загрузки.
 
 Админский клиент сначала вызывает Website API и получает `artifact_manifest_file_id`; затем отдельным запросом вызывает Router Settings API. Нет Website→Router или Router→Website вызовов.
@@ -51,9 +51,9 @@ flowchart TB
 
 ## 2. Независимость от снапшотов и веток
 
-Router не хранит `snapshot_id`, `page_id`, Website build inputs, branch-to-snapshot assignment или Website status. Для Router target — immutable Core file ID одного файла, manifest ID одного `static-page-artifact/v1` либо registered operation ID из текущего build profile. Operation route ссылается на скомпилированный ID; visitor не выбирает operation.
+Router не хранит `snapshot_id`, `page_id`, Website build inputs или Website status. Для Router target — immutable Core file ID одного файла, manifest ID одного `static-page-artifact/v1` либо registered operation ID из текущего build profile. Operation route ссылается на скомпилированный ID; visitor не выбирает operation.
 
-Topology branch, public hostnames, ports, CORS/indexing policy и branch IDs конфигурируются статически при запуске. На каждый branch запускается отдельный Router process с `branch_id` и configured `public_listen_address`; эти process-local значения не входят в общий Coordinator config fingerprint. Общие настройки и build profile должны совпадать. Route records ссылаются только на объявленный branch.
+Оператор задаёт один `public_listen_address`, разрешённые публичные hosts и CORS/indexing policy при запуске. Маршрут определяется каноническими host и path. Старые версии хранят `branch_id` в конфигурации, payload и ключах записей; переход на единый набор маршрутов должен сохранять route IDs, ревизии, цели, квитанции идемпотентности и durable jobs. Обнаруженный конфликт данных требует остановить переход до изменения записей.
 
 Route → page publication slot связь принадлежит trusted outer Presentation/Coordinator registry, а не Website snapshot и не visitor request. Route record хранит текущую locale-to-artifact map и revision; привязка в registry непрозрачная для Router. После Website build и проверки готового page artifact coordinator вызывает Router ReplaceLocaleTarget для одной locale отдельным CAS. Сбой build или CAS оставляет прежнюю цель этой locale. Несколько routes/locales обновляются независимо; orchestration сообщает partial result и безопасно повторяет незавершённые назначения. System-wide Content publication автоматически триггерит этот fan-out через Coordinator, не заставляя Router разбирать Website или Content модель.
 
@@ -78,7 +78,6 @@ Route mappings хранятся Router в namespace `router` таблицы `eng
 Логическая запись маршрута включает:
 
 - внутренний сгенерированный `route_id`;
-- `branch_id` из startup config;
 - нормализованный host scope (только из разрешённой конфигурации);
 - канонический path/prefix и тип matching;
 - `target`: `core-file | static-page-artifact | registered-operation`; static artifact target содержит `default_locale` и упорядоченный список `{locale, artifact_manifest_file_id}` — по одному готовому manifest на каждую locale catalog; Router проверяет полноту и соответствие locale catalog до активации;
@@ -88,7 +87,7 @@ Route mappings хранятся Router в namespace `router` таблицы `eng
 - только разрешённые cache/security-header policies из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 - состояние `active` (чернового неявно публичного route нет).
 
-Route records могут храниться отдельными CAS-документами. Каждая операция изменяет ровно один route; общей транзакции набора routes нет. Хранилище должно позволять детерминированно обнаруживать конфликты ветки/host/path до сохранения. TTL не используется.
+Route records могут храниться отдельными CAS-документами. Каждая операция изменяет ровно один route; общей транзакции набора routes нет. Хранилище должно позволять детерминированно обнаруживать конфликты host/path до сохранения. TTL не используется.
 
 ### 3.1 Права на настройку
 
@@ -102,9 +101,9 @@ Router runtime использует отдельную обычную Core user 
 
 Методы API ниже — семантический контракт, а не обязательные имена URL:
 
-- `ListRoutes(branch, filter)` — только с уровнем чтения конфигурационной группы;
+- `ListRoutes(filter)` — только с уровнем чтения конфигурационной группы;
 - `GetRoute(route_id)` — вернуть mapping и revision, не раскрывая недоступные Core objects;
-- `CreateRoute(route_spec, idempotency_key)` — проверить host/path/branch/target, конфликт, Core grants или регистрацию/schema operation;
+- `CreateRoute(route_spec, idempotency_key)` — проверить host/path/target, конфликт, Core grants или регистрацию/schema operation;
 - `ReplaceTarget(route_id, new_target, expected_revision)` — атомарный CAS target binding;
 - `UpdatePolicy(route_id, policy, expected_revision)` — изменить только allowlisted serving/cache policy из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 - `DeleteRoute(route_id, expected_revision)` — удалить mapping через явную аутентифицированную операцию.
@@ -115,12 +114,11 @@ Router runtime использует отдельную обычную Core user 
 
 ## 5. Delivery API
 
-Запрос публично отдается, только если host + branch + path разрешились в активный route. Core files остаются приватными; публичный доступ возникает только в результате явного route binding. Передача ID файла клиентом не может создать route или получить доступ.
+Запрос публично отдается, только если host + path разрешились в активный route. Core files остаются приватными; публичный доступ возникает только в результате явного route binding. Передача ID файла клиентом не может создать route или получить доступ.
 
 ### 5.1 Matching и нормализация
 
 - Route host сопоставляется со стандартным HTTP Host запроса; forwarded-заголовки не участвуют в выборе route. Сконфигурированный host — каноническое имя без порта; допустимый числовой порт во входящем `Host` снимается перед поиском route, а неоднозначный или некорректный Host отклоняется. Запись host нормализуется (нижний регистр, необязательная завершающая точка) до использования в ключе маршрута. Exact-запись, чей путь является префиксом запроса, не прерывает поиск других подходящих маршрутов.
-- Branch определяется слушающим endpoint/статической конфигурацией, не user query/header.
 - Текущий публичный Router не ограничивает частоту запросов, в том числе по IP. Его listener нельзя выставлять напрямую в публичную сеть: deployer должен закрыть его за внешним proxy. Выбор, настройка и эксплуатация proxy, включая его admission policy, остаются ответственностью deployer и не входят в приложение или этот репозиторий.
 - Path нормализуется ровно один раз: reject encoded separators/dot-segments, NUL и неоднозначную кодировку; привести percent encoding по единому алгоритму до matching.
 - Route precedence фиксирован: exact match выше longest-prefix; равный конфликт запрещён до публикации. Не использовать порядок строк БД как порядок маршрутизации.
@@ -158,7 +156,7 @@ Router ставит host-only cookie с `Path=/`, без `Domain`, `HttpOnly`, `
 - ETag строится из checksum immutable file/manifest; conditional GET проверяется после разрешения route и актуальной Core авторизации. Validators, weak comparison и 304 подчиняются [SPEC-caching.md](../../architecture/SPEC-caching.md).
 - Range поддерживается только если Core streaming contract его безопасно реализует; в противном случае route отвечает без Range, не буферизуя неограниченный файл в памяти.
 - Cache-Control по умолчанию — `no-store`. Допустимы только `no-store` и `public, max-age=<uint>[, immutable]` из allowlist [SPEC-caching.md](../../architecture/SPEC-caching.md) при `<uint> > 0`; приватные данные и authorization responses не попадают в shared CDN cache. Locale из cookie остаётся `no-store`, locale из `Accept-Language` получает `Vary: Accept-Language`; сжатие добавляет `Vary: Accept-Encoding`.
-- CORS и indexing headers задаются веткой/route allowlist; значения из файла или запроса не могут установить произвольный origin/header.
+- CORS и indexing headers задаются startup policy и route allowlist; значения из файла или запроса не могут установить произвольный origin/header.
 - Внутренние Core IDs, ошибки S3, права, namespace и наличие закрытых файлов не раскрываются в публичном теле ответа.
 - Ошибка Core/module-data проверки закрывает доступ. Недоступный объект не может быть доставлен из устаревшего Core byte cache, кэша прав, manifest cache или route cache.
 
@@ -210,8 +208,8 @@ Atomicity распространяется на один route binding. Если
 
 1. явной публикации файла и запрета прямого доступа к тому же UUID вне route;
 2. route на `static-page-artifact/v1`, exact document path, route-scoped asset mapping, query string и неизвестный asset path;
-3. host/branch изолированности и статических branch IDs;
-4. exact/longest-prefix matching, collision и одинакового prefix в разных ветках;
+3. одного публичного listener, разделения hosts и отсутствия `branch_id` в HTTP-контракте;
+4. exact/longest-prefix matching, конфликта на одном host и одинакового prefix на разных hosts;
 5. percent-encoded traversal/separators, malformed URL, spoofed Host/Forwarded headers;
 6. access revocation, отсутствующей группы, stale local cache, отказа проверки revision, а также сценарии `CACHE-004` и `CACHE-006` из [SPEC-caching.md](../../architecture/SPEC-caching.md);
 7. параллельных replaceTarget с одинаковой expected revision: только один commit succeeds;
