@@ -35,6 +35,18 @@ tests/qa/run-core-red.sh integration
 QA_ENV_FILE="<path printed by up.sh>" tests/qa/run-core-acceptance.sh run
 ```
 
+Для проверки восстановления Content publication после потери ответа
+Coordinator используйте эксклюзивный свежий запуск стека и загруженный
+env-файл. Тест дважды открывает Core на этой БД и сохраняет фикстуру.
+
+```sh
+overlay="$(mktemp)"
+python3 tests/go-overlay.py > "$overlay"
+(cd main && go test -count=1 -tags='full publication_delivery_acceptance' \
+  -overlay="$overlay" ./cmd/zubrium -run '^TestContentPublicationDeliveryRestart$')
+rm "$overlay"
+```
+
 Завершение:
 
 ```sh

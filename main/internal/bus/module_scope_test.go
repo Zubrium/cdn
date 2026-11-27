@@ -90,6 +90,33 @@ func TestRecordOperationsResolveCapabilityFromBoundModuleScope(t *testing.T) {
 	}
 }
 
+func TestRecordOwnerDispatcherAllowsOnlyRecordOperations(t *testing.T) {
+	ctx := context.Background()
+	dispatch := recordOwnerDispatchFunc(func(ctx context.Context, request contracts.Envelope) (contracts.Envelope, error) {
+		if got := ModuleIDFromContext(ctx); got != "content" {
+			t.Fatalf("record owner = %q, want content", got)
+		}
+		return request, nil
+	})
+	client := NewRecordOwnerDispatcher(dispatch, "content")
+	for _, key := range recordOperationKeys() {
+		request := contracts.Envelope{OperationID: key.ID, Version: key.Version}
+		if _, err := client.Dispatch(ctx, request); err != nil {
+			t.Fatalf("dispatch %v: %v", key, err)
+		}
+	}
+	key := contracts.WorkflowStartOperation().Key
+	if _, err := client.Dispatch(ctx, contracts.Envelope{OperationID: key.ID, Version: key.Version}); !errors.Is(err, ErrOperationNotAllowedForModule) {
+		t.Fatalf("workflow dispatch error = %v, want ErrOperationNotAllowedForModule", err)
+	}
+}
+
+type recordOwnerDispatchFunc func(context.Context, contracts.Envelope) (contracts.Envelope, error)
+
+func (fn recordOwnerDispatchFunc) Dispatch(ctx context.Context, request contracts.Envelope) (contracts.Envelope, error) {
+	return fn(ctx, request)
+}
+
 type recordStoreForBusTest struct{}
 
 func (recordStoreForBusTest) Get(context.Context, contracts.RecordKey) (contracts.Record, error) {

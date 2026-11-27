@@ -1,4 +1,4 @@
-//go:build website_acceptance
+//go:build website_acceptance || publication_delivery_acceptance
 
 package main
 
@@ -77,7 +77,7 @@ func websiteAcceptanceRecordStore(t *testing.T, runtime *core.Runtime, descripto
 		MaxPageBytes: 3 << 20, MaxSelectors: 16, MaxSelectorValues: 64,
 		MaxPageSize: 100, MaxBatchOperations: 64,
 	}
-	client, err := contracts.NewRecordDataStore(bus.NewModuleDispatcher(dispatcher, descriptor.OwnerID), limits)
+	client, err := contracts.NewRecordDataStore(bus.NewRecordOwnerDispatcher(dispatcher, descriptor.OwnerID), limits)
 	if err != nil {
 		return nil, err
 	}

@@ -41,7 +41,7 @@ func (component *coreComponent) registerModuleData(descriptor contracts.RecordDe
 	component.recordStoreMu.Unlock()
 
 	settings := component.config.Core.ModuleData
-	return contracts.NewRecordDataStore(bus.NewModuleDispatcher(component.dispatcher, descriptor.OwnerID), contracts.RecordLimits{
+	return contracts.NewRecordDataStore(bus.NewRecordOwnerDispatcher(component.dispatcher, descriptor.OwnerID), contracts.RecordLimits{
 		MaxPayloadBytes: settings.MaxPayloadBytes, MaxIndexBytes: settings.MaxIndexBytes, MaxBatchBytes: settings.MaxBatchBytes,
 		MaxPageBytes: settings.MaxPageBytes, MaxSelectors: settings.MaxSelectors, MaxSelectorValues: settings.MaxSelectorValues,
 		MaxPageSize: settings.MaxPageSize, MaxBatchOperations: settings.MaxBatchOperations,

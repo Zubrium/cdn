@@ -29,11 +29,24 @@ type moduleDispatcher struct {
 // operations declared for it in allowedKeysForModule. The Core Coordinator is
 // the bus owner and is exempt from this narrowing.
 func NewModuleDispatcher(dispatcher contracts.Dispatcher, moduleID string) contracts.Dispatcher {
+	if moduleID == "core.coordinator" && dispatcher != nil {
+		return moduleDispatcher{dispatcher: dispatcher, moduleID: moduleID}
+	}
+	return newModuleDispatcher(dispatcher, moduleID, allowedKeysForModule(moduleID))
+}
+
+// NewRecordOwnerDispatcher binds a registered record descriptor owner to the
+// record operations. The owner ID selects the scoped store in Core.
+func NewRecordOwnerDispatcher(dispatcher contracts.Dispatcher, ownerID string) contracts.Dispatcher {
+	return newModuleDispatcher(dispatcher, ownerID, recordOperationKeys())
+}
+
+func newModuleDispatcher(dispatcher contracts.Dispatcher, moduleID string, keys []contracts.Key) contracts.Dispatcher {
 	if dispatcher == nil || !moduleIdentityPattern.MatchString(moduleID) {
 		return nil
 	}
 	allowed := make(map[contracts.Key]struct{})
-	for _, key := range allowedKeysForModule(moduleID) {
+	for _, key := range keys {
 		allowed[key] = struct{}{}
 	}
 	return moduleDispatcher{dispatcher: dispatcher, moduleID: moduleID, allowed: allowed}
@@ -44,7 +57,7 @@ func (dispatcher moduleDispatcher) Dispatch(ctx context.Context, request contrac
 		return contracts.Envelope{}, ErrInvalidModuleIdentity
 	}
 	key := request.Key()
-	if dispatcher.moduleID != "core.coordinator" {
+	if dispatcher.allowed != nil {
 		if _, allowed := dispatcher.allowed[key]; !allowed {
 			return contracts.Envelope{}, ErrOperationNotAllowedForModule
 		}
@@ -66,6 +79,18 @@ func ModuleIDFromContext(ctx context.Context) string {
 	return moduleID
 }
 
+func recordOperationKeys() []contracts.Key {
+	return []contracts.Key{
+		contracts.RecordGetOperation().Key,
+		contracts.RecordGetExpiredOperation().Key,
+		contracts.RecordPutOperation().Key,
+		contracts.RecordDeleteOperation().Key,
+		contracts.RecordBatchOperation().Key,
+		contracts.RecordListOperation().Key,
+		contracts.RecordListExpiredOperation().Key,
+	}
+}
+
 func allowedKeysForModule(moduleID string) []contracts.Key {
 	core := []contracts.Key{contracts.CoreReadinessOperation().Key}
 	access := []contracts.Key{
@@ -84,15 +109,7 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 		contracts.FileSetAddOperation().Key,
 		contracts.FileSetRemoveOperation().Key,
 	}
-	records := []contracts.Key{
-		contracts.RecordGetOperation().Key,
-		contracts.RecordGetExpiredOperation().Key,
-		contracts.RecordPutOperation().Key,
-		contracts.RecordDeleteOperation().Key,
-		contracts.RecordBatchOperation().Key,
-		contracts.RecordListOperation().Key,
-		contracts.RecordListExpiredOperation().Key,
-	}
+	records := recordOperationKeys()
 	workflow := []contracts.Key{
 		contracts.WorkflowStartOperation().Key,
 		contracts.WorkflowStateOperation().Key,

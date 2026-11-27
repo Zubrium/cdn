@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -30,13 +29,6 @@ import (
 	"github.com/Zubrium/cdn/workers/archive"
 	"github.com/google/uuid"
 )
-
-// websiteRunBootstrapSecret keeps one run-scoped bootstrap identity across
-// disposable integration scenarios that share the same PostgreSQL instance.
-func websiteRunBootstrapSecret(runID string) string {
-	digest := sha256.Sum256([]byte("web012-bootstrap-" + runID))
-	return "ct_live_" + base64.RawURLEncoding.EncodeToString(digest[:])
-}
 
 // TestWebsiteFeatureImportAcceptance is the executable WEB-012 check. It uses
 // only disposable PostgreSQL/S3 inputs and never skips when they are missing.
