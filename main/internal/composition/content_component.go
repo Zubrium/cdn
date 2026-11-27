@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	platform "github.com/Zubrium/cdn/core/presentation"
 	contentengine "github.com/Zubrium/cdn/engines/content"
@@ -62,7 +63,7 @@ func (component *contentEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	bridge, err := contentbridge.NewClient(newContentBridgeWorkflowClient(moduleDispatcher))
+	bridge, err := contentbridge.NewClient(newContentBridgeWorkflowClient(moduleDispatcher), component.config.CoordinatorFingerprint)
 	if err != nil {
 		return err
 	}
@@ -170,14 +171,18 @@ func (component *contentEngineComponent) ResolveContentBuildProjection(ctx conte
 // never calls a Website-owned operation itself.
 func (component *contentEngineComponent) ResolveContentBuildProjectionFromProjections(ctx context.Context, projections contentapi.Projections, locale string) (contracts.ContentBuildProjectionResponse, error) {
 	if component == nil || ctx == nil || component.engine == nil || locale == "" {
-		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
+		return contracts.ContentBuildProjectionResponse{}, fmt.Errorf("content build projection dependencies: %w", contentapi.ErrUnavailable)
 	}
 	if !projections.VerifyScope(projections.Page.PageSnapshotID) || projections.Locale != locale {
-		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
+		return contracts.ContentBuildProjectionResponse{}, fmt.Errorf("content build projection scope: %w", contentapi.ErrUnavailable)
 	}
 	workspace, err := component.engine.GetWorkspace(ctx, projections)
-	if err != nil || workspace.PublishedRevision < 0 || workspace.Selections == nil {
-		return contracts.ContentBuildProjectionResponse{}, contentapi.ErrUnavailable
+	if err != nil {
+		return contracts.ContentBuildProjectionResponse{}, fmt.Errorf("content build workspace: %w", err)
+	}
+	if workspace.PublishedRevision < 0 || workspace.Selections == nil {
+		return contracts.ContentBuildProjectionResponse{}, fmt.Errorf("content build workspace incomplete: revision=%d selections=%t: %w",
+			workspace.PublishedRevision, workspace.Selections != nil, contentapi.ErrUnavailable)
 	}
 	encoded, err := json.Marshal(workspace.Selections)
 	if err != nil {

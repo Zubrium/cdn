@@ -8,8 +8,8 @@ const credential = required("E2E_BOOTSTRAP_CREDENTIAL");
 const runId = required("E2E_RUN_ID");
 const statePath = required("E2E_STATE_FILE");
 const mode = process.argv[2];
-if (mode !== "prepare" && mode !== "fixtures") {
-  throw new Error("usage: setup.mjs prepare|fixtures");
+if (mode !== "prepare" && mode !== "fixtures" && mode !== "baseline") {
+  throw new Error("usage: setup.mjs prepare|fixtures|baseline");
 }
 
 function required(name) {
@@ -244,6 +244,13 @@ async function uploadBootstrapArtifact(client, locale) {
   return uploaded.id;
 }
 
+function localeManifestFileID(route, locale) {
+  const target = route.target;
+  if (target?.kind !== "static-site-artifact") return undefined;
+  return target.locale_targets?.find((entry) => entry.locale === locale)
+    ?.artifact_manifest_file_id;
+}
+
 async function publishWorkspace(client, snapshotID, locale) {
   const workspace = await client.json(
     "GET",
@@ -302,6 +309,29 @@ if (mode === "prepare") {
   });
   await writeState({ runId, fileSetID: fileSet.id });
   process.stdout.write(`E2E prepare complete (run ${runId})\n`);
+} else if (mode === "baseline") {
+  // Preparation publications resume only after the final config supplies their
+  // route bindings. Capture the settled activated state before Playwright reads
+  // it, so the test never races a still-running preparation fan-out.
+  const state = await readState();
+  for (const route of state.routes) {
+    const settled = await client.poll(
+      `/api/admin/router/routes/${encodeURIComponent(route.id)}`,
+      (view) =>
+        ["en-US", "de-DE"].every(
+          (locale) =>
+            localeManifestFileID(view, locale) &&
+            localeManifestFileID(view, locale) !== route.initial[locale],
+        ),
+      `baseline publication for ${route.path}`,
+    );
+    route.initial = {
+      "en-US": localeManifestFileID(settled, "en-US"),
+      "de-DE": localeManifestFileID(settled, "de-DE"),
+    };
+  }
+  await writeState(state);
+  process.stdout.write(`E2E baseline complete (run ${runId})\n`);
 } else {
   const state = await readState();
   const featureKey = "e2e-page";

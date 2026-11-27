@@ -54,6 +54,49 @@ func TestPublicationActivationRevisionIsStableAcrossRetry(t *testing.T) {
 	}
 }
 
+func TestBuiltArtifactFileIDReturnsServerIssuedFileInsteadOfRequestKey(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Publish(ctx, Trigger{Locale: testLocale, ContentPublicationRevision: 4, IdempotencyKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued := "55555555-5555-4555-8555-555555555555"
+	if issued == workflow.PublicationArtifactFileID(run.RunID, testRouteA, testLocale) {
+		t.Fatal("test issued ID must differ from the deterministic Core request key")
+	}
+	if err := service.updateTarget(ctx, run.RunID, testRouteA, testLocale, func(target *targetRecord) {
+		target.State = stateBuilt
+		target.ArtifactManifestFileID = issued
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.BuiltArtifactFileID(ctx, run.RunID, testRouteA, testLocale)
+	if err != nil || got != issued {
+		t.Fatalf("BuiltArtifactFileID = %q, %v; want %q", got, err, issued)
+	}
+}
+
+func TestBuiltArtifactFileIDRejectsSlotWithoutCompletedBuild(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Publish(ctx, Trigger{Locale: testLocale, ContentPublicationRevision: 4, IdempotencyKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.BuiltArtifactFileID(ctx, run.RunID, testRouteA, testLocale); !errors.Is(err, ErrStale) {
+		t.Fatalf("pending slot error = %v, want ErrStale", err)
+	}
+}
+
 func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
 	ctx := context.Background()
 	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,

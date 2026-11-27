@@ -30,10 +30,23 @@ type ContentBuildProjectionResolver interface {
 	ResolveContentBuildProjection(context.Context, string, string) (ContentBuildProjection, error)
 }
 
+// PinnedContentBuildProjectionResolver can resolve the Content projection for
+// one already published revision instead of whatever happens to be current.
+type PinnedContentBuildProjectionResolver interface {
+	ResolveContentBuildProjectionPinned(context.Context, string, string, int64) (ContentBuildProjection, error)
+}
+
 // BuildInputResolver resolves the complete versioned input set for one
 // locale-bound prerender. It is a required trusted capability.
 type BuildInputResolver interface {
 	ResolveBuildInput(context.Context, websiteapi.Snapshot, string, int64) (prerendercontract.TrustedInput, error)
+}
+
+// PinnedBuildInputResolver pins the Content half of a build to an already
+// published revision. Publication uses it so a durable trigger cannot build
+// from a newer or older publication than the one it represents.
+type PinnedBuildInputResolver interface {
+	ResolveBuildInputPinned(context.Context, websiteapi.Snapshot, string, int64, int64) (prerendercontract.TrustedInput, error)
 }
 
 // ModuleBuildInputResolver resolves build inputs exclusively from registered
@@ -65,8 +78,12 @@ func NewModuleBuildInputResolver(store RecordStore, content ContentBuildProjecti
 }
 
 func (r *ModuleBuildInputResolver) ResolveBuildInput(ctx context.Context, snapshot websiteapi.Snapshot, locale string, catalogRevision int64) (prerendercontract.TrustedInput, error) {
+	return r.ResolveBuildInputPinned(ctx, snapshot, locale, catalogRevision, 0)
+}
+
+func (r *ModuleBuildInputResolver) ResolveBuildInputPinned(ctx context.Context, snapshot websiteapi.Snapshot, locale string, catalogRevision, expectedContentRevision int64) (prerendercontract.TrustedInput, error) {
 	if r == nil || !validInterface(r.store) || !validInterface(r.content) || ctx == nil || snapshot.Payload == nil ||
-		len(snapshot.Payload.Config) == 0 || !validBuildLocale(locale) || catalogRevision < 1 {
+		len(snapshot.Payload.Config) == 0 || !validBuildLocale(locale) || catalogRevision < 1 || expectedContentRevision < 0 {
 		return prerendercontract.TrustedInput{}, websiteapi.ErrUnavailable
 	}
 	if snapshot.State != "ready" || snapshot.Revision < 1 || !sha256HexPattern.MatchString(snapshot.Digest) {
@@ -80,9 +97,21 @@ func (r *ModuleBuildInputResolver) ResolveBuildInput(ctx context.Context, snapsh
 	if err != nil || model.Digest == "" {
 		return prerendercontract.TrustedInput{}, websiteapi.ErrUnavailable
 	}
-	projection, err := r.content.ResolveContentBuildProjection(ctx, snapshot.ID, locale)
+	var projection ContentBuildProjection
+	if expectedContentRevision > 0 {
+		if pinned, ok := r.content.(PinnedContentBuildProjectionResolver); ok {
+			projection, err = pinned.ResolveContentBuildProjectionPinned(ctx, snapshot.ID, locale, expectedContentRevision)
+		} else {
+			projection, err = r.content.ResolveContentBuildProjection(ctx, snapshot.ID, locale)
+		}
+	} else {
+		projection, err = r.content.ResolveContentBuildProjection(ctx, snapshot.ID, locale)
+	}
 	if err != nil || projection.PublicationRevision < 0 || !sha256HexPattern.MatchString(projection.SelectionDigest) {
 		return prerendercontract.TrustedInput{}, websiteapi.ErrUnavailable
+	}
+	if expectedContentRevision > 0 && projection.PublicationRevision != expectedContentRevision {
+		return prerendercontract.TrustedInput{}, websiteapi.ErrConflict
 	}
 	featureDigest, lockDigest, err := r.resolveFeaturePins(ctx, snapshot.FeaturePins)
 	if err != nil {
@@ -195,7 +224,10 @@ func RenderPagePlan(input prerendercontract.TrustedInput, config json.RawMessage
 
 // AssertModuleBuildInputResolver keeps the core-only capability dependency
 // explicit for composition and compile-time checks.
-var _ BuildInputResolver = (*ModuleBuildInputResolver)(nil)
+var (
+	_ BuildInputResolver       = (*ModuleBuildInputResolver)(nil)
+	_ PinnedBuildInputResolver = (*ModuleBuildInputResolver)(nil)
+)
 
 var errBuildInputUnavailable = errors.New("trusted build input unavailable")
 

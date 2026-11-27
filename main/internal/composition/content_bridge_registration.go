@@ -1,6 +1,8 @@
 package composition
 
 import (
+	"context"
+
 	"github.com/Zubrium/cdn/main/internal/bus"
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/main/internal/contentbridge"
@@ -20,9 +22,16 @@ func registerContentBridgeWorkerHandlers(
 ) error {
 	enabled := config.Scales.WorkerPools.Publication.Enabled
 	handlerConfig := contentbridge.Config{MaxAttempts: config.Coordinator.MaxAttempts}
-	var workflows contentbridge.WorkflowClient = newContentBridgeWorkflowClient(nil)
-	if core != nil {
-		workflows = newContentBridgeWorkflowClient(core.dispatcher)
+	// The Core DataBus dispatcher is created after worker handlers are bound,
+	// so the Content build adapter resolves its workflow client when the task
+	// runs rather than capturing a nil dispatcher here. Core scopes workflow
+	// reads to the owner that started the root: the build bridge root belongs
+	// to engine.website even though this child runs in the engine.content pool.
+	workflows := func(bound *coreComponent) contentbridge.WorkflowClient {
+		if bound == nil || bound.dispatcher == nil {
+			return newContentBridgeWorkflowClient(nil)
+		}
+		return newContentBridgeWorkflowClient(bus.NewModuleDispatcher(bound.dispatcher, contentBridgeTaskClassWebsite))
 	}
 
 	if _, compiled := selected[contentBridgeTaskClassContent]; compiled {
@@ -35,7 +44,10 @@ func registerContentBridgeWorkerHandlers(
 			return err
 		}
 		if err := register(contentBridgeTaskClassContent, contracts.ContentBuildResolveOperationID,
-			contracts.ContentBridgeChildVersion, enabled, contentBuildWorker{core: core, workflows: workflows}.WorkerHandler); err != nil {
+			contracts.ContentBridgeChildVersion, enabled,
+			func(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
+				return contentBuildWorker{core: core, workflows: workflows(core)}.WorkerHandler(ctx, task)
+			}); err != nil {
 			return err
 		}
 		if err := register(contentBridgeTaskClassContent, contracts.ContentLocaleReadOperationID,

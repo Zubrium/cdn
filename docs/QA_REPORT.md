@@ -56,6 +56,29 @@ composition/publication и сборка также прошли с `-tags=full`.
 конкуренция на disposable PostgreSQL в этом проходе не проверялись; WEB-021
 остаётся заблокированным.
 
+### Живой E2E после CAS/revision-исправления (2026-11-27)
+
+Подтверждённый прогон: `e2e-20261127T230710Z-ca5cc5`, evidence в
+`output/e2e/e2e-20261127T230710Z-ca5cc5/`. Полный sweep
+`QA_BROWSER_WORKING_PORTS=8080,55432 bash tests/qa/run-release-checks.sh --with-e2e --report-prefix output/test-report-release-final-e2efix`
+завершился кодом 0; отчёт фиксирует `git.head=9c174843`, `dirty=True`,
+`89 pass / 0 fail / 0 blocked` гейтов и `70 pass / 0 fail / 0 not_run / 14 blocked`
+сценариев при покрытии `70/70` исполняемых сценариев. Порт `5173` не использовался:
+явно заданы рабочие порты `8080,55432`, чужие listener'ы не останавливались.
+
+- `prepare-checkout.log`: `HEAD 9c17484390dc, 78 status entries; source unchanged, copy matches` — E2E проверял рабочее дерево поверх `9c174843`, а не только чистый HEAD.
+- `setup-baseline.log`: `E2E baseline complete (run e2e-20261127T230710Z-ca5cc5)` — подготовительные публикации урегулированы до старта Playwright, поэтому тест не гоняется с собственной фикстурой.
+- `verify-target.log`: слушают только checkout binary/config; `GET /healthz` и `/readyz` Admin вернули `204`, build identity совпал, рабочие порты свободны.
+- `playwright.log`: точные строки `PASS E2E-PUB-001`, `PASS E2E-LOC-001`, `PASS E2E-RET-001`, финальные `PASS` и `ok github.com/Zubrium/cdn/tests/e2e 16.385s`, ни одной строки `FAIL`.
+
+Исправление устранило две причины красного E2E: root workflow теперь подставляет
+выданный Core artifact ID вместо детерминированного upload request key, а
+фикстура фиксирует baseline после завершения подготовительного fan-out.
+Результат получен на дереве с параллельной правкой удаления веточной топологии;
+последующий коммит этой волны меняет только контрактные тексты, тестовые фикстуры
+и сгенерированные Admin-ассеты. Интеграционные `WEB-021`, `WEB-022` и остальные
+`blocked`-сценарии этим прогоном не снимаются.
+
 ## Publication: гонка старта и завершения (2026-11-26)
 
 Статус запуска записывается с CAS по ревизии, прочитанной до `Start`, поэтому

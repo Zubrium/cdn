@@ -76,8 +76,9 @@ type ContentProjectionResponse struct {
 }
 
 type ContentBuildProjectionRequest struct {
-	PageSnapshotID string `json:"page_snapshot_id"`
-	Locale         string `json:"locale"`
+	PageSnapshotID              string `json:"page_snapshot_id"`
+	Locale                      string `json:"locale"`
+	ExpectedPublicationRevision int64  `json:"expected_publication_revision,omitempty"`
 }
 
 type ContentBuildProjectionResponse struct {
@@ -124,8 +125,9 @@ type ContentProjectionWorkflowPayload struct {
 }
 
 type ContentBuildWorkflowPayload struct {
-	PageSnapshotID string `json:"page_snapshot_id"`
-	Locale         string `json:"locale"`
+	PageSnapshotID              string `json:"page_snapshot_id"`
+	Locale                      string `json:"locale"`
+	ExpectedPublicationRevision int64  `json:"expected_publication_revision,omitempty"`
 }
 
 type ContentLocaleWorkflowPayload struct{}
@@ -166,6 +168,9 @@ func ValidateContentProjectionWorkflowPayload(payload ContentProjectionWorkflowP
 }
 
 func ValidateBuildWorkflowPayload(payload ContentBuildWorkflowPayload) error {
+	if payload.ExpectedPublicationRevision < 0 {
+		return ErrInvalidContentProjectionRequest
+	}
 	return validateContentProjectionRequest(ContentProjectionRequest{
 		PageSnapshotID: payload.PageSnapshotID, Locale: payload.Locale,
 	}, false)

@@ -63,7 +63,7 @@ func (stub *bridgeWorkflowStub) ResolveTaskID(_ context.Context, _ uuid.UUID, _ 
 func TestWebsiteLocaleCatalogUsesNeutralWorkflowBridge(t *testing.T) {
 	stub := newBridgeWorkflowStub()
 	stub.locale = contracts.ContentLocaleCatalogResponse{Revision: 4, Locales: []string{"en-US", "ru-RU"}}
-	bridge, err := contentbridge.NewClient(stub)
+	bridge, err := contentbridge.NewClient(stub, "test-configuration")
 	if err != nil {
 		t.Fatal(err)
 	}

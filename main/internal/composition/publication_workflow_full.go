@@ -16,6 +16,7 @@ import (
 	"time"
 
 	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
+	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	featureruntime "github.com/Zubrium/cdn/engines/website/features/runtime"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/main/internal/bus"
@@ -105,9 +106,10 @@ func (handler publicationBuildHandler) build(ctx context.Context, payload contra
 	result.InputDigest = digest
 
 	job, err := website.service.service.BuildSnapshot(website.ctx, websiteapi.BuildSnapshotRequest{
-		SnapshotID:     payload.PageSnapshotID,
-		Locale:         payload.Locale,
-		IdempotencyKey: contracts.PublicationBuildIdempotencyKey(payload),
+		SnapshotID:              payload.PageSnapshotID,
+		Locale:                  payload.Locale,
+		IdempotencyKey:          contracts.PublicationBuildIdempotencyKey(payload),
+		ExpectedContentRevision: payload.ContentPublicationRevision,
 	})
 	if err != nil || job.ID == "" {
 		if err == nil {
@@ -170,12 +172,20 @@ func (handler publicationBuildHandler) inputDigest(website authenticatedWebsite,
 	if err != nil || revision < 1 {
 		return "", publication.ErrUnavailable
 	}
-	input, err := website.service.inputResolver.ResolveBuildInput(website.ctx, snapshot, payload.Locale, revision)
-	if err != nil || prerendercontract.ValidateTrustedInput(input) != nil ||
-		input.SnapshotID != payload.PageSnapshotID || input.Locale != payload.Locale ||
+	input, err := resolvePinnedBuildInput(website.service.inputResolver, website.ctx, snapshot, payload.Locale, revision, payload.ContentPublicationRevision)
+	if err != nil {
+		return "", fmt.Errorf("publication build input: %w", err)
+	}
+	if err := prerendercontract.ValidateTrustedInput(input); err != nil {
+		return "", fmt.Errorf("publication trusted input validation: %w", err)
+	}
+	if input.SnapshotID != payload.PageSnapshotID || input.Locale != payload.Locale ||
 		input.ContentPublicationRevision != payload.ContentPublicationRevision ||
 		input.SystemModelRevision != payload.SystemModelRevision {
-		return "", fmt.Errorf("publication trusted input: %w", publication.ErrInvalid)
+		return "", fmt.Errorf("publication trusted input mismatch: snapshot=%s/%s locale=%s/%s content=%d/%d model=%d/%d: %w",
+			input.SnapshotID, payload.PageSnapshotID, input.Locale, payload.Locale,
+			input.ContentPublicationRevision, payload.ContentPublicationRevision,
+			input.SystemModelRevision, payload.SystemModelRevision, publication.ErrInvalid)
 	}
 	digest, err := prerendercontract.InputDigest(input)
 	if err != nil {
@@ -184,23 +194,48 @@ func (handler publicationBuildHandler) inputDigest(website authenticatedWebsite,
 	return digest, nil
 }
 
+func resolvePinnedBuildInput(resolver websiteapp.BuildInputResolver, ctx context.Context, snapshot websiteapi.Snapshot,
+	locale string, catalogRevision, contentRevision int64) (prerendercontract.TrustedInput, error) {
+	if contentRevision < 0 {
+		return prerendercontract.TrustedInput{}, publication.ErrInvalid
+	}
+	if contentRevision == 0 {
+		return resolver.ResolveBuildInput(ctx, snapshot, locale, catalogRevision)
+	}
+	pinned, ok := resolver.(websiteapp.PinnedBuildInputResolver)
+	if !ok {
+		return prerendercontract.TrustedInput{}, publication.ErrUnavailable
+	}
+	return pinned.ResolveBuildInputPinned(ctx, snapshot, locale, catalogRevision, contentRevision)
+}
+
 func (handler publicationBuildHandler) awaitBuild(website authenticatedWebsite, buildID string) (websiteapi.BuildJob, error) {
-	deadline := time.Now().Add(handler.component.config.Publication.BuildTimeout)
+	return awaitBuildStatus(website.ctx, website.service.service.GetBuild, buildID,
+		handler.component.config.Publication.BuildTimeout, handler.component.config.Publication.PollInterval)
+}
+
+// awaitBuildStatus drives one durable build to a terminal state. Concurrent
+// readers legitimately race on the build record's CAS revision; a conflict
+// means another reader advanced it, so reload instead of failing the target.
+func awaitBuildStatus(ctx context.Context, getBuild func(context.Context, string) (websiteapi.BuildJob, error),
+	buildID string, timeout, pollInterval time.Duration) (websiteapi.BuildJob, error) {
+	deadline := time.Now().Add(timeout)
 	for {
-		job, err := website.service.service.GetBuild(website.ctx, buildID)
+		job, err := getBuild(ctx, buildID)
 		if err != nil {
-			return websiteapi.BuildJob{}, fmt.Errorf("publication build status: %w", err)
-		}
-		if job.State == "ready" || job.State == "failed" {
+			if !errors.Is(err, websiteapi.ErrConflict) {
+				return websiteapi.BuildJob{}, fmt.Errorf("publication build status for %s: %w", buildID, err)
+			}
+		} else if job.State == "ready" || job.State == "failed" {
 			return job, nil
 		}
 		if time.Now().After(deadline) {
 			return websiteapi.BuildJob{}, fmt.Errorf("publication build: %w", context.DeadlineExceeded)
 		}
 		select {
-		case <-website.ctx.Done():
-			return websiteapi.BuildJob{}, website.ctx.Err()
-		case <-time.After(handler.component.config.Publication.PollInterval):
+		case <-ctx.Done():
+			return websiteapi.BuildJob{}, ctx.Err()
+		case <-time.After(pollInterval):
 		}
 	}
 }
@@ -284,6 +319,25 @@ func (handler publicationBuildHandler) coreFiles(ctx context.Context) (contracts
 
 type publicationActivateHandler struct{ component *coreComponent }
 
+// builtArtifactResolver is the server-owned activation precondition: the
+// deterministic upload request key emitted by the workflow root is replaced
+// with the file ID Core actually issued to the completed build.
+type builtArtifactResolver interface {
+	BuiltArtifactFileID(ctx context.Context, runID, routeID, locale string) (string, error)
+}
+
+func publicationActivationPayloadWithBuiltArtifact(ctx context.Context, resolver builtArtifactResolver, payload contracts.PublicationActivatePayload) (contracts.PublicationActivatePayload, error) {
+	if resolver == nil {
+		return payload, publication.ErrUnavailable
+	}
+	artifactID, err := resolver.BuiltArtifactFileID(ctx, payload.RunID, payload.RouteID, payload.Locale)
+	if err != nil {
+		return payload, err
+	}
+	payload.ArtifactManifestFileID = artifactID
+	return payload, nil
+}
+
 func (handler publicationActivateHandler) WorkerHandler(ctx context.Context, task contracts.OperationTask) (contracts.OperationOutcome, error) {
 	payload, err := contracts.DecodePayload[contracts.PublicationActivatePayload](task.Payload)
 	if err != nil {
@@ -295,6 +349,10 @@ func (handler publicationActivateHandler) WorkerHandler(ctx context.Context, tas
 	service := publicationWorkflowService.Load()
 	if service == nil {
 		return contracts.OperationOutcome{}, publication.ErrUnavailable
+	}
+	payload, err = publicationActivationPayloadWithBuiltArtifact(ctx, service, payload)
+	if err != nil {
+		return contracts.OperationOutcome{}, err
 	}
 	if err := service.BeginActivation(ctx, payload); err != nil {
 		return contracts.OperationOutcome{}, err
@@ -339,7 +397,7 @@ func (handler publicationActivateHandler) activate(ctx context.Context, payload 
 	if err != nil {
 		return result, publication.ErrUnavailable
 	}
-	snapshotID, err := service.TargetSnapshot(ctx, payload.RunID, payload.RouteID, payload.Locale)
+	snapshotID, contentRevision, err := service.TargetContentRevision(ctx, payload.RunID, payload.RouteID, payload.Locale)
 	if err != nil {
 		return result, err
 	}
@@ -354,9 +412,9 @@ func (handler publicationActivateHandler) activate(ctx context.Context, payload 
 	if err != nil || revision < 1 {
 		return result, publication.ErrUnavailable
 	}
-	input, err := website.inputResolver.ResolveBuildInput(websiteCtx, snapshot, payload.Locale, revision)
+	input, err := resolvePinnedBuildInput(website.inputResolver, websiteCtx, snapshot, payload.Locale, revision, contentRevision)
 	if err != nil {
-		return result, fmt.Errorf("publication trusted input: %w", publication.ErrInvalid)
+		return result, fmt.Errorf("publication trusted input: %w", err)
 	}
 	current, err := prerendercontract.InputDigest(input)
 	if err != nil || current != pinned {

@@ -180,9 +180,11 @@ func PublicationFinalizeEmissionKey(runID string) string {
 	return "publication.finalize:" + runID
 }
 
-// PublicationArtifactFileID is the server-derived, immutable file request key
-// for one publication slot. It is recomputed by build and activation workers;
-// no worker can choose a different file or route.
+// PublicationArtifactFileID is the server-derived, immutable Core upload
+// request key for one publication slot. Build recomputes it and never accepts
+// a caller-selected key; activation must resolve the Core-issued file ID from
+// the completed publication record instead of treating this request key as a
+// file identity.
 func PublicationArtifactFileID(runID, routeID, locale string) string {
 	key := "publication-artifact\x00" + runID + "\x00" + routeID + "\x00" + locale
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(key)).String()

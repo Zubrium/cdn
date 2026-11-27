@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	contentapi "github.com/Zubrium/cdn/engines/content/presentation"
 	"github.com/Zubrium/cdn/main/internal/contentbridge"
@@ -97,6 +98,7 @@ func (worker contentBuildWorker) WorkerHandler(ctx context.Context, task contrac
 	}
 	if err := contracts.ValidateBuildWorkflowPayload(contracts.ContentBuildWorkflowPayload{
 		PageSnapshotID: request.PageSnapshotID, Locale: request.Locale,
+		ExpectedPublicationRevision: request.ExpectedPublicationRevision,
 	}); err != nil {
 		return contracts.OperationOutcome{}, err
 	}
@@ -105,17 +107,19 @@ func (worker contentBuildWorker) WorkerHandler(ctx context.Context, task contrac
 		return contracts.OperationOutcome{}, contentbridge.ErrInvalid
 	}
 	if worker.core == nil || worker.workflows == nil {
-		return contracts.OperationOutcome{}, errContentBridgeDependencyUnavailable
+		return contracts.OperationOutcome{}, fmt.Errorf("content build worker dependencies: %w", errContentBridgeDependencyUnavailable)
 	}
 	content := worker.core.contentHandle.Load()
 	if content == nil {
-		return contracts.OperationOutcome{}, errContentBridgeDependencyUnavailable
+		return contracts.OperationOutcome{}, fmt.Errorf("content engine handle: %w", errContentBridgeDependencyUnavailable)
 	}
 	projection, err := worker.upstreamProjection(ctx, task.WorkflowID, request.PageSnapshotID, request.Locale)
 	if err != nil {
 		return contracts.OperationOutcome{}, err
 	}
-	response, err := content.ResolveContentBuildProjectionFromProjections(ctx, projection, request.Locale)
+	// Workspace resolution needs the server-owned authenticated Content
+	// context; the task context carries only the Core workflow identity.
+	response, err := content.ResolveContentBuildProjectionFromProjections(content.serviceCtx, projection, request.Locale)
 	if err != nil {
 		return contracts.OperationOutcome{}, err
 	}
@@ -136,12 +140,15 @@ func (worker contentBuildWorker) upstreamProjection(ctx context.Context, workflo
 	}
 	emission := contracts.ContentBuildProjectionEmissionKey(pageSnapshotID, locale)
 	taskID, err := worker.workflows.ResolveTaskID(ctx, workflowID, emission)
-	if err != nil || taskID == uuid.Nil {
-		return contentapi.Projections{}, errContentBridgeDependencyUnavailable
+	if err != nil {
+		return contentapi.Projections{}, fmt.Errorf("resolve build projection task: %w", err)
+	}
+	if taskID == uuid.Nil {
+		return contentapi.Projections{}, fmt.Errorf("resolve build projection task: %w", errContentBridgeDependencyUnavailable)
 	}
 	result, err := worker.workflows.GetTaskResult(ctx, workflowID, taskID)
 	if err != nil {
-		return contentapi.Projections{}, err
+		return contentapi.Projections{}, fmt.Errorf("read build projection task result: %w", err)
 	}
 	if result.TaskID != taskID || result.WorkflowID != workflowID || result.State != "succeeded" ||
 		result.Operation == nil || result.Operation.ClassID != contentBridgeTaskClassWebsite ||

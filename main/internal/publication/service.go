@@ -291,18 +291,38 @@ func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationB
 	}))
 }
 
-// TargetSnapshot returns the server-owned snapshot bound to one run slot. The
-// Router activation adapter uses it only to recompute the trusted input digest.
-func (s *Service) TargetSnapshot(ctx context.Context, runID, routeID, locale string) (string, error) {
+// TargetContentRevision returns the server-owned snapshot and publication
+// revision bound to one run slot. The Router activation adapter uses both only
+// to recompute the trusted input digest from the same publication the build
+// used.
+func (s *Service) TargetContentRevision(ctx context.Context, runID, routeID, locale string) (string, int64, error) {
 	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
-		return "", ErrInvalid
+		return "", 0, ErrInvalid
 	}
 	key := targetDataKey(runID, routeID, locale)
 	_, target, err := s.loadTarget(ctx, key, runID)
 	if err != nil {
+		return "", 0, err
+	}
+	return target.PageSnapshotID, target.ContentPublicationRevision, nil
+}
+
+// BuiltArtifactFileID returns the Core-issued manifest file ID recorded by the
+// completed build. The workflow root carries only a deterministic Core upload
+// request key; activation must use the issued file ID and never that key.
+func (s *Service) BuiltArtifactFileID(ctx context.Context, runID, routeID, locale string) (string, error) {
+	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
+		return "", ErrInvalid
+	}
+	_, target, err := s.loadTarget(ctx, targetDataKey(runID, routeID, locale), runID)
+	if err != nil {
 		return "", err
 	}
-	return target.PageSnapshotID, nil
+	if target.ArtifactManifestFileID == "" ||
+		(target.State != stateBuilt && target.State != stateRunning && target.State != stateFailed && target.State != stateSuccess) {
+		return "", ErrStale
+	}
+	return target.ArtifactManifestFileID, nil
 }
 
 // ArtifactDigest returns the input digest pinned when the verified build was

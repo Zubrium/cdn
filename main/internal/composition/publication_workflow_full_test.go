@@ -116,3 +116,47 @@ func TestWorkflowHandlerKeepsOwningCoreAcrossInitialization(t *testing.T) {
 		t.Fatal("second registration changed the first handler's Core instance")
 	}
 }
+
+type recordingBuiltArtifactResolver struct {
+	id     string
+	err    error
+	runID  string
+	route  string
+	locale string
+}
+
+func (resolver *recordingBuiltArtifactResolver) BuiltArtifactFileID(_ context.Context, runID, routeID, locale string) (string, error) {
+	resolver.runID, resolver.route, resolver.locale = runID, routeID, locale
+	return resolver.id, resolver.err
+}
+
+func TestPublicationActivationUsesIssuedArtifactInsteadOfRootRequestKey(t *testing.T) {
+	requestKey := contracts.PublicationArtifactFileID("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "en-US")
+	issued := "55555555-5555-4555-8555-555555555555"
+	resolver := &recordingBuiltArtifactResolver{id: issued}
+	payload := contracts.PublicationActivatePayload{
+		RunID: "11111111-1111-4111-8111-111111111111", RouteID: "22222222-2222-4222-8222-222222222222",
+		Locale: "en-US", ArtifactManifestFileID: requestKey, IdempotencyKey: "publication-key-0123456789abcdef",
+	}
+	resolved, err := publicationActivationPayloadWithBuiltArtifact(context.Background(), resolver, payload)
+	if err != nil || resolved.ArtifactManifestFileID != issued {
+		t.Fatalf("resolved artifact = %q, %v; want %q", resolved.ArtifactManifestFileID, err, issued)
+	}
+	if resolver.runID != payload.RunID || resolver.route != payload.RouteID || resolver.locale != payload.Locale {
+		t.Fatalf("resolver received %q/%q/%q", resolver.runID, resolver.route, resolver.locale)
+	}
+	if payload.ArtifactManifestFileID != requestKey {
+		t.Fatal("resolution must not mutate the durable task payload")
+	}
+}
+
+func TestPublicationActivationPropagatesMissingBuiltArtifact(t *testing.T) {
+	resolver := &recordingBuiltArtifactResolver{err: publication.ErrStale}
+	payload := contracts.PublicationActivatePayload{
+		RunID: "11111111-1111-4111-8111-111111111111", RouteID: "22222222-2222-4222-8222-222222222222",
+		Locale: "en-US", ArtifactManifestFileID: "33333333-3333-4333-8333-333333333333", IdempotencyKey: "publication-key-0123456789abcdef",
+	}
+	if _, err := publicationActivationPayloadWithBuiltArtifact(context.Background(), resolver, payload); !errors.Is(err, publication.ErrStale) {
+		t.Fatalf("error = %v, want ErrStale", err)
+	}
+}

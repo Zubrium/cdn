@@ -140,7 +140,16 @@ func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSna
 	if err != nil || catalogRevision < 0 {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 	}
-	trustedInput, err := s.config.BuildInputResolver.ResolveBuildInput(ctx, snapshot, request.Locale, catalogRevision)
+	var trustedInput prerendercontract.TrustedInput
+	if request.ExpectedContentRevision > 0 {
+		pinned, ok := s.config.BuildInputResolver.(PinnedBuildInputResolver)
+		if !ok {
+			return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
+		}
+		trustedInput, err = pinned.ResolveBuildInputPinned(ctx, snapshot, request.Locale, catalogRevision, request.ExpectedContentRevision)
+	} else {
+		trustedInput, err = s.config.BuildInputResolver.ResolveBuildInput(ctx, snapshot, request.Locale, catalogRevision)
+	}
 	if err != nil {
 		return websiteapi.BuildJob{}, websiteapi.ErrUnavailable
 	}
@@ -516,9 +525,14 @@ func (s *Service) advanceBuild(ctx context.Context, current buildState, next str
 	if err := s.putBuildRecord(ctx, current.key, current.revision, updated); err != nil {
 		return current, err
 	}
-	current.record = updated
-	current.revision++
-	return current, nil
+	// Core assigns revisions from a database-wide sequence. Re-read the
+	// authoritative revision after the CAS instead of assuming the record's
+	// next revision equals its previous revision plus one.
+	refreshed, err := s.loadBuildState(ctx, current.record.ID)
+	if err != nil {
+		return current, err
+	}
+	return refreshed, nil
 }
 
 func (s *Service) failBuild(ctx context.Context, current buildState, code string) (websiteapi.BuildJob, error) {

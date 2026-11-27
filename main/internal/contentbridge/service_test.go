@@ -1,6 +1,7 @@
 package contentbridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ type workflowStub struct {
 	childID      uuid.UUID
 	starts       []contracts.WorkflowStartInput
 	startByKey   map[string]contracts.WorkflowStartReceipt
+	startInputs  map[string]contracts.WorkflowStartInput
 	stateCalls   int
 	resolveCalls int
 	resolveMiss  bool
@@ -33,7 +35,7 @@ type workflowStub struct {
 func newWorkflowStub() *workflowStub {
 	return &workflowStub{
 		workflowID: uuid.New(), rootID: uuid.New(), childID: uuid.New(),
-		startByKey: map[string]contracts.WorkflowStartReceipt{}, rootClass: "engine.content",
+		startByKey: map[string]contracts.WorkflowStartReceipt{}, startInputs: map[string]contracts.WorkflowStartInput{}, rootClass: "engine.content",
 		rootOp:     contracts.ContentProjectionOperationID,
 		childClass: "engine.website", childOp: contracts.WebsiteProjectionOperationID,
 		childVersion: contracts.ContentBridgeChildVersion,
@@ -41,12 +43,16 @@ func newWorkflowStub() *workflowStub {
 }
 
 func (stub *workflowStub) Start(_ context.Context, input contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
-	if receipt, ok := stub.startByKey[input.IdempotencyKey]; ok {
-		return receipt, nil
+	if prior, ok := stub.startInputs[input.IdempotencyKey]; ok {
+		if !bytes.Equal(prior.Payload, input.Payload) {
+			return contracts.WorkflowStartReceipt{}, contracts.ErrWorkflowConflict
+		}
+		return stub.startByKey[input.IdempotencyKey], nil
 	}
 	stub.starts = append(stub.starts, input)
 	receipt := contracts.WorkflowStartReceipt{WorkflowID: stub.workflowID, RootTaskID: stub.rootID, Created: true}
 	stub.startByKey[input.IdempotencyKey] = receipt
+	stub.startInputs[input.IdempotencyKey] = input
 	return receipt, nil
 }
 
@@ -90,7 +96,7 @@ func projectionResult(snapshotID, locale string) []byte {
 }
 
 func clientForTest(stub *workflowStub) *Client {
-	client, err := NewClient(stub)
+	client, err := NewClient(stub, "test-configuration")
 	if err != nil {
 		panic(err)
 	}
@@ -128,6 +134,82 @@ func TestProjectionBridgeStartsNeutralRootAndReadsOnlyDeclaredChild(t *testing.T
 	}
 }
 
+func TestProjectionBridgeSeparatesProvisioningFromReadOnlyIdempotency(t *testing.T) {
+	snapshotID := "44444444-4444-4444-8444-444444444444"
+	stub := newWorkflowStub()
+	stub.rootResult, _ = json.Marshal(contracts.ContentBridgeRootResult{
+		Format:      contracts.ContentProjectionWorkflowFormat,
+		EmissionKey: contracts.ContentProjectionEmissionKey(snapshotID, "en-US"),
+	})
+	stub.childResult = projectionResult(snapshotID, "en-US")
+	client := clientForTest(stub)
+
+	if _, err := client.ReadProjection(context.Background(), contracts.ContentProjectionRequest{
+		PageSnapshotID: snapshotID, Locale: "en-US", AllowProvisioning: true,
+	}); err != nil {
+		t.Fatalf("provisioning projection read failed: %v", err)
+	}
+	if _, err := client.ReadProjection(context.Background(), contracts.ContentProjectionRequest{
+		PageSnapshotID: snapshotID, Locale: "en-US",
+	}); err != nil {
+		t.Fatalf("read-only projection read after provisioning failed: %v", err)
+	}
+	if len(stub.starts) != 2 {
+		t.Fatalf("workflow starts = %d, want 2 distinct projection workflows", len(stub.starts))
+	}
+	if stub.starts[0].IdempotencyKey == stub.starts[1].IdempotencyKey {
+		t.Fatalf("provisioning and read-only reads share idempotency key %q", stub.starts[0].IdempotencyKey)
+	}
+	if _, err := client.ReadProjection(context.Background(), contracts.ContentProjectionRequest{
+		PageSnapshotID: snapshotID, Locale: "en-US", AllowProvisioning: true,
+	}); err != nil {
+		t.Fatalf("repeated provisioning read failed: %v", err)
+	}
+	if len(stub.starts) != 2 {
+		t.Fatalf("provisioning idempotency was lost: %d starts", len(stub.starts))
+	}
+}
+
+func TestProjectionBridgeScopesIdempotencyToConfiguration(t *testing.T) {
+	snapshotID := "66666666-6666-4666-8666-666666666666"
+	stub := newWorkflowStub()
+	stub.rootResult, _ = json.Marshal(contracts.ContentBridgeRootResult{
+		Format:      contracts.ContentProjectionWorkflowFormat,
+		EmissionKey: contracts.ContentProjectionEmissionKey(snapshotID, "en-US"),
+	})
+	stub.childResult = projectionResult(snapshotID, "en-US")
+	request := contracts.ContentProjectionRequest{PageSnapshotID: snapshotID, Locale: "en-US"}
+
+	first, err := NewClient(stub, "configuration-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.pollInterval = time.Millisecond
+	if _, err := first.ReadProjection(context.Background(), request); err != nil {
+		t.Fatalf("first configuration read failed: %v", err)
+	}
+	second, err := NewClient(stub, "configuration-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.pollInterval = time.Millisecond
+	if _, err := second.ReadProjection(context.Background(), request); err != nil {
+		t.Fatalf("second configuration read failed: %v", err)
+	}
+	if len(stub.starts) != 2 {
+		t.Fatalf("workflow starts = %d, want one per configuration", len(stub.starts))
+	}
+	if stub.starts[0].IdempotencyKey == stub.starts[1].IdempotencyKey {
+		t.Fatalf("different configurations share idempotency key %q", stub.starts[0].IdempotencyKey)
+	}
+	if _, err := first.ReadProjection(context.Background(), request); err != nil {
+		t.Fatalf("repeated first configuration read failed: %v", err)
+	}
+	if len(stub.starts) != 2 {
+		t.Fatalf("configuration idempotency was lost: %d starts", len(stub.starts))
+	}
+}
+
 func TestBuildBridgeBindsRootToBothDeclaredEmissions(t *testing.T) {
 	snapshotID := "77777777-7777-4777-8777-777777777777"
 	stub := newWorkflowStub()
@@ -149,6 +231,65 @@ func TestBuildBridgeBindsRootToBothDeclaredEmissions(t *testing.T) {
 	}
 	if len(stub.starts) != 1 || stub.starts[0].OperationID != contracts.ContentBuildOperationID {
 		t.Fatalf("workflow starts = %+v", stub.starts)
+	}
+}
+
+func buildBridgeStub(snapshotID string, publicationRevision int64) *workflowStub {
+	stub := newWorkflowStub()
+	stub.rootClass = "engine.website"
+	stub.rootOp = contracts.ContentBuildOperationID
+	stub.childClass = "engine.content"
+	stub.childOp = contracts.ContentBuildResolveOperationID
+	stub.rootResult, _ = json.Marshal(contracts.ContentBridgeRootResult{
+		Format:                contracts.ContentBuildWorkflowFormat,
+		EmissionKey:           contracts.ContentBuildEmissionKey(snapshotID, "en-US"),
+		ProjectionEmissionKey: contracts.ContentBuildProjectionEmissionKey(snapshotID, "en-US"),
+	})
+	stub.childResult, _ = json.Marshal(contracts.ContentBuildProjectionResponse{
+		PublicationRevision: publicationRevision, SelectionDigest: strings.Repeat("a", 64),
+	})
+	return stub
+}
+
+func TestBuildBridgePinsIdempotencyToExpectedPublicationRevision(t *testing.T) {
+	snapshotID := "88888888-8888-4888-8888-888888888888"
+	firstStub := buildBridgeStub(snapshotID, 1)
+	first := clientForTest(firstStub)
+	firstRequest := contracts.ContentBuildProjectionRequest{
+		PageSnapshotID: snapshotID, Locale: "en-US", ExpectedPublicationRevision: 1,
+	}
+	if _, err := first.ReadBuild(context.Background(), firstRequest); err != nil {
+		t.Fatalf("revision 1 build read: %v", err)
+	}
+	secondStub := buildBridgeStub(snapshotID, 2)
+	second := clientForTest(secondStub)
+	secondRequest := firstRequest
+	secondRequest.ExpectedPublicationRevision = 2
+	if _, err := second.ReadBuild(context.Background(), secondRequest); err != nil {
+		t.Fatalf("revision 2 build read: %v", err)
+	}
+	if len(firstStub.starts) != 1 || len(secondStub.starts) != 1 {
+		t.Fatalf("workflow starts = %d/%d, want one per revision", len(firstStub.starts), len(secondStub.starts))
+	}
+	if firstStub.starts[0].IdempotencyKey == secondStub.starts[0].IdempotencyKey {
+		t.Fatalf("revisions share idempotency key %q", firstStub.starts[0].IdempotencyKey)
+	}
+	if _, err := first.ReadBuild(context.Background(), firstRequest); err != nil {
+		t.Fatalf("repeated revision 1 build read: %v", err)
+	}
+	if len(firstStub.starts) != 1 {
+		t.Fatalf("revision 1 idempotency was lost: %d starts", len(firstStub.starts))
+	}
+}
+
+func TestBuildBridgeRejectsProjectionFromAnotherPublicationRevision(t *testing.T) {
+	snapshotID := "99999999-9999-4999-8999-999999999999"
+	stub := buildBridgeStub(snapshotID, 1)
+	_, err := clientForTest(stub).ReadBuild(context.Background(), contracts.ContentBuildProjectionRequest{
+		PageSnapshotID: snapshotID, Locale: "en-US", ExpectedPublicationRevision: 2,
+	})
+	if err == nil {
+		t.Fatal("build bridge accepted a projection from an unexpected publication revision")
 	}
 }
 
@@ -193,7 +334,7 @@ func TestBridgeRejectsSubstitutedResultsAndForeignTasks(t *testing.T) {
 }
 
 func TestBridgeFailsClosedWithoutWorkflowClient(t *testing.T) {
-	client, err := NewClient(nil)
+	client, err := NewClient(nil, "test-configuration")
 	if err == nil || client != nil {
 		t.Fatal("bridge accepted a nil workflow client")
 	}

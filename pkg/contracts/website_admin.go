@@ -296,6 +296,10 @@ type AdminWebsiteBuildSnapshotRequest struct {
 	SnapshotID     string `json:"snapshot_id"`
 	Locale         string `json:"locale"`
 	IdempotencyKey string `json:"-"`
+
+	// ExpectedContentRevision is a composition-only pin for durable
+	// publication builds. HTTP callers cannot set it.
+	ExpectedContentRevision int64 `json:"-"`
 }
 
 type AdminWebsiteBuildJob struct {

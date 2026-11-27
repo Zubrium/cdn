@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
@@ -16,7 +17,10 @@ const (
 	bridgeWaitTimeout  = 30 * time.Second
 )
 
-var selectionDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var (
+	selectionDigestPattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	configurationScopePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
+)
 
 func validSelectionDigest(value string) bool { return selectionDigestPattern.MatchString(value) }
 
@@ -33,16 +37,47 @@ type WorkflowClient interface {
 // the root declared. The caller receives a validated neutral DTO; it can
 // neither select a workflow owner nor name another task.
 type Client struct {
-	workflows    WorkflowClient
-	pollInterval time.Duration
-	waitTimeout  time.Duration
+	workflows          WorkflowClient
+	configurationScope string
+	pollInterval       time.Duration
+	waitTimeout        time.Duration
 }
 
-func NewClient(workflows WorkflowClient) (*Client, error) {
+// NewClient binds the bridge to the current shared configuration fingerprint.
+// Core scopes durable workflow results to the instance's config epoch, so a
+// different configuration must not replay a workflow started by another epoch.
+func NewClient(workflows WorkflowClient, configurationScope string) (*Client, error) {
 	if workflows == nil {
 		return nil, ErrUnavailable
 	}
-	return &Client{workflows: workflows, pollInterval: bridgePollInterval, waitTimeout: bridgeWaitTimeout}, nil
+	if !configurationScopePattern.MatchString(configurationScope) {
+		return nil, ErrInvalid
+	}
+	return &Client{
+		workflows:          workflows,
+		configurationScope: configurationScope,
+		pollInterval:       bridgePollInterval,
+		waitTimeout:        bridgeWaitTimeout,
+	}, nil
+}
+
+func (client *Client) idempotencyKey(kind string, parts ...string) string {
+	key := "content-bridge/" + client.configurationScope + "/" + kind
+	for _, part := range parts {
+		key += "/" + part
+	}
+	return key
+}
+
+// Provisioning reads and read-only reads are distinct workflows: the root
+// payload differs by allow_provisioning, and Core rejects a reused key with a
+// different input.
+func (client *Client) contentProjectionIdempotencyKey(request contracts.ContentProjectionRequest) string {
+	key := client.idempotencyKey("projection", request.PageSnapshotID, request.Locale)
+	if request.AllowProvisioning {
+		key += "/provisioning"
+	}
+	return key
 }
 
 func (client *Client) ReadProjection(ctx context.Context, request contracts.ContentProjectionRequest) (contracts.ContentProjectionResponse, error) {
@@ -59,7 +94,7 @@ func (client *Client) ReadProjection(ctx context.Context, request contracts.Cont
 	if err != nil {
 		return contracts.ContentProjectionResponse{}, ErrInvalid
 	}
-	idempotencyKey := "content-bridge/projection/" + request.PageSnapshotID + "/" + request.Locale
+	idempotencyKey := client.contentProjectionIdempotencyKey(request)
 	emission := contracts.ContentProjectionEmissionKey(request.PageSnapshotID, request.Locale)
 	result, err := client.run(ctx, contracts.ContentProjectionOperationID, idempotencyKey, payload,
 		emission, "", contracts.ContentProjectionWorkflowFormat, "engine.content", "engine.website", contracts.WebsiteProjectionOperationID)
@@ -78,18 +113,21 @@ func (client *Client) ReadBuild(ctx context.Context, request contracts.ContentBu
 	if client == nil || client.workflows == nil {
 		return contracts.ContentBuildProjectionResponse{}, ErrUnavailable
 	}
-	payload, err := json.Marshal(contracts.ContentBuildWorkflowPayload{
+	workflowPayload := contracts.ContentBuildWorkflowPayload{
 		PageSnapshotID: request.PageSnapshotID, Locale: request.Locale,
-	})
+		ExpectedPublicationRevision: request.ExpectedPublicationRevision,
+	}
+	if err := contracts.ValidateBuildWorkflowPayload(workflowPayload); err != nil {
+		return contracts.ContentBuildProjectionResponse{}, err
+	}
+	payload, err := json.Marshal(workflowPayload)
 	if err != nil {
 		return contracts.ContentBuildProjectionResponse{}, ErrInvalid
 	}
-	if err := contracts.ValidateBuildWorkflowPayload(contracts.ContentBuildWorkflowPayload{
-		PageSnapshotID: request.PageSnapshotID, Locale: request.Locale,
-	}); err != nil {
-		return contracts.ContentBuildProjectionResponse{}, err
+	idempotencyKey := client.idempotencyKey("build", request.PageSnapshotID, request.Locale)
+	if request.ExpectedPublicationRevision > 0 {
+		idempotencyKey += "/revision/" + strconv.FormatInt(request.ExpectedPublicationRevision, 10)
 	}
-	idempotencyKey := "content-bridge/build/" + request.PageSnapshotID + "/" + request.Locale
 	emission := contracts.ContentBuildEmissionKey(request.PageSnapshotID, request.Locale)
 	projectionEmission := contracts.ContentBuildProjectionEmissionKey(request.PageSnapshotID, request.Locale)
 	result, err := client.run(ctx, contracts.ContentBuildOperationID, idempotencyKey, payload,
@@ -99,6 +137,9 @@ func (client *Client) ReadBuild(ctx context.Context, request contracts.ContentBu
 	}
 	response, err := contracts.DecodePayload[contracts.ContentBuildProjectionResponse](result)
 	if err != nil || response.PublicationRevision < 0 || !validSelectionDigest(response.SelectionDigest) {
+		return contracts.ContentBuildProjectionResponse{}, ErrInvalid
+	}
+	if request.ExpectedPublicationRevision > 0 && response.PublicationRevision != request.ExpectedPublicationRevision {
 		return contracts.ContentBuildProjectionResponse{}, ErrInvalid
 	}
 	return response, nil
@@ -112,7 +153,7 @@ func (client *Client) ReadLocale(ctx context.Context, request contracts.ContentL
 	if err != nil {
 		return contracts.ContentLocaleCatalogResponse{}, ErrInvalid
 	}
-	result, err := client.run(ctx, contracts.ContentLocaleOperationID, "content-bridge/locale/catalog", payload,
+	result, err := client.run(ctx, contracts.ContentLocaleOperationID, client.idempotencyKey("locale/catalog"), payload,
 		contracts.ContentLocaleEmissionKey, "", contracts.ContentLocaleWorkflowFormat, "engine.website", "engine.content", contracts.ContentLocaleReadOperationID)
 	if err != nil {
 		return contracts.ContentLocaleCatalogResponse{}, err

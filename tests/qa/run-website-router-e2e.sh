@@ -602,6 +602,20 @@ wait_port_free "$public_port" || fail "public port was not released before final
 printf '==> starting final server with trusted publication bindings\n'
 start_server "$final_config" final
 
+printf '==> settling baseline publications before Playwright tests\n'
+(
+	cd "$checkout/tests/e2e"
+	E2E_ADMIN_URL="http://127.0.0.1:$admin_port" \
+	E2E_PUBLIC_URL="http://127.0.0.1:$public_port" \
+	E2E_BOOTSTRAP_CREDENTIAL="$ZUBRIUM_E2E_SERVICE_CREDENTIAL" \
+	E2E_RUN_ID="$run_id" \
+	E2E_STATE_FILE="$state_file" \
+		node setup.mjs baseline
+) >"$evidence_dir/setup-baseline.log" 2>&1 || {
+	tail -n 60 "$evidence_dir/setup-baseline.log" >&2
+	fail "E2E baseline settlement failed"
+}
+
 printf '==> verifying target build identity and listener ownership\n'
 QA_BROWSER_CONFIG="$final_config" \
 EXPECTED_BUILD_IDENTITY="$build_identity" \

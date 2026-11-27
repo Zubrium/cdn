@@ -26,7 +26,7 @@ core:
     coordinator_jobs: 2
   min_connections: 0
   # Budget: 1 + 2 * loader commits + 2 * sum(worker limits) + storage read_reserve.
-  max_connections: 32
+  max_connections: 40
   connect_timeout: 10s
   max_lifetime: 1h
   max_idle_time: 10m
@@ -197,7 +197,10 @@ worker:
   publication:
     concurrency:
       enabled: true
-      limit: 2
+      # Publication build handlers wait for nested content-bridge roots and
+      # children in the same engine.website class; keep slots for concurrent
+      # builds and their nested tasks.
+      limit: 6
       poll_interval: 1s
       task_timeout: 30m
       lease_duration: 30s

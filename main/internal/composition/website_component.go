@@ -61,7 +61,7 @@ func (component *websiteEngineComponent) Start(ctx context.Context) error {
 	if websiteBuildEnabled {
 		buildWorkflow = newWebsiteBuildWorkflowClient(moduleDispatcher)
 	}
-	bridge, err := contentbridge.NewClient(newContentBridgeWorkflowClient(moduleDispatcher))
+	bridge, err := contentbridge.NewClient(newContentBridgeWorkflowClient(moduleDispatcher), component.config.CoordinatorFingerprint)
 	if err != nil {
 		return err
 	}

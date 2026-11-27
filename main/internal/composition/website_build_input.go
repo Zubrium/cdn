@@ -23,7 +23,11 @@ func newWebsiteContentBuildProjection(bridge *contentbridge.Client) *websiteCont
 }
 
 func (p *websiteContentBuildProjection) resolve(ctx context.Context, pageSnapshotID, locale string) (contracts.ContentBuildProjectionResponse, error) {
-	if p == nil || p.bridge == nil || ctx == nil || pageSnapshotID == "" || locale == "" {
+	return p.resolvePinned(ctx, pageSnapshotID, locale, 0)
+}
+
+func (p *websiteContentBuildProjection) resolvePinned(ctx context.Context, pageSnapshotID, locale string, expectedPublicationRevision int64) (contracts.ContentBuildProjectionResponse, error) {
+	if p == nil || p.bridge == nil || ctx == nil || pageSnapshotID == "" || locale == "" || expectedPublicationRevision < 0 {
 		return contracts.ContentBuildProjectionResponse{}, errContentBuildProjectionUnavailable
 	}
 	if err := ctx.Err(); err != nil {
@@ -31,6 +35,7 @@ func (p *websiteContentBuildProjection) resolve(ctx context.Context, pageSnapsho
 	}
 	return p.bridge.ReadBuild(ctx, contracts.ContentBuildProjectionRequest{
 		PageSnapshotID: pageSnapshotID, Locale: locale,
+		ExpectedPublicationRevision: expectedPublicationRevision,
 	})
 }
 
@@ -39,10 +44,14 @@ type websiteContentBuildProjectionAdapter struct {
 }
 
 func (adapter websiteContentBuildProjectionAdapter) ResolveContentBuildProjection(ctx context.Context, pageSnapshotID, locale string) (websiteapp.ContentBuildProjection, error) {
+	return adapter.ResolveContentBuildProjectionPinned(ctx, pageSnapshotID, locale, 0)
+}
+
+func (adapter websiteContentBuildProjectionAdapter) ResolveContentBuildProjectionPinned(ctx context.Context, pageSnapshotID, locale string, expectedPublicationRevision int64) (websiteapp.ContentBuildProjection, error) {
 	if adapter.client == nil {
 		return websiteapp.ContentBuildProjection{}, errContentBuildProjectionUnavailable
 	}
-	response, err := adapter.client.resolve(ctx, pageSnapshotID, locale)
+	response, err := adapter.client.resolvePinned(ctx, pageSnapshotID, locale, expectedPublicationRevision)
 	if err != nil {
 		return websiteapp.ContentBuildProjection{}, err
 	}
@@ -50,3 +59,5 @@ func (adapter websiteContentBuildProjectionAdapter) ResolveContentBuildProjectio
 		PublicationRevision: response.PublicationRevision, SelectionDigest: response.SelectionDigest,
 	}, nil
 }
+
+var _ websiteapp.PinnedContentBuildProjectionResolver = websiteContentBuildProjectionAdapter{}
