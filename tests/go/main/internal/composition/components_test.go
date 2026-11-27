@@ -3,6 +3,7 @@ package composition
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,6 +62,18 @@ func TestMergeProfileAccessGroupsUnionsSourcesAndPreservesYAMLLevel(t *testing.T
 func TestMergeProfileAccessGroupsRejectsInvalidEngineDeclaration(t *testing.T) {
 	if _, err := mergeProfileAccessGroups(nil, []contracts.ComponentDescriptor{{ID: "engine.example", AccessGroups: []string{"invalid group"}}}); err == nil {
 		t.Fatal("invalid engine group declaration was accepted")
+	}
+}
+
+func TestWebsiteCanRequestOnlyFeatureAndConfiguredWorkflowGrants(t *testing.T) {
+	descriptors := []contracts.ComponentDescriptor{{ID: "engine.website", AccessGroups: []string{"features"}}}
+	selected := map[string]struct{}{"engine.website": {}, "admin.coordinator": {}}
+	configured := map[string]platform.AccessLevel{
+		"features": platform.AccessLevelWrite, "site_jobs": platform.AccessLevelRead, "unrelated": platform.AccessLevelWrite,
+	}
+	groups := moduleCoreAccessGroups(descriptors, selected, configured, "site_jobs")
+	if got := groups["engine.website"]; !slices.Equal(got, []string{"features", "site_jobs"}) {
+		t.Fatalf("Website access groups = %v, want features and site_jobs", got)
 	}
 }
 

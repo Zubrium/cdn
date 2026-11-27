@@ -95,35 +95,46 @@ func mergeProfileAccessGroups(configured map[string]platform.AccessLevel, descri
 	return groups, nil
 }
 
+func moduleCoreAccessGroups(descriptors []contracts.ComponentDescriptor, selected map[string]struct{}, groups map[string]platform.AccessLevel, workflowGroup string) map[string][]string {
+	moduleGroups := make(map[string][]string)
+	for _, descriptor := range descriptors {
+		if moduleUsesCoreAccess(descriptor.ID, selected) && len(descriptor.AccessGroups) > 0 {
+			moduleGroups[descriptor.ID] = append([]string(nil), descriptor.AccessGroups...)
+		}
+	}
+	if websiteGroups, enabled := moduleGroups["engine.website"]; enabled {
+		if _, configured := groups[workflowGroup]; configured {
+			moduleGroups["engine.website"] = append(websiteGroups, workflowGroup)
+		}
+	}
+	for _, alias := range []string{"engine.website.import", "admin.api", "main.publication", "composition.retirement"} {
+		if moduleUsesCoreAccess(alias, selected) {
+			moduleGroups[alias] = configuredGroupNames(groups)
+		}
+	}
+	if _, ok := selected["admin.identity"]; ok {
+		moduleGroups["admin.identity"] = configuredGroupNames(groups)
+	}
+	if _, ok := selected["admin.coordinator"]; ok {
+		moduleGroups["admin.coordinator"] = []string{workflowGroup}
+	}
+	return moduleGroups
+}
+
 func (c *coreComponent) Start(ctx context.Context) error {
 	profileRegistry := NewProfileRegistry(platform.NewRegistry())
 	if err := RegisterProfile(profileRegistry); err != nil {
 		return fmt.Errorf("register compiled profile: %w", err)
 	}
-	c.accessGroups = make(map[string][]string)
-	for _, descriptor := range profileRegistry.ComponentDescriptors() {
-		if moduleUsesCoreAccess(descriptor.ID, c.selected) && len(descriptor.AccessGroups) > 0 {
-			c.accessGroups[descriptor.ID] = append([]string(nil), descriptor.AccessGroups...)
-		}
-	}
+	descriptors := profileRegistry.ComponentDescriptors()
 	coreConfig := c.config.Core
-	groups, err := mergeProfileAccessGroups(coreConfig.AccessGroups, profileRegistry.ComponentDescriptors())
+	groups, err := mergeProfileAccessGroups(coreConfig.AccessGroups, descriptors)
 	if err != nil {
 		return err
 	}
 	coreConfig.AccessGroups = groups
 	c.config.Core.AccessGroups = groups
-	for _, alias := range []string{"engine.website.import", "admin.api", "main.publication", "composition.retirement"} {
-		if moduleUsesCoreAccess(alias, c.selected) {
-			c.accessGroups[alias] = configuredGroupNames(groups)
-		}
-	}
-	if _, selected := c.selected["admin.identity"]; selected {
-		c.accessGroups["admin.identity"] = configuredGroupNames(groups)
-	}
-	if _, selected := c.selected["admin.coordinator"]; selected {
-		c.accessGroups["admin.coordinator"] = []string{c.config.Coordinator.WorkflowAccessGroup}
-	}
+	c.accessGroups = moduleCoreAccessGroups(descriptors, c.selected, groups, c.config.Coordinator.WorkflowAccessGroup)
 	if c.observer == nil {
 		return errors.New("core cache observer is not configured")
 	}
