@@ -59,7 +59,6 @@ type PublicationWorkflowTarget struct {
 // module identity, task class, credential, operation selector or Core handle.
 type PublicationWorkflowPayload struct {
 	RunID                      string                      `json:"run_id"`
-	BranchID                   string                      `json:"branch_id"`
 	Locale                     string                      `json:"locale"`
 	ContentPublicationRevision int64                       `json:"content_publication_revision"`
 	SystemModelRevision        int64                       `json:"system_model_revision"`
@@ -123,8 +122,7 @@ type PublicationStartResult struct {
 }
 
 func ValidatePublicationWorkflowPayload(payload PublicationWorkflowPayload) error {
-	if !workflowUUIDPattern.MatchString(payload.RunID) || payload.BranchID == "" ||
-		ValidateWorkflowLocale(payload.Locale) != nil || payload.ContentPublicationRevision < 0 ||
+	if !workflowUUIDPattern.MatchString(payload.RunID) || ValidateWorkflowLocale(payload.Locale) != nil || payload.ContentPublicationRevision < 0 ||
 		payload.SystemModelRevision < 0 || !workflowKeyPattern.MatchString(payload.IdempotencyKey) ||
 		len(payload.Targets) == 0 || len(payload.Targets) > 256 {
 		return ErrInvalidPublicationWorkflow

@@ -34,7 +34,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	run := runRecord{
-		Kind: recordTypeRun, RunID: runID, BranchID: s.config.BranchID, Locale: locale,
+		Kind: recordTypeRun, RunID: runID, Locale: locale,
 		ContentPublicationRevision: trigger.ContentPublicationRevision, SystemModelRevision: trigger.SystemModelRevision,
 		IdempotencyKey: trigger.IdempotencyKey, State: stateStarting, CreatedAt: now, UpdatedAt: now,
 	}
@@ -44,7 +44,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		return Result{}, err
 	}
 	mutations = append(mutations, workflow.RecordMutation{
-		Key: runDataKey(s.config.BranchID, runID), ExpectedRevision: 0, Value: runValue,
+		Key: runDataKey(runID), ExpectedRevision: 0, Value: runValue,
 	})
 	for _, target := range s.target {
 		if target.Locale != locale {
@@ -60,7 +60,7 @@ func (s *Service) Publish(ctx context.Context, trigger Trigger) (Result, error) 
 		if err != nil {
 			return Result{}, err
 		}
-		key := targetDataKey(s.config.BranchID, runID, target.RouteID, locale)
+		key := targetDataKey(runID, target.RouteID, locale)
 		run.TargetKeys = append(run.TargetKeys, key.RecordKey)
 		mutations = append(mutations, workflow.RecordMutation{Key: key, ExpectedRevision: 0, Value: value})
 	}
@@ -141,7 +141,7 @@ func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
 		SystemModelRevision: run.SystemModelRevision, IdempotencyKey: run.IdempotencyKey}
 	targets := make([]workflow.PublicationWorkflowTarget, 0, len(run.TargetKeys))
 	for _, recordKey := range run.TargetKeys {
-		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, run.RunID)
 		if err != nil {
 			return err
@@ -150,7 +150,7 @@ func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
 			RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID, Locale: target.Locale,
 		})
 	}
-	input := workflowStartInput(s.config.BranchID, trigger, run.Locale, run.RunID, targets)
+	input := workflowStartInput(trigger, run.Locale, run.RunID, targets)
 	key, record, current, err := s.loadRun(ctx, run.RunID)
 	if err != nil {
 		return err
@@ -180,9 +180,9 @@ func (s *Service) markStartOutcome(ctx context.Context, key workflow.RecordKey, 
 	return nil
 }
 
-func workflowStartInput(branchID string, trigger Trigger, locale, runID string, targets []workflow.PublicationWorkflowTarget) workflow.WorkflowStartInput {
+func workflowStartInput(trigger Trigger, locale, runID string, targets []workflow.PublicationWorkflowTarget) workflow.WorkflowStartInput {
 	payload, _ := json.Marshal(workflow.PublicationWorkflowPayload{
-		RunID: runID, BranchID: branchID, Locale: locale,
+		RunID: runID, Locale: locale,
 		ContentPublicationRevision: trigger.ContentPublicationRevision, SystemModelRevision: trigger.SystemModelRevision,
 		IdempotencyKey: trigger.IdempotencyKey, Targets: targets,
 	})
@@ -214,7 +214,7 @@ func (s *Service) BeginBuild(ctx context.Context, payload workflow.PublicationBu
 	if err := workflow.ValidatePublicationBuildPayload(payload); err != nil {
 		return err
 	}
-	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	key := targetDataKey(payload.RunID, payload.RouteID, payload.Locale)
 	current, target, err := s.loadTarget(ctx, key, payload.RunID)
 	if err != nil {
 		return err
@@ -243,7 +243,7 @@ func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationB
 		result.ArtifactManifestFileID == "" || !runKeyPattern.MatchString(result.ArtifactManifestFileID) {
 		return fmt.Errorf("%w: invalid build result", ErrInvalid)
 	}
-	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	key := targetDataKey(payload.RunID, payload.RouteID, payload.Locale)
 	current, target, err := s.loadTarget(ctx, key, payload.RunID)
 	if err != nil {
 		return err
@@ -287,7 +287,7 @@ func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationB
 	}
 	return mapStoreError(s.config.Store.Batch(ctx, []workflow.RecordMutation{
 		{Key: key, ExpectedRevision: current.Revision, Value: targetValue},
-		{Key: artifactDataKey(s.config.BranchID, artifact.RunID, artifact.RouteID, artifact.Locale), ExpectedRevision: 0, Value: artifactValue},
+		{Key: artifactDataKey(artifact.RunID, artifact.RouteID, artifact.Locale), ExpectedRevision: 0, Value: artifactValue},
 	}))
 }
 
@@ -297,7 +297,7 @@ func (s *Service) TargetSnapshot(ctx context.Context, runID, routeID, locale str
 	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
 		return "", ErrInvalid
 	}
-	key := targetDataKey(s.config.BranchID, runID, routeID, locale)
+	key := targetDataKey(runID, routeID, locale)
 	_, target, err := s.loadTarget(ctx, key, runID)
 	if err != nil {
 		return "", err
@@ -325,7 +325,7 @@ func (s *Service) ReserveActivationRevision(ctx context.Context, payload workflo
 	if workflow.ValidatePublicationActivatePayload(payload) != nil || observed < 1 {
 		return 0, ErrInvalid
 	}
-	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	key := targetDataKey(payload.RunID, payload.RouteID, payload.Locale)
 	current, target, err := s.loadTarget(ctx, key, payload.RunID)
 	if err != nil {
 		return 0, err
@@ -358,7 +358,7 @@ func (s *Service) BeginActivation(ctx context.Context, payload workflow.Publicat
 	if artifact.ArtifactManifestFileID != payload.ArtifactManifestFileID {
 		return fmt.Errorf("%w: activation artifact substitution", ErrInvalid)
 	}
-	key := targetDataKey(s.config.BranchID, payload.RunID, payload.RouteID, payload.Locale)
+	key := targetDataKey(payload.RunID, payload.RouteID, payload.Locale)
 	current, target, err := s.loadTarget(ctx, key, payload.RunID)
 	if err != nil {
 		return err
@@ -397,7 +397,7 @@ func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string,
 	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
 		return ErrInvalid
 	}
-	key := targetDataKey(s.config.BranchID, runID, routeID, locale)
+	key := targetDataKey(runID, routeID, locale)
 	current, target, loadErr := s.loadTarget(ctx, key, runID)
 	if loadErr != nil {
 		return loadErr
@@ -413,7 +413,7 @@ func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string,
 }
 
 func (s *Service) updateTarget(ctx context.Context, runID, routeID, locale string, mutate func(*targetRecord)) error {
-	key := targetDataKey(s.config.BranchID, runID, routeID, locale)
+	key := targetDataKey(runID, routeID, locale)
 	current, target, err := s.loadTarget(ctx, key, runID)
 	if err != nil {
 		return err
@@ -435,7 +435,7 @@ func (s *Service) FinalizeRun(ctx context.Context, runID string) (Result, error)
 	}
 	state := stateSuccess
 	for _, recordKey := range run.TargetKeys {
-		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, runID)
 		if err != nil {
 			return Result{}, err
@@ -460,7 +460,7 @@ func (s *Service) result(ctx context.Context, run runRecord) (Result, error) {
 		WorkflowStarted: run.State == stateRunning || run.State == stateSuccess || (run.State == stateFailed && run.ErrorCode == ""),
 	}
 	for _, recordKey := range run.TargetKeys {
-		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
+		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, run.RunID)
 		if err != nil {
 			return Result{}, err

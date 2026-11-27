@@ -16,6 +16,7 @@ const (
 	moduleID  = "publication"
 	namespace = "main/publication"
 	scopeType = "global"
+	scopeID   = "global"
 
 	recordTypeRun      = "publication_run"
 	recordTypeTarget   = "publication_target"
@@ -92,7 +93,6 @@ func (Module) ComponentDescriptor() contracts.ComponentDescriptor {
 // Config is the complete set of trusted capabilities required by the fan-out.
 // Engine credentials and channel handles stay in the composition root.
 type Config struct {
-	BranchID    string
 	Store       contracts.RecordDataStore
 	Starter     WorkflowStarter
 	Targets     []Target
@@ -125,7 +125,7 @@ type Service struct {
 
 // NewService fails closed until composition supplies every trusted capability.
 func NewService(config Config) (*Service, error) {
-	if config.BranchID == "" || config.Store == nil || len(config.Targets) == 0 ||
+	if config.Store == nil || len(config.Targets) == 0 ||
 		len(config.Targets) > maxTargets || config.MaxAttempts < 1 || config.MaxAttempts > 100 {
 		return nil, ErrUnavailable
 	}

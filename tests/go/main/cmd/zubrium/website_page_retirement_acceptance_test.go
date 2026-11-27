@@ -102,13 +102,11 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		routerOwned := &websiteOwnedKeys{store: routerData}
 		contentOwned := &websiteOwnedKeys{store: contentData}
 		formsOwned := &websiteOwnedKeys{store: formsData}
-		retirementOwned := &websiteOwnedKeys{store: retirementData}
 		t.Cleanup(func() {
 			owned.deleteAll(t)
 			routerOwned.deleteAll(t)
 			contentOwned.deleteAll(t)
 			formsOwned.deleteAll(t)
-			retirementOwned.deleteAll(t)
 		})
 
 		identity := runtime.Identity()
@@ -286,7 +284,7 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		router.failDelete[routeIDs[1]] = true
 
 		service2, err := retirement.NewService(retirement.Config{
-			BranchID: branchID, Store: retirementData,
+			Store:   retirementData,
 			Routes:  map[string][]string{page.ID: routeIDs},
 			Website: service, WebsiteCredential: credential,
 			Router: router, RouterCredential: credential,
@@ -415,7 +413,6 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		if err != nil || afterFile.Revision != beforeFile.Revision {
 			t.Fatalf("retirement modified Core file: before=%+v after=%+v err=%v", beforeFile, afterFile, err)
 		}
-		retirementOwned.add(collectBranchModuleKeys(t, ctx, retirementData, "main/retirement", branchID)...)
 	})
 }
 

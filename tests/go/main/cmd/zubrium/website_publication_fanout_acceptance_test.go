@@ -96,11 +96,9 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		}
 		owned := &websiteOwnedKeys{store: websiteData}
 		routerOwned := &websiteOwnedKeys{store: routerData}
-		publicationOwned := &websiteOwnedKeys{store: publicationData}
 		t.Cleanup(func() {
 			owned.deleteAll(t)
 			routerOwned.deleteAll(t)
-			publicationOwned.deleteAll(t)
 		})
 
 		identity := runtime.Identity()
@@ -277,7 +275,7 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		}
 
 		publicationService, err := publication.NewService(publication.Config{
-			BranchID: branchID, Store: publicationData, Targets: targets,
+			Store: publicationData, Targets: targets,
 			Website: trackedWebsite, WebsiteCredential: credential,
 			Router: trackedRouter, RouterCredential: credential,
 			FileIdentity: identity, Files: trackedFiles, FileCredential: credential,
@@ -366,10 +364,8 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if catalog.revision.Load() != 8 {
 			t.Fatalf("trusted input revision was not advanced: %d", catalog.revision.Load())
 		}
-		// This branch ID belongs only to this disposable scenario; collect every
-		// record created by publication and Router, including idempotency
-		// receipts and the stale run, so cleanup stays exact and complete.
-		publicationOwned.add(collectBranchModuleKeys(t, ctx, publicationData, "main/publication", branchID)...)
+		// Router records use the run-specific scope; publication records are
+		// cleaned up when the disposable PostgreSQL database is removed.
 		routerOwned.add(collectBranchModuleKeys(t, ctx, routerData, "router/routes", branchID)...)
 	})
 }

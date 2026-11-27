@@ -15,6 +15,7 @@ const (
 	moduleID  = "retirement"
 	namespace = "main/retirement"
 	scopeType = "global"
+	scopeID   = "global"
 
 	recordTypeJob       = "retirement_job"
 	recordTypeReceipt   = "retirement_receipt"
@@ -74,7 +75,6 @@ type WorkflowStarter interface {
 // Config is complete only when the static composition root supplies every
 // trusted capability and the page-to-route registry.
 type Config struct {
-	BranchID    string
 	Store       contracts.RecordDataStore
 	Starter     WorkflowStarter
 	Routes      map[string][]string
@@ -87,7 +87,7 @@ type Service struct {
 }
 
 func NewService(config Config) (*Service, error) {
-	if config.BranchID == "" || config.Store == nil || len(config.Routes) == 0 ||
+	if config.Store == nil || len(config.Routes) == 0 ||
 		config.MaxAttempts < 1 || config.MaxAttempts > 100 {
 		return nil, ErrUnavailable
 	}

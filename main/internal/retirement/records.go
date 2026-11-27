@@ -27,7 +27,6 @@ type jobRecord struct {
 	Kind             string        `json:"kind"`
 	ID               string        `json:"id"`
 	PageID           string        `json:"page_id"`
-	BranchID         string        `json:"branch_id"`
 	ExpectedRevision int64         `json:"expected_revision"`
 	IfMatch          string        `json:"if_match"`
 	IdempotencyKey   string        `json:"idempotency_key"`
@@ -53,21 +52,16 @@ type tombstoneRecord struct {
 }
 
 func jobKey(jobID string) contracts.RecordKey {
-	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "job/" + jobID}
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: "job/" + jobID}
 }
 
 func tombstoneKey(pageID string) contracts.RecordKey {
-	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "page/" + pageID}
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: "page/" + pageID}
 }
 
 func idempotencyKey(pageID, key string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(pageID + "\x00" + key))
-	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: "", RecordKey: "idem/" + hex.EncodeToString(digest[:])}
-}
-
-func withBranch(key contracts.RecordKey, branchID string) contracts.RecordKey {
-	key.ScopeID = branchID
-	return key
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: "idem/" + hex.EncodeToString(digest[:])}
 }
 
 func encodeRecord(payload any, index map[string]any) (*contracts.RecordValue, error) {
@@ -86,7 +80,7 @@ func jobIndex(job jobRecord) map[string]any {
 	return map[string]any{"record_type": recordTypeJob, "page_id": job.PageID, "state": job.State}
 }
 
-func jobCreationMutations(branchID string, request contracts.RetirePageRequest, job jobRecord) ([]contracts.RecordMutation, error) {
+func jobCreationMutations(request contracts.RetirePageRequest, job jobRecord) ([]contracts.RecordMutation, error) {
 	jobValue, err := encodeRecord(job, jobIndex(job))
 	if err != nil {
 		return nil, err
@@ -102,9 +96,9 @@ func jobCreationMutations(branchID string, request contracts.RetirePageRequest, 
 		return nil, err
 	}
 	return []contracts.RecordMutation{
-		{Key: withBranch(jobKey(job.ID), branchID), ExpectedRevision: 0, Value: jobValue},
-		{Key: withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), branchID), ExpectedRevision: 0, Value: receiptValue},
-		{Key: withBranch(tombstoneKey(request.PageID), branchID), ExpectedRevision: 0, Value: tombstoneValue},
+		{Key: jobKey(job.ID), ExpectedRevision: 0, Value: jobValue},
+		{Key: idempotencyKey(request.PageID, request.IdempotencyKey), ExpectedRevision: 0, Value: receiptValue},
+		{Key: tombstoneKey(request.PageID), ExpectedRevision: 0, Value: tombstoneValue},
 	}, nil
 }
 

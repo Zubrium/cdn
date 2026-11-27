@@ -33,7 +33,7 @@ func TestRetirementLaunchPreservesCompletionAndRecoversStartFailure(t *testing.T
 				return contracts.WorkflowStartReceipt{State: "running"}, nil
 			})
 			var err error
-			service, err = NewService(Config{BranchID: retireBranchID, Store: newRetirementMemoryStore(), Starter: starter, MaxAttempts: 3,
+			service, err = NewService(Config{Store: newRetirementMemoryStore(), Starter: starter, MaxAttempts: 3,
 				Routes: map[string][]string{retirePageID: {retireRouteA}}})
 			if err != nil {
 				t.Fatal(err)
@@ -86,7 +86,7 @@ func TestRetirementRetryDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	ctx := context.Background()
 	store := &raceRetirementStore{retirementMemoryStore: newRetirementMemoryStore()}
 	starter := &retirementStarter{}
-	service, err := NewService(Config{BranchID: retireBranchID, Store: store, Starter: starter, MaxAttempts: 3,
+	service, err := NewService(Config{Store: store, Starter: starter, MaxAttempts: 3,
 		Routes: map[string][]string{retirePageID: {retireRouteA}}})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestRetirementRetryDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 func TestRetirementCompletedJobRejectsLateStateRegression(t *testing.T) {
 	ctx := context.Background()
 	store := newRetirementMemoryStore()
-	service, err := NewService(Config{BranchID: retireBranchID, Store: store, Starter: &retirementStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: store, Starter: &retirementStarter{}, MaxAttempts: 3,
 		Routes: map[string][]string{retirePageID: {retireRouteA}}})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestRetirementCompletedJobRejectsLateStateRegression(t *testing.T) {
 	if _, err := service.SetJobState(ctx, job.ID, stateSucceeded); err != nil {
 		t.Fatal(err)
 	}
-	key := withBranch(jobKey(job.ID), retireBranchID)
+	key := jobKey(job.ID)
 	before, err := store.Get(ctx, key)
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func (starter *retirementStarter) Start(_ context.Context, input contracts.Workf
 func TestRetirementPrepareLaunchIsIdempotentAndRejectsUnknownPage(t *testing.T) {
 	starter := &retirementStarter{}
 	service, err := NewService(Config{
-		BranchID: retireBranchID, Store: newRetirementMemoryStore(), Starter: starter, MaxAttempts: 3,
+		Store: newRetirementMemoryStore(), Starter: starter, MaxAttempts: 3,
 		Routes: map[string][]string{retirePageID: {retireRouteA, retireRouteB}},
 	})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestRetirementPrepareLaunchIsIdempotentAndRejectsUnknownPage(t *testing.T) 
 
 func TestRetirementRouteAndFinalizeStateTransitions(t *testing.T) {
 	service, err := NewService(Config{
-		BranchID: retireBranchID, Store: newRetirementMemoryStore(), Starter: &retirementStarter{}, MaxAttempts: 3,
+		Store: newRetirementMemoryStore(), Starter: &retirementStarter{}, MaxAttempts: 3,
 		Routes: map[string][]string{retirePageID: {retireRouteA, retireRouteB}},
 	})
 	if err != nil {
@@ -293,7 +293,7 @@ func TestRetirementRouteAndFinalizeStateTransitions(t *testing.T) {
 
 func TestRetirementRouteSuccessSurvivesLateFailure(t *testing.T) {
 	ctx := context.Background()
-	service, err := NewService(Config{BranchID: retireBranchID, Store: newRetirementMemoryStore(), Starter: &retirementStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: newRetirementMemoryStore(), Starter: &retirementStarter{}, MaxAttempts: 3,
 		Routes: map[string][]string{retirePageID: {retireRouteA, retireRouteB}}})
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestRetirementRouteSuccessSurvivesLateFailure(t *testing.T) {
 	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRemoved, 42, ""); err != nil {
 		t.Fatal(err)
 	}
-	key := withBranch(jobKey(job.ID), retireBranchID)
+	key := jobKey(job.ID)
 	before, err := service.config.Store.Get(ctx, key)
 	if err != nil {
 		t.Fatal(err)

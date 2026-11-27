@@ -48,7 +48,6 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 	component.core.setCoreFiles("main.publication", coreSessionFileAdapter{files: component.core.runtime.Files(), session: session})
 	starter := publicationWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, "main.publication")}
 	service, err := publication.NewService(publication.Config{
-		BranchID:    routerStorageScope,
 		Store:       data,
 		Targets:     component.config.Publication.Targets,
 		Starter:     starter,

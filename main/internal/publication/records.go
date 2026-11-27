@@ -14,7 +14,6 @@ const dataVersion = 1
 type runRecord struct {
 	Kind                       string   `json:"kind"`
 	RunID                      string   `json:"run_id"`
-	BranchID                   string   `json:"branch_id"`
 	Locale                     string   `json:"locale"`
 	ContentPublicationRevision int64    `json:"content_publication_revision"`
 	SystemModelRevision        int64    `json:"system_model_revision"`
@@ -55,16 +54,16 @@ type artifactRecord struct {
 	ArtifactManifestFileID string `json:"artifact_manifest_file_id"`
 }
 
-func runDataKey(branchID, runID string) contracts.RecordKey {
-	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: branchID, RecordKey: "run/" + runID}
+func runDataKey(runID string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: "run/" + runID}
 }
 
-func targetDataKey(branchID, runID, routeID, locale string) contracts.RecordKey {
-	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: branchID, RecordKey: "target/" + runID + "/" + routeID + "/" + locale}
+func targetDataKey(runID, routeID, locale string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: "target/" + runID + "/" + routeID + "/" + locale}
 }
 
-func artifactDataKey(branchID, runID, routeID, locale string) contracts.RecordKey {
-	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: branchID, RecordKey: "artifact/" + runID + "/" + routeID + "/" + locale}
+func artifactDataKey(runID, routeID, locale string) contracts.RecordKey {
+	return contracts.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: "artifact/" + runID + "/" + routeID + "/" + locale}
 }
 
 func runIndex(run runRecord) []byte {
@@ -97,14 +96,14 @@ func encodeModuleData(payload any, index []byte) (*contracts.RecordValue, error)
 }
 
 func (s *Service) loadRun(ctx context.Context, runID string) (contracts.RecordKey, contracts.Record, runRecord, error) {
-	key := runDataKey(s.config.BranchID, runID)
+	key := runDataKey(runID)
 	record, err := s.config.Store.Get(ctx, key)
 	if err != nil {
 		return contracts.RecordKey{}, contracts.Record{}, runRecord{}, mapStoreError(err)
 	}
 	var run runRecord
 	if record.PayloadVersion != dataVersion || record.Revision < 1 || json.Unmarshal(record.Payload, &run) != nil ||
-		run.Kind != recordTypeRun || run.RunID != runID || run.BranchID != s.config.BranchID || len(run.TargetKeys) == 0 {
+		run.Kind != recordTypeRun || run.RunID != runID || len(run.TargetKeys) == 0 {
 		return contracts.RecordKey{}, contracts.Record{}, runRecord{}, fmt.Errorf("%w: invalid publication run record", ErrInvalid)
 	}
 	return key, record, run, nil
@@ -147,7 +146,7 @@ func (s *Service) putTarget(ctx context.Context, key contracts.RecordKey, expect
 }
 
 func (s *Service) loadArtifact(ctx context.Context, runID, routeID, locale string) (artifactRecord, error) {
-	record, err := s.config.Store.Get(ctx, artifactDataKey(s.config.BranchID, runID, routeID, locale))
+	record, err := s.config.Store.Get(ctx, artifactDataKey(runID, routeID, locale))
 	if err != nil {
 		return artifactRecord{}, mapStoreError(err)
 	}

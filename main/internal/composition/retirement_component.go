@@ -38,7 +38,6 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 	}
 	starter := retirementWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, "composition.retirement")}
 	service, err := retirement.NewService(retirement.Config{
-		BranchID:    routerStorageScope,
 		Store:       data,
 		Routes:      component.config.Retirement.Routes,
 		Starter:     starter,

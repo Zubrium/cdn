@@ -19,7 +19,7 @@ func (s *Service) FindReceipt(ctx context.Context, request contracts.RetirePageR
 	if err := contracts.RetirePageOperation().Validate(request); err != nil {
 		return Job{}, false, err
 	}
-	record, err := s.config.Store.Get(ctx, withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), s.config.BranchID))
+	record, err := s.config.Store.Get(ctx, idempotencyKey(request.PageID, request.IdempotencyKey))
 	if errors.Is(err, contracts.ErrRecordNotFound) {
 		return Job{}, false, nil
 	}
@@ -44,7 +44,7 @@ func (s *Service) PageIsRetired(ctx context.Context, pageID string) (bool, error
 	if s == nil || ctx == nil || !contracts.ValidWorkflowID(pageID) {
 		return false, ErrInvalid
 	}
-	_, err := s.config.Store.Get(ctx, withBranch(tombstoneKey(pageID), s.config.BranchID))
+	_, err := s.config.Store.Get(ctx, tombstoneKey(pageID))
 	if errors.Is(err, contracts.ErrRecordNotFound) {
 		return false, nil
 	}
@@ -67,10 +67,9 @@ func (s *Service) Prepare(ctx context.Context, request contracts.RetirePageReque
 	if err != nil {
 		return Job{}, err
 	}
-	branch := s.config.BranchID
 	// Receipts are checked before the identity tombstone so an identical retry
 	// stays idempotent after the workflow has completed.
-	if record, err := s.config.Store.Get(ctx, withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), branch)); err == nil {
+	if record, err := s.config.Store.Get(ctx, idempotencyKey(request.PageID, request.IdempotencyKey)); err == nil {
 		var receipt receiptRecord
 		if record.PayloadVersion != dataVersion || jsonUnmarshal(record.Payload, &receipt) != nil ||
 			receipt.Kind != recordTypeReceipt || receipt.PageID != request.PageID || !uuidPattern.MatchString(receipt.JobID) {
@@ -80,7 +79,7 @@ func (s *Service) Prepare(ctx context.Context, request contracts.RetirePageReque
 	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
 		return Job{}, mapStoreError(err)
 	}
-	if _, err := s.config.Store.Get(ctx, withBranch(tombstoneKey(request.PageID), branch)); err == nil {
+	if _, err := s.config.Store.Get(ctx, tombstoneKey(request.PageID)); err == nil {
 		return Job{}, fmt.Errorf("%w: page identity is retired and cannot be reused", ErrConflict)
 	} else if !errors.Is(err, contracts.ErrRecordNotFound) {
 		return Job{}, mapStoreError(err)
@@ -90,20 +89,19 @@ func (s *Service) Prepare(ctx context.Context, request contracts.RetirePageReque
 		return Job{}, fmt.Errorf("%w: no registered route targets", ErrInvalid)
 	}
 	job := jobRecord{
-		Kind: recordTypeJob, ID: newUUID(), PageID: request.PageID, BranchID: branch,
-		ExpectedRevision: expected, IfMatch: request.IfMatch, IdempotencyKey: request.IdempotencyKey,
+		Kind: recordTypeJob, ID: newUUID(), PageID: request.PageID, ExpectedRevision: expected, IfMatch: request.IfMatch, IdempotencyKey: request.IdempotencyKey,
 		State: stateRunning, CreatedAt: timestamp(), UpdatedAt: timestamp(),
 	}
 	for _, routeID := range routes {
 		job.Routes = append(job.Routes, routeRecord{RouteID: routeID, State: routeStatePending})
 	}
-	mutations, err := jobCreationMutations(branch, request, job)
+	mutations, err := jobCreationMutations(request, job)
 	if err != nil {
 		return Job{}, err
 	}
 	if err := s.config.Store.Batch(ctx, mutations); err != nil {
 		if errors.Is(err, contracts.ErrRecordConflict) {
-			if record, readErr := s.config.Store.Get(ctx, withBranch(idempotencyKey(request.PageID, request.IdempotencyKey), branch)); readErr == nil {
+			if record, readErr := s.config.Store.Get(ctx, idempotencyKey(request.PageID, request.IdempotencyKey)); readErr == nil {
 				var receipt receiptRecord
 				if record.PayloadVersion == dataVersion && jsonUnmarshal(record.Payload, &receipt) == nil && receipt.PageID == request.PageID {
 					return s.LoadJob(ctx, receipt.JobID, request.PageID)
@@ -124,13 +122,13 @@ func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement
 	if s.config.Starter == nil {
 		return contracts.PageRetirement{}, ErrUnavailable
 	}
-	key := withBranch(jobKey(job.ID), s.config.BranchID)
+	key := jobKey(job.ID)
 	record, err := s.config.Store.Get(ctx, key)
 	if err != nil {
 		return contracts.PageRetirement{}, mapStoreError(err)
 	}
 	job, err = decodeJob(record, job.ID, job.PageID)
-	if err != nil || job.BranchID != s.config.BranchID {
+	if err != nil {
 		return contracts.PageRetirement{}, ErrUnavailable
 	}
 	if job.State == stateSucceeded {
@@ -141,8 +139,7 @@ func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement
 		routes = append(routes, route.RouteID)
 	}
 	payload := contracts.RetirementWorkflowPayload{
-		JobID: job.ID, PageID: job.PageID, BranchID: s.config.BranchID,
-		ExpectedRevision: job.ExpectedRevision, IfMatch: job.IfMatch,
+		JobID: job.ID, PageID: job.PageID, ExpectedRevision: job.ExpectedRevision, IfMatch: job.IfMatch,
 		IdempotencyKey: job.IdempotencyKey, Routes: routes,
 	}
 	if err := contracts.ValidateRetirementWorkflowPayload(payload); err != nil {
@@ -220,9 +217,6 @@ func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetire
 		return contracts.PageRetirement{}, fmt.Errorf("%w: invalid job identity", ErrInvalid)
 	}
 	job, err := s.updateJob(ctx, jobID, func(current *jobRecord) error {
-		if current.BranchID != s.config.BranchID {
-			return ErrUnavailable
-		}
 		switch current.State {
 		case stateSucceeded, stateRunning:
 			return errRetryAlreadySettled
@@ -254,16 +248,13 @@ func (s *Service) LoadJob(ctx context.Context, jobID, pageID string) (Job, error
 	if s == nil || ctx == nil || !contracts.ValidWorkflowID(jobID) {
 		return Job{}, fmt.Errorf("%w: invalid job identity", ErrInvalid)
 	}
-	record, err := s.config.Store.Get(ctx, withBranch(jobKey(jobID), s.config.BranchID))
+	record, err := s.config.Store.Get(ctx, jobKey(jobID))
 	if err != nil {
 		return Job{}, mapStoreError(err)
 	}
 	job, err := decodeJob(record, jobID, pageID)
 	if err != nil {
 		return Job{}, err
-	}
-	if job.BranchID != s.config.BranchID {
-		return Job{}, fmt.Errorf("%w: job belongs to another branch", ErrUnavailable)
 	}
 	return job, nil
 }
@@ -274,9 +265,6 @@ func (s *Service) SetJobState(ctx context.Context, jobID, state string) (Job, er
 		return Job{}, ErrInvalid
 	}
 	job, err := s.updateJob(ctx, jobID, func(current *jobRecord) error {
-		if current.BranchID != s.config.BranchID {
-			return ErrUnavailable
-		}
 		if current.State == stateSucceeded || current.State == state {
 			return errJobStateUnchanged
 		}
@@ -330,7 +318,7 @@ func (s *Service) RecordRoute(ctx context.Context, jobID, routeID, state string,
 var errRouteAlreadyRemoved = errors.New("retirement route already removed")
 
 func (s *Service) updateJob(ctx context.Context, jobID string, mutate func(*jobRecord) error) (Job, error) {
-	key := withBranch(jobKey(jobID), s.config.BranchID)
+	key := jobKey(jobID)
 	for attempt := 0; attempt < 8; attempt++ {
 		record, err := s.config.Store.Get(ctx, key)
 		if err != nil {

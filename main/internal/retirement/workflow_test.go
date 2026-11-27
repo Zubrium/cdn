@@ -11,20 +11,19 @@ import (
 )
 
 const (
-	retirePageID     = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	retireJobID      = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-	retireRouteA     = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	retireRouteB     = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-	retireBranchID   = "branch-a"
-	retireIfMatch    = `"7"`
-	retireIdemKey    = "retirement-key-0123456789abcdef"
+	retirePageID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	retireJobID  = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	retireRouteA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	retireRouteB = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+	retireIfMatch     = `"7"`
+	retireIdemKey     = "retirement-key-0123456789abcdef"
 	retireExpectedRev = 7
 )
 
 func retirementPayload() contracts.RetirementWorkflowPayload {
 	return contracts.RetirementWorkflowPayload{
-		JobID: retireJobID, PageID: retirePageID, BranchID: retireBranchID,
-		ExpectedRevision: retireExpectedRev, IfMatch: retireIfMatch,
+		JobID: retireJobID, PageID: retirePageID, ExpectedRevision: retireExpectedRev, IfMatch: retireIfMatch,
 		IdempotencyKey: retireIdemKey,
 		Routes:         []string{retireRouteA, retireRouteB},
 	}
@@ -124,6 +123,10 @@ func TestRetirementChildPayloadCannotSelectClassOrModule(t *testing.T) {
 func TestRetirementWorkflowStartInputIsIdempotent(t *testing.T) {
 	first := retirementWorkflowStartInput(retirementPayload())
 	second := retirementWorkflowStartInput(retirementPayload())
+	if strings.Contains(string(first.Payload), `"branch_id"`) {
+		t.Fatalf("workflow payload contains a retired field: %s", first.Payload)
+	}
+
 	if first.OperationID != contracts.RetirementStartOperationID || first.ContractVersion != contracts.RetirementStartContractVersion {
 		t.Fatalf("unexpected operation: %+v", first)
 	}

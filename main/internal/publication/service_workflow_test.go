@@ -29,7 +29,7 @@ func TestPublicationFailureCodesAreBoundedAndDoNotExposeDependencyErrors(t *test
 
 func TestPublicationActivationRevisionIsStableAcrossRetry(t *testing.T) {
 	ctx := context.Background()
-	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestPublicationActivationRevisionIsStableAcrossRetry(t *testing.T) {
 
 func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
 	ctx := context.Background()
-	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
 	if err := service.updateTarget(ctx, run.RunID, testRouteA, testLocale, func(target *targetRecord) { target.State = stateSuccess }); err != nil {
 		t.Fatal(err)
 	}
-	key := targetDataKey(testBranchID, run.RunID, testRouteA, testLocale)
+	key := targetDataKey(run.RunID, testRouteA, testLocale)
 	before, _, err := service.loadTarget(ctx, key, run.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func (store *publicationRaceStore) Get(ctx context.Context, key workflow.RecordK
 func TestPublicationFailureCASDoesNotOverwriteConcurrentSuccess(t *testing.T) {
 	ctx := context.Background()
 	store := &publicationRaceStore{memoryRecordStore: newMemoryRecordStore()}
-	service, err := NewService(Config{BranchID: testBranchID, Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestPublicationFailureCASDoesNotOverwriteConcurrentSuccess(t *testing.T) {
 	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, errors.New("late failure")); !errors.Is(err, ErrConflict) {
 		t.Fatalf("want CAS conflict: %v", err)
 	}
-	_, target, err := service.loadTarget(ctx, targetDataKey(testBranchID, run.RunID, testRouteA, testLocale), run.RunID)
+	_, target, err := service.loadTarget(ctx, targetDataKey(run.RunID, testRouteA, testLocale), run.RunID)
 	if err != nil || target.State != stateSuccess {
 		t.Fatalf("concurrent success lost: %+v %v", target, err)
 	}
@@ -125,7 +125,7 @@ func TestPublicationFailureCASDoesNotOverwriteConcurrentSuccess(t *testing.T) {
 
 func TestFinishBuildRejectsConflictingExistingArtifactWithoutChangingTarget(t *testing.T) {
 	ctx := context.Background()
-	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestFinishBuildRejectsConflictingExistingArtifactWithoutChangingTarget(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.config.Store.Put(ctx, artifactDataKey(testBranchID, run.RunID, testRouteA, testLocale), *value, 0); err != nil {
+	if _, err := service.config.Store.Put(ctx, artifactDataKey(run.RunID, testRouteA, testLocale), *value, 0); err != nil {
 		t.Fatal(err)
 	}
 	result := workflow.PublicationBuildResult{Format: workflow.PublicationBuildResultFormat, RunID: run.RunID, RouteID: testRouteA,
@@ -152,7 +152,7 @@ func TestFinishBuildRejectsConflictingExistingArtifactWithoutChangingTarget(t *t
 	if err := service.FinishBuild(ctx, payload, result); !errors.Is(err, ErrStale) {
 		t.Fatalf("conflicting artifact accepted: %v", err)
 	}
-	_, target, err := service.loadTarget(ctx, targetDataKey(testBranchID, run.RunID, testRouteA, testLocale), run.RunID)
+	_, target, err := service.loadTarget(ctx, targetDataKey(run.RunID, testRouteA, testLocale), run.RunID)
 	if err != nil || target.State != stateRunning || target.InputDigest != "" {
 		t.Fatalf("target changed on conflict: %+v %v", target, err)
 	}
@@ -172,7 +172,7 @@ func (store *concurrentPublicationStore) Batch(ctx context.Context, mutations []
 
 func TestPublishRecoversConcurrentIdenticalRunCreation(t *testing.T) {
 	starter := &recordingWorkflowStarter{}
-	service, err := NewService(Config{BranchID: testBranchID, Store: &concurrentPublicationStore{newMemoryRecordStore()}, Starter: starter, MaxAttempts: 3,
+	service, err := NewService(Config{Store: &concurrentPublicationStore{newMemoryRecordStore()}, Starter: starter, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func (store *rejectBuildBatchStore) Batch(ctx context.Context, mutations []workf
 func TestFinishBuildLeavesTargetUnchangedWhenAtomicBatchFails(t *testing.T) {
 	ctx := context.Background()
 	store := &rejectBuildBatchStore{memoryRecordStore: newMemoryRecordStore()}
-	service, err := NewService(Config{BranchID: testBranchID, Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+	service, err := NewService(Config{Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestFinishBuildLeavesTargetUnchangedWhenAtomicBatchFails(t *testing.T) {
 	if err := service.FinishBuild(ctx, payload, result); !errors.Is(err, ErrConflict) {
 		t.Fatalf("want conflict, got %v", err)
 	}
-	_, target, err := service.loadTarget(ctx, targetDataKey(testBranchID, run.RunID, testRouteA, testLocale), run.RunID)
+	_, target, err := service.loadTarget(ctx, targetDataKey(run.RunID, testRouteA, testLocale), run.RunID)
 	if err != nil || target.State != stateRunning || target.InputDigest != "" {
 		t.Fatalf("target changed on failed batch: %+v %v", target, err)
 	}
@@ -251,7 +251,7 @@ func TestPublishReportsCurrentStateWhenWorkflowCompletesDuringStart(t *testing.T
 				return workflow.WorkflowStartReceipt{State: "running"}, nil
 			})
 			var err error
-			service, err = NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
+			service, err = NewService(Config{Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
 				Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 			if err != nil {
 				t.Fatal(err)
@@ -275,7 +275,7 @@ func TestPublishReportsCurrentStateWhenWorkflowCompletesDuringStart(t *testing.T
 func TestBuildAndActivationRejectSubstitutedServerOwnedValues(t *testing.T) {
 	store := newMemoryRecordStore()
 	service, err := NewService(Config{
-		BranchID: testBranchID, Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
+		Store: store, Starter: &recordingWorkflowStarter{}, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}},
 	})
 	if err != nil {
@@ -348,7 +348,7 @@ func TestBuildAndActivationRejectSubstitutedServerOwnedValues(t *testing.T) {
 func TestPublishReplayKeepsFinalizedFailure(t *testing.T) {
 	ctx := context.Background()
 	starter := &recordingWorkflowStarter{}
-	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)

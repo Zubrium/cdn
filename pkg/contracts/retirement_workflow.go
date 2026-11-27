@@ -34,7 +34,6 @@ const (
 type RetirementWorkflowPayload struct {
 	JobID            string   `json:"job_id"`
 	PageID           string   `json:"page_id"`
-	BranchID         string   `json:"branch_id"`
 	ExpectedRevision int64    `json:"expected_revision"`
 	IfMatch          string   `json:"if_match"`
 	IdempotencyKey   string   `json:"idempotency_key"`
@@ -81,7 +80,7 @@ type RetirementStartResult struct {
 
 func ValidateRetirementWorkflowPayload(payload RetirementWorkflowPayload) error {
 	if !retirementPageIDPattern.MatchString(payload.JobID) || !retirementPageIDPattern.MatchString(payload.PageID) ||
-		payload.BranchID == "" || payload.ExpectedRevision < 1 || !retirementIfMatchPattern.MatchString(payload.IfMatch) ||
+		payload.ExpectedRevision < 1 || !retirementIfMatchPattern.MatchString(payload.IfMatch) ||
 		!retirementKeyPattern.MatchString(payload.IdempotencyKey) || len(payload.Routes) == 0 || len(payload.Routes) > 64 {
 		return ErrInvalidRetirementRequest
 	}

@@ -16,7 +16,6 @@ const (
 	testRouteA     = "22222222-2222-4222-8222-222222222222"
 	testRouteB     = "33333333-3333-4333-8333-333333333333"
 	testSnapshotID = "44444444-4444-4444-8444-444444444444"
-	testBranchID   = "branch-a"
 	testLocale     = "en-US"
 	testKey        = "publication-key-0123456789abcdef"
 )
@@ -24,7 +23,6 @@ const (
 func workflowTestPayload() contracts.PublicationWorkflowPayload {
 	return contracts.PublicationWorkflowPayload{
 		RunID:                      testRunID,
-		BranchID:                   testBranchID,
 		Locale:                     testLocale,
 		ContentPublicationRevision: 4,
 		SystemModelRevision:        9,
@@ -168,8 +166,12 @@ func TestPublicationChildPayloadCannotSelectClassOrModule(t *testing.T) {
 
 func TestPublicationWorkflowStartInputIsIdempotent(t *testing.T) {
 	trigger := Trigger{Locale: testLocale, ContentPublicationRevision: 4, SystemModelRevision: 9, IdempotencyKey: testKey}
-	first := workflowStartInput(testBranchID, trigger, testLocale, testRunID, workflowTestPayload().Targets)
-	second := workflowStartInput(testBranchID, trigger, testLocale, testRunID, workflowTestPayload().Targets)
+	first := workflowStartInput(trigger, testLocale, testRunID, workflowTestPayload().Targets)
+	second := workflowStartInput(trigger, testLocale, testRunID, workflowTestPayload().Targets)
+	if strings.Contains(string(first.Payload), `"branch_id"`) {
+		t.Fatalf("workflow payload contains a retired field: %s", first.Payload)
+	}
+
 	if first.OperationID != second.OperationID || first.ContractVersion != second.ContractVersion ||
 		first.IdempotencyKey != second.IdempotencyKey || string(first.Payload) != string(second.Payload) {
 		t.Fatalf("start inputs differ: %+v vs %+v", first, second)
@@ -186,7 +188,7 @@ func TestPublicationServiceRetryRestartsSameWorkflow(t *testing.T) {
 	store := newMemoryRecordStore()
 	starter := &recordingWorkflowStarter{}
 	service, err := NewService(Config{
-		BranchID: testBranchID, Store: store, Starter: starter, MaxAttempts: 3,
+		Store: store, Starter: starter, MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}},
 	})
 	if err != nil {
@@ -210,7 +212,7 @@ func TestPublicationServiceRetryRestartsSameWorkflow(t *testing.T) {
 }
 
 func TestPublicationRetryRejectsUnknownRun(t *testing.T) {
-	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), MaxAttempts: 3,
+	service, err := NewService(Config{Store: newMemoryRecordStore(), MaxAttempts: 3,
 		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
 	if err != nil {
 		t.Fatal(err)
@@ -220,14 +222,18 @@ func TestPublicationRetryRejectsUnknownRun(t *testing.T) {
 	}
 }
 
-type recordingWorkflowStarter struct{ inputs []contracts.WorkflowStartInput }
+type recordingWorkflowStarter struct {
+	inputs []contracts.WorkflowStartInput
+}
 
 func (starter *recordingWorkflowStarter) Start(_ context.Context, input contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
 	starter.inputs = append(starter.inputs, input)
 	return contracts.WorkflowStartReceipt{WorkflowID: uuid.New(), RootTaskID: uuid.New(), State: "running"}, nil
 }
 
-type memoryRecordStore struct{ records map[contracts.RecordKey]contracts.Record }
+type memoryRecordStore struct {
+	records map[contracts.RecordKey]contracts.Record
+}
 
 func newMemoryRecordStore() *memoryRecordStore {
 	return &memoryRecordStore{records: make(map[contracts.RecordKey]contracts.Record)}
@@ -286,8 +292,8 @@ func (store *memoryRecordStore) ListExpired(context.Context, string, string, str
 	return nil, nil, "", nil
 }
 
-func (store *memoryRecordStore) MaxPageSize() int       { return 100 }
-func (store *memoryRecordStore) MaxBatchSize() int      { return 100 }
-func (store *memoryRecordStore) MaxPayloadBytes() int   { return 1 << 20 }
-func (store *memoryRecordStore) MaxIndexBytes() int     { return 1 << 16 }
-func (store *memoryRecordStore) MaxBatchBytes() int     { return 4 << 20 }
+func (store *memoryRecordStore) MaxPageSize() int     { return 100 }
+func (store *memoryRecordStore) MaxBatchSize() int    { return 100 }
+func (store *memoryRecordStore) MaxPayloadBytes() int { return 1 << 20 }
+func (store *memoryRecordStore) MaxIndexBytes() int   { return 1 << 16 }
+func (store *memoryRecordStore) MaxBatchBytes() int   { return 4 << 20 }

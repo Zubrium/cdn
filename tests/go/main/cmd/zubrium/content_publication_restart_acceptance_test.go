@@ -104,7 +104,7 @@ func TestContentPublicationDeliveryRestart(t *testing.T) {
 		}
 		starter := &restartWorkflowStarter{client: client, loseReply: loseReply}
 		publisher, err := publication.NewService(publication.Config{
-			BranchID: env.runID, Store: publicationStore, Starter: starter, MaxAttempts: 3,
+			Store: publicationStore, Starter: starter, MaxAttempts: 3,
 			Targets: []publication.Target{{Locale: locale, RouteID: routeID, PageSnapshotID: snapshotID}},
 		})
 		if err != nil {
