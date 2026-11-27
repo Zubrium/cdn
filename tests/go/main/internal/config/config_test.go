@@ -78,10 +78,10 @@ func TestCoordinatorFingerprintIncludesConnectionPolicyAndOmitsCredentials(t *te
 	}
 }
 
-func TestRouterStartupRejectsLegacyBranchConfiguration(t *testing.T) {
-	content := strings.NewReader("router_api:\n  branch_id: main\n")
-	if _, err := Load(content); err == nil || !strings.Contains(err.Error(), "branch_id") {
-		t.Fatalf("legacy branch configuration error = %v", err)
+func TestRouterStartupRejectsUnknownField(t *testing.T) {
+	content := strings.NewReader("router_api:\n  unexpected_field: value\n")
+	if _, err := Load(content); err == nil || !strings.Contains(err.Error(), "unexpected_field") {
+		t.Fatalf("unknown configuration field error = %v", err)
 	}
 }
 

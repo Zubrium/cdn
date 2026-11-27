@@ -65,8 +65,8 @@ System-wide model revisions and records are shared by all page snapshots in the 
 
 ## Permissions and failure behavior
 
-Existing role guards, branch isolation, optimistic revisions, local recovery, unsaved-change protections, destructive confirmations, media ownership checks, and publication safeguards remain in force. A stale revision cannot partially save or publish content. Invalid model bindings or retired relation data cannot create a snapshot.
+Existing direct group access checks, optimistic revisions, local recovery, unsaved-change protections, destructive confirmations, media ownership checks, and publication safeguards remain in force. A stale revision cannot partially save or publish content. Invalid model bindings or retired relation data cannot create a snapshot.
 
 ## Current verification
 
-Frontend typecheck, lint, component/unit tests, build, Go tests, Go vet, and `git diff --check` cover the flat model, direct bindings, compatibility parsing, snapshot remapping, and runtime projection. Browser QA checks the list and model detail at desktop and 390 px, snapshot deep links, browser back/forward, field controls, absence of the retired canvas/relation controls, and horizontal overflow. Full release sign-off still requires the broader snapshot/branch/runtime matrix documented in [TODO-admin-snapshots-content-files.md](../../../docs/TODO-admin-snapshots-content-files.md).
+Frontend typecheck, lint, component/unit tests, build, Go tests, Go vet, and `git diff --check` cover the flat model, direct bindings, compatibility parsing, snapshot remapping, and runtime projection. Browser QA checks the list and model detail at desktop and 390 px, snapshot deep links, browser back/forward, field controls, absence of the retired canvas/relation controls, and horizontal overflow. Full release sign-off still requires the broader snapshot/runtime matrix documented in [TODO-admin-snapshots-content-files.md](../../../docs/TODO-admin-snapshots-content-files.md).

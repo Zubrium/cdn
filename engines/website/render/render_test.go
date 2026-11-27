@@ -41,7 +41,7 @@ func validView(t *testing.T) PageView {
 		Bootstrap:     map[string]any{"route": "/page"},
 		RuntimeAssets: nil,
 		RenderedAt:    time.Date(2026, time.November, 22, 10, 30, 0, 0, time.UTC),
-		Identity:      "branch-1/snapshot-2/revision-3",
+		Identity:      "global/snapshot-2/revision-3",
 	}
 }
 

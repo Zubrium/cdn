@@ -5,4 +5,4 @@
 - `foundation.css` provides the minimal reset used by the admin application.
 - `admin.css` is the admin design system and Tailwind layer.
 
-Admin React components remain under `admin/src/components`. Public feature runtime scripts live in `pkg/runtime/scripts`, and the isolated public stylesheet lives in `pkg/runtime/styles`; they are built as assets and served by the Go document handler. Admin CSS is never included in public branch assets. Snapshot design tokens continue to be resolved by the public runtime from site data.
+Admin React components remain under `admin/src/components`. Public feature runtime scripts live in `pkg/runtime/scripts`, and the isolated public stylesheet lives in `pkg/runtime/styles`; they are built as assets and served by the Go document handler. Admin CSS is never included in public assets. Snapshot design tokens continue to be resolved by the public runtime from site data.

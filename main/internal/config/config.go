@@ -547,8 +547,8 @@ func (r Resolved) ValidateBuildPlan(plan platform.BuildPlan) error {
 
 // WithBuildPlan binds the compiled component set into the system fingerprint
 // so processes built from different profiles cannot join the same Coordinator
-// system. Router branch selection and its listener are process-local; all
-// shared operational settings and the input order remain fingerprinted.
+// system. The Router public listener and its host policy are process-local;
+// all shared operational settings and the input order remain fingerprinted.
 func (r Resolved) WithBuildPlan(plan platform.BuildPlan) (Resolved, error) {
 	if err := r.ValidateBuildPlan(plan); err != nil {
 		return Resolved{}, err

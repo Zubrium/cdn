@@ -409,25 +409,25 @@ func TestDisposableWorkflowJoinWaitsForEveryDependency(t *testing.T) {
 	}
 	outcome := corecoord.TaskOutcome{Result: json.RawMessage(`{}`), Children: []corecoord.TaskChild{
 		{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.one", ID: "process", Version: 1},
-			EmissionKey: "branch:one", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
+			EmissionKey: "task:one", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
 		{Kind: corecoord.TaskKindOperation, Operation: &corecoord.OperationRef{ClassID: "worker.two", ID: "process", Version: 1},
-			EmissionKey: "branch:two", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
+			EmissionKey: "task:two", Payload: json.RawMessage(`{}`), MaxAttempts: 2},
 		{Kind: corecoord.TaskKindJoin, EmissionKey: "barrier", Payload: json.RawMessage(`{}`),
-			DependsOnEmissions: []string{"branch:one", "branch:two"}},
+			DependsOnEmissions: []string{"task:one", "task:two"}},
 	}}
 	if err := store.Complete(ctx, root.ID, owner, epoch, root.FencingToken, 10, 3, time.Hour, outcome); err != nil {
 		t.Fatal(err)
 	}
-	branches, err := store.Claim(ctx, owner, epoch, []string{"worker.one", "worker.two"}, 10, time.Minute, time.Hour)
-	if err != nil || len(branches) != 2 {
-		t.Fatalf("claim worker branches without claiming join: tasks=%+v err=%v", branches, err)
+	tasks, err := store.Claim(ctx, owner, epoch, []string{"worker.one", "worker.two"}, 10, time.Minute, time.Hour)
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("claim worker tasks without claiming join: tasks=%+v err=%v", tasks, err)
 	}
-	for _, task := range branches {
+	for _, task := range tasks {
 		if task.Kind != corecoord.TaskKindOperation || task.Operation == nil {
 			t.Fatalf("Core leased a control task as worker work: %+v", task)
 		}
 	}
-	if err := store.Complete(ctx, branches[0].ID, owner, epoch, branches[0].FencingToken, 10, 3, time.Hour,
+	if err := store.Complete(ctx, tasks[0].ID, owner, epoch, tasks[0].FencingToken, 10, 3, time.Hour,
 		corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestDisposableWorkflowJoinWaitsForEveryDependency(t *testing.T) {
 	if join == nil || join.Kind != corecoord.TaskKindJoin || join.State != "queued" || len(join.DependsOn) != 2 || detail.Workflow.State != "running" {
 		t.Fatalf("join completed before every dependency: join=%+v workflow=%+v", join, detail.Workflow)
 	}
-	if err := store.Complete(ctx, branches[1].ID, owner, epoch, branches[1].FencingToken, 10, 3, time.Hour,
+	if err := store.Complete(ctx, tasks[1].ID, owner, epoch, tasks[1].FencingToken, 10, 3, time.Hour,
 		corecoord.TaskOutcome{Result: json.RawMessage(`{"done":true}`)}); err != nil {
 		t.Fatal(err)
 	}

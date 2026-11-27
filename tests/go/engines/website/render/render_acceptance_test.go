@@ -56,7 +56,7 @@ func scenarioPublishedView(t *testing.T) render.PageView {
 			{Kind: render.AssetScript, Path: "assets/runtime.abcdef0123456789.js", Integrity: "sha384-0123456789abcdefghijklmnopqrstuvwxyz"},
 		},
 		RenderedAt: time.Date(2026, time.November, 22, 10, 30, 0, 0, time.UTC),
-		Identity:   "branch-main/snapshot-7/revision-9",
+		Identity:   "global/snapshot-7/revision-9",
 	}
 }
 

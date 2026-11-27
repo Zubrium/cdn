@@ -58,10 +58,11 @@ Website управляет страницами, snapshots, placements и bindin
 редакционными записями и публикацией. Trusted input сборки закрепляет snapshot,
 locale, Content и другие необходимые версии. Router хранит сопоставление
 маршрута с artifact. По уточнению владельца системы используется один Router
-listener и единый реестр маршрутов. Внешний Router Admin API не выдаёт
-`branch_id`. Startup YAML принимает адрес listener. Новая установка использует
-системную область хранения для Router, publication и retirement.
-Поле `BranchID` пока встречается во внутренних DTO и runtime-коде.
+listener и единый реестр маршрутов. Внешний Router Admin API выдаёт только
+контрактные поля. Startup YAML принимает адрес listener. Новая установка
+использует глобальный scope хранения для Router, publication и retirement.
+Устаревший ключ конфигурации Router удалён из production Go-кода и внешних
+HTTP-контрактов; неизвестный ключ в YAML отклоняется строгим декодером.
 При выводе страницы из эксплуатации отдельный retirement workflow должен
 отозвать все зарегистрированные маршруты до перехода страницы в `retired`.
 

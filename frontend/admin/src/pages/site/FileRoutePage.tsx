@@ -12,7 +12,7 @@ import { MediaPickerDialog } from "@/domains/media/MediaPickerDialog";
 import type { Media } from "@/types";
 import { formatBytes } from "@/lib/format";
 import { useSiteWorkspace } from "./SiteWorkspace";
-import { describeRoutes, removeRouteBranch, updateRouteNode } from "./route-tree";
+import { describeRoutes, removeRouteSubtree, updateRouteNode } from "./route-tree";
 import { comparableRootPath, parseStaticFilePath } from "./components/routes/route-utils";
 import { siteContextQuery } from "./site-query";
 
@@ -97,7 +97,7 @@ export default function FileRoutePage() {
       destructive: true,
     });
     if (!accepted) return;
-    update((current) => ({ ...current, routeTree: removeRouteBranch(current.routeTree, route.id), formatVersion: 3 }));
+    update((current) => ({ ...current, routeTree: removeRouteSubtree(current.routeTree, route.id), formatVersion: 3 }));
     toast.success("Файловый маршрут удалён из рабочей копии");
     navigate(listURL);
   };

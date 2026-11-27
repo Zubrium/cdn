@@ -228,8 +228,8 @@ router_api:
   # Router service principal is an ordinary Core user with direct group grants.
   # The same scoped credential reads explicitly routed files and uploads via Loader.
   service_credential_env: ZUBRIUM_ROUTER_SERVICE_CREDENTIAL
-  # Run one Router process per configured branch. These two values select the
-  # process-local branch binding; shared Coordinator settings must match.
+  # One Router process serves a single public listener for all configured hosts.
+  # Shared Coordinator settings describe the same system-wide scope.
   # Router has no request-rate limiter. Keep this listener private behind an
   # external proxy; proxy setup and admission policy belong to the deployer.
   public_listen_address: 127.0.0.1:8081

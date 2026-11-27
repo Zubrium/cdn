@@ -238,7 +238,7 @@ router_api:
   default_page_size: 25
   max_page_size: 100
   service_credential_env: ZUBRIUM_ROUTER_SERVICE_CREDENTIAL
-  # Один Router process обслуживает одну настроенную branch.
+  # Один Router process обслуживает один публичный listener для всех hosts.
   public_listen_address: 0.0.0.0:8081
   upload_max_file_bytes: 104857600
   upload_max_concurrent: 4

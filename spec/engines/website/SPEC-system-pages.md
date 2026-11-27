@@ -4,9 +4,9 @@ Status: 7 November 2026 functional and focused browser acceptance passed on disp
 
 ## Purpose and boundaries
 
-System pages give public visitors a useful HTML response when a route is missing, the active page cannot be rendered, or a branch has not yet been configured. They are part of the public runtime and have their own neutral presentation. They do not inherit admin navigation, branding, or scripts. They remain readable without JavaScript.
+System pages give public visitors a useful HTML response when a route is missing, the active page cannot be rendered, or no snapshot is assigned to the route. They are part of the public runtime and have their own neutral presentation. They do not inherit admin navigation, branding, or scripts. They remain readable without JavaScript.
 
-The gateway owns public host routing and access restrictions. It is not an engine-managed route and does not assign a snapshot to a branch. The engine does not infer access policy from a page name or feature.
+The gateway owns public host routing and access restrictions. It is not an engine-managed route and does not assign a snapshot to a route. The engine does not infer access policy from a page name or feature.
 
 ## Core response contract
 
@@ -15,11 +15,11 @@ The gateway owns public host routing and access restrictions. It is not an engin
 | Condition                              | Response                                                                                                                                                                                                                                                                                                       |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unknown route or missing detail record | 404, “Страница не найдена”                                                                                                                                                                                                                                                                                     |
-| Unassigned branch                      | Built-in 503, “Страница ещё не настроена”                                                                                                                                                                                                                                                                           |
+| Route without snapshot                 | Built-in 503, “Страница ещё не настроена”                                                                                                                                                                                                                                                                           |
 | Runtime/composition error              | 500, “Сайт временно недоступен”                                                                                                                                                                                                                                                                                |
 | Forbidden public request               | No engine route-level source currently generates this status. The gateway/access-control layer must render its own 403 or explicitly integrate a public 403 response. The core `SystemDocument(403)` template exists, but a snapshot `systemPages["403"]` is currently not reached by public route resolution. |
 
-The unassigned branch response is always the core 503. It cannot use a snapshot override because no snapshot payload exists; no per-branch startup-config override is supported. A 503 mapping stored in snapshot configuration does not change this rule.
+The response for a route without an assigned snapshot is always the core 503. It cannot use a snapshot override because no snapshot payload exists; no per-route startup-config override is supported. A 503 mapping stored in snapshot configuration does not change this rule.
 
 ## Snapshot feature overrides
 
@@ -33,12 +33,12 @@ The current public router generates no 403 route-level response. Although config
 
 - Core 404, 403, 500, and 503 documents contain their intended text, noindex metadata, and no admin-only assets.
 - Unknown route and render failures preserve their HTTP status and use `no-store`.
-- Unassigned branches always return the built-in 503 without snapshot identity or cache identity.
+- Routes without an assigned snapshot always return the built-in 503 without snapshot identity or cache identity.
 - Valid 404/500 overrides preserve the error status. Missing or failing overrides use a safe core page without recursive rendering.
 - System pages are absent from sitemaps even without page-specific `noindex` metadata; ordinary indexable routes remain present.
 - Public system pages remain independent of admin branding and function without JavaScript.
 
-Automated coverage includes runtime document tests, sitebuilder unit tests, and the integration scenarios in `cmd/integration/system_pages_test.go`. On disposable database `website_engine_system_pages_qa_20261107_1b4c`, the coordinator ran `go test -count=1 -v ./cmd/integration -run '^(TestConfiguredSystemPagesAreExcludedFromSitemapWithoutNoindexOverride|TestSystemPage404FallsBackWhenOverrideIsMissingOrBroken|TestUnassignedBranchUsesBuiltInNotConfigured503|TestSystemPage500OverrideAndFallbackWhenOverrideIsBroken)$'`; all four tests passed. Preflight/postflight confirmed the exact local test database and zero other client sessions. The current-Vitasil SEO browser acceptance also verified the selected 404 override and that `/not-found` is absent from sitemap.
+Automated coverage includes runtime document tests, sitebuilder unit tests, and the integration scenarios in `cmd/integration/system_pages_test.go`. On disposable database `website_engine_system_pages_qa_20261107_1b4c`, the coordinator ran `go test -count=1 -v ./cmd/integration -run '^(TestConfiguredSystemPagesAreExcludedFromSitemapWithoutNoindexOverride|TestSystemPage404FallsBackWhenOverrideIsMissingOrBroken|TestSystemPage500OverrideAndFallbackWhenOverrideIsBroken)$'`; the fourth test covered the built-in 503 for a route without an assigned snapshot; all four tests passed. Preflight/postflight confirmed the exact local test database and zero other client sessions. The current-Vitasil SEO browser acceptance also verified the selected 404 override and that `/not-found` is absent from sitemap.
 
 ## Focused automated accessibility acceptance
 

@@ -68,7 +68,7 @@ export function SnapshotStateNotice({ snapshot, onRefresh }: { snapshot: SiteSna
 
   return <div className="page-grid p-6">
     <h1 className="text-lg font-semibold">{provisioning ? "Снапшот готовится" : "Не удалось подготовить снапшот"}</h1>
-    <p role="status" className="text-sm text-muted-foreground">{provisioning ? "Копируются записи, публикации и выборы контента. Редактирование станет доступно после завершения." : "Этот снапшот нельзя редактировать или назначать ветке. Проверьте его состояние в дереве снапшотов."}</p>
+    <p role="status" className="text-sm text-muted-foreground">{provisioning ? "Копируются записи, публикации и выборы контента. Редактирование станет доступно после завершения." : "Этот snapshot нельзя редактировать; привязку к маршруту выполняет Router. Проверьте его состояние в дереве снапшотов."}</p>
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="outline" className="w-fit" onClick={onRefresh}>Обновить состояние</Button>
       <Button asChild variant="outline" className="w-fit"><Link to={treeURL}>К дереву снапшотов</Link></Button>

@@ -38,7 +38,7 @@ var (
 )
 
 // Request is the immutable, typed workflow input created by Website
-// application. It deliberately contains no route, URL, branch, record value,
+// application. It deliberately contains no route, URL, record value,
 // executable, command or storage path.
 type Request struct {
 	Version     int                            `json:"version"`

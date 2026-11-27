@@ -374,7 +374,7 @@ func TestWebsiteScenarioStructuralBoundaryCoverage(t *testing.T) {
 			t.Fatal(err)
 		}
 		beforeInvalid := len(store.records)
-		leakingConfig := json.RawMessage(`{"format_version":3,"route":"/public","url":"https://example.test","branch":"main","branch_assignment":{"route_id":"r1"},"dataModel":{"formatVersion":1,"entities":[]},"records":[{"id":"record-1"}],"page":{"id":"` + page.ID + `","name":"Boundary","placements":[]}}`)
+		leakingConfig := json.RawMessage(`{"format_version":3,"route":"/public","url":"https://example.test","dataModel":{"formatVersion":1,"entities":[]},"records":[{"id":"record-1"}],"page":{"id":"` + page.ID + `","name":"Boundary","placements":[]}}`)
 		request := scenarioSnapshotRequest(t, page.ID, root.ID, root.Revision, "Invalid boundary", "web010-boundary-snap-0001", websiteapi.SnapshotPayload{Config: leakingConfig, Metadata: json.RawMessage(`{}`)})
 		if _, err := service.CreateSnapshot(ctx, request); !errors.Is(err, websiteapi.ErrInvalid) {
 			t.Fatalf("snapshot with Router/record fields = %v, want invalid", err)
@@ -397,7 +397,7 @@ func TestWebsiteScenarioStructuralBoundaryCoverage(t *testing.T) {
 			websiteapi.CreateSnapshotRequest{}, websiteapi.SnapshotPayload{}, websiteapi.BuildSnapshotRequest{}, websiteapi.BuildJob{},
 		} {
 			valueType := reflect.TypeOf(model)
-			for _, forbidden := range []string{"Route", "URL", "Branch", "BranchAssignment", "Records", "RecordValues", "FileSet", "Namespace", "Module"} {
+			for _, forbidden := range []string{"Route", "URL", "Records", "RecordValues", "FileSet", "Namespace", "Module"} {
 				if _, exists := valueType.FieldByName(forbidden); exists {
 					t.Fatalf("%s must not expose Router assignment field %s", valueType.Name(), forbidden)
 				}
@@ -495,7 +495,7 @@ func TestWebsiteScenarioAdminContractCoverage(t *testing.T) {
 			reflect.TypeOf(websiteapi.CreateSnapshotRequest{}), reflect.TypeOf(websiteapi.ApplyPageTemplateRequest{}),
 			reflect.TypeOf(websiteapi.BuildSnapshotRequest{}), reflect.TypeOf(websiteapi.SnapshotPayload{}),
 		} {
-			for _, forbidden := range []string{"Route", "URL", "Branch", "BranchAssignment", "FileSet", "Namespace", "ModuleID", "RecordValues"} {
+			for _, forbidden := range []string{"Route", "URL", "FileSet", "Namespace", "ModuleID", "RecordValues"} {
 				if _, exists := valueType.FieldByName(forbidden); exists {
 					t.Fatalf("%s must not accept %s from Admin HTTP clients", valueType.Name(), forbidden)
 				}

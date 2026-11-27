@@ -9,17 +9,17 @@
 
 ## Запуск Router на чистой установке
 
-YAML с `router_api.branch_id` отклоняется. Композиция использует один
-listener и системную область хранения Router, publication и retirement.
+YAML с неизвестным ключом конфигурации Router отклоняется. Композиция использует один
+listener и глобальный scope хранения Router, publication и retirement.
 Проверены main full, Router Engine, pkg и Core cache. E2E на новой БД
 запустил full-профиль с одним публичным listener, создал FileSet и
 импортировал фичу. Прогон остановился на `503` при создании дочернего
 snapshot. Удаление поля из внутренних Router DTO остаётся открытым.
 
-## Router Admin без branch ID
+## Router Admin без устаревших полей
 
 HTTP contract проверяет список, детали, создание и замену цели, а также
-отклонение `branch_id` в create request. Router Presentation прошёл
+отклонение неизвестного поля в create request. Router Presentation прошёл
 `go test`, `go vet`, `go build`. Admin прошёл typecheck, unit-тесты,
 сборку и `pnpm lint`. Проверки одного listener и перехода сохранённых
 записей, а также browser QA остаются открытыми.
@@ -41,7 +41,7 @@ PostgreSQL с изолированным MinIO. После фиксации work
 оставляют очередь пустой и сохраняют историю. Проверка восстановления
 после старта full-профиля, параллельной доставки и старых публикаций
 без intent остаётся открытой. В новом системном scope повторный
-PostgreSQL-прогон прошёл после удаления `branch_id` из payload
+PostgreSQL-прогон прошёл после удаления устаревшего поля из payload
 publication и retirement. Форму обоих root payload проверяют unit-тесты. Для locale без настроенных маршрутов intent остаётся
 pending.
 
@@ -480,7 +480,8 @@ trace. В `OBS-008` отказ flush при недоступном Collector с�
 
 - Приложение в `otel` режиме: PID `35381`, `GET /healthz` → 204, `GET /metrics` → 200
   с `Cache-Control: no-store`. Collector debug-exporter принимает батчи с атрибутами
-  `service.name=zubrium`, `deployment.profile=full`, `router.branch=main`,
+  `service.name=zubrium`, `deployment.profile=full`, `router.branch=main`
+  (устаревший атрибут того исторического прогона; текущая конфигурация его не выводит),
   `module.kind`, `module.id`, `component.id`, `operation.id`.
 - `POST /api/admin/session` с credentials из `OBS_BOOTSTRAP_SECRET` → 201;
   авторизованный `GET /api/admin/access-groups` с `traceparent:
@@ -488,7 +489,8 @@ trace. В `OBS-008` отказ flush при недоступном Collector с�
   `X-Request-Id: 6cf56e46f478c40e`, `X-Trace-Id: c0ffee0123456789abcdef0123456789`.
   В `logs/default` одна запись `http request completed` с `http_route=/api/admin/access-groups`,
   `http_status_code=200`, `module_id=admin`, `service_name=zubrium`,
-  `deployment_profile=full`, `router_branch=main`; в `traces/default` — span
+  `deployment_profile=full`, `router_branch=main` (устаревший атрибут того же
+  исторического прогона); в `traces/default` — span
   `http.server` с тем же `trace_id`. Метрика `zubrium_http_server_requests_total`
   содержит exemplar с этим `trace_id` и span_id `6cf56e46f478c40e`.
 - Ошибочный запрос `PATCH /api/admin/forms/submissions/{id}/status` с CSRF-токеном

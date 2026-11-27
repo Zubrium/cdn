@@ -49,11 +49,11 @@ flowchart TB
     PublicOperation --> Core
 ```
 
-## 2. Независимость от снапшотов и веток
+## 2. Независимость от Website snapshots
 
 Router не хранит `snapshot_id`, `page_id`, Website build inputs или Website status. Для Router target — immutable Core file ID одного файла, manifest ID одного `static-page-artifact/v1` либо registered operation ID из текущего build profile. Operation route ссылается на скомпилированный ID; visitor не выбирает operation.
 
-Оператор задаёт один `public_listen_address`, разрешённые публичные hosts и CORS/indexing policy при запуске. Маршрут определяется каноническими host и path. Целевой профиль запускается на чистой PostgreSQL после применения Core migrations. Router routes, publication и retirement используют системную область хранения. Совместимость с прежними `branch_id`, веточными ключами и заданиями не входит в контракт. Приложение не очищает существующую PostgreSQL при старте.
+Оператор задаёт один `public_listen_address`, разрешённые публичные hosts и CORS/indexing policy при запуске. Маршрут определяется каноническими host и path. Целевой профиль запускается на чистой PostgreSQL после применения Core migrations. Router routes, publication и retirement используют системную область хранения. Совместимость с прежними неконтрактными ключами и заданиями, разделявшими область маршрутов, не входит в контракт. Приложение не очищает существующую PostgreSQL при старте.
 
 Route → page publication slot связь принадлежит trusted outer Presentation/Coordinator registry, а не Website snapshot и не visitor request. Route record хранит текущую locale-to-artifact map и revision; привязка в registry непрозрачная для Router. После Website build и проверки готового page artifact coordinator вызывает Router ReplaceLocaleTarget для одной locale отдельным CAS. Сбой build или CAS оставляет прежнюю цель этой locale. Несколько routes/locales обновляются независимо; orchestration сообщает partial result и безопасно повторяет незавершённые назначения. System-wide Content publication автоматически триггерит этот fan-out через Coordinator, не заставляя Router разбирать Website или Content модель.
 
@@ -208,7 +208,7 @@ Atomicity распространяется на один route binding. Если
 
 1. явной публикации файла и запрета прямого доступа к тому же UUID вне route;
 2. route на `static-page-artifact/v1`, exact document path, route-scoped asset mapping, query string и неизвестный asset path;
-3. одного публичного listener, разделения hosts и отсутствия `branch_id` в HTTP-контракте;
+3. одного публичного listener, разделения hosts, единого глобального scope и отсутствия неконтрактных полей в HTTP-контракте;
 4. exact/longest-prefix matching, конфликта на одном host и одинакового prefix на разных hosts;
 5. percent-encoded traversal/separators, malformed URL, spoofed Host/Forwarded headers;
 6. access revocation, отсутствующей группы, stale local cache, отказа проверки revision, а также сценарии `CACHE-004` и `CACHE-006` из [SPEC-caching.md](../../architecture/SPEC-caching.md);

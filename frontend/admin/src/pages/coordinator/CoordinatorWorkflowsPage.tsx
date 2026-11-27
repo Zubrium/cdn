@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, GitBranch, RefreshCw, RotateCcw, Workflow as WorkflowIcon } from "lucide-react";
+import { ArrowLeft, RefreshCw, RotateCcw, Workflow as WorkflowIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/api";
 import type { CoordinatorTask, CoordinatorWorkflowState } from "@/types";
@@ -248,7 +248,7 @@ function WorkflowDetails({ workflowId }: { workflowId: string }) {
 
           <section aria-label="Граф задач workflow" className="rounded-md border border-border bg-card p-4">
             <div className="mb-4 flex items-center gap-2">
-              <GitBranch className="size-4 text-muted-foreground" aria-hidden="true" />
+              <WorkflowIcon className="size-4 text-muted-foreground" aria-hidden="true" />
               <h2 className="text-sm font-semibold">Граф задач</h2>
               <span className="text-xs text-muted-foreground">{tasks.length}{workflow.hasNextPage ? "+" : ""}</span>
             </div>

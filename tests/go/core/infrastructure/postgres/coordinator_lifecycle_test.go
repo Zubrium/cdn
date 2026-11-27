@@ -304,23 +304,23 @@ func TestDisposableCoordinatorLifecycleSuite(t *testing.T) {
 		if err := CompleteCoordinatorTask(ctx, pool, root.ID, owner, epoch, root.FencingToken, 10, 4, time.Hour, outcome); err != nil {
 			t.Fatal(err)
 		}
-		branches, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 2, time.Minute, time.Hour)
-		if err != nil || len(branches) != 2 {
-			t.Fatalf("claim join dependencies: tasks=%+v err=%v", branches, err)
+		tasks, err := ClaimTasks(ctx, pool, owner, epoch, []string{"engine.example", "engine.other", "worker.one", "worker.two", "worker.example", "worker.archive", "worker.media"}, 2, time.Minute, time.Hour)
+		if err != nil || len(tasks) != 2 {
+			t.Fatalf("claim join dependencies: tasks=%+v err=%v", tasks, err)
 		}
-		var failedBranch Task
-		for _, branch := range branches {
-			if branch.EmissionKey == "join:one" {
-				failedBranch = branch
+		var failedTask Task
+		for _, task := range tasks {
+			if task.EmissionKey == "join:one" {
+				failedTask = task
 			}
-			if branch.Kind != corecoord.TaskKindOperation || branch.Operation == nil {
-				t.Fatalf("join task was claimed as worker work: %+v", branch)
+			if task.Kind != corecoord.TaskKindOperation || task.Operation == nil {
+				t.Fatalf("join task was claimed as worker work: %+v", task)
 			}
 		}
-		if failedBranch.ID == uuid.Nil {
-			t.Fatal("test did not claim the failing branch")
+		if failedTask.ID == uuid.Nil {
+			t.Fatal("test did not claim the failing task")
 		}
-		if err := FailTask(ctx, pool, failedBranch.ID, owner, epoch, failedBranch.FencingToken,
+		if err := FailTask(ctx, pool, failedTask.ID, owner, epoch, failedTask.FencingToken,
 			"permanent_error", false, 0, time.Hour); err != nil {
 			t.Fatal(err)
 		}

@@ -112,7 +112,7 @@ type buildManifestFile struct {
 // BuildSnapshot pins one immutable render input and starts the registered
 // composition-owned workflow. All durable writes use Core's scoped engine-data
 // batch with CAS create/update; no HTTP request can select an operation, owner,
-// route, branch, record value or storage path.
+// route, URL, record value or storage path.
 func (s *Service) BuildSnapshot(ctx context.Context, request websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error) {
 	if err := s.requireLevel(ctx, platform.AccessLevelWrite); err != nil {
 		return websiteapi.BuildJob{}, err

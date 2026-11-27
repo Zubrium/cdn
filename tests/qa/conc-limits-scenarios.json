@@ -82,7 +82,7 @@
         "Статические контракты OpenAPI и исходники transport/router доступны для проверки."
       ],
       "input": "Build plan профиля router, пример конфигурации и зафиксированные публичные пути OpenAPI/Router.",
-      "action": "Проверить количество public.router, одну branch в resolved config, отсутствие версионных префиксов и неизменность публичных Core-путей.",
+      "action": "Проверить количество public.router, один публичный listener и глобальный scope в resolved config, отсутствие версионных префиксов и неизменность публичных Core-путей.",
       "expected_result": "В профиле ровно одна публичная Router-компонента, конфигурация проходит WithBuildPlan, новых публичных путей и /api/vN нет, контракт /api/files не изменён.",
       "expected_state": "Топология остаётся статической; живое разворачивание за внешним proxy не требуется для этого статического сценария.",
       "test_file": "tests/go/main/internal/bus/topology_scenario_test.go",

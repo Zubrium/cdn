@@ -32,7 +32,7 @@ Website build является исключительно root-операцие�
 
 ### Prerender activation
 
-Prerender строит для конкретной page identity и locale immutable `static-page-artifact/v1`, проверяет digest и все файлы, затем durable publication workflow находит зарегистрированные Router targets для этой page identity и активирует каждый `(route, locale)` независимым Router CAS. Создание/удаление route, URL/path, Router startup branch и Website snapshot-to-branch assignment в worker workflow не входят. Отсутствующий или неоднозначный target и CAS conflict завершают соответствующую активацию контролируемой ошибкой, но не удаляют готовый artifact и не меняют предыдущую выдачу этого target; остальные targets продолжают обрабатываться. Workflow сохраняет результат по каждому target и допускает безопасный повтор. Target изменяется только после состояния `ready`; stale inputs отклоняются.
+Prerender строит для конкретной page identity и locale immutable `static-page-artifact/v1`, проверяет digest и все файлы, затем durable publication workflow находит зарегистрированные Router targets для этой page identity и активирует каждый `(route, locale)` независимым Router CAS. Создание/удаление route, URL/path, конфигурация публичного listener'а Router и привязка Website snapshot к route в worker workflow не входят. Отсутствующий или неоднозначный target и CAS conflict завершают соответствующую активацию контролируемой ошибкой, но не удаляют готовый artifact и не меняют предыдущую выдачу этого target; остальные targets продолжают обрабатываться. Workflow сохраняет результат по каждому target и допускает безопасный повтор. Target изменяется только после состояния `ready`; stale inputs отклоняются.
 
 
 ## Специфичные worker сценарии

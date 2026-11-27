@@ -87,7 +87,7 @@ func TestRouterAdminRouteResponsesUseSingleListenerContract(t *testing.T) {
 		{http.MethodGet, "/" + routeID, "", http.StatusOK},
 		{http.MethodPost, "", `{"host":"example.test","path":"/","match":"exact",` + target + `}`, http.StatusCreated},
 		{http.MethodPut, "/" + routeID + "/target", `{` + target + `}`, http.StatusOK},
-		{http.MethodPost, "", `{"branch_id":"main","host":"example.test","path":"/","match":"exact",` + target + `}`, http.StatusBadRequest},
+		{http.MethodPost, "", `{"unexpected_field":"value","host":"example.test","path":"/","match":"exact",` + target + `}`, http.StatusBadRequest},
 	} {
 		t.Run(scenario.method+scenario.suffix, func(t *testing.T) {
 			request := httptest.NewRequest(scenario.method, routesPath+scenario.suffix, strings.NewReader(scenario.body))
@@ -114,7 +114,7 @@ func TestRouterAdminRouteResponsesUseSingleListenerContract(t *testing.T) {
 				}
 				body = items[0]
 			}
-			if _, exists := body["branch_id"]; exists || string(body["id"]) != `"`+routeID+`"` {
+			if _, exists := body["unexpected_field"]; exists || string(body["id"]) != `"`+routeID+`"` {
 				t.Fatalf("unexpected route: %s", response.Body)
 			}
 		})

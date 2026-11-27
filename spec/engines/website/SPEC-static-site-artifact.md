@@ -13,7 +13,7 @@
 - Единственный входной объект — Core file, содержащий manifest `static-page-artifact/v1`.
 - Manifest описывает один HTML document и набор его immutable assets по artifact-relative paths, Core file IDs, проверенным типам содержимого, checksum и размеру.
 - Артефакт не даёт прав и не делает Core files публичными; прочитать их может только авторизованная identity Router.
-- Manifest не содержит snapshot/feature/branch/route semantics и не может указать публичный URL, S3 key, путь локального диска или произвольный redirect.
+- Manifest не содержит snapshot/feature/route semantics и не может указать публичный URL, S3 key, путь локального диска или произвольный redirect.
 - Создание/проверка артефакта полностью завершается до его привязки к публичному маршруту.
 
 ```mermaid
@@ -106,7 +106,7 @@ Artifact ID — Core file ID manifest. Успешное создание artifac
 
 При запросе Router:
 
-1. определяет статический branch scope и находит точный активный route binding;
+1. определяет глобальный scope и находит точный активный route binding;
 2. подтверждает свежую revision route state и права своего Core principal;
 3. читает artifact manifest через Core и проверяет поддерживаемый `format`/schema;
 4. для точного route запрашивает `document`; для route-scoped asset request канонизирует относительный asset path;

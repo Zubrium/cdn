@@ -168,8 +168,8 @@ func TestPublicationWorkflowStartInputIsIdempotent(t *testing.T) {
 	trigger := Trigger{Locale: testLocale, ContentPublicationRevision: 4, SystemModelRevision: 9, IdempotencyKey: testKey}
 	first := workflowStartInput(trigger, testLocale, testRunID, workflowTestPayload().Targets)
 	second := workflowStartInput(trigger, testLocale, testRunID, workflowTestPayload().Targets)
-	if strings.Contains(string(first.Payload), `"branch_id"`) {
-		t.Fatalf("workflow payload contains a retired field: %s", first.Payload)
+	if strings.Contains(string(first.Payload), `"unexpected_field"`) {
+		t.Fatalf("workflow payload contains an unexpected field: %s", first.Payload)
 	}
 
 	if first.OperationID != second.OperationID || first.ContractVersion != second.ContractVersion ||

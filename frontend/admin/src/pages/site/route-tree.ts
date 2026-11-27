@@ -121,7 +121,7 @@ export function addRouteNode(tree: RouteTreeNode, parentId: string | null, node:
   return updateRouteNode(tree, parentId, (parent) => ({ ...parent, children: [...(parent.children ?? []), node] }));
 }
 
-export function removeRouteBranch(tree: RouteTreeNode, id: string): RouteTreeNode {
+export function removeRouteSubtree(tree: RouteTreeNode, id: string): RouteTreeNode {
   const remove = (node: RouteTreeNode): RouteTreeNode | null => {
     if (node.id === id) return null;
     const children = (node.children ?? []).map(remove).filter((child): child is RouteTreeNode => child !== null);

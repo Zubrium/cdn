@@ -157,7 +157,7 @@ def go_body_has_exact_subtest(
 
 
 def go_control_statement_end(tokens: list[tuple[str, str]], start: int) -> int | None:
-    """Locate the final body brace, including an if statement's else branches."""
+    """Locate the final body brace, including an if statement's else arms."""
     index = go_control_body_open(tokens, start + 1)
     if index is None:
         return None

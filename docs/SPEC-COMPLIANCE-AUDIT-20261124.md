@@ -75,7 +75,7 @@ identity и функциональных сценариев не была осл
 
 | Требование | Статус | Основание и ограничение |
 | --- | --- | --- |
-| Один Router process на branch, без неконтрактных публичных путей и version prefix | Verified | `CONC-012` pass с явным разрешением контрактного `POST /api/locale-preference`; topology/OpenAPI контракт и E2E target ownership pass |
+| Один публичный Router listener с глобальным scope, без неконтрактных публичных путей и version prefix | Verified | `CONC-012` pass с явным разрешением контрактного `POST /api/locale-preference`; topology/OpenAPI контракт и E2E target ownership pass |
 | HTTP/bus admission, fail-fast `503`, per-route override, shutdown/draining | Verified | `CONC-001..003`, `CONC-009`, `CONC-011` pass; уровень unit |
 | DB budget и fail-fast до API | Verified | `CONC-004` pass; `main/internal/config/scales.go`; бюджет считает все class limits |
 | Sharded LRU, RWMutex, coalescing, zero-copy `cache.View`, invalidation batch | Verified | `CONC-005..007` pass, включая `-race` вCore-cache runner |
@@ -227,7 +227,7 @@ identity и функциональных сценариев не была осл
 
 ## 5. Website SPEC
 
-### `spec/engines/website/SPEC-website-engine.md`, `SPEC-branches-snapshots.md`, `SPEC-data-model.md`
+### `spec/engines/website/SPEC-website-engine.md`, `SPEC-snapshot-trees.md`, `SPEC-data-model.md`
 
 | Требование | Статус | Основание и ограничение |
 | --- | --- | --- |
@@ -365,7 +365,7 @@ class-isolated pools **Verified** (`CONC-008`, integration evidence на disposa
 
 - SPEC ID: `POST /api/locale-preference` в `spec/presentation/openapi/router.yaml`, locale resolution и preference cookie в `spec/engines/router/SPEC-router-engine.md`, публичная топология `CONC-012`.
 - Изменённые файлы: полный состав зафиксирован коммитом `107bbde`, Evidence/HEAD/проверки — в [QA report](QA_REPORT.md) и [acceptance matrix](../tests/ACCEPTANCE-MATRIX.md).
-- Новая возможность: скомпилированная в full profile публичная операция с явной startup-конфигурацией, валидацией locale/return_path/route/branch/state, cookie `zubrium_locale` (`HttpOnly`, `SameSite=Lax`, host-only, явный lifetime) и `303` на return_path; Admin listener не регистрирует путь.
+- Новая возможность: скомпилированная в full profile публичная операция с явной startup-конфигурацией, валидацией locale/return_path/route/state, cookie `zubrium_locale` (`HttpOnly`, `SameSite=Lax`, host-only, явный lifetime) и `303` на return_path; Admin listener не регистрирует путь.
 - Тесты: `tests/go/presentation/router/locale_preference_test.go`, `tests/go/main/internal/config/locale_preference_test.go`, topology/OpenAPI regression, ledger `E2E-LOC-001` и live Playwright.
 - Результат: PASS. Живой proof — `/private/var/folders/qk/694xx2l56_l01zmd37h82szh0000gn/T/zubrium-locale-preference-evidence-final/`; исходный run `e2e-20261124T121627Z-bab896` в `output/e2e/`, точные строки `PASS E2E-PUB-001`, `PASS E2E-LOC-001`, `PASS E2E-RET-001` без `FAIL`. Завершающие статические проверки перечислены в QA report и прошли exit 0.
 - HEAD после коммита и пуша: `107bbde` (ветка `readiness-20261123`).

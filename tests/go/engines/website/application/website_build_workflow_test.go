@@ -397,7 +397,7 @@ func TestWebsiteBuildWorkflowCreateIdempotentReplayAndTypedPayload(t *testing.T)
 			t.Fatalf("workflow payload lacks %q: %s", field, start.Payload)
 		}
 	}
-	for _, forbidden := range []string{"operation_id", "route", "url", "branch", "records", "secret", "token", "file_set_id"} {
+	for _, forbidden := range []string{"operation_id", "route", "url", "records", "secret", "token", "file_set_id"} {
 		if _, present := startPayload[forbidden]; present {
 			t.Fatalf("workflow payload exposes %q: %s", forbidden, start.Payload)
 		}

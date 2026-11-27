@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RouteTreeNode } from "@/types";
-import { addRouteNode, describeRoutes, moveRoutePriority, removeRouteBranch, reparentRoute, routeCapturesForPage, staticPageRouteIds } from "../../../../../../frontend/admin/src/pages/site/route-tree";
+import { addRouteNode, describeRoutes, moveRoutePriority, removeRouteSubtree, reparentRoute, routeCapturesForPage, staticPageRouteIds } from "../../../../../../frontend/admin/src/pages/site/route-tree";
 
 const tree: RouteTreeNode = {
   id: "site",
@@ -57,7 +57,7 @@ describe("route tree editor", () => {
     expect(result.tree?.children?.[0]?.children).toEqual([]);
   });
 
-  it("moves route branches below another node and rejects cycles", () => {
+  it("moves route subtrees below another node and rejects cycles", () => {
     const moved = reparentRoute(tree, "product", "about");
     expect(moved.error).toBeUndefined();
     expect(describeRoutes(moved.tree!).find((route) => route.id === "product")?.path).toBe("/about/{slug}");
@@ -72,7 +72,7 @@ describe("route tree editor", () => {
     const nestedReorder = moveRoutePriority(siblings, "alternate", -1);
     expect(nestedReorder.children?.[0]?.children?.map((node) => node.id)).toEqual(["alternate", "products"]);
 
-    const removed = removeRouteBranch(tree, "product");
+    const removed = removeRouteSubtree(tree, "product");
     expect(describeRoutes(removed).map((route) => route.id)).toEqual(["catalog", "about"]);
     expect(removed.children?.[0]?.children).toEqual([]);
   });

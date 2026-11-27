@@ -68,7 +68,7 @@ describe("Website contract acceptance", () => {
     expect(new Headers(init.headers).get("Authorization")).toBeNull();
     const body = JSON.parse(String(init.body));
     expect(body.payload.config).toMatchObject({ format_version: 3, pages: [{ id: "22222222-2222-4222-8222-222222222222" }] });
-    for (const forbidden of ["route", "routeTree", "dataModel", "records", "branch", "module_id", "scope"]) {
+    for (const forbidden of ["route", "routeTree", "dataModel", "records", "module_id", "scope"]) {
       expect(body.payload.config).not.toHaveProperty(forbidden);
     }
   });

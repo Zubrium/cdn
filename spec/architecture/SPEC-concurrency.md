@@ -6,7 +6,7 @@
 
 ## 1. Область и модель процесса
 
-- Продукт остаётся одним OS-процессом на branch. Один Router process обслуживает ровно одну настроенную branch; внешний proxy terminating TLS, rate limiting и caching не создаёт дополнительные инстансы для той же branch. Горизонтальное масштабирование внутри branch не допускается этим контрактом.
+- Продукт остаётся одним OS-процессом с одним публичным listener. Один Router process обслуживает все настроенные hosts; внешний proxy terminating TLS, rate limiting и caching не создаёт дополнительные инстансы этого listener. Горизонтальное масштабирование публичного listener не допускается этим контрактом.
 - Рост RPS достигается за счёт внутренней конкуренции: параллельных HTTP-goroutine, ограниченного числа in-flight операций, шардированных кэшей, coalescing cold misses, изолированных worker-пулов и корректно спроектированного DB-пула.
 - Реальная конкуренция — goroutine HTTP-серверов, фоновых циклов, `TaskExecutor`-пулов и listen-цикла инвалидации. Число OS-потоков Go runtime не является целевым параметром и не настраивается в YAML.
 - Process-local bus остаётся синхронным: handler вызывается в горутине вызывающего. Добавляется только semaphore конкуренции, но не асинхронная очередь и не client-видимые operation ID.
@@ -261,7 +261,7 @@ worker:
 
 - [SPEC-caching.md](SPEC-caching.md) — кэши, HTTP cache policy и прогрев до Ready.
 - [SPEC-core-architecture.md](../core/SPEC-core-architecture.md) — границы Core и владение PostgreSQL/S3/cache.
-- [SPEC-router-engine.md](../engines/router/SPEC-router-engine.md) — маршрутизация, один процесс на branch и proxy.
+- [SPEC-router-engine.md](../engines/router/SPEC-router-engine.md) — маршрутизация, один публичный listener и proxy.
 - [SPEC-module-data.md](../core/SPEC-module-data.md) — CAS revision как основа инвалидации.
 - [SPEC-observability.md](../observability/SPEC-observability.md) — метрики и `/metrics`.
 - [router.yaml](../presentation/openapi/router.yaml) — HTTP-контракт публичного Router.

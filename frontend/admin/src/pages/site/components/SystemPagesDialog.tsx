@@ -46,7 +46,7 @@ export function SystemPagesDialog({ open, onOpenChange, config, update }: System
               {missingRoute && <p role="alert" className="text-xs text-warning">Добавьте статический маршрут или выберите другую страницу. Пока используется встроенный вариант.</p>}
             </div>;
           })}
-          <p className="text-xs text-muted-foreground">Для ветки без назначенного снапшота показывается встроенная страница «Страница ещё не настроена». Отдельная страница 403 пока не вызывается runtime.</p>
+          <p className="text-xs text-muted-foreground">Для страницы без назначенного snapshot показывается встроенная страница «Страница ещё не настроена». Отдельная страница 403 пока не вызывается runtime.</p>
           {(["403", "503"] as const).filter((status) => config.systemPages?.[status]).map((status) => <div key={status} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3 text-sm"><span>Сохранено назначение {status}: {config.pages.find((page) => page.id === config.systemPages?.[status])?.name ?? "страница недоступна"}. Сейчас используется встроенная страница.</span><Button type="button" variant="outline" size="sm" onClick={() => update((current) => setSystemPageAssignment(current, status, ""))}>Снять назначение</Button></div>)}
         </div>
         <DialogFooter><Button type="button" onClick={() => onOpenChange(false)}>Готово</Button></DialogFooter>

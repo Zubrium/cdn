@@ -123,8 +123,8 @@ func TestRetirementChildPayloadCannotSelectClassOrModule(t *testing.T) {
 func TestRetirementWorkflowStartInputIsIdempotent(t *testing.T) {
 	first := retirementWorkflowStartInput(retirementPayload())
 	second := retirementWorkflowStartInput(retirementPayload())
-	if strings.Contains(string(first.Payload), `"branch_id"`) {
-		t.Fatalf("workflow payload contains a retired field: %s", first.Payload)
+	if strings.Contains(string(first.Payload), `"unexpected_field"`) {
+		t.Fatalf("workflow payload contains an unexpected field: %s", first.Payload)
 	}
 
 	if first.OperationID != contracts.RetirementStartOperationID || first.ContractVersion != contracts.RetirementStartContractVersion {

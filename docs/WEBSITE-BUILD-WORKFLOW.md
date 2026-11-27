@@ -31,14 +31,14 @@
 ### 3. Workflow graph
 
 - Root: зарегистрированная static-операция `engine.website/build-page/v1`; handler живёт в `engines/website/workflow` и регистрируется только `main`-композицией full-профиля. Operation ID и версию задаёт trusted `websiteapp.Config`, не HTTP-запрос.
-- Root payload содержит immutable `trusted-build-input/v1` со всеми pin'нутыми ревизиями/диджестами и locale. Handler проверяет strict JSON, identity задачи, пересчитывает `input_digest` и контракт, после чего детерминированно строит `render-plan/v2`. Запрещённые поля (route, URL, branch, record values, команды, path, secret) в DTO отсутствуют.
+- Root payload содержит immutable `trusted-build-input/v1` со всеми pin'нутыми ревизиями/диджестами и locale. Handler проверяет strict JSON, identity задачи, пересчитывает `input_digest` и контракт, после чего детерминированно строит `render-plan/v2`. Запрещённые поля (route, URL, host, record values, команды, path, secret) в DTO отсутствуют.
 - Child: `worker.prerender/render-page/v1` с payload `{idempotency_key, plan, plan_digest, input_digest}`. Core создаёт `Task.ID` только при коммите root result, поэтому root публикует стабильный `prerender_emission_key = prerender:<build_id>`, а Website разрешает его через task graph доверенного `WorkflowClient` и затем закрепляет task ID в записи build. Результат child читается через owner-scoped `GetTaskResult`; root result не содержит engine-specific данных.
 - Prerender остаётся изолированным worker; JavaScript `static-lifecycle` исполняется только там. Website не запускает браузер и не держит credential.
 
 ### 4. Входные данные build
 
 - `snapshot_id`, snapshot revision/digest, system-model revision/digest, `locale`, `locale_catalog_revision`, content publication revision, locale selection digest, feature package digest, dependency lock digest, runtime ABI/APIVersion и вычисленный `input_digest`.
-- Запрещены: route, URL, branch, visitor-selected target, record values, произвольные command/executable, S3 paths, секреты.
+- Запрещены: route, URL, host, visitor-selected target, record values, произвольные command/executable, S3 paths, секреты.
 - Stale input (любая из закреплённых ревизий изменилась) отклоняется до запуска prerender и не активирует результат.
 
 ### 5. Artifact и активация
@@ -69,7 +69,7 @@
 - `WEB-020` — locale-bound full trusted input digest, `render-plan/v2`, sandbox, stale result и Core-only artifact verification. Текущая integration-приёмка blocked.
 - `WEB-021` — rebuild fan-out, независимые Router target CAS, retry только failed и stale protection. Текущая integration-приёмка blocked; независимость частичных отказов требует исправления.
 - `WEB-014`, `WEB-026` — валидация artifact manifest и trusted file metadata.
-- `WEB-010` — отсутствие route/URL/branch/record values в structural/build DTO.
+- `WEB-010` — отсутствие route/URL/host/record values в structural/build DTO.
 - Новый Core regression test — владелец видит result child task, посторонний components/networks — нет.
 
 ## Ограничения, которые не снимаются этим решением

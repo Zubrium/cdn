@@ -4,9 +4,9 @@
 
 Системные и страничные metadata хранятся в payload snapshot. Поддерживаются canonical origin, language, `noIndex`, title, description, Open Graph media и page-level overrides. Canonical принимает только HTTP(S) origin без path, query или userinfo и не строится из `Host` запроса. Пустой canonical разрешён до настройки; sitemap в этом случае пустой.
 
-Назначенный snapshot — источник metadata публичного runtime для статической branch. Индексация разрешена только при согласии branch policy и metadata сайта/страницы. Preview не является контролем доступа: приватный preview закрывается gateway/auth.
+Назначенный snapshot — источник metadata публичного runtime для статического route. Индексация разрешена только при согласии политики индексации и metadata сайта/страницы. Preview не является контролем доступа: приватный preview закрывается gateway/auth.
 
-`robots.txt` позволяет crawler прочитать публичные страницы и запрещает административные URL. Он не блокирует необходимые публичные GET runtime/data/theme/assets endpoints. Публичные JSON runtime/data ответы помечаются `X-Robots-Tag: noindex`; это не препятствует их загрузке как данных страницы. Sitemap указывается только для индексируемой branch с canonical origin. Неиндексируемая публичная branch выдаёт `noindex,nofollow` и пустой sitemap; `robots.txt` не используется вместо контроля доступа или как способ удалить URL из индекса.
+`robots.txt` позволяет crawler прочитать публичные страницы и запрещает административные URL. Он не блокирует необходимые публичные GET runtime/data/theme/assets endpoints. Публичные JSON runtime/data ответы помечаются `X-Robots-Tag: noindex`; это не препятствует их загрузке как данных страницы. Sitemap указывается только для индексируемых публичных route с canonical origin. Неиндексируемые публичные route получают `noindex,nofollow` и не включаются в sitemap (пустой sitemap, если индексируемых route нет); `robots.txt` не используется вместо контроля доступа или как способ удалить URL из индекса.
 
 Query-варианты индексируемой страницы получают `noindex,follow`. Preview, query-варианты, ошибки и core fallback не должны становиться индексируемым или shared-cache содержимым.
 
@@ -20,7 +20,7 @@ Runtime строит detail metadata только из опубликованн�
 
 Browser prerender и `/api/runtime` используют одинаковую итоговую `RuntimeComposition.Metadata`. Metadata и разрешённое содержимое placements входят в document cache identity, authoritative инвалидация которого определяется [SPEC-caching.md](../../architecture/SPEC-caching.md). Draft save не меняет публичное представление; публикация и restore обновляют `contentRevision`.
 
-Sitemap index делит результат, если XML превышает 50 000 URL или 50 MiB; каждая часть остаётся в пределах обоих лимитов. URL list может кешироваться в памяти только как bounded process-local cache по branch, active snapshot, content revision, structural digest, canonical origin и branch/page indexing policy и подчиняется [SPEC-caching.md](../../architecture/SPEC-caching.md). Draft save не инвалидирует опубликованный результат. XML ETag вычисляется по байтам представления; GET и HEAD поддерживают conditional 304.
+Sitemap index делит результат, если XML превышает 50 000 URL или 50 MiB; каждая часть остаётся в пределах обоих лимитов. URL list может кешироваться в памяти только как bounded process-local cache по active snapshot, content revision, structural digest, canonical origin и page indexing policy и подчиняется [SPEC-caching.md](../../architecture/SPEC-caching.md). Draft save не инвалидирует опубликованный результат. XML ETag вычисляется по байтам представления; GET и HEAD поддерживают conditional 304.
 
 ## HTTP cache и статусы документов
 
@@ -38,7 +38,7 @@ Worker разрешает только GET/HEAD к текущему внутре
 
 Каждый ответ одинаков для всех User-Agent; locale-представление при этом может различаться и регулируется `Vary`/`no-store` из [SPEC-caching.md](../../architecture/SPEC-caching.md). При успешной генерации HTML содержит inert prerendered copy и гидратируемый target runtime без дополнительных page/slot wrappers или вложенных `<main>`. При отключённом или отказавшем worker возвращается актуальная server shell; частичный HTML не кешируется, ошибка не считается успешным prerender и не кешируется.
 
-HTML cache локален для процесса, ограничен конфигурацией и использует resolved identity: branch, snapshot, content revision, structural digest, metadata, normalized path и эффективный результат route/argument/data resolution. Этот кэш является process-local подчинённым кэшем [SPEC-caching.md](../../architecture/SPEC-caching.md): он не заменяет Core byte/metadata cache и Router manifest/route cache и не имеет межпроцессного shared состояния. Сырая query string не является cache key: неиспользуемые параметры и порядок независимых query keys не создают отдельные entries; порядок повторных значений array arguments сохраняется. Cache misses с одинаковой identity объединяются; вытеснение использует LRU. Ошибки не кешируются. Каждая генерация повторно сверяет snapshot/content identity до сохранения результата и отклоняет изменившееся состояние.
+HTML cache локален для процесса, ограничен конфигурацией и использует resolved identity: snapshot, content revision, structural digest, metadata, normalized path и эффективный результат route/argument/data resolution. Этот кэш является process-local подчинённым кэшем [SPEC-caching.md](../../architecture/SPEC-caching.md): он не заменяет Core byte/metadata cache и Router manifest/route cache и не имеет межпроцессного shared состояния. Сырая query string не является cache key: неиспользуемые параметры и порядок независимых query keys не создают отдельные entries; порядок повторных значений array arguments сохраняется. Cache misses с одинаковой identity объединяются; вытеснение использует LRU. Ошибки не кешируются. Каждая генерация повторно сверяет snapshot/content identity до сохранения результата и отклоняет изменившееся состояние.
 
 Worker failure diagnostics ограничены безопасными кодами стадий и ошибок; URL, query, cache keys, HTML, stderr и данные посетителей не записываются. Общий timeout завершает группу worker-процессов. Повтор разрешён только для сбоя до создания browser context, в пределах настроенного общего timeout и исходного queue slot; ошибки страницы и запреты запросов автоматически не повторяются.
 
@@ -46,12 +46,12 @@ Worker failure diagnostics ограничены безопасными кода�
 
 Администратор выбирает system pages из страниц хотя бы с одним static route. Назначение хранится в snapshot `config.systemPages` и сохраняется обычным structural save. Перед удалением назначенной страницы назначение снимается. Если выбранная страница удалена или стала динамической, редактор показывает предупреждение, а runtime использует встроенный fallback.
 
-Для branch без назначенного snapshot всегда используется встроенная 503-страница; её нельзя назначить через startup config или snapshot. Отдельное публичное состояние 403 не заявляется, пока runtime не определяет согласованный источник такого запрета.
+Для route без назначенного snapshot всегда используется встроенная 503-страница; её нельзя назначить через startup config или snapshot. Отдельное публичное состояние 403 не заявляется, пока runtime не определяет согласованный источник такого запрета.
 
 ## Acceptance criteria
 
 - Проверить canonical, language, title/description/OG escaping, отсутствие дублирующихся head tags и согласованность metadata между HTML и `/api/runtime`.
-- Проверить robots/sitemap для индексируемой и неиндексируемой branch, detail records, system pages, неизвестных routes, query variants и branch без snapshot.
+- Проверить robots/sitemap для индексируемых и неиндексируемых route, detail records, system pages, неизвестных routes, query variants и route без snapshot.
 - Подтвердить, что drafts не меняют public HTML, ETag или sitemap, а publish/restore обновляют корректные представления и инвалидируют кэши по CAS/revision из [SPEC-caching.md](../../architecture/SPEC-caching.md).
 - Проверить HTTP validators, HEAD, 304, ошибки/no-store, allowlist `Cache-Control`, `Vary` для locale и сжатия, а также отсутствие validators у failed prerender fallback.
 - Проверить worker sandbox, сетевые и method ограничения, queue/timeouts, отказ/восстановление, coalescing и bounded-ограничения кэша и отсутствие чувствительных данных в diagnostics.

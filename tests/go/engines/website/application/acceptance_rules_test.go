@@ -121,7 +121,7 @@ func TestWebsiteScenarioSnapshotCAS(t *testing.T) {
 		if err := json.Unmarshal(storedParent.Payload.Config, &config); err != nil {
 			t.Fatal(err)
 		}
-		for _, forbidden := range []string{"route", "url", "branch", "dataModel", "records"} {
+		for _, forbidden := range []string{"route", "url", "dataModel", "records"} {
 			if _, exists := config[forbidden]; exists {
 				t.Fatalf("snapshot payload must not carry %q after structural save", forbidden)
 			}

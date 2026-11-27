@@ -15,7 +15,7 @@ export default function DashboardPage() {
     ...(hasGroupAccess(principal, "forms_schemas") ? [{ title: "Формы", description: "Схемы и поля форм", href: "/forms", icon: FilePlus2 }] : []),
     ...(hasGroupAccess(principal, "forms_submissions") ? [{ title: "Заявки", description: "Ответы на формы", href: "/submissions", icon: FileText }] : []),
     ...(hasAnyGroupAccess(principal) ? [{ title: "Файлы", description: "Файловая библиотека", href: "/media", icon: Files }] : []),
-    ...(hasGroupAccess(principal, "features") ? [{ title: "Конфигурация запуска", description: "Статические ветки и их параметры", href: "/settings", icon: Settings }] : []),
+    ...(hasGroupAccess(principal, "features") ? [{ title: "Конфигурация запуска", description: "Параметры публичного listener", href: "/settings", icon: Settings }] : []),
     ...(canManageSchema(principal) ? [{ title: "Редактор страниц", description: "Снапшоты и фичи", href: "/site/pages", icon: Layers }] : []),
     ...(hasGroupAccess(principal, "router_routes") ? [{ title: "Маршруты", description: "Публичная выдача и загрузка", href: "/router/routes", icon: Workflow }] : []),
     ...(canManageAccess(principal) ? [{ title: "Доступы", description: "Пользователи и права групп", href: "/access/users", icon: LockKeyhole }] : []),

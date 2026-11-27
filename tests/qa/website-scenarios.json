@@ -39,7 +39,7 @@
     },
     {
       "id": "WEB-003",
-      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraphs 1 and 3; SPEC-branches-snapshots.md §Проверяемые требования, items 1-2",
+      "source": "spec/engines/website/SPEC-website-engine.md §Target Website API: страницы и их версии, paragraphs 1 and 3; SPEC-snapshot-trees.md §Проверяемые требования, items 1-2",
       "level": "unit",
       "preconditions": [
         "В системе существуют две страницы с root snapshots.",
@@ -159,14 +159,14 @@
     },
     {
       "id": "WEB-010",
-      "source": "spec/engines/website/SPEC-website-engine.md §§Target Website API: страницы и их версии, Страничные snapshots и сборка; SPEC-branches-snapshots.md §§Границы, Публичная выдача",
+      "source": "spec/engines/website/SPEC-website-engine.md §§Target Website API: страницы и их версии, Страничные snapshots и сборка; SPEC-snapshot-trees.md §§Границы, Публичная выдача",
       "level": "unit",
       "preconditions": [
         "A Website snapshot and a Router route target have independent configured identities."
       ],
-      "input": "Create/save a snapshot payload containing route, URL, branch assignment or system-wide record data; separately inspect accepted snapshot/build DTOs.",
+      "input": "Create/save a snapshot payload containing route, URL, snapshot-to-route assignment or system-wide record data; separately inspect accepted snapshot/build DTOs.",
       "action": "Validate Website structural input and build result boundaries.",
-      "expected_result": "Website accepts no route/URL/branch assignment or record values in snapshot input and does not activate Router targets itself.",
+      "expected_result": "Website accepts no route/URL/snapshot-to-route assignment or record values in snapshot input and does not activate Router targets itself.",
       "expected_state": "Structural mutation preserves prior public artifact; Router selection remains an explicit outer orchestration/CAS action.",
       "test_file": "tests/go/engines/website/application/website_acceptance_coverage_test.go",
       "test_symbol": "TestWebsiteScenarioStructuralBoundaryCoverage/WEB-010",
@@ -348,7 +348,7 @@
     },
     {
       "id": "WEB-021",
-      "source": "spec/engines/website/SPEC-website-engine.md §Страничные snapshots и сборка, paragraphs 4-5; SPEC-branches-snapshots.md §Публичная выдача, paragraphs 2-3; tests/ACCEPTANCE-MATRIX.md Website criterion: rebuild fan-out/retry/stale-result protection",
+      "source": "spec/engines/website/SPEC-website-engine.md §Страничные snapshots и сборка, paragraphs 4-5; SPEC-snapshot-trees.md §Публичная выдача, paragraphs 2-3; tests/ACCEPTANCE-MATRIX.md Website criterion: rebuild fan-out/retry/stale-result protection",
       "level": "integration",
       "preconditions": [
         "Disposable Website, Content projection and Router target-CAS capabilities are connected through trusted outer orchestration."
