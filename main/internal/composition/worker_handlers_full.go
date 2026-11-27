@@ -180,8 +180,11 @@ func registerWorkerHandlers(selected map[string]struct{}, config appconfig.Resol
 // construct scoped workflow clients whose tasks wait in the durable store
 // until the corresponding pool is explicitly enabled.
 func compiledWorkerClasses(selected map[string]struct{}) []string {
-	classes := make([]string, 0, 7)
-	for _, id := range []string{archive.DataModuleID, media.DataModuleID, prerender.DataModuleID, websiteworkflow.ComponentID, "engine.content", "engine.publication", "composition.retirement"} {
+	classes := make([]string, 0, 8)
+	for _, id := range []string{
+		archive.DataModuleID, media.DataModuleID, prerender.DataModuleID, websiteworkflow.ComponentID,
+		"engine.content", "engine.publication", "engine.router", "composition.retirement",
+	} {
 		if _, compiled := selected[id]; compiled {
 			classes = append(classes, id)
 		}

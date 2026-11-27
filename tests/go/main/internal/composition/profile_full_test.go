@@ -4,6 +4,7 @@ package composition
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -30,6 +31,16 @@ func TestFullProfileRegistersEngineContractsAndOperations(t *testing.T) {
 		if !groups[group] {
 			t.Errorf("full profile did not declare engine access group %q: %v", group, groups)
 		}
+	}
+}
+
+func TestFullProfileRegistersRouterTaskClass(t *testing.T) {
+	selected := make(map[string]struct{})
+	for _, component := range GeneratedBuildPlan().Components {
+		selected[component] = struct{}{}
+	}
+	if classes := compiledWorkerClasses(selected); !slices.Contains(classes, "engine.router") {
+		t.Fatalf("Router publication and retirement pool class is missing: %v", classes)
 	}
 }
 
