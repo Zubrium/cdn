@@ -99,7 +99,7 @@ func (s *Service) resumePublishedRun(ctx context.Context, run runRecord, trigger
 		run.SystemModelRevision != trigger.SystemModelRevision || run.IdempotencyKey != trigger.IdempotencyKey {
 		return Result{}, ErrConflict
 	}
-	if run.State == stateStarting || run.State == stateFailed {
+	if run.State == stateStarting || (run.State == stateFailed && run.ErrorCode == "workflow_start_failed") {
 		return s.restart(ctx, run)
 	}
 	return s.result(ctx, run)
@@ -455,7 +455,10 @@ func (s *Service) FinalizeRun(ctx context.Context, runID string) (Result, error)
 }
 
 func (s *Service) result(ctx context.Context, run runRecord) (Result, error) {
-	result := Result{RunID: run.RunID, State: run.State, Targets: make([]TargetResult, 0, len(run.TargetKeys))}
+	result := Result{
+		RunID: run.RunID, State: run.State, Targets: make([]TargetResult, 0, len(run.TargetKeys)),
+		WorkflowStarted: run.State == stateRunning || run.State == stateSuccess || (run.State == stateFailed && run.ErrorCode == ""),
+	}
 	for _, recordKey := range run.TargetKeys {
 		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: s.config.BranchID, RecordKey: recordKey}
 		_, target, err := s.loadTarget(ctx, key, run.RunID)

@@ -17,8 +17,8 @@ const (
 	namespace = "main/publication"
 	scopeType = "branch"
 
-	recordTypeRun     = "publication_run"
-	recordTypeTarget  = "publication_target"
+	recordTypeRun      = "publication_run"
+	recordTypeTarget   = "publication_target"
 	recordTypeArtifact = "publication_artifact"
 
 	stateStarting = "starting"
@@ -101,9 +101,10 @@ type Config struct {
 
 // Result is the durable partial result of one publication run.
 type Result struct {
-	RunID   string         `json:"run_id"`
-	State   string         `json:"state"`
-	Targets []TargetResult `json:"targets"`
+	RunID           string         `json:"run_id"`
+	WorkflowStarted bool           `json:"workflow_started"`
+	State           string         `json:"state"`
+	Targets         []TargetResult `json:"targets"`
 }
 
 type TargetResult struct {

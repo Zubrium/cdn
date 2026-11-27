@@ -46,9 +46,10 @@ type PublicationTargetResult struct {
 }
 
 type PublicationPublishResponse struct {
-	RunID   string                    `json:"run_id"`
-	State   string                    `json:"state"`
-	Targets []PublicationTargetResult `json:"targets"`
+	RunID           string                    `json:"run_id"`
+	WorkflowStarted bool                      `json:"workflow_started"`
+	State           string                    `json:"state"`
+	Targets         []PublicationTargetResult `json:"targets"`
 }
 
 func PublicationPublishOperation() Operation[PublicationPublishRequest, PublicationPublishResponse] {

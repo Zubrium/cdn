@@ -342,3 +342,30 @@ func TestBuildAndActivationRejectSubstitutedServerOwnedValues(t *testing.T) {
 		t.Fatalf("FinalizeRun = %+v, %v", final, err)
 	}
 }
+
+// A delivery replay may arrive after the graph has already finished with
+// failed targets. The original run is still a confirmed delivery.
+func TestPublishReplayKeepsFinalizedFailure(t *testing.T) {
+	ctx := context.Background()
+	starter := &recordingWorkflowStarter{}
+	service, err := NewService(Config{BranchID: testBranchID, Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
+		Targets: []Target{{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger := Trigger{Locale: testLocale, ContentPublicationRevision: 9, IdempotencyKey: testKey}
+	run, err := service.Publish(ctx, trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, ErrStale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeRun(ctx, run.RunID); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := service.Publish(ctx, trigger)
+	if err != nil || replay.RunID != run.RunID || !replay.WorkflowStarted || replay.State != stateFailed || len(starter.inputs) != 1 {
+		t.Fatalf("replay=%+v starts=%d err=%v", replay, len(starter.inputs), err)
+	}
+}

@@ -26,6 +26,8 @@ func TestFullProfileStaticAllowlistIsExact(t *testing.T) {
 		{ID: websiteworkflow.ForkFinalizeOperationID, Version: websiteworkflow.ForkChildContractVersion},
 		contracts.PublishedContentReadOperation().Key,
 		contracts.PublicationPublishOperation().Key,
+		contracts.ListContentPublicationIntentsOperation().Key,
+		contracts.AcknowledgeContentPublicationIntentOperation().Key,
 		contracts.RetirePageOperation().Key,
 		contracts.GetPageRetirementOperation().Key,
 		{ID: contracts.ContentProjectionOperationID, Version: contracts.ContentBridgeRootVersion},

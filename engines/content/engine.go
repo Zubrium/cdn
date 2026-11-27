@@ -48,6 +48,7 @@ type Engine struct {
 	authorization Authorization
 	projections   contentapi.ProjectionsProvider
 	service       *contentapp.Service
+	repository    *repository.Repository
 }
 
 type authenticatedContextKey struct{}
@@ -73,7 +74,7 @@ func New(dependencies Dependencies) (*Engine, error) {
 	}
 	return &Engine{
 		identity: dependencies.Identity, sessions: dependencies.Sessions, authorization: dependencies.Authorization,
-		projections: dependencies.Projections, service: service,
+		projections: dependencies.Projections, service: service, repository: repo,
 	}, nil
 }
 

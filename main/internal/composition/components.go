@@ -706,9 +706,6 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 			if c.contentEngine == nil {
 				return nil
 			}
-			if c.config.Publication.Enabled {
-				return contentPublicationAPI{API: c.contentEngine.engine, client: publicationClient{dispatcher: c.dispatcher}}
-			}
 			return c.contentEngine.engine
 		},
 		Forms: func() bus.AdminFormsEngine {
@@ -896,7 +893,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		keys = append(keys, contracts.PublishedContentReadOperation().Key)
 	}
 	if _, enabled := selected["engine.publication"]; enabled {
-		keys = append(keys, contracts.PublicationPublishOperation().Key)
+		keys = append(keys, contracts.PublicationPublishOperation().Key, contracts.ListContentPublicationIntentsOperation().Key, contracts.AcknowledgeContentPublicationIntentOperation().Key)
 	}
 	if _, enabled := selected["composition.retirement"]; enabled {
 		keys = append(keys, contracts.RetirePageOperation().Key, contracts.GetPageRetirementOperation().Key)
@@ -1168,11 +1165,14 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		}
 	}
 	if _, enabled := selected["engine.publication"]; enabled {
-		if websiteEngine == nil || routerEngine == nil {
+		if websiteEngine == nil || routerEngine == nil || contentEngine == nil {
 			return nil, nil, nil, nil, platform.ErrComponentUnavailable
 		}
 		publicationEngine := &publicationComponent{
-			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher,
+			core: core, config: resolved, website: websiteEngine, router: routerEngine, dispatcher: dispatcher, observer: observer,
+		}
+		if err := registerPublicationIntentOperations(dispatcher, contentEngine); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("register Content publication intents: %w", err)
 		}
 		if err := bus.Register(dispatcher, contracts.PublicationPublishOperation(), publicationEngine.publish); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("register publication operation: %w", err)

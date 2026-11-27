@@ -9,18 +9,22 @@ import (
 	appconfig "github.com/Zubrium/cdn/main/internal/config"
 	"github.com/Zubrium/cdn/main/internal/publication"
 	"github.com/Zubrium/cdn/pkg/contracts"
+	"github.com/Zubrium/cdn/pkg/observability"
 )
 
 // publicationComponent owns the server-side rebuild fan-out. It is assembled
 // only from startup configuration and registered engine capabilities; no HTTP
 // request can select its routes, pages, locales or Router operations.
 type publicationComponent struct {
-	core       *coreComponent
-	config     appconfig.Resolved
-	website    *websiteEngineComponent
-	router     *routerEngineComponent
-	dispatcher *bus.Dispatcher
-	service    *publication.Service
+	core           *coreComponent
+	config         appconfig.Resolved
+	website        *websiteEngineComponent
+	router         *routerEngineComponent
+	dispatcher     *bus.Dispatcher
+	service        *publication.Service
+	observer       *observability.Observer
+	deliveryCancel context.CancelFunc
+	deliveryDone   <-chan struct{}
 }
 
 func (component *publicationComponent) Start(ctx context.Context) error {
@@ -70,7 +74,7 @@ func (component *publicationComponent) publish(ctx context.Context, request cont
 	if err != nil {
 		return contracts.PublicationPublishResponse{}, err
 	}
-	response := contracts.PublicationPublishResponse{RunID: result.RunID, State: result.State, Targets: make([]contracts.PublicationTargetResult, 0, len(result.Targets))}
+	response := contracts.PublicationPublishResponse{RunID: result.RunID, WorkflowStarted: result.WorkflowStarted, State: result.State, Targets: make([]contracts.PublicationTargetResult, 0, len(result.Targets))}
 	for _, target := range result.Targets {
 		response.Targets = append(response.Targets, contracts.PublicationTargetResult{
 			RouteID: target.RouteID, Locale: target.Locale, State: target.State,
@@ -90,9 +94,17 @@ func (component *publicationComponent) Ready(context.Context) error {
 	return nil
 }
 
-func (component *publicationComponent) Stop(context.Context) error {
-	if component != nil {
-		component.service = nil
+func (component *publicationComponent) Stop(ctx context.Context) error {
+	if component == nil {
+		return nil
+	}
+	if component.deliveryCancel != nil {
+		component.deliveryCancel()
+		select {
+		case <-component.deliveryDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }

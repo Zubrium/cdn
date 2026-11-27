@@ -14,5 +14,8 @@ func TestContentPublicationTriggerKeyIsValidAndStable(t *testing.T) {
 		if err := PublicationPublishOperation().Validate(PublicationPublishRequest{Locale: "en-US", ContentPublicationRevision: 1, IdempotencyKey: key}); err != nil {
 			t.Fatalf("derived key is invalid for %q: %v", input, err)
 		}
+		if (len(input) == 16 || len(input) == 128) && key != input {
+			t.Fatalf("previously accepted key changed: %q", input)
+		}
 	}
 }

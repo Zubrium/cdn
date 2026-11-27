@@ -136,7 +136,10 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 	case "worker.archive", "worker.media", "worker.prerender":
 		return join(core, access, files, records, workflow)
 	case "main.publication":
-		return join(core, access, files, records, workflow, publication)
+		return join(core, access, files, records, workflow, publication, []contracts.Key{
+			contracts.ListContentPublicationIntentsOperation().Key,
+			contracts.AcknowledgeContentPublicationIntentOperation().Key,
+		})
 	case "composition.retirement":
 		return join(core, access, files, records, workflow, retirement)
 	case "admin.identity":
