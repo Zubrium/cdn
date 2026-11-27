@@ -100,7 +100,7 @@ func (delivery *CoreDelivery) initCacheMetrics() {
 // WarmupRouteSource is satisfied by the Router route service. It reads a
 // server-owned route record by its configured identity.
 type WarmupRouteSource interface {
-	GetRoute(context.Context, string, string) (contracts.Route, error)
+	GetRoute(context.Context, string) (contracts.Route, error)
 }
 
 var (
@@ -238,8 +238,8 @@ func (delivery *CoreDelivery) warmupRoute(ctx context.Context, target RouterWarm
 	if !ok || isNilAPI(source) {
 		return errRouterWarmupRoute
 	}
-	route, err := source.GetRoute(ctx, delivery.branchID, target.RouteID)
-	if err != nil || route.ID != target.RouteID || route.BranchID != delivery.branchID ||
+	route, err := source.GetRoute(ctx, target.RouteID)
+	if err != nil || route.ID != target.RouteID ||
 		route.State != contracts.RouteStateActive || contracts.ValidateRoute(route) != nil {
 		return errRouterWarmupRoute
 	}
@@ -250,9 +250,9 @@ func (delivery *CoreDelivery) warmupRoute(ctx context.Context, target RouterWarm
 		if !contracts.PathMatches(route.Path, path, route.Match) {
 			return errRouterWarmupRoute
 		}
-		key := routeCacheKey{branch: delivery.branchID, host: route.Host, path: path, method: http.MethodGet}
+		key := routeCacheKey{host: route.Host, path: path, method: http.MethodGet}
 		resolved, err := delivery.routeCache.resolve(ctx, key, route.Host, path)
-		if err != nil || resolved.ID != route.ID || resolved.BranchID != delivery.branchID ||
+		if err != nil || resolved.ID != route.ID ||
 			!matchesPublishedSlot(resolved, target) {
 			return errRouterWarmupRoute
 		}

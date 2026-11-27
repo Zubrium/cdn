@@ -72,7 +72,6 @@ type Target struct {
 
 type Route struct {
 	ID        string    `json:"id"`
-	BranchID  string    `json:"branch_id"`
 	Host      string    `json:"host"`
 	Path      string    `json:"path"`
 	Match     string    `json:"match"`
@@ -343,7 +342,7 @@ func NewStaticArtifactTarget(defaultLocale string, items []LocaleArtifactTarget)
 	return target, nil
 }
 
-func NewRoute(id, branchID, host, routePath, match string, target Target, now time.Time) (Route, error) {
+func NewRoute(id, host, routePath, match string, target Target, now time.Time) (Route, error) {
 	if target.Kind == TargetStaticSiteArtifact {
 		target.LocaleTargets = append([]LocaleArtifactTarget(nil), target.LocaleTargets...)
 		for index := range target.LocaleTargets {
@@ -353,8 +352,7 @@ func NewRoute(id, branchID, host, routePath, match string, target Target, now ti
 		}
 	}
 	parsedID, err := uuid.Parse(id)
-	if err != nil || parsedID == uuid.Nil || branchID == "" || len(branchID) > 128 || strings.TrimSpace(branchID) != branchID ||
-		strings.ContainsAny(branchID, "\r\n\x00/\\") {
+	if err != nil || parsedID == uuid.Nil {
 		return Route{}, ErrInvalidRoute
 	}
 	host, err = NormalizeHost(host)
@@ -375,7 +373,7 @@ func NewRoute(id, branchID, host, routePath, match string, target Target, now ti
 		return Route{}, ErrInvalidRoute
 	}
 	now = now.UTC()
-	route := Route{ID: parsedID.String(), BranchID: branchID, Host: host, Path: routePath, Match: match,
+	route := Route{ID: parsedID.String(), Host: host, Path: routePath, Match: match,
 		Target: target, State: StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := route.ValidateForStorage(); err != nil {
 		return Route{}, err
@@ -385,14 +383,8 @@ func NewRoute(id, branchID, host, routePath, match string, target Target, now ti
 
 func (route Route) ValidateForStorage() error {
 	id, err := uuid.Parse(route.ID)
-	if err != nil || id == uuid.Nil || id.String() != route.ID || route.BranchID == "" || len(route.BranchID) > 128 ||
-		strings.TrimSpace(route.BranchID) != route.BranchID || strings.ContainsAny(route.BranchID, "\r\n\x00/\\") {
+	if err != nil || id == uuid.Nil || id.String() != route.ID {
 		return ErrInvalidRoute
-	}
-	for _, char := range route.BranchID {
-		if char < 0x21 || char == 0x7f {
-			return ErrInvalidRoute
-		}
 	}
 	host, err := NormalizeHost(route.Host)
 	if err != nil || host != route.Host {

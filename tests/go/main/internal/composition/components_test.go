@@ -77,6 +77,17 @@ func TestWebsiteCanRequestOnlyFeatureAndConfiguredWorkflowGrants(t *testing.T) {
 	}
 }
 
+func TestEnabledPublicationCanStartItsOwnWorkflows(t *testing.T) {
+	bindings := coreWorkflowOperationBindings(&coreComponent{}, map[string]struct{}{"engine.publication": {}})
+	publication, ok := bindings["main.publication"].(coreWorkflowOperations)
+	if !ok || publication.owner != "engine.publication" {
+		t.Fatal("publication caller is missing its scoped Coordinator capability")
+	}
+	if _, grantsAllAdminRequests := bindings["admin.api"]; grantsAllAdminRequests {
+		t.Fatal("general Admin API must not receive the publication workflow capability")
+	}
+}
+
 func TestComponentLifecycleAdaptersFailClosedBeforeInitialization(t *testing.T) {
 	ctx := context.Background()
 	var core *coreComponent

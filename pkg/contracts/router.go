@@ -39,10 +39,9 @@ const RouteStateActive = StateActive
 func ValidateRoute(route Route) error { return route.ValidateForStorage() }
 
 type ListRoutesRequest struct {
-	BranchID string
-	Host     string
-	Cursor   string
-	Limit    int
+	Host   string
+	Cursor string
+	Limit  int
 }
 
 type RoutePage struct {
@@ -51,7 +50,6 @@ type RoutePage struct {
 }
 
 type CreateRouteRequest struct {
-	BranchID       string      `json:"-"`
 	Host           string      `json:"host"`
 	Path           string      `json:"path"`
 	Match          string      `json:"match"`
@@ -82,7 +80,6 @@ type DeleteRouteRequest struct {
 }
 
 type DeliveryRequest struct {
-	BranchID          string
 	Host              string
 	Method            string
 	EscapedPath       string

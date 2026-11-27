@@ -10,7 +10,6 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/Zubrium/cdn/engines/router/features/routes/model"
@@ -46,18 +45,16 @@ type TargetValidator interface {
 // used before a cached public route match may be reused. It is never populated
 // from visitor input.
 type RouteFingerprintSource interface {
-	ResolveRouteFingerprint(context.Context, string, string) (string, error)
+	ResolveRouteFingerprint(context.Context, string) (string, error)
 }
 
 type Config struct {
-	BranchID        string
 	AccessGroup     string
 	DefaultPageSize int
 	MaxPageSize     int
 }
 
 type CreateRouteInput struct {
-	BranchID       string
 	Host           string
 	Path           string
 	Match          string
@@ -99,7 +96,6 @@ type sessionKey struct{}
 
 func New(repo repository.Repository, identity Identity, authorizer GroupAuthorizer, validator TargetValidator, config Config) (*Service, error) {
 	if nilDependency(repo) || nilDependency(identity) || nilDependency(authorizer) || nilDependency(validator) ||
-		config.BranchID == "" || len(config.BranchID) > 128 || strings.TrimSpace(config.BranchID) != config.BranchID ||
 		!contracts.ValidAccessGroupKey(config.AccessGroup) || config.DefaultPageSize < 1 || config.MaxPageSize < config.DefaultPageSize || config.MaxPageSize > 100 {
 		return nil, ErrInvalid
 	}
@@ -132,11 +128,11 @@ func (service *Service) AuthenticateSession(ctx context.Context, token string) (
 	return context.WithValue(ctx, sessionKey{}, contracts.AuthorizationSubject{SessionToken: token}), nil
 }
 
-func (service *Service) ListRoutes(ctx context.Context, branchID, host, cursor string, limit int) ([]model.Route, string, error) {
+func (service *Service) ListRoutes(ctx context.Context, host, cursor string, limit int) ([]model.Route, string, error) {
 	if err := service.authorize(ctx, contracts.AccessLevelRead); err != nil {
 		return nil, "", err
 	}
-	if branchID != service.config.BranchID || len(cursor) > 256 {
+	if len(cursor) > 256 {
 		return nil, "", ErrInvalid
 	}
 	if limit == 0 {
@@ -152,21 +148,21 @@ func (service *Service) ListRoutes(ctx context.Context, branchID, host, cursor s
 		}
 		host = normalized
 	}
-	items, next, err := service.repository.List(ctx, branchID, host, cursor, limit)
+	items, next, err := service.repository.List(ctx, host, cursor, limit)
 	if err != nil {
 		return nil, "", mapRepositoryError(err)
 	}
 	return items, next, nil
 }
 
-func (service *Service) GetRoute(ctx context.Context, branchID, id string) (model.Route, error) {
+func (service *Service) GetRoute(ctx context.Context, id string) (model.Route, error) {
 	if err := service.authorize(ctx, contracts.AccessLevelRead); err != nil {
 		return model.Route{}, err
 	}
-	if branchID != service.config.BranchID || !validUUID(id) {
+	if !validUUID(id) {
 		return model.Route{}, ErrNotFound
 	}
-	route, err := service.repository.GetByID(ctx, branchID, id)
+	route, err := service.repository.GetByID(ctx, id)
 	if err != nil {
 		return model.Route{}, mapRepositoryError(err)
 	}
@@ -177,7 +173,7 @@ func (service *Service) CreateRoute(ctx context.Context, input CreateRouteInput)
 	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return model.Route{}, err
 	}
-	if input.BranchID != "" && input.BranchID != service.config.BranchID || !validIdempotency.MatchString(input.IdempotencyKey) {
+	if !validIdempotency.MatchString(input.IdempotencyKey) {
 		return model.Route{}, ErrInvalid
 	}
 	host, err := model.NormalizeHost(input.Host)
@@ -191,7 +187,7 @@ func (service *Service) CreateRoute(ctx context.Context, input CreateRouteInput)
 	if err := service.validator.ValidateRouteTarget(ctx, input.Target, input.Match); err != nil {
 		return model.Route{}, mapTargetError(err)
 	}
-	route, err := model.NewRoute(uuid.NewString(), service.config.BranchID, host, path, input.Match, input.Target, service.now())
+	route, err := model.NewRoute(uuid.NewString(), host, path, input.Match, input.Target, service.now())
 	if err != nil {
 		return model.Route{}, ErrInvalid
 	}
@@ -206,14 +202,14 @@ func (service *Service) CreateRoute(ctx context.Context, input CreateRouteInput)
 	return created, nil
 }
 
-func (service *Service) ReplaceTarget(ctx context.Context, branchID string, input ReplaceTargetInput) (model.Route, error) {
+func (service *Service) ReplaceTarget(ctx context.Context, input ReplaceTargetInput) (model.Route, error) {
 	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return model.Route{}, err
 	}
-	if branchID != service.config.BranchID || !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
+	if !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
 		return model.Route{}, ErrInvalid
 	}
-	current, err := service.repository.GetByID(ctx, branchID, input.RouteID)
+	current, err := service.repository.GetByID(ctx, input.RouteID)
 	if err != nil {
 		return model.Route{}, mapRepositoryError(err)
 	}
@@ -226,7 +222,7 @@ func (service *Service) ReplaceTarget(ctx context.Context, branchID string, inpu
 	if err := service.validator.ValidateRouteTarget(ctx, input.Target, current.Match); err != nil {
 		return model.Route{}, mapTargetError(err)
 	}
-	updated, err := service.repository.ReplaceTarget(ctx, branchID, input.RouteID, input.Target, input.ExpectedRevision, service.now())
+	updated, err := service.repository.ReplaceTarget(ctx, input.RouteID, input.Target, input.ExpectedRevision, service.now())
 	if err != nil {
 		return model.Route{}, mapRepositoryError(err)
 	}
@@ -235,16 +231,16 @@ func (service *Service) ReplaceTarget(ctx context.Context, branchID string, inpu
 
 // ReplaceLocaleTarget performs an independent, retry-safe CAS for one route
 // locale. Sibling locale revisions and unverified artifacts are untouched.
-func (service *Service) ReplaceLocaleTarget(ctx context.Context, branchID string, input ReplaceLocaleTargetInput) (model.Route, error) {
+func (service *Service) ReplaceLocaleTarget(ctx context.Context, input ReplaceLocaleTargetInput) (model.Route, error) {
 	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return model.Route{}, err
 	}
 	locale, err := model.CanonicalLocale(input.Locale)
-	if err != nil || locale != input.Locale || branchID != service.config.BranchID || !validUUID(input.RouteID) ||
+	if err != nil || locale != input.Locale || !validUUID(input.RouteID) ||
 		!validUUID(input.ArtifactManifestFileID) || input.ExpectedRevision < 1 || !validIdempotency.MatchString(input.IdempotencyKey) {
 		return model.Route{}, ErrInvalid
 	}
-	current, err := service.repository.GetByID(ctx, branchID, input.RouteID)
+	current, err := service.repository.GetByID(ctx, input.RouteID)
 	if err != nil {
 		return model.Route{}, mapRepositoryError(err)
 	}
@@ -263,7 +259,7 @@ func (service *Service) ReplaceLocaleTarget(ctx context.Context, branchID string
 	if err := service.validator.ValidateRouteTarget(ctx, updatedTarget, current.Match); err != nil {
 		return model.Route{}, mapTargetError(err)
 	}
-	route, err := service.repository.ReplaceLocaleTarget(ctx, branchID, input.RouteID, repository.LocaleTargetUpdate{
+	route, err := service.repository.ReplaceLocaleTarget(ctx, input.RouteID, repository.LocaleTargetUpdate{
 		Locale: locale, ArtifactManifestFileID: input.ArtifactManifestFileID,
 		ExpectedRevision: input.ExpectedRevision, IdempotencyKey: input.IdempotencyKey,
 	}, service.now())
@@ -278,18 +274,18 @@ func (service *Service) ReplaceLocaleTarget(ctx context.Context, branchID string
 	return model.Route{}, ErrConflict
 }
 
-func (service *Service) DeleteRoute(ctx context.Context, branchID string, input DeleteRouteInput) error {
+func (service *Service) DeleteRoute(ctx context.Context, input DeleteRouteInput) error {
 	if err := service.authorize(ctx, contracts.AccessLevelWrite); err != nil {
 		return err
 	}
-	if branchID != service.config.BranchID || !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
+	if !validUUID(input.RouteID) || input.ExpectedRevision < 1 {
 		return ErrInvalid
 	}
-	return mapRepositoryError(service.repository.Delete(ctx, branchID, input.RouteID, input.ExpectedRevision))
+	return mapRepositoryError(service.repository.Delete(ctx, input.RouteID, input.ExpectedRevision))
 }
 
 // ResolveRoute returns the active mapping for an already selected static
-// branch. Public resolution deliberately has no end-user credential input:
+// system. Public resolution deliberately has no end-user credential input:
 // delivery is authorized by the route's configured Core identity instead.
 func (service *Service) ResolveRoute(ctx context.Context, host, escapedPath string) (model.Route, error) {
 	if service == nil || ctx == nil {
@@ -303,7 +299,7 @@ func (service *Service) ResolveRoute(ctx context.Context, host, escapedPath stri
 	if err != nil {
 		return model.Route{}, ErrNotFound
 	}
-	route, err := service.repository.FindMatch(ctx, service.config.BranchID, host, path)
+	route, err := service.repository.FindMatch(ctx, host, path)
 	if err != nil {
 		return model.Route{}, mapRepositoryError(err)
 	}
@@ -316,11 +312,10 @@ func (service *Service) ResolveRoute(ctx context.Context, host, escapedPath stri
 func RouteFingerprint(route model.Route) string {
 	identity := struct {
 		ID        string       `json:"id"`
-		BranchID  string       `json:"branch_id"`
 		Revision  int64        `json:"revision"`
 		UpdatedAt time.Time    `json:"updated_at"`
 		Target    model.Target `json:"target"`
-	}{route.ID, route.BranchID, route.Revision, route.UpdatedAt, route.Target}
+	}{route.ID, route.Revision, route.UpdatedAt, route.Target}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return ""
@@ -330,13 +325,13 @@ func RouteFingerprint(route model.Route) string {
 }
 
 // ResolveRouteFingerprint reads the authoritative record for one configured
-// branch. Delivery has no end-user credential: this is a server-owned check
+// system. Delivery has no end-user credential: this is a server-owned check
 // and never accepts an identity supplied by a visitor.
-func (service *Service) ResolveRouteFingerprint(ctx context.Context, branchID, routeID string) (string, error) {
-	if service == nil || ctx == nil || branchID != service.config.BranchID || !validUUID(routeID) {
+func (service *Service) ResolveRouteFingerprint(ctx context.Context, routeID string) (string, error) {
+	if service == nil || ctx == nil || !validUUID(routeID) {
 		return "", ErrInvalid
 	}
-	route, err := service.repository.GetByID(ctx, branchID, routeID)
+	route, err := service.repository.GetByID(ctx, routeID)
 	if err != nil {
 		return "", mapRepositoryError(err)
 	}
@@ -366,12 +361,11 @@ func (service *Service) authorize(ctx context.Context, minimum contracts.AccessL
 
 func fingerprint(route model.Route) (string, error) {
 	value := struct {
-		BranchID string       `json:"branch_id"`
-		Host     string       `json:"host"`
-		Path     string       `json:"path"`
-		Match    string       `json:"match"`
-		Target   model.Target `json:"target"`
-	}{route.BranchID, route.Host, route.Path, route.Match, route.Target}
+		Host   string       `json:"host"`
+		Path   string       `json:"path"`
+		Match  string       `json:"match"`
+		Target model.Target `json:"target"`
+	}{route.Host, route.Path, route.Match, route.Target}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return "", err

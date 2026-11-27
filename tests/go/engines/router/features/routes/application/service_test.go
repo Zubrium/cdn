@@ -40,7 +40,7 @@ func TestSessionTokenIsRetainedOnlyAsDataBusAuthorizationSubject(t *testing.T) {
 	repo := newFakeRouteRepository()
 	authorizer := &fakeAuthorizer{maximum: contracts.AccessLevelRead}
 	service, err := New(repo, fakeIdentity{}, authorizer, fakeTargetValidator{}, Config{
-		BranchID: "main", AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
+		AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestSessionTokenIsRetainedOnlyAsDataBusAuthorizationSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := service.ListRoutes(ctx, "main", "", "", 0); err != nil {
+	if _, _, err := service.ListRoutes(ctx, "", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	want := contracts.AuthorizationSubject{SessionToken: "opaque-token"}
@@ -88,7 +88,7 @@ func (repository *fakeRouteRepository) Create(_ context.Context, route model.Rou
 		return saved, nil
 	}
 	for _, current := range repository.items {
-		if current.BranchID == route.BranchID && current.Host == route.Host && current.Path == route.Path {
+		if current.Host == route.Host && current.Path == route.Path {
 			return model.Route{}, repository.ErrConflict()
 		}
 	}
@@ -96,17 +96,17 @@ func (repository *fakeRouteRepository) Create(_ context.Context, route model.Rou
 	repository.idempotency[key] = struct{ fingerprint, routeID string }{fingerprint, route.ID}
 	return route, nil
 }
-func (repo *fakeRouteRepository) GetByID(_ context.Context, branchID, id string) (model.Route, error) {
+func (repo *fakeRouteRepository) GetByID(_ context.Context, id string) (model.Route, error) {
 	route, ok := repo.items[id]
-	if !ok || route.BranchID != branchID {
+	if !ok {
 		return model.Route{}, repository.ErrNotFound
 	}
 	return route, nil
 }
-func (repo *fakeRouteRepository) List(_ context.Context, branchID, host, cursor string, limit int) ([]model.Route, string, error) {
+func (repo *fakeRouteRepository) List(_ context.Context, host, cursor string, limit int) ([]model.Route, string, error) {
 	ids := make([]string, 0, len(repo.items))
 	for id, route := range repo.items {
-		if route.BranchID == branchID && (host == "" || route.Host == host) && id > cursor {
+		if (host == "" || route.Host == host) && id > cursor {
 			ids = append(ids, id)
 		}
 	}
@@ -122,10 +122,10 @@ func (repo *fakeRouteRepository) List(_ context.Context, branchID, host, cursor 
 	}
 	return items, next, nil
 }
-func (repo *fakeRouteRepository) FindMatch(_ context.Context, branchID, host, path string) (model.Route, error) {
+func (repo *fakeRouteRepository) FindMatch(_ context.Context, host, path string) (model.Route, error) {
 	var best model.Route
 	for _, route := range repo.items {
-		if route.BranchID != branchID || route.Host != host || !model.PathMatches(route.Path, path, route.Match) {
+		if route.Host != host || !model.PathMatches(route.Path, path, route.Match) {
 			continue
 		}
 		if best.ID == "" || route.Match == model.MatchExact || (best.Match != model.MatchExact && len(route.Path) > len(best.Path)) {
@@ -137,8 +137,8 @@ func (repo *fakeRouteRepository) FindMatch(_ context.Context, branchID, host, pa
 	}
 	return best, nil
 }
-func (repo *fakeRouteRepository) ReplaceTarget(_ context.Context, branchID, id string, target model.Target, revision int64, now time.Time) (model.Route, error) {
-	route, err := repo.GetByID(context.Background(), branchID, id)
+func (repo *fakeRouteRepository) ReplaceTarget(_ context.Context, id string, target model.Target, revision int64, now time.Time) (model.Route, error) {
+	route, err := repo.GetByID(context.Background(), id)
 	if err != nil {
 		return model.Route{}, err
 	}
@@ -149,8 +149,8 @@ func (repo *fakeRouteRepository) ReplaceTarget(_ context.Context, branchID, id s
 	repo.items[id] = route
 	return route, nil
 }
-func (repo *fakeRouteRepository) ReplaceLocaleTarget(_ context.Context, branchID, id string, update repository.LocaleTargetUpdate, now time.Time) (model.Route, error) {
-	route, err := repo.GetByID(context.Background(), branchID, id)
+func (repo *fakeRouteRepository) ReplaceLocaleTarget(_ context.Context, id string, update repository.LocaleTargetUpdate, now time.Time) (model.Route, error) {
+	route, err := repo.GetByID(context.Background(), id)
 	if err != nil {
 		return model.Route{}, err
 	}
@@ -171,8 +171,8 @@ func (repo *fakeRouteRepository) ReplaceLocaleTarget(_ context.Context, branchID
 	return route, nil
 }
 
-func (repo *fakeRouteRepository) Delete(_ context.Context, branchID, id string, revision int64) error {
-	route, err := repo.GetByID(context.Background(), branchID, id)
+func (repo *fakeRouteRepository) Delete(_ context.Context, id string, revision int64) error {
+	route, err := repo.GetByID(context.Background(), id)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func newTestService(t *testing.T, level contracts.AccessLevel, targetValidator T
 	repo := newFakeRouteRepository()
 	authorizer := &fakeAuthorizer{maximum: level}
 	service, err := New(repo, fakeIdentity{}, authorizer, targetValidator, Config{
-		BranchID: "main", AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
+		AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,10 +208,10 @@ func uploadTarget() model.Target {
 
 func TestGroupLevelOneReadsButCannotChangeRoutes(t *testing.T) {
 	service, _, authorizer, ctx := newTestService(t, contracts.AccessLevelRead, fakeTargetValidator{})
-	if _, _, err := service.ListRoutes(ctx, "main", "", "", 0); err != nil {
+	if _, _, err := service.ListRoutes(ctx, "", "", 0); err != nil {
 		t.Fatalf("read at level 1 failed: %v", err)
 	}
-	_, err := service.CreateRoute(ctx, CreateRouteInput{BranchID: "main", Host: "example.com", Path: "/upload", Match: model.MatchExact, Target: uploadTarget(), IdempotencyKey: "router-route-create-001"})
+	_, err := service.CreateRoute(ctx, CreateRouteInput{Host: "example.com", Path: "/upload", Match: model.MatchExact, Target: uploadTarget(), IdempotencyKey: "router-route-create-001"})
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("write at level 1 = %v, want forbidden", err)
 	}
@@ -225,7 +225,7 @@ func TestGroupLevelOneReadsButCannotChangeRoutes(t *testing.T) {
 
 func TestCreateNormalizesRouteAndIdempotentlyReplaysRequest(t *testing.T) {
 	service, repo, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
-	input := CreateRouteInput{BranchID: "main", Host: "EXAMPLE.COM.", Path: "/uploads/a%20b", Match: model.MatchExact,
+	input := CreateRouteInput{Host: "EXAMPLE.COM.", Path: "/uploads/a%20b", Match: model.MatchExact,
 		Target: uploadTarget(), IdempotencyKey: "router-route-create-002"}
 	first, err := service.CreateRoute(ctx, input)
 	if err != nil {
@@ -245,13 +245,10 @@ func TestCreateNormalizesRouteAndIdempotentlyReplaysRequest(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsVisitorControlledBranchTraversalAndUnavailableTarget(t *testing.T) {
+func TestCreateRejectsTraversalAndUnavailableTarget(t *testing.T) {
 	service, repo, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
-	base := CreateRouteInput{BranchID: "main", Host: "example.com", Path: "/safe", Match: model.MatchExact, Target: uploadTarget(), IdempotencyKey: "router-route-create-003"}
-	wrongBranch := base
-	wrongBranch.BranchID = "other"
+	base := CreateRouteInput{Host: "example.com", Path: "/safe", Match: model.MatchExact, Target: uploadTarget(), IdempotencyKey: "router-route-create-003"}
 	for name, input := range map[string]CreateRouteInput{
-		"branch":                wrongBranch,
 		"traversal":             func() CreateRouteInput { value := base; value.Path = "/assets/%2e%2e/private"; return value }(),
 		"short idempotency key": func() CreateRouteInput { value := base; value.IdempotencyKey = "short"; return value }(),
 	} {
@@ -270,27 +267,27 @@ func TestCreateRejectsVisitorControlledBranchTraversalAndUnavailableTarget(t *te
 
 func TestReplaceAndDeleteRequireCurrentRevision(t *testing.T) {
 	service, _, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
-	created, err := service.CreateRoute(ctx, CreateRouteInput{BranchID: "main", Host: "example.com", Path: "/upload", Match: model.MatchExact,
+	created, err := service.CreateRoute(ctx, CreateRouteInput{Host: "example.com", Path: "/upload", Match: model.MatchExact,
 		Target: uploadTarget(), IdempotencyKey: "router-route-create-004"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := service.ReplaceTarget(ctx, "main", ReplaceTargetInput{RouteID: created.ID, Target: created.Target, ExpectedRevision: 1})
+	updated, err := service.ReplaceTarget(ctx, ReplaceTargetInput{RouteID: created.ID, Target: created.Target, ExpectedRevision: 1})
 	if err != nil || updated.Revision != 2 {
 		t.Fatalf("replace target = %+v, %v", updated, err)
 	}
-	if _, err := service.ReplaceTarget(ctx, "main", ReplaceTargetInput{RouteID: created.ID, Target: created.Target, ExpectedRevision: 1}); !errors.Is(err, ErrConflict) {
+	if _, err := service.ReplaceTarget(ctx, ReplaceTargetInput{RouteID: created.ID, Target: created.Target, ExpectedRevision: 1}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale replacement = %v, want conflict", err)
 	}
-	if err := service.DeleteRoute(ctx, "main", DeleteRouteInput{RouteID: created.ID, ExpectedRevision: 1}); !errors.Is(err, ErrConflict) {
+	if err := service.DeleteRoute(ctx, DeleteRouteInput{RouteID: created.ID, ExpectedRevision: 1}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale delete = %v, want conflict", err)
 	}
-	if err := service.DeleteRoute(ctx, "main", DeleteRouteInput{RouteID: created.ID, ExpectedRevision: 2}); err != nil {
+	if err := service.DeleteRoute(ctx, DeleteRouteInput{RouteID: created.ID, ExpectedRevision: 2}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestPublicResolutionNormalizesRequestAndUsesConfiguredBranch(t *testing.T) {
+func TestPublicResolutionNormalizesRequestAndSeparatesHosts(t *testing.T) {
 	service, _, _, ctx := newTestService(t, contracts.AccessLevelWrite, fakeTargetValidator{})
 	baseTarget, err := model.NewStaticArtifactTarget("en-US", []model.LocaleArtifactTarget{
 		{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301", Revision: 1},
@@ -313,6 +310,14 @@ func TestPublicResolutionNormalizesRequestAndUsesConfiguredBranch(t *testing.T) 
 		Target: fileTarget, IdempotencyKey: "router-route-resolve-003"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	other, err := service.CreateRoute(ctx, CreateRouteInput{Host: "other.example", Path: "/assets/icons/logo.svg", Match: model.MatchExact,
+		Target: fileTarget, IdempotencyKey: "router-route-resolve-004"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := service.ResolveRoute(context.Background(), "other.example", "/assets/icons/logo.svg"); err != nil || matched.ID != other.ID {
+		t.Fatalf("other host mapping = %+v, %v; want %q", matched, err, other.ID)
 	}
 	got, err := service.ResolveRoute(context.Background(), "EXAMPLE.COM:443", "/assets/icons/logo.svg")
 	if err != nil || got.ID != exact.ID {

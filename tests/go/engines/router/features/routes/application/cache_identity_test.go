@@ -16,7 +16,7 @@ func TestRouteFingerprintTracksAuthoritativeRevision(t *testing.T) {
 		LocaleTargets: []model.LocaleArtifactTarget{{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301", Revision: 1}},
 	}
 	route := model.Route{
-		ID: "01938f7a-68af-7c20-a51d-78b6ca125399", BranchID: "main", Host: "www.example.invalid",
+		ID: "01938f7a-68af-7c20-a51d-78b6ca125399", Host: "www.example.invalid",
 		Path: "/site/", Match: model.MatchPrefix, Target: target, State: model.StateActive,
 		Revision: 1, CreatedAt: time.Unix(1, 0).UTC(), UpdatedAt: time.Unix(1, 0).UTC(),
 	}
@@ -38,22 +38,22 @@ func TestRouteFingerprintTracksAuthoritativeRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, err := New(repo, fakeIdentity{}, &fakeAuthorizer{maximum: contracts.AccessLevelRead}, fakeTargetValidator{}, Config{
-		BranchID: "main", AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
+		AccessGroup: "router_routes", DefaultPageSize: 20, MaxPageSize: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := service.ResolveRouteFingerprint(context.Background(), "main", route.ID)
+	got, err := service.ResolveRouteFingerprint(context.Background(), route.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != first {
 		t.Fatalf("resolved fingerprint = %q, want %q", got, first)
 	}
-	if _, err := service.ResolveRouteFingerprint(context.Background(), "main", "01938f7a-68af-7c20-a51d-78b6ca125398"); err == nil {
+	if _, err := service.ResolveRouteFingerprint(context.Background(), "01938f7a-68af-7c20-a51d-78b6ca125398"); err == nil {
 		t.Fatal("unknown route fingerprint resolved")
 	}
-	if _, err := service.ResolveRouteFingerprint(nil, "main", route.ID); err == nil {
+	if _, err := service.ResolveRouteFingerprint(nil, route.ID); err == nil {
 		t.Fatal("nil context fingerprint resolved")
 	}
 }

@@ -118,7 +118,6 @@ func mapOperationTargetValidationError(err error) error {
 }
 
 type CoreDelivery struct {
-	branchID   string
 	files      CoreFiles
 	routes     RouteResolver
 	operations contracts.PublicOperationCatalog
@@ -127,14 +126,14 @@ type CoreDelivery struct {
 	observer   CacheObserver
 }
 
-func NewCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, operations contracts.PublicOperationCatalog) (*CoreDelivery, error) {
-	return newCoreDelivery(branchID, files, routes, operations, nil, nil, nil)
+func NewCoreDelivery(files CoreFiles, routes RouteResolver, operations contracts.PublicOperationCatalog) (*CoreDelivery, error) {
+	return newCoreDelivery(files, routes, operations, nil, nil, nil)
 }
 
 // NewCoreDeliveryWithCache enables both bounded Router caches. Every bound is
 // mandatory: composition must pass explicit startup configuration, and an
 // unavailable revision source never falls back to a stale cached match.
-func NewCoreDeliveryWithCache(branchID string, files CoreFiles, routes RouteResolver, operations contracts.PublicOperationCatalog, config RouterCacheConfig) (*CoreDelivery, error) {
+func NewCoreDeliveryWithCache(files CoreFiles, routes RouteResolver, operations contracts.PublicOperationCatalog, config RouterCacheConfig) (*CoreDelivery, error) {
 	if !validCacheSettings(config.Manifests) || !validCacheSettings(config.Routes) || config.Observer == nil {
 		return nil, contracts.ErrPublicInvalid
 	}
@@ -142,24 +141,18 @@ func NewCoreDeliveryWithCache(branchID string, files CoreFiles, routes RouteReso
 	if !ok || isNilAPI(fingerprints) {
 		return nil, contracts.ErrPublicInvalid
 	}
-	return newCoreDelivery(branchID, files, routes, operations,
+	return newCoreDelivery(files, routes, operations,
 		newManifestCache(files, config.Manifests, config.Observer),
-		newRouteCache(branchID, routes, fingerprints, config.Routes, config.Observer), config.Observer)
+		newRouteCache(routes, fingerprints, config.Routes, config.Observer), config.Observer)
 }
 
-func newCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, operations contracts.PublicOperationCatalog,
+func newCoreDelivery(files CoreFiles, routes RouteResolver, operations contracts.PublicOperationCatalog,
 	manifests *manifestCache, routeCache *routeCache, observer CacheObserver) (*CoreDelivery, error) {
-	if branchID == "" || len(branchID) > 128 || strings.TrimSpace(branchID) != branchID ||
-		isNilAPI(files) || isNilAPI(routes) {
+	if isNilAPI(files) || isNilAPI(routes) {
 		return nil, contracts.ErrPublicInvalid
 	}
-	for _, char := range branchID {
-		if char < 0x21 || char == 0x7f || char == '/' || char == '\\' {
-			return nil, contracts.ErrPublicInvalid
-		}
-	}
 	delivery := &CoreDelivery{
-		branchID: branchID, files: files, routes: routes, operations: operations,
+		files: files, routes: routes, operations: operations,
 		manifests: manifests, routeCache: routeCache, observer: observer,
 	}
 	if observer != nil {
@@ -169,7 +162,7 @@ func newCoreDelivery(branchID string, files CoreFiles, routes RouteResolver, ope
 }
 
 func (delivery *CoreDelivery) Deliver(ctx context.Context, request contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
-	if delivery == nil || ctx == nil || request.BranchID != delivery.branchID {
+	if delivery == nil || ctx == nil {
 		return contracts.DeliveryResponse{}, contracts.ErrPublicNotFound
 	}
 	if request.Method != http.MethodGet && request.Method != http.MethodHead && request.Method != http.MethodPost &&
@@ -185,7 +178,7 @@ func (delivery *CoreDelivery) Deliver(ctx context.Context, request contracts.Del
 	if err != nil {
 		return contracts.DeliveryResponse{}, mapRouteError(err)
 	}
-	if route.BranchID != delivery.branchID || route.State != contracts.StateActive || route.ValidateForStorage() != nil {
+	if route.State != contracts.StateActive || route.ValidateForStorage() != nil {
 		return contracts.DeliveryResponse{}, contracts.ErrPublicNotFound
 	}
 	if route.Host != host || !contracts.PathMatches(route.Path, path, route.Match) {
@@ -222,7 +215,7 @@ func (delivery *CoreDelivery) resolveRoute(ctx context.Context, request contract
 	if delivery.routeCache == nil {
 		return delivery.routes.ResolveRoute(ctx, request.Host, request.EscapedPath)
 	}
-	key := routeCacheKey{branch: delivery.branchID, host: host, path: path, method: request.Method}
+	key := routeCacheKey{host: host, path: path, method: request.Method}
 	return delivery.routeCache.resolve(ctx, key, request.Host, request.EscapedPath)
 }
 

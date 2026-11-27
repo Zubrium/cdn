@@ -705,7 +705,8 @@ func (c *fileAPIComponent) Start(ctx context.Context) error {
 		// dispatcher, so construct it here instead of carrying a nil pointer.
 		sources.retirement = &retirementClient{dispatcher: c.dispatcher}
 	}
-	sources.snapshotFork = snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "admin.api")}
+	// The registered fork operation uses Website's Coordinator capability.
+	sources.snapshotFork = snapshotForkWorkflowStarter{dispatcher: bus.NewModuleDispatcher(c.dispatcher, "engine.website")}
 	// Admin feature modules never receive an engine handle. All calls to
 	// Content, Forms, Website and Loader go through this dedicated DataBus;
 	// composition is the only place that resolves a provider to an engine.
@@ -977,18 +978,7 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		}
 	}
 	if hasWorkflowConsumers(selected) {
-		workflowOperations := map[string]bus.WorkflowOperations{
-			"engine.website":        coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.website"},
-			"engine.website.import": coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: archive.DataModuleID},
-		}
-		if _, ok := selected["engine.content"]; ok {
-			workflowOperations["engine.content"] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.content"}
-		}
-		for _, moduleID := range []string{"engine.publication", "composition.retirement", "admin.coordinator", "worker.archive", "worker.media", "worker.prerender"} {
-			if _, ok := selected[moduleID]; ok {
-				workflowOperations[moduleID] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: moduleID}
-			}
-		}
+		workflowOperations := coreWorkflowOperationBindings(core, selected)
 		if err := bus.RegisterWorkflowOperations(dispatcher, workflowOperations); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("register workflow DataBus operations: %w", err)
 		}
@@ -1377,6 +1367,25 @@ func configuredGroupNames(groups map[string]platform.AccessLevel) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func coreWorkflowOperationBindings(core *coreComponent, selected map[string]struct{}) map[string]bus.WorkflowOperations {
+	workflowOperations := map[string]bus.WorkflowOperations{
+		"engine.website":        coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.website"},
+		"engine.website.import": coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: archive.DataModuleID},
+	}
+	if _, ok := selected["engine.content"]; ok {
+		workflowOperations["engine.content"] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: "engine.content"}
+	}
+	for _, moduleID := range []string{"engine.publication", "composition.retirement", "admin.coordinator", "worker.archive", "worker.media", "worker.prerender"} {
+		if _, ok := selected[moduleID]; ok {
+			workflowOperations[moduleID] = coreWorkflowOperations{resolve: func() *platform.Runtime { return core.runtime }, owner: moduleID}
+		}
+	}
+	if _, ok := selected["engine.publication"]; ok {
+		workflowOperations["main.publication"] = workflowOperations["engine.publication"]
+	}
+	return workflowOperations
 }
 
 func hasWorkflowConsumers(selected map[string]struct{}) bool {

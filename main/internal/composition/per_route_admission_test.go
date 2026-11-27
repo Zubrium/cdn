@@ -24,7 +24,7 @@ func (useCase staticRouteUseCase) AuthenticateSession(context.Context, string) (
 	return context.Background(), nil
 }
 
-func (useCase staticRouteUseCase) ListRoutes(context.Context, string, string, string, int) ([]routemodel.Route, string, error) {
+func (useCase staticRouteUseCase) ListRoutes(context.Context, string, string, int) ([]routemodel.Route, string, error) {
 	items := make([]routemodel.Route, 0, len(useCase.routes))
 	for _, route := range useCase.routes {
 		items = append(items, route)
@@ -32,7 +32,7 @@ func (useCase staticRouteUseCase) ListRoutes(context.Context, string, string, st
 	return items, "", nil
 }
 
-func (useCase staticRouteUseCase) GetRoute(_ context.Context, _, id string) (routemodel.Route, error) {
+func (useCase staticRouteUseCase) GetRoute(_ context.Context, id string) (routemodel.Route, error) {
 	route, ok := useCase.routes[id]
 	if !ok {
 		return routemodel.Route{}, errors.New("route not found")
@@ -44,22 +44,22 @@ func (useCase staticRouteUseCase) CreateRoute(context.Context, routesapp.CreateR
 	return routemodel.Route{}, errors.New("not supported")
 }
 
-func (useCase staticRouteUseCase) ReplaceTarget(context.Context, string, routesapp.ReplaceTargetInput) (routemodel.Route, error) {
+func (useCase staticRouteUseCase) ReplaceTarget(context.Context, routesapp.ReplaceTargetInput) (routemodel.Route, error) {
 	return routemodel.Route{}, errors.New("not supported")
 }
 
-func (useCase staticRouteUseCase) ReplaceLocaleTarget(context.Context, string, routesapp.ReplaceLocaleTargetInput) (routemodel.Route, error) {
+func (useCase staticRouteUseCase) ReplaceLocaleTarget(context.Context, routesapp.ReplaceLocaleTargetInput) (routemodel.Route, error) {
 	return routemodel.Route{}, errors.New("not supported")
 }
 
-func (useCase staticRouteUseCase) DeleteRoute(context.Context, string, routesapp.DeleteRouteInput) error {
+func (useCase staticRouteUseCase) DeleteRoute(context.Context, routesapp.DeleteRouteInput) error {
 	return errors.New("not supported")
 }
 
 func TestResolvePerRouteAdmissionUsesStartupRouteIDs(t *testing.T) {
 	adapter, err := routerapi.NewAPIAdapter(staticRouteUseCase{routes: map[string]routemodel.Route{
-		"route-1": {ID: "route-1", Path: "/qa", BranchID: "main"},
-	}}, nil, "main")
+		"route-1": {ID: "route-1", Path: "/qa"},
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

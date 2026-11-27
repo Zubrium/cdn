@@ -53,6 +53,6 @@ func NewStaticArtifactTarget(defaultLocale string, items []LocaleArtifactTarget)
 	return contracts.NewStaticArtifactTarget(defaultLocale, items)
 }
 
-func NewRoute(id, branchID, host, routePath, match string, target Target, now time.Time) (Route, error) {
-	return contracts.NewRoute(id, branchID, host, routePath, match, target, now)
+func NewRoute(id, host, routePath, match string, target Target, now time.Time) (Route, error) {
+	return contracts.NewRoute(id, host, routePath, match, target, now)
 }

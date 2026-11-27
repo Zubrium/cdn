@@ -83,7 +83,7 @@ func TestRouterTargetDispositionAndArtifactCASAreNeutral(t *testing.T) {
 	if strings.Contains(string(encoded), "revision") {
 		t.Fatalf("artifact slots exposed internal revision: %s", encoded)
 	}
-	route, err := NewRoute("01938f7a-68af-7c20-a51d-78b6ca125399", "main", "www.example.invalid", "/site/", MatchPrefix, artifact, time.Unix(1, 0).UTC())
+	route, err := NewRoute("01938f7a-68af-7c20-a51d-78b6ca125399", "www.example.invalid", "/site/", MatchPrefix, artifact, time.Unix(1, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

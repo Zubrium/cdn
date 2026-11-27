@@ -12,12 +12,12 @@ import (
 type RouteUseCase interface {
 	Authenticate(context.Context, string) (context.Context, error)
 	AuthenticateSession(context.Context, string) (context.Context, error)
-	ListRoutes(context.Context, string, string, string, int) ([]model.Route, string, error)
-	GetRoute(context.Context, string, string) (model.Route, error)
+	ListRoutes(context.Context, string, string, int) ([]model.Route, string, error)
+	GetRoute(context.Context, string) (model.Route, error)
 	CreateRoute(context.Context, routesapp.CreateRouteInput) (model.Route, error)
-	ReplaceTarget(context.Context, string, routesapp.ReplaceTargetInput) (model.Route, error)
-	ReplaceLocaleTarget(context.Context, string, routesapp.ReplaceLocaleTargetInput) (model.Route, error)
-	DeleteRoute(context.Context, string, routesapp.DeleteRouteInput) error
+	ReplaceTarget(context.Context, routesapp.ReplaceTargetInput) (model.Route, error)
+	ReplaceLocaleTarget(context.Context, routesapp.ReplaceLocaleTargetInput) (model.Route, error)
+	DeleteRoute(context.Context, routesapp.DeleteRouteInput) error
 }
 
 // APIAdapter maps the engine's route use cases onto its stable public facade.
@@ -25,16 +25,15 @@ type RouteUseCase interface {
 // fails closed with 503 through ErrUnavailable.
 type APIAdapter struct {
 	Descriptor
-	branchID string
 	routes   RouteUseCase
 	delivery DeliveryAPI
 }
 
-func NewAPIAdapter(routes RouteUseCase, delivery DeliveryAPI, branchID string) (*APIAdapter, error) {
-	if isNilAdapterDependency(routes) || branchID == "" || len(branchID) > 128 {
+func NewAPIAdapter(routes RouteUseCase, delivery DeliveryAPI) (*APIAdapter, error) {
+	if isNilAdapterDependency(routes) {
 		return nil, ErrInvalid
 	}
-	return &APIAdapter{branchID: branchID, routes: routes, delivery: delivery}, nil
+	return &APIAdapter{routes: routes, delivery: delivery}, nil
 }
 
 func (adapter *APIAdapter) Authenticate(ctx context.Context, credential string) (context.Context, error) {
@@ -55,7 +54,7 @@ func (adapter *APIAdapter) ListRoutes(ctx context.Context, input ListRoutesReque
 	if adapter == nil || adapter.routes == nil {
 		return RoutePage{}, ErrUnavailable
 	}
-	items, next, err := adapter.routes.ListRoutes(ctx, input.BranchID, input.Host, input.Cursor, input.Limit)
+	items, next, err := adapter.routes.ListRoutes(ctx, input.Host, input.Cursor, input.Limit)
 	if err != nil {
 		return RoutePage{}, mapApplicationError(err)
 	}
@@ -69,7 +68,7 @@ func (adapter *APIAdapter) GetRoute(ctx context.Context, id string) (Route, erro
 	if adapter == nil || adapter.routes == nil {
 		return Route{}, ErrUnavailable
 	}
-	route, err := adapter.routes.GetRoute(ctx, adapter.branchID, id)
+	route, err := adapter.routes.GetRoute(ctx, id)
 	if err != nil {
 		return Route{}, mapApplicationError(err)
 	}
@@ -81,7 +80,7 @@ func (adapter *APIAdapter) CreateRoute(ctx context.Context, input CreateRouteReq
 		return Route{}, ErrUnavailable
 	}
 	route, err := adapter.routes.CreateRoute(ctx, routesapp.CreateRouteInput{
-		BranchID: input.BranchID, Host: input.Host, Path: input.Path, Match: input.Match,
+		Host: input.Host, Path: input.Path, Match: input.Match,
 		Target: input.Target, IdempotencyKey: input.IdempotencyKey,
 	})
 	if err != nil {
@@ -94,7 +93,7 @@ func (adapter *APIAdapter) ReplaceRouteTarget(ctx context.Context, input Replace
 	if adapter == nil || adapter.routes == nil {
 		return Route{}, ErrUnavailable
 	}
-	route, err := adapter.routes.ReplaceTarget(ctx, adapter.branchID, routesapp.ReplaceTargetInput{
+	route, err := adapter.routes.ReplaceTarget(ctx, routesapp.ReplaceTargetInput{
 		RouteID: input.RouteID, Target: input.Target, ExpectedRevision: input.ExpectedRevision,
 	})
 	if err != nil {
@@ -107,7 +106,7 @@ func (adapter *APIAdapter) ReplaceLocaleTarget(ctx context.Context, input Replac
 	if adapter == nil || adapter.routes == nil {
 		return Route{}, ErrUnavailable
 	}
-	route, err := adapter.routes.ReplaceLocaleTarget(ctx, adapter.branchID, routesapp.ReplaceLocaleTargetInput{
+	route, err := adapter.routes.ReplaceLocaleTarget(ctx, routesapp.ReplaceLocaleTargetInput{
 		RouteID: input.RouteID, Locale: input.Locale, ArtifactManifestFileID: input.ArtifactManifestFileID,
 		ExpectedRevision: input.ExpectedRevision, IdempotencyKey: input.IdempotencyKey,
 	})
@@ -121,7 +120,7 @@ func (adapter *APIAdapter) DeleteRoute(ctx context.Context, input DeleteRouteReq
 	if adapter == nil || adapter.routes == nil {
 		return ErrUnavailable
 	}
-	return mapApplicationError(adapter.routes.DeleteRoute(ctx, adapter.branchID, routesapp.DeleteRouteInput{
+	return mapApplicationError(adapter.routes.DeleteRoute(ctx, routesapp.DeleteRouteInput{
 		RouteID: input.RouteID, ExpectedRevision: input.ExpectedRevision,
 	}))
 }

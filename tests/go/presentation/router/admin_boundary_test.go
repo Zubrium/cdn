@@ -14,7 +14,7 @@ func TestRouterPublicListenerDoesNotServeAdminOperations(t *testing.T) {
 	handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(context.Context, contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 		t.Fatal("public delivery must not be called for an Admin path")
 		return contracts.DeliveryResponse{}, nil
-	}}, Config{BranchID: "main", MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
+	}}, Config{MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +72,8 @@ func (api adminRouteContractAPI) ReplaceRouteTarget(context.Context, contracts.R
 func TestRouterAdminRouteResponsesUseSingleListenerContract(t *testing.T) {
 	const routeID = "01938f7a-68af-7c10-a51d-78b6ca125301"
 	const target = `"target":{"kind":"core-file","file_id":"01938f7a-68af-7c10-a51d-78b6ca125302"}`
-	api := adminRouteContractAPI{route: contracts.Route{ID: routeID, BranchID: "main", Match: "exact", Revision: 1}}
-	handler, err := NewHandler(api, Config{BranchID: "main", MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
+	api := adminRouteContractAPI{route: contracts.Route{ID: routeID, Match: "exact", Revision: 1}}
+	handler, err := NewHandler(api, Config{MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}

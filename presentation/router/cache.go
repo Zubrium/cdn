@@ -176,7 +176,6 @@ type manifestCache struct {
 }
 
 type routeCacheKey struct {
-	branch string
 	host   string
 	path   string
 	method string
@@ -190,11 +189,10 @@ type cachedRoute struct {
 // RouteFingerprintSource is satisfied by the Router engine's authoritative
 // route record lookup. A failure to check the revision closes the cache path.
 type RouteFingerprintSource interface {
-	ResolveRouteFingerprint(context.Context, string, string) (string, error)
+	ResolveRouteFingerprint(context.Context, string) (string, error)
 }
 
 type routeCache struct {
-	branch       string
 	routes       RouteResolver
 	fingerprints RouteFingerprintSource
 	cache        *boundedCache[routeCacheKey, cachedRoute]
@@ -242,16 +240,16 @@ func manifestCacheSize(key manifestCacheKey, parsed parsedArtifact) int64 {
 	return size
 }
 
-func newRouteCache(branch string, routes RouteResolver, fingerprints RouteFingerprintSource, settings CacheSettings, observer CacheObserver) *routeCache {
+func newRouteCache(routes RouteResolver, fingerprints RouteFingerprintSource, settings CacheSettings, observer CacheObserver) *routeCache {
 	return &routeCache{
-		branch: branch, routes: routes, fingerprints: fingerprints,
+		routes: routes, fingerprints: fingerprints,
 		cache: newBoundedCache[routeCacheKey, cachedRoute](settings, cacheRouterRoutes, observer),
 	}
 }
 
 func (cache *routeCache) resolve(ctx context.Context, key routeCacheKey, host, path string) (contracts.Route, error) {
 	if entry, found := cache.cache.get(key); found {
-		current, err := cache.fingerprints.ResolveRouteFingerprint(ctx, cache.branch, entry.route.ID)
+		current, err := cache.fingerprints.ResolveRouteFingerprint(ctx, entry.route.ID)
 		if err != nil {
 			return contracts.Route{}, err
 		}
@@ -264,10 +262,7 @@ func (cache *routeCache) resolve(ctx context.Context, key routeCacheKey, host, p
 	if err != nil {
 		return contracts.Route{}, err
 	}
-	if route.BranchID != cache.branch {
-		return contracts.Route{}, contracts.ErrPublicNotFound
-	}
-	fingerprint, err := cache.fingerprints.ResolveRouteFingerprint(ctx, cache.branch, route.ID)
+	fingerprint, err := cache.fingerprints.ResolveRouteFingerprint(ctx, route.ID)
 	if err != nil {
 		return contracts.Route{}, err
 	}
@@ -276,7 +271,7 @@ func (cache *routeCache) resolve(ctx context.Context, key routeCacheKey, host, p
 }
 
 func routeCacheSize(key routeCacheKey, route contracts.Route) int64 {
-	size := int64(len(key.branch) + len(key.host) + len(key.path) + len(key.method) + len(route.ID) + 128)
+	size := int64(len(key.host) + len(key.path) + len(key.method) + len(route.ID) + 128)
 	size += int64(len(route.Target.DefaultLocale))
 	for _, locale := range route.Target.LocaleTargets {
 		size += int64(len(locale.Locale) + len(locale.ArtifactManifestFileID) + 32)

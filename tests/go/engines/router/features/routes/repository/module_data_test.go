@@ -161,7 +161,7 @@ func testRouteWithMatch(t *testing.T, id, host, path, match string) model.Route 
 			t.Fatal(err)
 		}
 	}
-	route, err := model.NewRoute(id, "main", host, path, match, target, time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC))
+	route, err := model.NewRoute(id, host, path, match, target, time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,19 +184,19 @@ func TestFindMatchChoosesExactThenLongestSegmentPrefix(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	exact, err := repo.FindMatch(ctx, "main", "example.com", "/assets/icons/logo.svg")
+	exact, err := repo.FindMatch(ctx, "example.com", "/assets/icons/logo.svg")
 	if err != nil || exact.ID != routes[2].ID {
 		t.Fatalf("exact route = %+v, %v; want %q", exact, err, routes[2].ID)
 	}
-	longestPrefix, err := repo.FindMatch(ctx, "main", "example.com", "/assets/icons/other.svg")
+	longestPrefix, err := repo.FindMatch(ctx, "example.com", "/assets/icons/other.svg")
 	if err != nil || longestPrefix.ID != routes[1].ID {
 		t.Fatalf("longest prefix route = %+v, %v; want %q", longestPrefix, err, routes[1].ID)
 	}
-	shorterPrefix, err := repo.FindMatch(ctx, "main", "example.com", "/assets/other.svg")
+	shorterPrefix, err := repo.FindMatch(ctx, "example.com", "/assets/other.svg")
 	if err != nil || shorterPrefix.ID != routes[0].ID {
 		t.Fatalf("shorter prefix route = %+v, %v; want %q", shorterPrefix, err, routes[0].ID)
 	}
-	if _, err := repo.FindMatch(ctx, "main", "example.com", "/assets-old/other.svg"); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.FindMatch(ctx, "example.com", "/assets-old/other.svg"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("partial segment path = %v, want not found", err)
 	}
 }
@@ -214,7 +214,7 @@ func TestFindMatchSkipsSiblingsThatArePrefixesOfTheRequest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	matched, err := repo.FindMatch(ctx, "main", "forms.example.test", "/forms/contact/submit")
+	matched, err := repo.FindMatch(ctx, "forms.example.test", "/forms/contact/submit")
 	if err != nil || matched.ID != submit.ID {
 		t.Fatalf("submit route = %+v, %v; want %q", matched, err, submit.ID)
 	}
@@ -260,11 +260,11 @@ func TestReplaceLocaleTargetReplaysOriginalCASWithoutAdvancingRevision(t *testin
 		t.Fatal(err)
 	}
 	update := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-route-00001"}
-	first, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	first, err := repo.ReplaceLocaleTarget(ctx, route.ID, update, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	replayed, err := repo.ReplaceLocaleTarget(ctx, route.ID, update, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("same CAS replay: %v", err)
 	}
@@ -274,17 +274,17 @@ func TestReplaceLocaleTargetReplaysOriginalCASWithoutAdvancingRevision(t *testin
 		t.Fatalf("replay advanced or changed target: first=%+v replay=%+v", firstSlot, replayedSlot)
 	}
 	update.ExpectedRevision = 2
-	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC()); !errors.Is(err, ErrConflict) {
+	if _, err := repo.ReplaceLocaleTarget(ctx, route.ID, update, time.Now().UTC()); !errors.Is(err, ErrConflict) {
 		t.Fatalf("same key with different precondition = %v, want conflict", err)
 	}
 	newer := update
 	newer.IdempotencyKey = "activate-route-00002"
 	newer.ArtifactManifestFileID = "01938f7a-68af-7c10-a51d-78b6ca125398"
-	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, newer, time.Now().UTC()); err != nil {
+	if _, err := repo.ReplaceLocaleTarget(ctx, route.ID, newer, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	update.ExpectedRevision = 1
-	current, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	current, err := repo.ReplaceLocaleTarget(ctx, route.ID, update, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,11 +307,11 @@ func TestReplaceLocaleTargetRecoversConcurrentIdenticalCAS(t *testing.T) {
 	}
 	update := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-route-00001"}
 	data.beforeBatch = func() {
-		if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC()); err != nil {
+		if _, err := repo.ReplaceLocaleTarget(ctx, route.ID, update, time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	replayed, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, update, time.Now().UTC())
+	replayed, err := repo.ReplaceLocaleTarget(ctx, route.ID, update, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("concurrent CAS replay: %v", err)
 	}
@@ -344,11 +344,11 @@ func TestReplaceLocaleTargetAllowsConcurrentDifferentLocaleCAS(t *testing.T) {
 	firstTime := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	secondTime := firstTime.Add(time.Minute)
 	data.beforeBatch = func() {
-		if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, fr, secondTime); err != nil {
+		if _, err := repo.ReplaceLocaleTarget(ctx, route.ID, fr, secondTime); err != nil {
 			t.Fatal(err)
 		}
 	}
-	updated, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, en, firstTime)
+	updated, err := repo.ReplaceLocaleTarget(ctx, route.ID, en, firstTime)
 	if err != nil {
 		t.Fatalf("independent locale CAS: %v", err)
 	}
@@ -377,14 +377,14 @@ func TestReplaceLocaleTargetRejectsConcurrentSameLocaleCAS(t *testing.T) {
 	winner := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125398", ExpectedRevision: 1, IdempotencyKey: "activate-winner-0001"}
 	loser := LocaleTargetUpdate{Locale: "en-US", ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125399", ExpectedRevision: 1, IdempotencyKey: "activate-loser-00001"}
 	data.beforeBatch = func() {
-		if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, winner, time.Now().UTC()); err != nil {
+		if _, err := repo.ReplaceLocaleTarget(ctx, route.ID, winner, time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := repo.ReplaceLocaleTarget(ctx, "main", route.ID, loser, time.Now().UTC()); !errors.Is(err, ErrConflict) {
+	if _, err := repo.ReplaceLocaleTarget(ctx, route.ID, loser, time.Now().UTC()); !errors.Is(err, ErrConflict) {
 		t.Fatalf("same locale conflict = %v", err)
 	}
-	current, err := repo.GetByID(ctx, "main", route.ID)
+	current, err := repo.GetByID(ctx, route.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,28 +408,28 @@ func TestRouteListFiltersHostAndCursorAndCASProtectsUpdates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	items, cursor, err := repo.List(ctx, "main", "a.example", "", 1)
+	items, cursor, err := repo.List(ctx, "a.example", "", 1)
 	if err != nil || len(items) != 1 || cursor == "" {
 		t.Fatalf("first filtered page = %d items, cursor=%q, err=%v", len(items), cursor, err)
 	}
-	page, next, err := repo.List(ctx, "main", "a.example", cursor, 1)
+	page, next, err := repo.List(ctx, "a.example", cursor, 1)
 	if err != nil || len(page) != 1 || next != "" || page[0].ID == items[0].ID {
 		t.Fatalf("second filtered page = %+v cursor=%q err=%v", page, next, err)
 	}
-	updated, err := repo.ReplaceTarget(ctx, "main", first.ID, model.Target{Kind: model.TargetCoreFile, FileID: "01938f7a-68af-7c10-a51d-78b6ca125399"}, 1, time.Date(2026, 11, 18, 12, 1, 0, 0, time.UTC))
+	updated, err := repo.ReplaceTarget(ctx, first.ID, model.Target{Kind: model.TargetCoreFile, FileID: "01938f7a-68af-7c10-a51d-78b6ca125399"}, 1, time.Date(2026, 11, 18, 12, 1, 0, 0, time.UTC))
 	if err != nil || updated.Revision != 2 {
 		t.Fatalf("target replacement = %+v, %v", updated, err)
 	}
-	if _, err := repo.ReplaceTarget(ctx, "main", first.ID, first.Target, 1, time.Now().UTC()); !errors.Is(err, ErrConflict) {
+	if _, err := repo.ReplaceTarget(ctx, first.ID, first.Target, 1, time.Now().UTC()); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale target replacement = %v, want conflict", err)
 	}
-	if err := repo.Delete(ctx, "main", first.ID, 1); !errors.Is(err, ErrConflict) {
+	if err := repo.Delete(ctx, first.ID, 1); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale delete = %v, want conflict", err)
 	}
-	if err := repo.Delete(ctx, "main", first.ID, 2); err != nil {
+	if err := repo.Delete(ctx, first.ID, 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.GetByID(ctx, "main", first.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.GetByID(ctx, first.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted route lookup = %v, want not found", err)
 	}
 }

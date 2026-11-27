@@ -70,8 +70,8 @@ func TestRouterTopologyScenario(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve example config: %v", err)
 		}
-		if strings.TrimSpace(resolved.RouterAPI.BranchID) == "" {
-			t.Fatal("resolved configuration has no single Router branch")
+		if strings.TrimSpace(resolved.RouterAPI.PublicListenAddress) == "" {
+			t.Fatal("resolved configuration has no Router listener address")
 		}
 		if _, err := resolved.WithBuildPlan(plan); err != nil {
 			t.Fatalf("build plan does not match resolved topology: %v", err)

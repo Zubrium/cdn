@@ -96,27 +96,27 @@ func TestPathSegmentLimitBoundsCoreSelectorValues(t *testing.T) {
 func TestNewRouteRequiresExactCoreFilePathAndExplicitOperationConfig(t *testing.T) {
 	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
 	coreFile := Target{Kind: TargetCoreFile, FileID: "01938f7a-68af-7c10-a51d-78b6ca125301"}
-	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "main", "EXAMPLE.COM", "/download.pdf", MatchPrefix, coreFile, now); err == nil {
+	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "EXAMPLE.COM", "/download.pdf", MatchPrefix, coreFile, now); err == nil {
 		t.Fatal("core-file route accepted prefix matching")
 	}
-	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125303", "main", "example.com", "/forms", MatchPrefix,
+	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125303", "example.com", "/forms", MatchPrefix,
 		Target{Kind: TargetRegisteredOperation, OperationID: "public.form-session", OperationConfig: json.RawMessage(`{"enabled":true}`)}, now); err == nil {
 		t.Fatal("registered operation accepted prefix matching")
 	}
 	if err := (Target{Kind: TargetCoreFile, FileID: coreFile.FileID, FallbackEnabled: true}).Validate(); err == nil {
 		t.Fatal("core-file target accepted artifact fallback configuration")
 	}
-	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "main", "EXAMPLE.COM", "/download.pdf", MatchExact, Target{Kind: TargetRegisteredOperation, OperationID: "public.form-upload"}, now); err == nil {
+	if _, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "EXAMPLE.COM", "/download.pdf", MatchExact, Target{Kind: TargetRegisteredOperation, OperationID: "public.form-upload"}, now); err == nil {
 		t.Fatal("registered operation accepted empty config")
 	}
-	route, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "main", "EXAMPLE.COM", "/download.pdf", MatchExact, coreFile, now)
+	route, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125302", "EXAMPLE.COM", "/download.pdf", MatchExact, coreFile, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if route.Host != "example.com" || route.Revision != 1 || route.State != StateActive || !route.CreatedAt.Equal(now) {
 		t.Fatalf("unexpected normalized route: %+v", route)
 	}
-	operation, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125303", "main", "example.com", "/upload", MatchExact,
+	operation, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125303", "example.com", "/upload", MatchExact,
 		Target{Kind: TargetRegisteredOperation, OperationID: "public.form-upload", OperationConfig: json.RawMessage(`{"enabled":true}`)}, now)
 	if err != nil || operation.Target.OperationID != "public.form-upload" {
 		t.Fatalf("valid registered operation route rejected: route=%+v err=%v", operation, err)
@@ -128,7 +128,7 @@ func TestNewRouteRequiresExactCoreFilePathAndExplicitOperationConfig(t *testing.
 		t.Fatal(err)
 	}
 	artifactTarget.FallbackEnabled = true
-	artifact, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "main", "example.com", "/site", MatchPrefix, artifactTarget, now)
+	artifact, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "example.com", "/site", MatchPrefix, artifactTarget, now)
 	if err == nil || !errors.Is(err, ErrInvalidRoute) {
 		t.Fatalf("static artifact route accepted explicit fallback: route=%+v err=%v", artifact, err)
 	}
@@ -142,7 +142,7 @@ func TestNewRouteAssignsInitialRevisionToLocaleArtifactTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStaticArtifactTarget(): %v", err)
 	}
-	route, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "main", "example.com", "/site", MatchPrefix, target, now)
+	route, err := NewRoute("01938f7a-68af-7c10-a51d-78b6ca125304", "example.com", "/site", MatchPrefix, target, now)
 	if err != nil {
 		t.Fatalf("NewRoute(): %v", err)
 	}

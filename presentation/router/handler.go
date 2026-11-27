@@ -50,7 +50,6 @@ type LocalePreferenceConfig struct {
 }
 
 type Config struct {
-	BranchID                string
 	MaxJSONBytes            int64
 	DefaultPageSize         int
 	MaxPageSize             int
@@ -87,14 +86,9 @@ type API interface {
 }
 
 func NewHandler(api API, cfg Config) (*Handler, error) {
-	if isNilAPI(api) || strings.TrimSpace(cfg.BranchID) != cfg.BranchID || cfg.BranchID == "" || len(cfg.BranchID) > 128 || cfg.MaxJSONBytes <= 0 || cfg.MaxJSONBytes > 1<<20 ||
+	if isNilAPI(api) || cfg.MaxJSONBytes <= 0 || cfg.MaxJSONBytes > 1<<20 ||
 		cfg.DefaultPageSize < 1 || cfg.MaxPageSize < cfg.DefaultPageSize || cfg.MaxPageSize > 100 {
 		return nil, errors.New("invalid Router HTTP configuration")
-	}
-	for _, r := range cfg.BranchID {
-		if r < 0x21 || r == 0x7f {
-			return nil, errors.New("invalid Router branch ID")
-		}
 	}
 	if !validCompressionConfig(cfg.Compression) {
 		return nil, errors.New("invalid Router HTTP compression configuration")
@@ -155,7 +149,7 @@ func (h *Handler) setLocalePreference(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if route.BranchID != h.cfg.BranchID || route.State != contracts.RouteStateActive {
+	if route.State != contracts.RouteStateActive {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -288,7 +282,7 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	page, err := h.api.ListRoutes(ctx, contracts.ListRoutesRequest{BranchID: h.cfg.BranchID, Host: query.Get("host"), Cursor: query.Get("cursor"), Limit: limit})
+	page, err := h.api.ListRoutes(ctx, contracts.ListRoutesRequest{Host: query.Get("host"), Cursor: query.Get("cursor"), Limit: limit})
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -326,7 +320,6 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	input.BranchID = h.cfg.BranchID
 	input.IdempotencyKey = key
 	route, err := h.api.CreateRoute(ctx, input)
 	if err != nil {
@@ -357,7 +350,7 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if route.ID == "" || route.BranchID != h.cfg.BranchID {
+	if route.ID == "" {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -395,7 +388,7 @@ func (h *Handler) replaceTarget(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if current.ID == "" || current.BranchID != h.cfg.BranchID {
+	if current.ID == "" {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
@@ -412,7 +405,7 @@ func (h *Handler) replaceTarget(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	if route.ID == "" || route.BranchID != h.cfg.BranchID {
+	if route.ID == "" {
 		writeError(w, http.StatusBadGateway, "unavailable")
 		return
 	}
@@ -505,7 +498,7 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	request := contracts.DeliveryRequest{
-		BranchID: h.cfg.BranchID, Host: r.Host, Method: r.Method,
+		Host: r.Host, Method: r.Method,
 		EscapedPath: r.URL.EscapedPath(), Query: r.URL.RawQuery,
 		ContentType: r.Header.Get("Content-Type"), ContentLength: r.ContentLength,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"), Body: body,

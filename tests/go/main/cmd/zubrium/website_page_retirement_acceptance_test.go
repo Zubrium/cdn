@@ -50,7 +50,7 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		config := websiteRuntimeConfig(env, bootstrap)
 		config.AccessGroups["features"] = core.AccessLevelWrite
 		config.AccessGroups["router_routes"] = core.AccessLevelWrite
-		branchID := env.runID + "-web022"
+
 		runtime, secret, err := core.Start(ctx, config)
 		if err != nil {
 			t.Fatalf("start disposable Core: %v", err)
@@ -244,11 +244,11 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			t.Fatalf("build Router module DataBus access client: %v", err)
 		}
 		routeService, err := routesapp.New(routeStore, coreAccess, coreAccess, targetValidator,
-			routesapp.Config{BranchID: branchID, AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
+			routesapp.Config{AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
 		if err != nil {
 			t.Fatalf("construct Router route service: %v", err)
 		}
-		routerAdapter, err := routerapi.NewAPIAdapter(routeService, nil, branchID)
+		routerAdapter, err := routerapi.NewAPIAdapter(routeService, nil)
 		if err != nil {
 			t.Fatalf("construct Router facade: %v", err)
 		}
@@ -270,15 +270,15 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			}
 			key := scenarioID + "-route-" + name
 			route, err := routerAdapter.CreateRoute(routerCtx, routerapi.CreateRouteRequest{
-				BranchID: branchID, Host: fmt.Sprintf("web022-%d.example", index), Path: "/",
+				Host: fmt.Sprintf("web022-%d.example", index), Path: "/",
 				Match: routermodel.MatchExact, Target: target, IdempotencyKey: key,
 			})
 			if err != nil || route.ID == "" {
 				t.Fatalf("create route %s: %+v, %v", name, route, err)
 			}
 			routeIDs = append(routeIDs, route.ID)
-			routerOwned.add(web021RouteKey(branchID, fmt.Sprintf("web022-%d.example", index), "/"))
-			routerOwned.add(web021IdempotencyKey(branchID, key))
+			routerOwned.add(web021RouteKey(fmt.Sprintf("web022-%d.example", index), "/"))
+			routerOwned.add(web021IdempotencyKey(key))
 		}
 		// The injected fault is on one trusted Router CAS withdrawal only.
 		router.failDelete[routeIDs[1]] = true

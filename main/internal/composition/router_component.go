@@ -22,9 +22,6 @@ import (
 	"github.com/Zubrium/cdn/presentation/router/publicupload"
 )
 
-// routerStorageScope binds Router, publication and retirement to the system.
-const routerStorageScope = "global"
-
 type routerEngineComponent struct {
 	core         *coreComponent
 	loader       *loaderComponent
@@ -140,7 +137,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 		return err
 	}
 	routeService, err := routesapp.New(repository, access, access, validator, routesapp.Config{
-		BranchID: routerStorageScope, AccessGroup: "router_routes", DefaultPageSize: settings.DefaultPageSize, MaxPageSize: settings.MaxPageSize,
+		AccessGroup: "router_routes", DefaultPageSize: settings.DefaultPageSize, MaxPageSize: settings.MaxPageSize,
 	})
 	if err != nil {
 		return err
@@ -154,7 +151,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid router route cache TTL: %w", err)
 	}
-	delivery, err := router.NewCoreDeliveryWithCache(routerStorageScope, files, routeService, registry, router.RouterCacheConfig{
+	delivery, err := router.NewCoreDeliveryWithCache(files, routeService, registry, router.RouterCacheConfig{
 		Manifests: router.CacheSettings{Enabled: scales.Manifests.Enabled, MaxEntries: scales.Manifests.MaxEntries, MaxBytes: scales.Manifests.MaxBytes, TTL: manifestTTL},
 		Routes:    router.CacheSettings{Enabled: scales.Routes.Enabled, MaxEntries: scales.Routes.MaxEntries, MaxBytes: scales.Routes.MaxBytes, TTL: routeTTL},
 		Observer:  routerCacheObserver{observer: component.observer},
@@ -175,7 +172,7 @@ func (component *routerEngineComponent) Start(ctx context.Context) error {
 				observability.Int("warmup.failed", int64(result.Failed)))
 		}
 	}
-	api, err := routerenginepresentation.NewAPIAdapter(routeService, delivery, routerStorageScope)
+	api, err := routerenginepresentation.NewAPIAdapter(routeService, delivery)
 	if err != nil {
 		return err
 	}
@@ -329,7 +326,7 @@ func (component *publicRouterComponent) Errors() <-chan error {
 func routerPresentationConfig(config appconfig.Resolved, operations *router.PublicOperationRegistry) router.Config {
 	settings := config.RouterAPI
 	return router.Config{
-		BranchID: routerStorageScope, MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
+		MaxJSONBytes: settings.MaxJSONBytes, DefaultPageSize: settings.DefaultPageSize,
 		MaxPageSize: settings.MaxPageSize, AllowedOrigins: append([]string(nil), config.AdminAPI.AllowedOrigins...),
 		PublicOperations: operations, FormSessionCookieSecure: settings.FormSessionCookieSecure,
 		Compression: router.CompressionConfig{

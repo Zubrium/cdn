@@ -22,7 +22,7 @@ func deliverCoreFileDisposition(t *testing.T, contentType, configured string, me
 	route.Path = "/image"
 	route.Match = contracts.MatchExact
 	routes := &cacheScenarioRoutes{route: route}
-	delivery, err := NewCoreDelivery(cacheScenarioBranch, files, routes, nil)
+	delivery, err := NewCoreDelivery(files, routes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

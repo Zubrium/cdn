@@ -26,9 +26,8 @@ import (
 )
 
 const (
-	cacheScenarioBranch = "main"
-	cacheScenarioHost   = "www.example.invalid"
-	cacheScenarioPath   = "/site/"
+	cacheScenarioHost = "www.example.invalid"
+	cacheScenarioPath = "/site/"
 )
 
 type cacheScenarioFile struct {
@@ -152,8 +151,8 @@ func cacheScenarioTarget(manifestID string) contracts.Target {
 
 func cacheScenarioRoute(target contracts.Target, revision int64) contracts.Route {
 	return contracts.Route{
-		ID:        "01938f7a-68af-7c20-a51d-78b6ca125399",
-		BranchID:  cacheScenarioBranch,
+		ID: "01938f7a-68af-7c20-a51d-78b6ca125399",
+
 		Host:      cacheScenarioHost,
 		Path:      cacheScenarioPath,
 		Match:     contracts.MatchPrefix,
@@ -185,7 +184,7 @@ func (routes *cacheScenarioRoutes) ResolveRoute(_ context.Context, _, _ string) 
 	return routes.route, nil
 }
 
-func (routes *cacheScenarioRoutes) ResolveRouteFingerprint(_ context.Context, _, _ string) (string, error) {
+func (routes *cacheScenarioRoutes) ResolveRouteFingerprint(_ context.Context, _ string) (string, error) {
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
 	routes.validations++
@@ -195,10 +194,10 @@ func (routes *cacheScenarioRoutes) ResolveRouteFingerprint(_ context.Context, _,
 	return routes.fingerprint, nil
 }
 
-func (routes *cacheScenarioRoutes) GetRoute(_ context.Context, branchID, routeID string) (contracts.Route, error) {
+func (routes *cacheScenarioRoutes) GetRoute(_ context.Context, routeID string) (contracts.Route, error) {
 	routes.mu.Lock()
 	defer routes.mu.Unlock()
-	if branchID != cacheScenarioBranch || routeID != routes.route.ID {
+	if routeID != routes.route.ID {
 		return contracts.Route{}, contracts.ErrPublicNotFound
 	}
 	return routes.route, nil
@@ -212,7 +211,7 @@ func (routes *cacheScenarioRoutes) counters() (int, int) {
 
 func cacheScenarioDeliveryRequest(path string) contracts.DeliveryRequest {
 	return contracts.DeliveryRequest{
-		BranchID: cacheScenarioBranch, Host: cacheScenarioHost, Method: http.MethodGet,
+		Host: cacheScenarioHost, Method: http.MethodGet,
 		EscapedPath: path,
 	}
 }
@@ -392,7 +391,7 @@ func TestCoreDeliveryMapsRouteLookupErrorsToPublicSentinels(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			routes := &cacheScenarioRoutes{resolveErr: scenario.resolveErr}
-			delivery, err := NewCoreDelivery(cacheScenarioBranch, newCacheScenarioFiles(), routes, nil)
+			delivery, err := NewCoreDelivery(newCacheScenarioFiles(), routes, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -410,7 +409,7 @@ func TestCacheRouterScenario(t *testing.T) {
 		cacheScenarioArtifact(t, files,
 			"01938f7a-68af-7c10-a51d-78b6ca125301", "01938f7a-68af-7c10-a51d-78b6ca125302", "01938f7a-68af-7c10-a51d-78b6ca125304", "v1", 1)
 		routes := &cacheScenarioRoutes{route: cacheScenarioRoute(cacheScenarioTarget("01938f7a-68af-7c10-a51d-78b6ca125301"), 1), fingerprint: cacheScenarioFingerprint}
-		delivery, err := NewCoreDeliveryWithCache(cacheScenarioBranch, files, routes, nil, cacheScenarioCaches())
+		delivery, err := NewCoreDeliveryWithCache(files, routes, nil, cacheScenarioCaches())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -486,13 +485,13 @@ func TestCacheRouterScenario(t *testing.T) {
 			},
 		}
 		routes := &cacheScenarioRoutes{route: cacheScenarioRoute(target, 1), fingerprint: cacheScenarioFingerprint}
-		delivery, err := NewCoreDelivery(cacheScenarioBranch, files, routes, nil)
+		delivery, err := NewCoreDelivery(files, routes, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(ctx context.Context, request contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 			return delivery.Deliver(ctx, request)
-		}}, Config{BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
+		}}, Config{MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -559,7 +558,7 @@ func TestCacheRouterScenario(t *testing.T) {
 			}}
 		}
 		handler, err := NewHandler(newAPI(), Config{
-			BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
+			MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
 			Compression: CompressionConfig{Enabled: true, Algorithms: []string{"gzip"}, MinBytes: 16, MaxUncompressedBytes: 1 << 20, MaxCompressedBytes: 1 << 20, MediaTypes: []string{"text/html"}},
 		})
 		if err != nil {
@@ -630,7 +629,7 @@ func TestCacheRouterScenario(t *testing.T) {
 		}
 
 		forbiddenControl = true
-		probeHandler, err := NewHandler(newAPI(), Config{BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
+		probeHandler, err := NewHandler(newAPI(), Config{MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -643,13 +642,13 @@ func TestCacheRouterScenario(t *testing.T) {
 		}
 
 		if _, err := NewHandler(newAPI(), Config{
-			BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
+			MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
 			Compression: CompressionConfig{Enabled: true, Algorithms: []string{"gzip"}, MaxUncompressedBytes: 1 << 20, MaxCompressedBytes: 1 << 20, MediaTypes: []string{"text/html"}},
 		}); err == nil {
 			t.Fatal("compression configuration without MinBytes was accepted")
 		}
 		if _, err := NewHandler(newAPI(), Config{
-			BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
+			MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
 			Compression: CompressionConfig{Enabled: true, Algorithms: []string{"gzip"}, MinBytes: 16, MaxCompressedBytes: 1 << 20, MediaTypes: []string{"text/html"}},
 		}); err == nil {
 			t.Fatal("compression configuration without MaxUncompressedBytes was accepted")
@@ -658,7 +657,7 @@ func TestCacheRouterScenario(t *testing.T) {
 		// When the compressed representation exceeds the explicit cap the full
 		// uncompressed body must still be delivered, not a consumed/truncated one.
 		fallbackHandler, err := NewHandler(newAPI(), Config{
-			BranchID: cacheScenarioBranch, MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
+			MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10,
 			Compression: CompressionConfig{Enabled: true, Algorithms: []string{"gzip"}, MinBytes: 16, MaxUncompressedBytes: 1 << 20, MaxCompressedBytes: 1, MediaTypes: []string{"text/html"}},
 		})
 		if err != nil {
@@ -727,7 +726,7 @@ func TestCacheRouterScenario(t *testing.T) {
 			observer := newCacheScenarioObserver()
 			cacheConfig := cacheScenarioCaches()
 			cacheConfig.Observer = observer
-			delivery, err := NewCoreDeliveryWithCache(cacheScenarioBranch, files, routes, nil, cacheConfig)
+			delivery, err := NewCoreDeliveryWithCache(files, routes, nil, cacheConfig)
 			if err != nil {
 				t.Fatal(err)
 			}

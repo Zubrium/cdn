@@ -17,7 +17,7 @@ func (resolve localePreferenceResolver) ResolveRoute(ctx context.Context, host, 
 }
 
 func localePreferenceTestRoute(locale string) contracts.Route {
-	return contracts.Route{BranchID: "main", State: contracts.RouteStateActive, Target: contracts.Target{
+	return contracts.Route{State: contracts.RouteStateActive, Target: contracts.Target{
 		Kind:          contracts.TargetStaticSiteArtifact,
 		DefaultLocale: "en-US",
 		LocaleTargets: []contracts.LocaleArtifactTarget{{Locale: locale, ArtifactManifestFileID: "01938f7a-68af-7c10-a51d-78b6ca125301"}},
@@ -29,7 +29,7 @@ func localePreferenceTestHandler(t *testing.T, enabled bool) *Handler {
 	handler, err := NewHandler(cacheScenarioHandlerAPI{deliver: func(context.Context, contracts.DeliveryRequest) (contracts.DeliveryResponse, error) {
 		return contracts.DeliveryResponse{}, nil
 	}}, Config{
-		BranchID:        "main",
+
 		MaxJSONBytes:    1024,
 		DefaultPageSize: 1,
 		MaxPageSize:     10,
@@ -121,8 +121,8 @@ func TestLocalePreferenceRequiresExplicitConfig(t *testing.T) {
 		name string
 		cfg  Config
 	}{
-		{"missing_max_age", Config{BranchID: "main", MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10, LocalePreference: LocalePreferenceConfig{Enabled: true}, LocaleResolver: resolver}},
-		{"missing_resolver", Config{BranchID: "main", MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10, LocalePreference: LocalePreferenceConfig{Enabled: true, MaxAge: time.Hour}}},
+		{"missing_max_age", Config{MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10, LocalePreference: LocalePreferenceConfig{Enabled: true}, LocaleResolver: resolver}},
+		{"missing_resolver", Config{MaxJSONBytes: 1024, DefaultPageSize: 1, MaxPageSize: 10, LocalePreference: LocalePreferenceConfig{Enabled: true, MaxAge: time.Hour}}},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			if _, err := NewHandler(api, item.cfg); err == nil {

@@ -56,7 +56,7 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		config := websiteRuntimeConfig(env, bootstrap)
 		config.AccessGroups["features"] = core.AccessLevelWrite
 		config.AccessGroups["router_routes"] = core.AccessLevelWrite
-		branchID := env.runID + "-web021"
+
 		runtime, secret, err := core.Start(ctx, config)
 		if err != nil {
 			t.Fatalf("start disposable Core: %v", err)
@@ -240,11 +240,11 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			t.Fatalf("build Router module DataBus access client: %v", err)
 		}
 		routeService, err := routesapp.New(routeStore, coreAccess, coreAccess, targetValidator,
-			routesapp.Config{BranchID: branchID, AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
+			routesapp.Config{AccessGroup: "router_routes", DefaultPageSize: 50, MaxPageSize: 100})
 		if err != nil {
 			t.Fatalf("construct Router route service: %v", err)
 		}
-		routerAdapter, err := routerapi.NewAPIAdapter(routeService, nil, branchID)
+		routerAdapter, err := routerapi.NewAPIAdapter(routeService, nil)
 		if err != nil {
 			t.Fatalf("construct Router facade: %v", err)
 		}
@@ -263,15 +263,15 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			}
 			idempotency := scenarioID + "-route-" + name
 			route, err := trackedRouter.CreateRoute(routerCtx, routerapi.CreateRouteRequest{
-				BranchID: branchID, Host: fmt.Sprintf("web021-%d.example", index), Path: "/",
+				Host: fmt.Sprintf("web021-%d.example", index), Path: "/",
 				Match: routermodel.MatchExact, Target: routeTarget, IdempotencyKey: idempotency,
 			})
 			if err != nil || route.ID == "" {
 				t.Fatalf("create route %s: %+v, %v", name, route, err)
 			}
 			targets = append(targets, publication.Target{RouteID: route.ID, PageSnapshotID: snapshots[name], Locale: web021Locale})
-			routerOwned.add(web021RouteKey(branchID, fmt.Sprintf("web021-%d.example", index), "/"))
-			routerOwned.add(web021IdempotencyKey(branchID, idempotency))
+			routerOwned.add(web021RouteKey(fmt.Sprintf("web021-%d.example", index), "/"))
+			routerOwned.add(web021IdempotencyKey(idempotency))
 		}
 
 		publicationService, err := publication.NewService(publication.Config{
@@ -364,9 +364,6 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if catalog.revision.Load() != 8 {
 			t.Fatalf("trusted input revision was not advanced: %d", catalog.revision.Load())
 		}
-		// Router records use the run-specific scope; publication records are
-		// cleaned up when the disposable PostgreSQL database is removed.
-		routerOwned.add(collectBranchModuleKeys(t, ctx, routerData, "router/routes", branchID)...)
 	})
 }
 
@@ -581,31 +578,14 @@ func web021OperationCatalog(t *testing.T) *routerpresent.PublicOperationRegistry
 	return catalog
 }
 
-func web021RouteKey(branchID, host, path string) contracts.RecordKey {
+func web021RouteKey(host, path string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(host + "\x00" + path))
-	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: branchID, RecordKey: "route:" + hex.EncodeToString(digest[:])}
+	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: "global", RecordKey: "route:" + hex.EncodeToString(digest[:])}
 }
 
-func web021IdempotencyKey(branchID, value string) contracts.RecordKey {
+func web021IdempotencyKey(value string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(value))
-	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: branchID, RecordKey: "idem:" + hex.EncodeToString(digest[:])}
-}
-
-func collectBranchModuleKeys(t *testing.T, ctx context.Context, store contracts.RecordDataStore, namespace, branchID string) []contracts.RecordKey {
-	t.Helper()
-	keys := make([]contracts.RecordKey, 0)
-	after := ""
-	for {
-		page, _, cursor, err := store.List(ctx, namespace, "global", branchID, after, nil, 100)
-		if err != nil {
-			t.Fatalf("list run-owned %s records: %v", namespace, err)
-		}
-		keys = append(keys, page...)
-		if cursor == "" {
-			return keys
-		}
-		after = cursor
-	}
+	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: "global", RecordKey: "idem:" + hex.EncodeToString(digest[:])}
 }
 
 func web021RouteCleanup(t *testing.T, ctx context.Context, api routerapi.SettingsAPI, routeID string, revision int64) func() {
