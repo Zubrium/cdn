@@ -305,7 +305,7 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 		}
 		intent := stored.PublicationIntent
 		if intent == nil || intent.Locale != publication.Locale || intent.Locale != stored.Aggregate.Locale ||
-			intent.ContentRevision != publication.ContentRevision || intent.SystemModelRevision < 0 || intent.State != "pending" ||
+			intent.ContentRevision != publication.ContentRevision || intent.SystemModelRevision < 0 || intent.State != "pending" || intent.RunID != "" ||
 			recorddata.ContentPublicationTriggerKey(intent.WorkflowKey) != intent.WorkflowKey {
 			return domain.StoredWorkspace{}, domain.ErrInvalid
 		}
@@ -314,7 +314,7 @@ func (repo *Repository) Commit(ctx context.Context, expectedStoreRevision int64,
 			return domain.StoredWorkspace{}, err
 		}
 		mutations = append(mutations, recorddata.RecordMutation{Key: historyKeyForRevision(publication.Locale, publication.ContentRevision), ExpectedRevision: 0, Value: &historyValue})
-		intentValue, err := encodePayload(intent, map[string]any{"record_type": "publication-intent", "content_revision": intent.ContentRevision, "locale": intent.Locale})
+		intentValue, err := encodePublicationIntent(*intent)
 		if err != nil {
 			return domain.StoredWorkspace{}, err
 		}
@@ -437,6 +437,77 @@ func (repo *Repository) ListHistory(ctx context.Context, locale, after string, l
 		}
 	}
 	return items, next, nil
+}
+
+// ListPendingPublicationIntents reads one bounded page of outstanding intents.
+func (repo *Repository) ListPendingPublicationIntents(ctx context.Context, after string, limit int) ([]domain.StoredPublicationIntent, string, error) {
+	if repo == nil || repo.store == nil || limit < 1 || limit > repo.MaxPageSize() || (after != "" && !validAfterCursor(after)) {
+		return nil, "", domain.ErrInvalid
+	}
+	selectors := []recorddata.RecordSelector{{Field: "record_type", Operator: recorddata.RecordSelectorEqual, Values: []any{"publication-intent"}}}
+	keys, records, next, err := repo.store.List(ctx, namespace, scopeType, globalScopeID, after, selectors, limit)
+	if err != nil {
+		return nil, "", mapStoreError(err)
+	}
+	if len(keys) != len(records) {
+		return nil, "", domain.ErrUnavailable
+	}
+	items := make([]domain.StoredPublicationIntent, 0, len(records))
+	for i, record := range records {
+		intent, err := decodePublicationIntent(record)
+		if err != nil || intent.State != "pending" || keys[i] != publicationIntentKey(intent.Locale, intent.ContentRevision) {
+			return nil, "", domain.ErrUnavailable
+		}
+		items = append(items, domain.StoredPublicationIntent{Intent: intent, StoreRevision: record.Revision})
+	}
+	return items, next, nil
+}
+
+// MarkPublicationIntentDelivered records a confirmed durable run using CAS.
+// A duplicate acknowledgement for the same run is safe even with an old CAS.
+func (repo *Repository) MarkPublicationIntentDelivered(ctx context.Context, locale string, revision, expected int64, runID string) error {
+	canonical, err := domain.CanonicalLocale(locale)
+	if repo == nil || repo.store == nil || err != nil || canonical != locale || revision < 1 || expected < 1 || !domain.ValidID(runID) {
+		return domain.ErrInvalid
+	}
+	key := publicationIntentKey(locale, revision)
+	record, err := repo.store.Get(ctx, key)
+	if err != nil {
+		return mapStoreError(err)
+	}
+	intent, err := decodePublicationIntent(record)
+	if err != nil || intent.Locale != locale || intent.ContentRevision != revision {
+		return domain.ErrUnavailable
+	}
+	if intent.State == "delivered" {
+		if intent.RunID == runID {
+			return nil
+		}
+		return domain.ErrConflict
+	}
+	if record.Revision != expected {
+		return domain.ErrConflict
+	}
+	intent.State, intent.RunID = "delivered", runID
+	value, err := encodePublicationIntent(intent)
+	if err != nil {
+		return err
+	}
+	_, err = repo.store.Put(ctx, key, value, record.Revision)
+	if errors.Is(err, recorddata.ErrRecordConflict) {
+		latest, readErr := repo.store.Get(ctx, key)
+		if readErr != nil {
+			return mapStoreError(readErr)
+		}
+		applied, decodeErr := decodePublicationIntent(latest)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if applied == intent {
+			return nil
+		}
+	}
+	return mapStoreError(err)
 }
 
 func (repo *Repository) GetCopyMarker(ctx context.Context) (domain.StoredCopyMarker, error) {
@@ -678,6 +749,40 @@ func encodePublication(publication domain.Publication) (recorddata.RecordValue, 
 		}
 	}
 	return encodePayload(publication, map[string]any{"record_type": "history", "content_revision": publication.ContentRevision, "locale": publication.Locale})
+}
+
+func validPublicationIntent(intent domain.PublicationIntent) bool {
+	locale, err := domain.CanonicalLocale(intent.Locale)
+	if err != nil || locale != intent.Locale || intent.ContentRevision < 1 || intent.SystemModelRevision < 0 ||
+		recorddata.ContentPublicationTriggerKey(intent.WorkflowKey) != intent.WorkflowKey {
+		return false
+	}
+	return (intent.State == "pending" && intent.RunID == "") || (intent.State == "delivered" && domain.ValidID(intent.RunID))
+}
+
+func encodePublicationIntent(intent domain.PublicationIntent) (recorddata.RecordValue, error) {
+	if !validPublicationIntent(intent) {
+		return recorddata.RecordValue{}, domain.ErrInvalid
+	}
+	return encodePayload(intent, map[string]any{"record_type": publicationIntentRecordType(intent), "content_revision": intent.ContentRevision, "locale": intent.Locale})
+}
+
+func publicationIntentRecordType(intent domain.PublicationIntent) string {
+	if intent.State == "delivered" {
+		return "publication-intent-delivered"
+	}
+	return "publication-intent"
+}
+
+func decodePublicationIntent(record recorddata.Record) (domain.PublicationIntent, error) {
+	var intent domain.PublicationIntent
+	var index recordIndex
+	if record.PayloadVersion != domain.PayloadVersion || record.Revision < 1 || decodeStrict(record.Payload, &intent) != nil ||
+		!validPublicationIntent(intent) || json.Unmarshal(record.IndexData, &index) != nil || index.RecordType != publicationIntentRecordType(intent) ||
+		index.ContentRevision != intent.ContentRevision || index.Locale != intent.Locale {
+		return domain.PublicationIntent{}, domain.ErrUnavailable
+	}
+	return intent, nil
 }
 
 func decodePublication(id string, record recorddata.Record) (domain.Publication, error) {

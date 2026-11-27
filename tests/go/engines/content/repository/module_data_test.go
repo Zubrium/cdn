@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	recorddata "github.com/Zubrium/cdn/pkg/contracts"
 	"reflect"
 	"sort"
@@ -121,6 +122,77 @@ func TestPublicationIntentIsNotStoredWhenCommitFails(t *testing.T) {
 	current, err := repo.Get(ctx, "en-US")
 	if err != nil || current.Aggregate.PublishedRevision != 0 {
 		t.Fatalf("workspace changed: %+v %v", current.Aggregate, err)
+	}
+}
+
+type publicationAckStore struct {
+	*memoryStore
+	beforePut func()
+}
+
+func (store *publicationAckStore) Put(ctx context.Context, key recorddata.RecordKey, value recorddata.RecordValue, revision int64) (recorddata.Record, error) {
+	if store.beforePut != nil {
+		hook := store.beforePut
+		store.beforePut = nil
+		hook()
+	}
+	return store.memoryStore.Put(ctx, key, value, revision)
+}
+
+func TestPublicationIntentDeliveryIsCASProtectedAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store := &publicationAckStore{memoryStore: newMemoryStore()}
+	repo, err := repository.New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repo.Create(ctx, domain.StoredWorkspace{Aggregate: domain.Aggregate{SnapshotID: domain.GlobalScopeID, Locale: "en-US", Records: []domain.Record{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rev := int64(1); rev <= 2; rev++ {
+		next := cloneRepositoryStored(created)
+		next.Aggregate.Revision, next.Aggregate.PublishedRevision = rev, rev
+		next.PublicationIntent = &domain.PublicationIntent{Locale: "en-US", ContentRevision: rev, WorkflowKey: "publish-key-0000001", State: "pending"}
+		pub := domain.Publication{ID: fmt.Sprintf("%08d-2222-4222-8222-222222222222", rev), Locale: "en-US", ContentRevision: rev,
+			CreatedAt: time.Now().UTC(), Records: []domain.Record{}, Selections: []domain.Selection{}}
+		created, err = repo.Commit(ctx, created.StoreRevision, next, &pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, next, err := repo.ListPendingPublicationIntents(ctx, "", 1)
+	if err != nil || len(items) != 1 || next == "" || items[0].Intent.ContentRevision != 1 {
+		t.Fatalf("first page: %+v next=%q err=%v", items, next, err)
+	}
+	runID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	store.beforePut = func() {
+		if err := repo.MarkPublicationIntentDelivered(ctx, "en-US", 1, items[0].StoreRevision, runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.MarkPublicationIntentDelivered(ctx, "en-US", 1, items[0].StoreRevision, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkPublicationIntentDelivered(ctx, "en-US", 1, items[0].StoreRevision, runID); err != nil {
+		t.Fatalf("idempotent acknowledgement: %v", err)
+	}
+	if err := repo.MarkPublicationIntentDelivered(ctx, "en-US", 1, items[0].StoreRevision, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("different run accepted: %v", err)
+	}
+	last, cursor, err := repo.ListPendingPublicationIntents(ctx, "", 1)
+	if cursor != "" {
+		t.Fatalf("unexpected next page: %q", cursor)
+	}
+	if err != nil || len(last) != 1 || last[0].Intent.ContentRevision != 2 {
+		t.Fatalf("second pending page: %+v %v", last, err)
+	}
+	if err := repo.MarkPublicationIntentDelivered(ctx, "en-US", 2, last[0].StoreRevision+1, runID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale acknowledgement = %v", err)
+	}
+	history, err := repo.GetHistoryByContentRevision(ctx, "en-US", 1)
+	if err != nil || history.ID != "00000001-2222-4222-8222-222222222222" {
+		t.Fatalf("delivery changed publication history: %+v, %v", history, err)
 	}
 }
 

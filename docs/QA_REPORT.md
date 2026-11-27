@@ -213,6 +213,13 @@ workflow key передаются из application. Unit-тесты провер
 подтверждение доставки, restart и реальная атомарность на PostgreSQL ещё не
 проверены; pending records пока не обрабатываются автоматически.
 
+Repository поддерживает постраничное чтение pending intents и подтверждение
+run через CAS. Unit-тест воспроизводит гонку двух подтверждений одного run,
+отклоняет подтверждение с другим run и проверяет сохранность истории.
+Для `engines/content` прошли `go test` и `go vet` с overlay
+`/tmp/content-intent-recovery-overlay.json` и `go build ./...`.
+Подключение обработчика и проверка на PostgreSQL остаются открытыми.
+
 ## Идентичность media receipts (2026-11-26)
 
 `TestMediaRequestFingerprintPreservesExistingInputIdentity` проверяет, что

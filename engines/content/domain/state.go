@@ -46,6 +46,12 @@ type PublicationIntent struct {
 	SystemModelRevision int64  `json:"system_model_revision"`
 	WorkflowKey         string `json:"workflow_key"`
 	State               string `json:"state"`
+	RunID               string `json:"run_id,omitempty"`
+}
+
+type StoredPublicationIntent struct {
+	Intent        PublicationIntent
+	StoreRevision int64
 }
 
 type StoredPageSelections struct {
