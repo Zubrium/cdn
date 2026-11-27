@@ -1,5 +1,12 @@
 # QA-отчёт
 
+## Release-проверки без интеграционных флагов
+
+`tests/qa/run-release-checks.sh --report-prefix output/readiness-single-router-static`
+завершился с кодом 0. В отчёте 89 успешных гейтов. Из 84 сценариев в
+сводке 70 получили pass, 14 остались blocked. Admin Vitest прошёл
+284 теста из 61 файла. Изолированная интеграция запускалась отдельно.
+
 ## Router Admin без branch ID
 
 HTTP contract проверяет список, детали, создание и замену цели, а также
@@ -158,20 +165,19 @@ unit-проверка принятия новой ревизии и отказа
 обработчика и имитацию конкурентного присваивания ключа. `go test`, `go vet`
 с `/tmp/website-idempotency-overlay.json` и `go build ./...` в
 `engines/website` прошли; overlay создан через `python3 tests/go-overlay.py`.
-Живая проверка конкурентных транзакций на disposable PostgreSQL/S3 не
-выполнена и остаётся частью заблокированного WEB-019.
+Проверка конкурентных транзакций для этого изменения остаётся открытой.
 
-## Website integration ledger (2026-11-26)
+## Website integration
 
-`go test -overlay=/tmp/website-acceptance-audit-overlay.json -tags='full
-website_acceptance' -gcflags=-e ./cmd/zubrium -run '^$'` из `main` завершился
-ошибкой компиляции: `WEB-021/022` fixtures используют удалённые поля
-publication/retirement Config. Поэтому связанные сценарии `WEB-012`,
-`WEB-018..022` переведены в `execution_status: blocked`, а их исторические
-прогоны не считаются текущим pass. Валидатор ledger подтвердил denominator 29,
-23 pass и 6 blocked; `python3 -m unittest tests/qa/test_scenario_ledger.py
-tests/qa/test_run_test_suite.py` прошёл (28 тестов). `covered` отражает наличие
-сценариев, а не успешный запуск.
+На изолированной PostgreSQL и MinIO прошли `WEB-012` (импорт фичи),
+`WEB-018` (границы хранения), `WEB-019` (медиа) и `WEB-020` (prerender).
+Оба worker-сценария выполнены с закреплёнными Docker/Linux образами.
+Для `WEB-021` и `WEB-022` остаётся ошибка компиляции старых
+publication/retirement fixtures после перехода на DataBus и Coordinator.
+Для этих двух сценариев runner добавляет тег
+`website_orchestration_acceptance`; сбой одного сценария оставляет
+остальные запуски доступными и сохраняет ненулевой общий exit code.
+В Website ledger 27 pass и 2 blocked из 29.
 
 ## Инициализация workflow handlers (2026-11-26)
 

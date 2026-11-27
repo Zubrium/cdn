@@ -165,6 +165,7 @@ run_integration_targets() {
 		return 1
 	fi
 
+	failed=0
 	while IFS='|' read -r test_file test_symbol; do
 		[ -n "$test_file" ] && [ -n "$test_symbol" ] || continue
 		top_level=${test_symbol%%/*}
@@ -176,19 +177,27 @@ run_integration_targets() {
 				return 1
 				;;
 		esac
+		case "$top_level" in
+			TestWebsitePublicationFanoutAcceptance|TestWebsitePageRetirementAcceptance)
+				tags=website_acceptance,website_orchestration_acceptance
+				;;
+			*) tags=website_acceptance ;;
+		esac
 		printf '%s\n' "==> running integration scenario $test_symbol in $module"
 		log="$work_dir/$(printf '%s' "$test_symbol" | tr '/|' '__').log"
-		if ! (cd "$root/$module" && GOCACHE="$gocache" go test -count=1 -v -tags=website_acceptance \
+		if ! (cd "$root/$module" && GOCACHE="$gocache" go test -count=1 -v -tags="$tags" \
 			-overlay="$overlay" -run "^${top_level}$" ./...) > "$log" 2>&1; then
 			cat "$log" >&2
-			return 1
+			failed=1
+			continue
 		fi
 		cat "$log"
 		if ! grep -q -- "--- PASS: $test_symbol" "$log"; then
 			printf '%s\n' "integration selector $test_symbol did not produce a PASS result; refusing a zero-test success" >&2
-			return 1
+			failed=1
 		fi
 	done < "$targets"
+	return "$failed"
 }
 
 run_integration() {

@@ -66,8 +66,8 @@ listener и единый реестр маршрутов. Внешний Router 
 
 Текущая реализация содержит orchestration publication и retirement, но
 независимость частичных отказов и повтор только неуспешных целей ещё не
-подтверждены и требуют исправления. `WEB-012` и `WEB-018..022` заблокированы
-компиляцией tagged integration fixtures. Детали и evidence — в
+подтверждены и требуют исправления. `WEB-021` и `WEB-022` заблокированы
+компиляцией fixtures orchestration. Детали и evidence — в
 [QA report](QA_REPORT.md), открытые задачи — в [активном плане](TODO-admin-snapshots-content-files.md),
 сценарии и их статусы — в [ledger](../tests/qa/website-scenarios.json).
 
@@ -81,12 +81,14 @@ listener и единый реестр маршрутов. Внешний Router 
 
 | Часть | Доля `pass` в указанном реестре | Граница оценки |
 | --- | --- | --- |
-| Website | 23/29 — 79,3% | [Website](../tests/qa/website-scenarios.json): 6 integration-сценариев blocked, включая media, prerender, publication и retirement. |
+| Website | 27/29 — 93,1% | [Website](../tests/qa/website-scenarios.json): 2 integration-сценария blocked, publication и retirement. |
 | Content | 4/5 — 80% | [Content](../tests/qa/content-scenarios.json): четыре contract-сценария и один заблокированный E2E; полная приёмка Content не подтверждена. |
 | Forms | 4/5 — 80% | [Forms](../tests/qa/forms-scenarios.json): четыре contract-сценария и один заблокированный E2E; это не оценка всех workflows Forms. |
 | Loader | 4/5 — 80% | [Loader](../tests/qa/loader-scenarios.json): четыре contract-сценария и один заблокированный E2E; это не оценка всех workflows Loader. |
 | Router cache | 5/6 — 83,3% | [Router cache](../tests/qa/cache-router-scenarios.json): ограниченный набор проверок cache, один E2E blocked; не оценка Router целиком. |
 | Core | 1/1 — 100% | [Core](../tests/qa/core-scenarios.json): только `CORE-001`, owner-scoped доступ к результату task. Это не означает 100% готовности Core или Coordinator. |
-| Workers | Не определена | Общего подтверждённого набора для всех workers нет; Website integration-сценарии media и prerender blocked. |
+| Observability | 10/10 — 100% | [OBS](../tests/qa/obs-scenarios.json): результаты отдельного прогона с OpenObserve; повтор на текущей ревизии открыт. |
+| Core cache | 11/11 — 100% | [Core cache](../tests/qa/core-cache-scenarios.json): проверены зарегистрированные сценарии cache и concurrency. |
+| Workers | Не определена | Website integration подтвердил media и prerender в Docker/Linux. Общего набора приёмки всех workers нет. |
 | Admin и HTTP Presentation | Не определена | Имеются отдельные unit и browser-проверки, но полного согласованного набора для расчёта готовности нет. |
 | Композиция и полная система | Не определена | Требуются актуальные сквозные проверки всех profiles и интеграции; исторический E2E не подтверждает текущий checkout. |

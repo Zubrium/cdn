@@ -72,7 +72,9 @@ Runner комбинирует три источника:
 
 `tests/qa/run-website-red.sh integration` исполняет каждый integration-символ в
 том Go-модуле, где лежит centralized test file, и требует реальную строку
-`--- PASS: TestX/WEB-NNN`; zero-test success запрещён. `tests/qa/run-core-red.sh`
+`--- PASS: TestX/WEB-NNN`. Сценарии публикации и retirement подключают
+дополнительный тег `website_orchestration_acceptance`. После сбоя runner
+продолжает проверять остальные сценарии и возвращает ненулевой exit code. `tests/qa/run-core-red.sh`
 делает то же для `CORE-NNN`.
 
 Сценарий со статусом `blocked` исключается из знаменателя coverage-gate, но

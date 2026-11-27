@@ -1,4 +1,4 @@
-//go:build website_acceptance || publication_delivery_acceptance
+//go:build website_acceptance || website_orchestration_acceptance || publication_delivery_acceptance
 
 package main
 
