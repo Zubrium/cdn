@@ -284,7 +284,7 @@
       "preconditions": [
         "Admin Website HTTP adapter and its OpenAPI contract are mounted in a test composition."
       ],
-      "input": "Valid and invalid page/snapshot/template requests against flat /api/admin/... paths, missing revision/idempotency headers, unsupported body fields, unauthorized group levels and route fields in Website DTOs.",
+      "input": "Valid and invalid page/snapshot/template requests against flat /api/admin/... paths, missing revision/idempotency headers, unsupported body fields, unauthorized group levels and route fields in Website DTOs; media derivative requests with valid, missing and unknown schema_kind.",
       "action": "Exercise mounted unversioned /api/... Website handlers and compare their OpenAPI schemas.",
       "expected_result": "Routes are flat unversioned /api paths with strict bounded decode, typed errors, required headers and group checks; request/response schema excludes Router assignment fields and extra scope identifiers.",
       "expected_state": "Invalid/unauthorized HTTP request produces no structural mutation and no existence disclosure for foreign resources.",

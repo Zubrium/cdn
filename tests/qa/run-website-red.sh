@@ -20,8 +20,8 @@ case "$selector" in
 		;;
 esac
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
 ledger="$script_dir/website-scenarios.json"
 checker="$script_dir/scenario-ledger.py"
 : "${TMPDIR:?TMPDIR must be set for temporary acceptance overlays}"
@@ -72,11 +72,19 @@ run_go_level() {
 
 run_sites_http_contract_selector() {
 	printf '%s\n' "==> running Website Admin HTTP contract scenarios"
+	log="$work_dir/website-http-contract.log"
 	(
 		cd "$root/presentation/admin/sites" || exit 1
 		GOCACHE="$gocache" go test -v -tags=website_acceptance -overlay="$overlay" \
 			-run '^TestWebsiteAdminHTTPAcceptanceWEB017$' ./...
-	)
+	) > "$log" 2>&1
+	result=$?
+	cat "$log"
+	[ "$result" -eq 0 ] || return "$result"
+	if ! grep -q -- '^--- PASS: TestWebsiteAdminHTTPAcceptanceWEB017 (' "$log"; then
+		printf '%s\n' "Website Admin HTTP contract test did not run" >&2
+		return 1
+	fi
 }
 
 run_ui_contract_selector() {
