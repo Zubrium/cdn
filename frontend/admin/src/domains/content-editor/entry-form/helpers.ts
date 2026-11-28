@@ -6,13 +6,6 @@ export function pointerPart(value: string): string {
   return value.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
-export function mediaAccept(profile: JsonObject | undefined): "image" | "raster-image" | "video" | "all" {
-  if (profile?.accept === "video") return "video";
-  if (profile?.accept === "file") return "all";
-  if (profile?.accept === "raster-image") return "raster-image";
-  return "image";
-}
-
 export function isRecordValue(value: JsonValue | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

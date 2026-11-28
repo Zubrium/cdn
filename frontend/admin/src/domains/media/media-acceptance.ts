@@ -2,6 +2,12 @@ import type { Media } from "@/types";
 
 export type MediaAccept = "image" | "raster-image" | "video" | "font" | "zip" | "all" | "none";
 
+export function manifestMediaAccept(accept: unknown): "image" | "raster-image" | "video" | "all" {
+  if (accept === "file") return "all";
+  if (accept === "video" || accept === "raster-image") return accept;
+  return "image";
+}
+
 export function acceptsMedia(media: Media, accept: MediaAccept): boolean {
   if (accept === "none") return false;
   if (accept === "image") return media.content_type.startsWith("image/");

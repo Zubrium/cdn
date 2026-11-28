@@ -319,9 +319,9 @@
       "preconditions": [
         "A disposable Core file store, PostgreSQL, S3, and a Docker/Linux kernel-enforced media sandbox are configured with explicit resource limits."
       ],
-      "input": "Invalid source/profile, client profile override, MIME/size/checksum failure, cancellation/retry/restart, profile or processor-version change, and a fresh source under the same caller key.",
+      "input": "Pinned arguments and dataInputs with the same media path and source; invalid source/profile, client profile override, MIME/size/checksum failure, cancellation/retry/restart, profile or processor-version change, and a fresh source under the same caller key.",
       "action": "Launch the manifest-pinned media derivative workflow in the disposable stack and probe sandbox isolation from inside the container.",
-      "expected_result": "Website accepts only the pinned x-media profile and updates the field only after all outputs validate; retry identity includes source checksum/profile/processor; network and cgroup limits are enforced by the kernel.",
+      "expected_result": "Website accepts only the pinned x-media profile and distinguishes schema kinds in durable job identity; ready requires all outputs; retry identity includes source checksum/profile/processor; network and cgroup limits are enforced by the kernel.",
       "expected_state": "Original and prior field value survive failure/cancellation/restart; derivatives are immutable, inherit groups/FileSets and partial outputs are not ready.",
       "test_file": "tests/go/main/cmd/zubrium/website_media_derivative_acceptance_test.go",
       "test_symbol": "TestWebsiteMediaDerivativeAcceptance/WEB-019",

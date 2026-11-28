@@ -487,6 +487,28 @@ func TestWebsiteMediaDerivativeAcceptance(t *testing.T) {
 		}
 		web019AssertPinnedValueUnchanged(t, ctx, websiteData, snapshotKey, snapshotBefore, files, serviceSession, source, sourceBefore)
 
+		argumentRequest := validRequest
+		argumentRequest.SchemaKind = "arguments"
+		if _, err := restarted.CreateMediaDerivative(restartedCtx, argumentRequest); !errors.Is(err, websiteapi.ErrConflict) {
+			t.Fatalf("same key for both schema kinds: got %v, want conflict", err)
+		}
+		argumentRequest.IdempotencyKey = scenarioID + "-argument"
+		argumentJob, err := restarted.CreateMediaDerivative(restartedCtx, argumentRequest)
+		if err != nil || argumentJob.ID == "" || argumentJob.ID == validJob.ID || argumentJob.ProfileDigest != expectedDigest {
+			t.Fatalf("create job for argument with the same path and source: %+v, %v", argumentJob, err)
+		}
+		argumentReady := web019AwaitReady(t, ctx, restarted, restartedCtx, argumentJob.ID)
+		for name, outputID := range argumentReady.Outputs {
+			web019TrackFile(t, files, serviceSession, outputID)
+			if outputID == ready.Outputs[name] {
+				t.Fatalf("schema kinds shared a derivative file for %s", name)
+			}
+		}
+		if len(argumentReady.Outputs) != 2 {
+			t.Fatalf("argument job must have both renditions: %+v", argumentReady)
+		}
+		web019AssertPinnedValueUnchanged(t, ctx, websiteData, snapshotKey, snapshotBefore, files, serviceSession, validSource, validSourceBefore)
+
 		web019AssertImmutableDerivative(t, ctx, mediaHandler, files, serviceSession, source, snapshotID, profile, expectedDigest)
 		web019AssertWorkerRejectsBadMetadata(t, ctx, mediaHandler, files, serviceSession, source, snapshotID, profile,
 			expectedDigest, maxInputBytes+maxOutputBytes)
@@ -874,7 +896,17 @@ func web019Manifest(t *testing.T) ([]byte, mediaprofile.Profile, []byte) {
 	manifest := web019JSON(map[string]any{
 		"formatVersion": 2, "key": web019FeatureID, "name": "WEB-019 Hero",
 		"version": web019FeatureVersion, "engineApi": "v1", "slots": []string{"main"},
-		"arguments": map[string]any{},
+		"arguments": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hero": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"image": map[string]any{"type": "string", "format": "media", "x-media": json.RawMessage(raw)},
+					},
+				},
+			},
+		},
 		"dataInputs": []any{map[string]any{
 			"key": "hero", "kind": "record", "type": "media", "profile": map[string]any{},
 			"fields": []any{map[string]any{

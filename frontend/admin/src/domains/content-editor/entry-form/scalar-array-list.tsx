@@ -1,10 +1,11 @@
+import { manifestMediaAccept } from "@/domains/media/media-acceptance";
 import { ArrowDown, ArrowUp, Copy, GripVertical, Plus, Trash2 } from "lucide-react";
 import type { JsonValue } from "@/types";
 import type { SchemaFieldNode } from "@/domains/content-schema/types";
 import { Button } from "@/components/ui/button";
 import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import type { MediaPickTarget } from "./types";
-import { clearMediaArraySelection, cloneOriginal, entryFieldAnchorId, mediaAccept } from "./helpers";
+import { clearMediaArraySelection, cloneOriginal, entryFieldAnchorId } from "./helpers";
 import { MediaValue, ScalarControl } from "./field-controls";
 import { starterValue } from "./schema-values";
 
@@ -94,7 +95,7 @@ export function ScalarArrayList({
                     onPickMedia({
                       label: `${field.label || field.key} (${index + 1})`,
                       single: true,
-                      accept: field.itemType === "file" ? "all" : mediaAccept(field.itemMediaProfile),
+                      accept: field.itemType === "file" ? "all" : manifestMediaAccept(field.itemMediaProfile?.accept),
                       fieldPath: `${schemaPath}/items`,
                       apply: (media) => {
                         const first = media[0];

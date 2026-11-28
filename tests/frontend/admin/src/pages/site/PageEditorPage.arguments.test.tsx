@@ -15,7 +15,8 @@ import {
 vi.mock("@/domains/media/MediaPickerDialog", async () => {
   const React = await import("react");
   return {
-    MediaPickerDialog: (props: { preparation?: { fieldPath?: string } }) => React.createElement("output", {
+    MediaPickerDialog: (props: { accept: string; preparation?: { fieldPath?: string } }) => React.createElement("output", {
+      "data-media-accept": props.accept,
       "data-media-field-path": props.preparation?.fieldPath ?? "",
     }),
   };
@@ -154,6 +155,19 @@ describe("PageEditorPage argument value editor", () => {
     ]);
     expect(addArgumentArrayItem([], { type: "integer" })).toEqual([0]);
     expect(addArgumentArrayItem([], { type: "string", enum: ["small", "large"] })).toEqual(["small"]);
+  });
+
+  it.each([
+    ["image", "image"],
+    ["raster-image", "raster-image"],
+    ["video", "video"],
+    ["file", "all"],
+  ])("maps manifest media accept %s to the picker filter %s", (accept, filter) => {
+    const markup = renderArgument({
+      schema: { type: "string", format: "media", "x-media": { accept } },
+      value: "",
+    });
+    expect(markup).toContain(`data-media-accept="${filter}"`);
   });
 
   it("keeps nested media selection bound to the manifest JSON pointer and preserves dynamic bindings", () => {

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/input";
 import { SortableItem, SortableList } from "@/components/ui/sortable-list";
 import { MediaPickerDialog } from "@/domains/media/MediaPickerDialog";
+import { manifestMediaAccept } from "@/domains/media/media-acceptance";
 import type { FeatureArgumentBinding, FeatureArgumentRouteBinding, FormSchema, JsonValue, MediaRenditionContext } from "@/types";
 import type { FormRouteSuggestion } from "@/domains/forms/publication";
 import { staleFormBindingWarning } from "@/domains/forms/publication";
@@ -270,7 +271,7 @@ function MediaArgumentValue({ schema, value, label, required, controlID, describ
     <p id={`${controlID}-label`} className="text-sm font-medium">{label}{required && <span className="ml-1 text-destructive">· обязательно</span>}</p>
     {schema.description && <p id={`${controlID}-description`} className="text-xs text-muted-foreground">{schema.description}</p>}
     <Button id={controlID} aria-label={`${selectedValue ? "Заменить" : "Выбрать"} медиа для ${label}`} aria-labelledby={`${controlID}-label`} aria-describedby={describedBy} type="button" variant="outline" className="min-h-11 w-full justify-start" onClick={() => setPickerOpen(true)}>{selectedValue ? "Файл выбран · заменить" : "Выбрать файл"}</Button>
-    <MediaPickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={(items) => { const selected = items[0]; if (selected) onChange(selected.id); }} accept={schema["x-media"]?.accept === "raster-image" ? "raster-image" : "image"} initialSelected={selectedValue ? [selectedValue] : []} preparation={preparation} />
+    <MediaPickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={(items) => { const selected = items[0]; if (selected) onChange(selected.id); }} accept={manifestMediaAccept(schema["x-media"]?.accept)} initialSelected={selectedValue ? [selectedValue] : []} preparation={preparation} />
     <OptionalValueClear value={value || undefined} label={label} required={required} onChange={onChange} />
   </div>;
 }

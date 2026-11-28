@@ -1,3 +1,4 @@
+import { manifestMediaAccept } from "@/domains/media/media-acceptance";
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { File as FileIcon, ImagePlus, Lock, X } from "lucide-react";
@@ -12,7 +13,7 @@ import { Switch } from "@/components/ui/misc";
 import { Badge } from "@/components/ui/badge";
 import { queryKeys } from "@/lib/query-keys";
 import type { MediaPickTarget } from "./types";
-import { codePointLength, mediaAccept, stringControlType, isoToLocalInput } from "./helpers";
+import { codePointLength, stringControlType, isoToLocalInput } from "./helpers";
 
 export function FieldCard({
   field,
@@ -364,7 +365,7 @@ export function ScalarControl({
             onPickMedia({
               label: mediaLabel || field.label || field.key,
               single: true,
-              accept: field.type === "file" ? "all" : acceptOverride ?? mediaAccept(field.mediaProfile),
+              accept: field.type === "file" ? "all" : acceptOverride ?? manifestMediaAccept(field.mediaProfile?.accept),
               preparations,
               fieldPath,
               apply: (media) => {
