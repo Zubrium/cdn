@@ -1,18 +1,20 @@
 # Активный план Website Engine
 
-## Состояние
+## Текущая приёмка
 
-Внешний HTTP API использует пути `/api/...` без версионного префикса. OpenAPI остаётся версии 3.1; `info.version` — метаданные документа. Внутренние версии данных, схем, feature builds, component contracts, snapshots и миграций сохраняются.
+Исполняемые сценарии определяют [матрица](../tests/ACCEPTANCE-MATRIX.md) и
+ledgers. Текущее evidence находится в [QA-отчёте](QA_REPORT.md).
 
-Композиция `main` собирает компоненты профиля через запечатанный runtime bus со статическим allowlist. Admin-транспорт получает таблицу `HandlerMount` из `main` и не знает engine facade; Admin-вызовы Content/Forms/Website/Loader идут через отдельный DataBus с caller module `admin.api`. Record store Website, Content, Forms, Router, Loader, Archive и Media использует typed `pkg/contracts` operations с composition-bound owner scope. Durable Coordinator использует generic operation/task-class contracts; component descriptors лежат в нейтральном `pkg/contracts`, собираются `main`, а Core registry хранит только opaque owner IDs. Файловые операции Prerender, Archive, Media и Router delivery используют `core.files.*` DataBus clients со scoped stream bytes; Router Routes identity/group authorization — typed `core.access.*` операции. `make lint-core-boundary` проверялся для 22 repository-local Go modules; прямых Core imports в `engines/`, `workers/` и `presentation/` нет, Core-адаптеры находятся только в `main/internal/composition`. Durable Website build подключён в full-профиле: root `engine.website/build-page/v1` эмитит `worker.prerender/render-page/v1`; manifest-pinned media derivative работает через изолированный runner. Успешная Content publication через composition запускает trusted `contracts.PublicationPublishOperation`, а durable retirement withdraw'ит зарегистрированные route target'ы и сохраняет page/snapshots/content/forms данные. `GET /api/admin/pages/{pageID}` отдаёт `ETag`, совместимый с обязательным `If-Match` для DELETE.
+## Открытые задачи
 
-Текущий Website ledger содержит 27 сценариев со статусом pass и 2 blocked из 29. `WEB-012`, `WEB-018..020` исполнены на disposable PostgreSQL/S3. `WEB-021` и `WEB-022` требуют обновления integration fixtures. Прогоны на прежних ревизиях не подтверждают работоспособность текущего checkout. Подтверждённые проверки, среда и ограничения приведены в [QA report](QA_REPORT.md); непокрытые требования не трактуются как pass.
-
-Контракт Forms переведён на глобальные схемы без `snapshot_id`: метаданные — только `key + fields`, ключ глобально уникален, submissions фильтруются по обязательному `form_id` и необязательному `key`, Router-привязки остаются pinned на версию схемы. Admin получил вложенные страницы `/admin/forms`, `/admin/forms/new` и `/admin/forms/:formId`; публикация из UI использует редактируемый base path `/forms/<key>` и включает upload-операцию только при `file`-полях. Site editor поддерживает route-аргумент `format: "route"`/`source: "route"` с предупреждением, не блокирующим сохранение. Текущие проверки и известные ограничения (в том числе 503 feature catalog) зафиксированы в [QA report](QA_REPORT.md).
-
-Целевой контракт описан в модульных спецификациях и OpenAPI. Ни этот план, ни наличие интерфейсов/заглушек не доказывают готовность реализации. Чекбоксы закрываются только после выполнения критериев и записи результатов в [QA report](QA_REPORT.md).
-
-## Незавершённые работы
+- [ ] Перевести межкомпонентные вызовы publication и retirement на typed DataBus.
+  Перенести orchestration fixtures к действующей композиции, подтвердить настоящий
+  Coordinator, частичные результаты, новые durable attempts и PostgreSQL CAS.
+- [ ] Подключить feature lifecycle и hydratable markup к production prerender,
+  включая закреплённые Content inputs, artifacts, design tokens и media.
+  Проверить реальный ZIP и browser runtime через текущий full profile.
+- [ ] Согласовать форматы Coordinator ledger с unified runner и подтвердить
+  его сценарии отдельно от статических гейтов.
 
 - [ ] Проверить и восстановить независимость частичных отказов publication/retirement после перехода на Coordinator: child handlers возвращают ошибки, а terminal failure Coordinator отменяет остальные queued/running tasks; повтор `Start` с тем же idempotency key не равен `RetryTask`. Сопоставить это поведение с требованиями WEB-021/022, восстановить тесты на частичный успех и повтор только неуспешных целей на disposable PostgreSQL/S3; не менять замороженный Core без доказанного нарушения его собственного контракта.
 - [ ] Принять durable доставку сигнала Content publication по [контракту](../spec/engines/content/SPEC-content-engine.md). Обработчик full-профиля читает очередь через DataBus после старта компонентов, использует существующие лимиты конфигурации и подтверждает один run на публикацию. На disposable PostgreSQL подтверждены потеря ответа после Start, перезапуск Core, повтор с исходными ID и идемпотентное подтверждение (`TestContentPublicationDeliveryRestart`). Открыты отказ dispatch до Start, восстановление через запуск full-профиля, параллельная доставка, ранее незавершённые jobs и locale без маршрутов. Сейчас intent последней остаётся pending.
@@ -28,7 +30,6 @@
 - [ ] Реализовать Content contract: system-wide model records/drafts/publication/history, page-snapshot selections/order, атомарные операции в пределах одной owner namespace и безопасные конфликты/cleanup. Core generic Batch допускает одну транзакцию на несколько scopes этой namespace. `core`, `engines/content` и `engines/website` unit/vet/build прошли; живой E2E подтвердил snapshot fork, публикацию locale и последующий fan-out на все configured Route targets, а также что черновик без публикации остаётся неактивным.
 - [ ] Завершить Forms workflow: schema revisions, visitor sessions, upload attachments, immutable submissions, status policy, CSV export limits, отмена/expiry и подтверждённое удаление с очисткой файлов. Глобальная модель схем (`key + fields`) и фильтр submissions по `key` реализованы и проверены в изолированном стеке; полнота статусов, CSV, expiry и cleanup требует проверки по контракту и живой приёмки.
 - [x] Убрать устаревшую топологию из Router startup, DataBus, cache, observability и workflow contracts. Production Go-код и внешние HTTP-контракты содержат только контрактные поля; неизвестный ключ конфигурации Router отклоняется строгим декодером. Живой E2E на свежей PostgreSQL подтверждает один глобальный scope для маршрутов, публикаций и retirement; точные PASS-строки и run ID — в [QA report](QA_REPORT.md). Старт приложения не удаляет данные.
-  - Подтверждение: run `e2e-20261127T230710Z-ca5cc5`, `playwright.log` содержит `PASS E2E-PUB-001`, `PASS E2E-LOC-001`, `PASS E2E-RET-001`.
 - [ ] Завершить Router/Loader production acceptance: exact route binding и artifact delivery, public upload staging/idempotency/authorization, permission revocation, один публичный listener и readiness. Публичный listener доступен только через внешний proxy, который настраивает deployer.
 - [ ] Завершить Admin workflows по актуальным группам и контрактам: Website, Content, Forms, Router, access management, notifications и recovery. Вложенные страницы Forms и публикация с редактируемым base path проверены в browser QA; подтверждения destructive actions, revision checks и защита несохранённых изменений сохраняются.
 - [ ] Завершить worker isolation, resource limits, cancellation/retry, cleanup и регистрацию в production profiles для Archive и Prerender; media derivative (`WEB-019`) исполнен в Docker/Linux sandbox с kernel-enforced ограничениями. Никакие worker-to-engine вызовы не допускаются.

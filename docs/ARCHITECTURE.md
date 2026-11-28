@@ -41,37 +41,39 @@ Core владеет PostgreSQL, S3 и общим файловым cache. Engine 
 Coordinator хранит долговечные workflow и задачи. DataBus является локальным
 транспортом процесса и сам не предоставляет долговечность.
 
-## Основной поток публикации
+## Публикация и вывод страницы из эксплуатации
 
 ```mermaid
-flowchart LR
-    Edit[Структура Website и данные Content] --> Publish[Публикация Content]
-    Publish --> Fanout[Publication orchestration]
-    Fanout --> Build[Website build]
-    Build --> Render[Prerender worker]
-    Render --> Artifact[Проверенный artifact в Core]
-    Artifact --> CAS[Router CAS для route и locale]
-    CAS --> Delivery[Публичная выдача]
+flowchart TD
+    Content[Content publication и durable intent] --> PubRoot[Coordinator: publication root]
+    PubRoot --> Build[Website build по закреплённым входам]
+    Build --> Render[Prerender и Core artifact]
+    Render --> Activate[Router CAS для route и locale]
+    Activate --> PubFinal[Итог по всем целям]
+    Retirement[Admin: retirement и ревизия страницы] --> RetRoot[Coordinator: retirement root]
+    RetRoot --> Withdraw[Router CAS withdrawal каждой route]
+    Withdraw --> RetFinal[Website: завершение retirement]
 ```
 
-Website управляет страницами, snapshots, placements и bindings; Content —
-редакционными записями и публикацией. Trusted input сборки закрепляет snapshot,
-locale, Content и другие необходимые версии. Router хранит сопоставление
-маршрута с artifact. По уточнению владельца системы используется один Router
-listener и единый реестр маршрутов. Внешний Router Admin API выдаёт только
-контрактные поля. Startup YAML принимает адрес listener. Новая установка
-использует глобальный scope хранения для Router, publication и retirement.
-Устаревший ключ конфигурации Router удалён из production Go-кода и внешних
-HTTP-контрактов; неизвестный ключ в YAML отклоняется строгим декодером.
-При выводе страницы из эксплуатации отдельный retirement workflow должен
-отозвать все зарегистрированные маршруты до перехода страницы в `retired`.
+Website владеет страницами, snapshots и структурными bindings. Content владеет
+редакционными записями и публикациями, Router — связью адреса с artifact.
+Router слушает один настроенный публичный адрес и использует общий реестр
+маршрутов. Новая установка использует системную область хранения. Checkout
+не выполняет перенос устаревших Router scope и не удаляет записи при старте.
 
-Текущая реализация содержит orchestration publication и retirement, но
-независимость частичных отказов и повтор только неуспешных целей ещё не
-подтверждены и требуют исправления. `WEB-021` и `WEB-022` заблокированы
-компиляцией fixtures orchestration. Детали и evidence — в
-[QA report](QA_REPORT.md), открытые задачи — в [активном плане](TODO-admin-snapshots-content-files.md),
-сценарии и их статусы — в [ledger](../tests/qa/website-scenarios.json).
+Схема отражает порядок задач. Core Coordinator хранит зависимости между
+эмиссиями. В текущих обработчиках часть операций Website и Router вызывается
+через прямые facade. Требуется перевести их на DataBus по статическому
+allowlist. Терминальная ошибка дочерней задачи сейчас останавливает соседние
+задачи. Для частичного результата обработчики должны записывать доменный исход
+каждой цели, а повтор должен запускать отдельную попытку по failed целям.
+Retirement переводит страницу в `retired` после успешного удаления всех
+зарегистрированных маршрутов.
+
+Production prerender строит HTML из конфигурации snapshot. Подключение
+закреплённых feature builds, Content values, media derivatives и browser
+hydration к этому потоку остаётся открытым. Поддержка `schema_kind: arguments |
+dataInputs` действует на входе в подготовку media.
 
 ## Оценка по имеющимся реестрам
 
@@ -88,9 +90,13 @@ HTTP-контрактов; неизвестный ключ в YAML отклон�
 | Forms | 4/5 — 80% | [Forms](../tests/qa/forms-scenarios.json): четыре contract-сценария и один заблокированный E2E; это не оценка всех workflows Forms. |
 | Loader | 4/5 — 80% | [Loader](../tests/qa/loader-scenarios.json): четыре contract-сценария и один заблокированный E2E; это не оценка всех workflows Loader. |
 | Router cache | 5/6 — 83,3% | [Router cache](../tests/qa/cache-router-scenarios.json): ограниченный набор проверок cache, один E2E blocked; не оценка Router целиком. |
-| Core | 1/1 — 100% | [Core](../tests/qa/core-scenarios.json): только `CORE-001`, owner-scoped доступ к результату task. Это не означает 100% готовности Core или Coordinator. |
+| Core (owner-scoped результат задачи) | 1/1 — 100% | [Core](../tests/qa/core-scenarios.json): только `CORE-001`, owner-scoped доступ к результату task. Это не означает 100% готовности Core или Coordinator. |
 | Observability | 10/10 — 100% | [OBS](../tests/qa/obs-scenarios.json): результаты отдельного прогона с OpenObserve; повтор на текущей ревизии открыт. |
 | Core cache | 11/11 — 100% | [Core cache](../tests/qa/core-cache-scenarios.json): проверены зарегистрированные сценарии cache и concurrency. |
 | Workers | Не определена | Website integration подтвердил media и prerender в Docker/Linux. Общего набора приёмки всех workers нет. |
 | Admin и HTTP Presentation | Не определена | Имеются отдельные unit и browser-проверки, но полного согласованного набора для расчёта готовности нет. |
 | Композиция и полная система | Не определена | Требуются актуальные сквозные проверки всех profiles и интеграции; исторический E2E не подтверждает текущий checkout. |
+
+Runner объединяет 84 сценария. Отдельные 16 записей Coordinator ledger пока
+не входят в эту сводку. Актуальные результаты выполнения и ограничения
+приведены в [QA-отчёте](QA_REPORT.md).

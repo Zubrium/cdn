@@ -36,7 +36,7 @@ LEDGER_PATHS = (
 DEFAULT_REPORT = ROOT / "output/test-report.json"
 LOG_DIR = ROOT / "output/test-logs"
 SCENARIO_RESULT = re.compile(
-    r"^\s*--- (PASS|FAIL|SKIP): (Test[A-Za-z0-9_]+)/([A-Z][A-Z0-9]*-[0-9]{3})",
+    r"^\s*--- (PASS|FAIL|SKIP): (Test[A-Za-z0-9_]+/[A-Z][A-Z0-9-]*-[0-9]{3})\s+\(",
     re.MULTILINE,
 )
 ERROR_HINT = re.compile(
@@ -189,37 +189,34 @@ def read_scenarios() -> list[dict[str, Any]]:
 
 def observed_scenario_statuses(gates: list[dict[str, Any]]) -> dict[str, str]:
     observed: dict[str, str] = {}
+    priority = {"blocked": 0, "pass": 1, "fail": 2}
     for gate in gates:
-        gate_id = str(gate["id"])
-        if gate["status"] != "pass":
+        if not gate.get("log"):
             continue
-        log_path = ROOT / gate.get("log", "")
+        log_path = ROOT / gate["log"]
         if not log_path.is_file():
             continue
         for match in SCENARIO_RESULT.finditer(log_path.read_text(encoding="utf-8")):
-            action, _, scenario_id = match.groups()
-            observed[scenario_id] = {"PASS": "pass", "FAIL": "fail", "SKIP": "blocked"}[action]
+            action, symbol = match.groups()
+            status = {"PASS": "pass", "FAIL": "fail", "SKIP": "blocked"}[action]
+            if symbol not in observed or priority[status] > priority[observed[symbol]]:
+                observed[symbol] = status
     return observed
 
 
 def scenario_report(
-    scenarios: list[dict[str, Any]], gates: list[dict[str, Any]], config: dict[str, Any]
+    scenarios: list[dict[str, Any]], gates: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     observed = observed_scenario_statuses(gates)
-    integration_gates = {
-        str(gate["id"]) for gate in gates if gate["status"] == "pass" and str(gate["id"]).endswith("-integration")
-    }
     records: list[dict[str, Any]] = []
     for scenario in scenarios:
         scenario_id = str(scenario["id"])
         ledger_status = str(scenario["execution_status"])
-        status = observed.get(scenario_id, ledger_status)
+        status = observed.get(scenario["test_symbol"])
+        if status is None:
+            status = "blocked" if ledger_status == "blocked" else "not_run"
         if status == "pass" and scenario["coverage_status"] != "covered":
             status = "not_run"
-        if scenario["level"] == "integration":
-            family = "core" if scenario_id.startswith("CORE-") else "website"
-            if f"{family}-integration" not in integration_gates:
-                status = "blocked"
         records.append({
             "id": scenario_id,
             "level": scenario["level"],
@@ -241,12 +238,14 @@ def scenario_report(
         if item["status"] != "blocked" and item["coverage_status"] != "blocked"
     ]
     covered = sum(item["coverage_status"] == "covered" for item in eligible)
+    passed = sum(item["status"] == "pass" for item in records)
     counts = {
         "denominator": denominator,
         "eligible_denominator": len(eligible),
         "covered": covered,
         "coverage_percent": round(covered / len(eligible) * 100, 2) if eligible else 0.0,
-        "pass": sum(item["status"] == "pass" for item in records),
+        "pass": passed,
+        "readiness_percent": round(passed / denominator * 100, 2) if denominator else 0.0,
         "fail": sum(item["status"] == "fail" for item in records),
         "not_run": sum(item["status"] == "not_run" for item in records),
         "blocked": sum(item["status"] == "blocked" for item in records),
@@ -270,6 +269,9 @@ def print_summary(report: dict[str, Any]) -> None:
         f"{summary['gates_blocked']} blocked"
     )
     scenarios = summary["scenarios"]
+    if "readiness_percent" in scenarios:
+        print(f"scenario readiness: {scenarios['pass']}/{scenarios['denominator']} "
+              f"= {scenarios['readiness_percent']:.2f}%")
     print(
         "scenarios: "
         f"{scenarios['pass']} pass, {scenarios['fail']} fail, "
@@ -330,7 +332,7 @@ def main() -> int:
     scenarios = read_scenarios()
     gate_list = build_gate_list(config, args)
     gate_records = [run_gate(gate) for gate in gate_list]
-    scenario_records, scenario_counts = scenario_report(scenarios, gate_records, config)
+    scenario_records, scenario_counts = scenario_report(scenarios, gate_records)
 
     failures: list[str] = []
     for gate in gate_records:
