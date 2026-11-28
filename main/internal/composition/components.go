@@ -904,6 +904,9 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 	if _, ok := selected["public.content-runtime"]; ok {
 		keys = append(keys, contracts.PublishedContentReadOperation().Key)
 	}
+	_, publicationSelected := selected["engine.publication"]
+	_, retirementSelected := selected["composition.retirement"]
+	keys = append(keys, orchestrationEngineKeys(publicationSelected, retirementSelected)...)
 	if _, enabled := selected["engine.publication"]; enabled {
 		keys = append(keys, contracts.PublicationPublishOperation().Key, contracts.ListContentPublicationIntentsOperation().Key, contracts.AcknowledgeContentPublicationIntentOperation().Key)
 	}
@@ -1164,6 +1167,14 @@ func registerComponents(resolved appconfig.Resolved, plan platform.BuildPlan, ob
 		if err := register(platform.RuntimeComponent{ID: "engine.router", Requires: requires, New: func(context.Context) (platform.ManagedComponent, error) { return routerEngine, nil }}); err != nil {
 			return nil, nil, nil, nil, err
 		}
+	}
+	workflowEngines := orchestrationEngines{
+		website: websiteEngine, router: routerEngine,
+		publicationWebsiteSecret: resolved.Publication.WebsiteCredential, publicationRouterSecret: resolved.Publication.RouterCredential,
+		retirementWebsiteSecret: resolved.Retirement.WebsiteCredential, retirementRouterSecret: resolved.Retirement.RouterCredential,
+	}
+	if err := workflowEngines.register(dispatcher, publicationSelected, retirementSelected); err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("register orchestration engine operations: %w", err)
 	}
 	if _, enabled := selected["engine.publication"]; enabled {
 		if websiteEngine == nil || routerEngine == nil || contentEngine == nil {

@@ -45,8 +45,8 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("authenticate publication file service: %w", err)
 	}
-	component.core.setCoreFiles("main.publication", coreSessionFileAdapter{files: component.core.runtime.Files(), session: session})
-	starter := publicationWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, "main.publication")}
+	component.core.setCoreFiles(publicationCaller, coreSessionFileAdapter{files: component.core.runtime.Files(), session: session})
+	starter := publicationWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, publicationCaller)}
 	service, err := publication.NewService(publication.Config{
 		Store:       data,
 		Targets:     component.config.Publication.Targets,
@@ -58,7 +58,6 @@ func (component *publicationComponent) Start(ctx context.Context) error {
 	}
 	component.service = service
 	setPublicationWorkflowService(service)
-	setPublicationHandlerRouter(component.router)
 	return nil
 }
 

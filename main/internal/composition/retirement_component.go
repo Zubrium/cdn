@@ -36,7 +36,7 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	starter := retirementWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, "composition.retirement")}
+	starter := retirementWorkflowStarter{dispatcher: bus.NewModuleDispatcher(component.dispatcher, retirementCaller)}
 	service, err := retirement.NewService(retirement.Config{
 		Store:       data,
 		Routes:      component.config.Retirement.Routes,
@@ -48,7 +48,6 @@ func (component *retirementComponent) Start(ctx context.Context) error {
 	}
 	component.service = service
 	setRetirementWorkflowService(service)
-	setRetirementHandlerRouter(component.router)
 	component.client = &retirementClient{dispatcher: component.dispatcher}
 	return nil
 }
@@ -112,18 +111,11 @@ func (component *retirementComponent) retirePage(ctx context.Context, request co
 }
 
 func validateRetirementPage(ctx context.Context, component *retirementComponent, request contracts.RetirePageRequest) error {
-	if component == nil || component.core == nil || component.config.Retirement.WebsiteCredential == "" {
+	if component == nil || component.core == nil || component.core.dispatcher == nil {
 		return retirement.ErrUnavailable
 	}
-	website := component.core.websiteHandle.Load()
-	if website == nil || website.service == nil {
-		return retirement.ErrUnavailable
-	}
-	websiteCtx, err := website.service.Authenticate(ctx, component.config.Retirement.WebsiteCredential)
-	if err != nil {
-		return retirement.ErrUnavailable
-	}
-	page, err := website.service.GetPage(websiteCtx, request.PageID)
+	website := retirementWebsite{bus.NewModuleDispatcher(component.core.dispatcher, retirementCaller)}
+	page, err := website.page(ctx, request.PageID)
 	if err != nil {
 		return retirement.ErrUnavailable
 	}

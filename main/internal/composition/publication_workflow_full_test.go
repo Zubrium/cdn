@@ -17,21 +17,22 @@ import (
 
 func TestPublicationActivatedRevisionChecksExactLocaleCASResult(t *testing.T) {
 	payload := contracts.PublicationActivatePayload{RouteID: "route", Locale: "en-US", ArtifactManifestFileID: "artifact"}
-	route := contracts.Route{ID: "route", Revision: 99, Target: contracts.Target{LocaleTargets: []contracts.LocaleArtifactTarget{{
+	route := contracts.OrchestrationRouteState{ID: "route", Revision: 99, Slot: &contracts.OrchestrationLocaleState{
 		Locale: "en-US", Revision: 8, ArtifactManifestFileID: "artifact",
-	}}}}
+	}}
 	if revision, err := publicationActivatedRevision(route, payload, 7); err != nil || revision != 8 {
 		t.Fatalf("valid locale CAS: revision=%d err=%v", revision, err)
 	}
-	for name, mutate := range map[string]func(*contracts.Route){
-		"other route":    func(r *contracts.Route) { r.ID = "other" },
-		"later revision": func(r *contracts.Route) { r.Target.LocaleTargets[0].Revision = 9 },
-		"other artifact": func(r *contracts.Route) { r.Target.LocaleTargets[0].ArtifactManifestFileID = "other" },
-		"missing locale": func(r *contracts.Route) { r.Target.LocaleTargets = nil },
+	for name, mutate := range map[string]func(*contracts.OrchestrationRouteState){
+		"other route":    func(r *contracts.OrchestrationRouteState) { r.ID = "other" },
+		"later revision": func(r *contracts.OrchestrationRouteState) { r.Slot.Revision = 9 },
+		"other artifact": func(r *contracts.OrchestrationRouteState) { r.Slot.ArtifactManifestFileID = "other" },
+		"missing locale": func(r *contracts.OrchestrationRouteState) { r.Slot = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := route
-			candidate.Target.LocaleTargets = append([]contracts.LocaleArtifactTarget(nil), route.Target.LocaleTargets...)
+			slot := *route.Slot
+			candidate.Slot = &slot
 			mutate(&candidate)
 			if _, err := publicationActivatedRevision(candidate, payload, 7); !errors.Is(err, publication.ErrStale) {
 				t.Fatalf("unexpected result: %v", err)

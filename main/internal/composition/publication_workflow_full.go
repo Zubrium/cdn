@@ -16,7 +16,6 @@ import (
 	"time"
 
 	routerapi "github.com/Zubrium/cdn/engines/router/presentation"
-	websiteapp "github.com/Zubrium/cdn/engines/website/application"
 	featureruntime "github.com/Zubrium/cdn/engines/website/features/runtime"
 	websiteapi "github.com/Zubrium/cdn/engines/website/presentation"
 	"github.com/Zubrium/cdn/main/internal/bus"
@@ -28,17 +27,10 @@ import (
 // The domain service and Core component are installed by the trusted
 // publication component. Engine handles and credentials stay in the child
 // handlers here; the domain service sees neither.
-var (
-	publicationWorkflowService atomic.Pointer[publication.Service]
-	publicationHandlerRouter   atomic.Pointer[routerEngineComponent]
-)
+var publicationWorkflowService atomic.Pointer[publication.Service]
 
 func setPublicationWorkflowService(service *publication.Service) {
 	publicationWorkflowService.Store(service)
-}
-
-func setPublicationHandlerRouter(router *routerEngineComponent) {
-	publicationHandlerRouter.Store(router)
 }
 
 type publicationWorkflowStarter struct{ dispatcher contracts.Dispatcher }
@@ -105,21 +97,24 @@ func (handler publicationBuildHandler) build(ctx context.Context, payload contra
 		Format: contracts.PublicationBuildResultFormat, RunID: payload.RunID, RouteID: payload.RouteID,
 		Locale: payload.Locale, SnapshotID: payload.PageSnapshotID,
 	}
-	website, err := handler.websiteContext(ctx)
+	if handler.component == nil || handler.component.dispatcher == nil {
+		return result, publication.ErrUnavailable
+	}
+	dispatcher := bus.NewModuleDispatcher(handler.component.dispatcher, publicationCaller)
+	inputRequest := contracts.PublicationInputRequest{
+		SnapshotID: payload.PageSnapshotID, Locale: payload.Locale, ContentRevision: payload.ContentPublicationRevision,
+	}
+	input, err := contracts.Call(ctx, dispatcher, contracts.PublicationInputOperation(), inputRequest)
 	if err != nil {
 		return result, err
 	}
-	digest, err := handler.inputDigest(website, payload)
-	if err != nil {
-		return result, err
+	if input.SystemModelRevision != payload.SystemModelRevision {
+		return result, publication.ErrStale
 	}
+	digest := input.Digest
 	result.InputDigest = digest
-
-	job, err := website.service.service.BuildSnapshot(website.ctx, websiteapi.BuildSnapshotRequest{
-		SnapshotID:              payload.PageSnapshotID,
-		Locale:                  payload.Locale,
-		IdempotencyKey:          contracts.PublicationBuildIdempotencyKey(payload),
-		ExpectedContentRevision: payload.ContentPublicationRevision,
+	job, err := contracts.Call(ctx, dispatcher, contracts.PublicationWebsiteBuildStartOperation(), contracts.PublicationWebsiteBuildRequest{
+		PublicationInputRequest: inputRequest, IdempotencyKey: contracts.PublicationBuildIdempotencyKey(payload),
 	})
 	if err != nil || job.ID == "" {
 		if err == nil {
@@ -127,7 +122,9 @@ func (handler publicationBuildHandler) build(ctx context.Context, payload contra
 		}
 		return result, fmt.Errorf("publication build: %w", err)
 	}
-	ready, err := handler.awaitBuild(website, job.ID)
+	ready, err := awaitBuildStatus(ctx, func(ctx context.Context, id string) (websiteapi.BuildJob, error) {
+		return contracts.Call(ctx, dispatcher, contracts.PublicationWebsiteBuildReadOperation(), contracts.OrchestrationObjectRequest{ID: id})
+	}, job.ID, handler.component.config.Publication.BuildTimeout, handler.component.config.Publication.PollInterval)
 	if err != nil {
 		return result, err
 	}
@@ -148,80 +145,6 @@ func (handler publicationBuildHandler) build(ctx context.Context, payload contra
 	}
 	result.ArtifactManifestFileID = artifactID
 	return result, nil
-}
-
-type authenticatedWebsite struct {
-	ctx     context.Context
-	service *websiteEngineComponent
-}
-
-func (handler publicationBuildHandler) websiteContext(ctx context.Context) (authenticatedWebsite, error) {
-	if handler.component == nil || handler.component.config.Publication.WebsiteCredential == "" {
-		return authenticatedWebsite{}, publication.ErrUnavailable
-	}
-	website := handler.component.websiteHandle.Load()
-	if website == nil || website.service == nil || website.localeCatalog == nil || website.inputResolver == nil {
-		return authenticatedWebsite{}, publication.ErrUnavailable
-	}
-	authCtx, err := website.service.Authenticate(ctx, handler.component.config.Publication.WebsiteCredential)
-	if err != nil {
-		return authenticatedWebsite{}, publication.ErrUnavailable
-	}
-	return authenticatedWebsite{ctx: authCtx, service: website}, nil
-}
-
-func (handler publicationBuildHandler) inputDigest(website authenticatedWebsite, payload contracts.PublicationBuildPayload) (string, error) {
-	snapshot, err := website.service.service.GetSnapshot(website.ctx, payload.PageSnapshotID)
-	if err != nil || snapshot.ID != payload.PageSnapshotID || snapshot.State != "ready" {
-		if err == nil {
-			err = publication.ErrInvalid
-		}
-		return "", fmt.Errorf("publication snapshot: %w", err)
-	}
-	revision, err := website.service.localeCatalog.LocaleCatalogRevision(website.ctx, payload.Locale)
-	if err != nil || revision < 1 {
-		return "", publication.ErrUnavailable
-	}
-	input, err := resolvePinnedBuildInput(website.service.inputResolver, website.ctx, snapshot, payload.Locale, revision, payload.ContentPublicationRevision)
-	if err != nil {
-		return "", fmt.Errorf("publication build input: %w", err)
-	}
-	if err := prerendercontract.ValidateTrustedInput(input); err != nil {
-		return "", fmt.Errorf("publication trusted input validation: %w", err)
-	}
-	if input.SnapshotID != payload.PageSnapshotID || input.Locale != payload.Locale ||
-		input.ContentPublicationRevision != payload.ContentPublicationRevision ||
-		input.SystemModelRevision != payload.SystemModelRevision {
-		return "", fmt.Errorf("publication trusted input mismatch: snapshot=%s/%s locale=%s/%s content=%d/%d model=%d/%d: %w",
-			input.SnapshotID, payload.PageSnapshotID, input.Locale, payload.Locale,
-			input.ContentPublicationRevision, payload.ContentPublicationRevision,
-			input.SystemModelRevision, payload.SystemModelRevision, publication.ErrInvalid)
-	}
-	digest, err := prerendercontract.InputDigest(input)
-	if err != nil {
-		return "", fmt.Errorf("publication trusted input: %w", publication.ErrInvalid)
-	}
-	return digest, nil
-}
-
-func resolvePinnedBuildInput(resolver websiteapp.BuildInputResolver, ctx context.Context, snapshot websiteapi.Snapshot,
-	locale string, catalogRevision, contentRevision int64) (prerendercontract.TrustedInput, error) {
-	if contentRevision < 0 {
-		return prerendercontract.TrustedInput{}, publication.ErrInvalid
-	}
-	if contentRevision == 0 {
-		return resolver.ResolveBuildInput(ctx, snapshot, locale, catalogRevision)
-	}
-	pinned, ok := resolver.(websiteapp.PinnedBuildInputResolver)
-	if !ok {
-		return prerendercontract.TrustedInput{}, publication.ErrUnavailable
-	}
-	return pinned.ResolveBuildInputPinned(ctx, snapshot, locale, catalogRevision, contentRevision)
-}
-
-func (handler publicationBuildHandler) awaitBuild(website authenticatedWebsite, buildID string) (websiteapi.BuildJob, error) {
-	return awaitBuildStatus(website.ctx, website.service.service.GetBuild, buildID,
-		handler.component.config.Publication.BuildTimeout, handler.component.config.Publication.PollInterval)
 }
 
 // awaitBuildStatus drives one durable build to a terminal state. Concurrent
@@ -322,7 +245,7 @@ func (handler publicationBuildHandler) coreFiles(ctx context.Context) (contracts
 	if handler.component == nil || handler.component.dispatcher == nil {
 		return nil, publication.ErrUnavailable
 	}
-	return contracts.NewCoreFilesClient(bus.NewModuleDispatcher(handler.component.dispatcher, "main.publication"), func() contracts.StreamRegistrar {
+	return contracts.NewCoreFilesClient(bus.NewModuleDispatcher(handler.component.dispatcher, publicationCaller), func() contracts.StreamRegistrar {
 		return bus.NewScopedStreams()
 	})
 }
@@ -397,68 +320,45 @@ func (handler publicationActivateHandler) activate(ctx context.Context, payload 
 		Format: contracts.PublicationActivateResultFormat, RunID: payload.RunID, RouteID: payload.RouteID,
 		Locale: payload.Locale, ArtifactManifestFileID: payload.ArtifactManifestFileID,
 	}
-	if handler.component == nil || handler.component.config.Publication.WebsiteCredential == "" ||
-		handler.component.config.Publication.RouterCredential == "" {
+	if handler.component == nil || handler.component.dispatcher == nil {
 		return result, publication.ErrUnavailable
 	}
-	website := handler.component.websiteHandle.Load()
-	if website == nil || website.service == nil || website.localeCatalog == nil || website.inputResolver == nil ||
-		publicationHandlerRouter.Load() == nil || publicationHandlerRouter.Load().api == nil {
-		return result, publication.ErrUnavailable
-	}
+	dispatcher := bus.NewModuleDispatcher(handler.component.dispatcher, publicationCaller)
 	pinned, err := service.ArtifactDigest(ctx, payload.RunID, payload.RouteID, payload.Locale)
 	if err != nil {
 		return result, err
-	}
-	if pinned == "" {
-		return result, publication.ErrStale
-	}
-	websiteCtx, err := website.service.Authenticate(ctx, handler.component.config.Publication.WebsiteCredential)
-	if err != nil {
-		return result, publication.ErrUnavailable
 	}
 	snapshotID, contentRevision, err := service.TargetContentRevision(ctx, payload.RunID, payload.RouteID, payload.Locale)
 	if err != nil {
 		return result, err
 	}
-	snapshot, err := website.service.GetSnapshot(websiteCtx, snapshotID)
-	if err != nil || snapshot.ID != snapshotID || snapshot.State != "ready" {
-		if err == nil {
-			err = publication.ErrInvalid
-		}
-		return result, fmt.Errorf("publication snapshot: %w", err)
-	}
-	revision, err := website.localeCatalog.LocaleCatalogRevision(websiteCtx, payload.Locale)
-	if err != nil || revision < 1 {
-		return result, publication.ErrUnavailable
-	}
-	input, err := resolvePinnedBuildInput(website.inputResolver, websiteCtx, snapshot, payload.Locale, revision, contentRevision)
+	input, err := contracts.Call(ctx, dispatcher, contracts.PublicationInputOperation(), contracts.PublicationInputRequest{
+		SnapshotID: snapshotID, Locale: payload.Locale, ContentRevision: contentRevision,
+	})
 	if err != nil {
-		return result, fmt.Errorf("publication trusted input: %w", err)
+		return result, err
 	}
-	current, err := prerendercontract.InputDigest(input)
-	if err != nil || current != pinned {
+	if pinned == "" || input.Digest != pinned {
 		return result, publication.ErrStale
 	}
-	routerCtx, err := publicationHandlerRouter.Load().api.Authenticate(ctx, handler.component.config.Publication.RouterCredential)
-	if err != nil {
-		return result, publication.ErrUnavailable
-	}
-	route, err := publicationHandlerRouter.Load().api.GetRoute(routerCtx, payload.RouteID)
+	route, err := contracts.Call(ctx, dispatcher, contracts.OrchestrationRouteReadOperation(), contracts.OrchestrationRouteRequest{RouteID: payload.RouteID, Locale: payload.Locale})
 	if err != nil {
 		return result, fmt.Errorf("publication route read: %w", err)
 	}
-	slot, found := route.Target.LocaleTarget(payload.Locale)
-	if !found || slot.Revision < 1 {
+	slot := route.Slot
+	if route.ID != payload.RouteID || slot == nil || slot.Locale != payload.Locale || slot.Revision < 1 {
 		return result, fmt.Errorf("publication route locale: %w", publication.ErrInvalid)
 	}
 	expectedRevision, err := service.ReserveActivationRevision(ctx, payload, slot.Revision)
 	if err != nil {
 		return result, err
 	}
-	updated, err := publicationHandlerRouter.Load().api.ReplaceLocaleTarget(routerCtx, routerapi.ReplaceLocaleTargetRequest{
-		RouteID: payload.RouteID, Locale: payload.Locale, ArtifactManifestFileID: payload.ArtifactManifestFileID,
-		ExpectedRevision: expectedRevision, IdempotencyKey: contracts.PublicationActivateIdempotencyKey(payload),
+	updated, err := contracts.Call(ctx, dispatcher, contracts.PublicationRouteCASOperation(), contracts.PublicationRouteCASRequest{
+		ReplaceLocaleTargetRequest: contracts.ReplaceLocaleTargetRequest{
+			RouteID: payload.RouteID, Locale: payload.Locale, ArtifactManifestFileID: payload.ArtifactManifestFileID,
+			ExpectedRevision: expectedRevision,
+		},
+		IdempotencyKey: contracts.PublicationActivateIdempotencyKey(payload),
 	})
 	if err != nil {
 		if errors.Is(err, routerapi.ErrConflict) {
@@ -474,9 +374,9 @@ func (handler publicationActivateHandler) activate(ctx context.Context, payload 
 	return result, nil
 }
 
-func publicationActivatedRevision(route routerapi.Route, payload contracts.PublicationActivatePayload, expected int64) (int64, error) {
-	slot, found := route.Target.LocaleTarget(payload.Locale)
-	if route.ID != payload.RouteID || !found || slot.Revision != expected+1 || slot.ArtifactManifestFileID != payload.ArtifactManifestFileID {
+func publicationActivatedRevision(route contracts.OrchestrationRouteState, payload contracts.PublicationActivatePayload, expected int64) (int64, error) {
+	slot := route.Slot
+	if route.ID != payload.RouteID || slot == nil || slot.Locale != payload.Locale || slot.Revision != expected+1 || slot.ArtifactManifestFileID != payload.ArtifactManifestFileID {
 		return 0, publication.ErrStale
 	}
 	return slot.Revision, nil

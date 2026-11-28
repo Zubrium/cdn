@@ -40,9 +40,12 @@ func (fixture OrchestrationAcceptance) Publication(ctx context.Context, store co
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	fileBus, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 32},
-		contracts.FileReadOperation().Key, contracts.FileCreateVerifiedOperation().Key)
+	keys := append(orchestrationEngineKeys(true, false), contracts.FileReadOperation().Key, contracts.FileCreateVerifiedOperation().Key)
+	fileBus, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 32}, keys...)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := fixture.engines().register(fileBus, true, false); err != nil {
 		return nil, nil, nil, err
 	}
 	files := coreSessionFileAdapter{files: fixture.Files, session: fixture.Session}
@@ -63,7 +66,6 @@ func (fixture OrchestrationAcceptance) Publication(ctx context.Context, store co
 		BuildTimeout: 30 * time.Second, PollInterval: 10 * time.Millisecond,
 	}
 	setPublicationWorkflowService(service)
-	setPublicationHandlerRouter(&routerEngineComponent{api: fixture.Router})
 	root, err := newPublicationRootHandler(3)
 	if err != nil {
 		return nil, nil, nil, err
@@ -75,7 +77,6 @@ func (fixture OrchestrationAcceptance) Publication(ctx context.Context, store co
 			{ID: contracts.PublicationFinalizeOperationID, Version: contracts.PublicationChildContractVersion}: {TaskClass: "engine.website", Handler: publicationFinalizeHandler{}.WorkerHandler},
 		}, func() {
 			setPublicationWorkflowService(nil)
-			setPublicationHandlerRouter(nil)
 			_ = fileBus.Close(context.WithoutCancel(ctx))
 		}, nil
 }
@@ -95,29 +96,45 @@ func (fixture OrchestrationAcceptance) Retirement(store contracts.RecordDataStor
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	engineBus, err := bus.NewAllowlisted(bus.ConcurrencyLimits{MaxInFlight: 32}, orchestrationEngineKeys(false, true)...)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := fixture.engines().register(engineBus, false, true); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := engineBus.Seal(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	component := fixture.component()
-	component.config.Retirement = appconfig.RetirementSettings{WebsiteCredential: fixture.Credential, RouterCredential: fixture.Credential}
-	ingress := &retirementComponent{core: component, config: component.config, service: service}
+	component.dispatcher = engineBus
+	ingress := &retirementComponent{core: component, service: service}
 	root, err := newRetirementRootHandler(3)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	setRetirementWorkflowService(service)
-	setRetirementHandlerRouter(&routerEngineComponent{api: fixture.Router})
 	return ingress.retirePage, service, map[contracts.Key]TaskOperationBinding{
 			{ID: contracts.RetirementStartOperationID, Version: contracts.RetirementStartContractVersion}:        {TaskClass: caller, Handler: root},
 			{ID: contracts.RetirementRouteRemoveOperationID, Version: contracts.RetirementChildContractVersion}:  {TaskClass: "engine.router", Handler: (retirementRouteRemoveHandler{component: component}).WorkerHandler},
 			{ID: contracts.RetirementPageFinalizeOperationID, Version: contracts.RetirementChildContractVersion}: {TaskClass: "engine.website", Handler: (retirementFinalizeHandler{component: component}).WorkerHandler},
 		}, func() {
 			setRetirementWorkflowService(nil)
-			setRetirementHandlerRouter(nil)
+			_ = engineBus.Close(context.Background())
 		}, nil
 }
 
 func (fixture OrchestrationAcceptance) component() *coreComponent {
-	component := &coreComponent{runtime: fixture.Runtime}
-	component.websiteHandle.Store(&websiteEngineComponent{
-		service: fixture.Website, localeCatalog: fixture.LocaleCatalog, inputResolver: fixture.BuildInputs,
-	})
-	return component
+	return &coreComponent{runtime: fixture.Runtime}
+}
+
+func (fixture OrchestrationAcceptance) engines() orchestrationEngines {
+	return orchestrationEngines{
+		website: &websiteEngineComponent{
+			service: fixture.Website, localeCatalog: fixture.LocaleCatalog, inputResolver: fixture.BuildInputs,
+		},
+		router:                   &routerEngineComponent{api: fixture.Router},
+		publicationWebsiteSecret: fixture.Credential, publicationRouterSecret: fixture.Credential,
+		retirementWebsiteSecret: fixture.Credential, retirementRouterSecret: fixture.Credential,
+	}
 }

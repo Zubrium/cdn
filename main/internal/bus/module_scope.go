@@ -156,9 +156,19 @@ func allowedKeysForModule(moduleID string) []contracts.Key {
 		return join(core, access, files, records, workflow, publication, []contracts.Key{
 			contracts.ListContentPublicationIntentsOperation().Key,
 			contracts.AcknowledgeContentPublicationIntentOperation().Key,
+			contracts.OrchestrationRouteReadOperation().Key,
+			contracts.PublicationInputOperation().Key,
+			contracts.PublicationWebsiteBuildStartOperation().Key,
+			contracts.PublicationWebsiteBuildReadOperation().Key,
+			contracts.PublicationRouteCASOperation().Key,
 		})
 	case "composition.retirement":
-		return join(core, access, files, records, workflow, retirement)
+		return join(core, access, files, records, workflow, retirement, []contracts.Key{
+			contracts.OrchestrationRouteReadOperation().Key,
+			contracts.RetirementRouteDeleteOperation().Key,
+			contracts.RetirementWebsiteReadOperation().Key,
+			contracts.RetirementWebsiteTransitionOperation().Key,
+		})
 	case "admin.identity":
 		return join(core, access, adminIdentity)
 	case "admin.coordinator":

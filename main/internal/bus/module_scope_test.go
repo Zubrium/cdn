@@ -141,3 +141,38 @@ func (recordStoreForBusTest) MaxBatchSize() int    { return 10 }
 func (recordStoreForBusTest) MaxPayloadBytes() int { return 1024 }
 func (recordStoreForBusTest) MaxIndexBytes() int   { return 1024 }
 func (recordStoreForBusTest) MaxBatchBytes() int   { return 4096 }
+
+func TestOrchestrationOperationsHaveNarrowCallerScopes(t *testing.T) {
+	for _, test := range []struct {
+		module string
+		key    contracts.Key
+	}{
+		{"main.publication", contracts.PublicationInputOperation().Key},
+		{"main.publication", contracts.PublicationRouteCASOperation().Key},
+		{"composition.retirement", contracts.RetirementRouteDeleteOperation().Key},
+		{"composition.retirement", contracts.RetirementWebsiteTransitionOperation().Key},
+	} {
+		dispatcher, err := NewAllowlisted(ConcurrencyLimits{MaxInFlight: 2}, test.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operation := contracts.Operation[struct{}, struct{}]{Key: test.key}
+		if err := Register(dispatcher, operation, func(ctx context.Context, _ struct{}) (struct{}, error) {
+			if ModuleIDFromContext(ctx) != test.module {
+				t.Fatal("unexpected module identity")
+			}
+			return struct{}{}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := dispatcher.Seal(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := contracts.Call(context.Background(), NewModuleDispatcher(dispatcher, test.module), operation, struct{}{}); err != nil {
+			t.Errorf("%s cannot call %s: %v", test.module, test.key.ID, err)
+		}
+		if _, err := contracts.Call(context.Background(), NewModuleDispatcher(dispatcher, "admin.api"), operation, struct{}{}); !errors.Is(err, ErrOperationNotAllowedForModule) {
+			t.Errorf("Admin reached internal operation %s: %v", test.key.ID, err)
+		}
+	}
+}

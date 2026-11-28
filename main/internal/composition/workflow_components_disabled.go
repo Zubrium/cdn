@@ -20,7 +20,6 @@ func (publicationWorkflowStarter) Start(context.Context, contracts.WorkflowStart
 }
 
 func setPublicationWorkflowService(*publication.Service) {}
-func setPublicationHandlerRouter(*routerEngineComponent) {}
 
 type retirementWorkflowStarter struct{ dispatcher contracts.Dispatcher }
 

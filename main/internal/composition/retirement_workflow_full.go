@@ -16,17 +16,10 @@ import (
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
 
-var (
-	retirementWorkflowService atomic.Pointer[retirement.Service]
-	retirementHandlerRouter   atomic.Pointer[routerEngineComponent]
-)
+var retirementWorkflowService atomic.Pointer[retirement.Service]
 
 func setRetirementWorkflowService(service *retirement.Service) {
 	retirementWorkflowService.Store(service)
-}
-
-func setRetirementHandlerRouter(router *routerEngineComponent) {
-	retirementHandlerRouter.Store(router)
 }
 
 type retirementWorkflowStarter struct{ dispatcher contracts.Dispatcher }
@@ -89,15 +82,11 @@ func (handler retirementRouteRemoveHandler) removeRoute(ctx context.Context, pay
 		Format: contracts.RetirementRouteRemoveResultFormat, JobID: payload.JobID,
 		RouteID: payload.RouteID, State: contracts.RetirementRouteStateRemoved,
 	}
-	if handler.component == nil || retirementHandlerRouter.Load() == nil || retirementHandlerRouter.Load().api == nil ||
-		handler.component.config.Retirement.RouterCredential == "" {
+	if handler.component == nil || handler.component.dispatcher == nil {
 		return result, retirement.ErrUnavailable
 	}
-	routerCtx, err := retirementHandlerRouter.Load().api.Authenticate(ctx, handler.component.config.Retirement.RouterCredential)
-	if err != nil {
-		return result, retirement.ErrUnavailable
-	}
-	route, err := retirementHandlerRouter.Load().api.GetRoute(routerCtx, payload.RouteID)
+	dispatcher := bus.NewModuleDispatcher(handler.component.dispatcher, retirementCaller)
+	route, err := contracts.Call(ctx, dispatcher, contracts.OrchestrationRouteReadOperation(), contracts.OrchestrationRouteRequest{RouteID: payload.RouteID})
 	if errors.Is(err, routerapi.ErrNotFound) {
 		return result, nil
 	}
@@ -110,7 +99,7 @@ func (handler retirementRouteRemoveHandler) removeRoute(ctx context.Context, pay
 		}
 		return result, err
 	}
-	err = retirementHandlerRouter.Load().api.DeleteRoute(routerCtx, routerapi.DeleteRouteRequest{
+	_, err = contracts.Call(ctx, dispatcher, contracts.RetirementRouteDeleteOperation(), contracts.DeleteRouteRequest{
 		RouteID: payload.RouteID, ExpectedRevision: route.Revision,
 	})
 	if err != nil && !errors.Is(err, routerapi.ErrNotFound) {
@@ -183,18 +172,11 @@ func (handler retirementFinalizeHandler) WorkerHandler(ctx context.Context, task
 }
 
 func (handler retirementFinalizeHandler) finalizePage(ctx context.Context, payload contracts.RetirementPageFinalizePayload, job retirement.Job) error {
-	if handler.component == nil || handler.component.config.Retirement.WebsiteCredential == "" {
+	if handler.component == nil || handler.component.dispatcher == nil {
 		return retirement.ErrUnavailable
 	}
-	website := handler.component.websiteHandle.Load()
-	if website == nil || website.service == nil {
-		return retirement.ErrUnavailable
-	}
-	websiteCtx, err := website.service.Authenticate(ctx, handler.component.config.Retirement.WebsiteCredential)
-	if err != nil {
-		return retirement.ErrUnavailable
-	}
-	page, err := website.service.GetPage(websiteCtx, payload.PageID)
+	website := retirementWebsite{bus.NewModuleDispatcher(handler.component.dispatcher, retirementCaller)}
+	page, err := website.page(ctx, payload.PageID)
 	if err != nil {
 		return fmt.Errorf("retirement page read: %w", err)
 	}
@@ -202,7 +184,7 @@ func (handler retirementFinalizeHandler) finalizePage(ctx context.Context, paylo
 	if err != nil || done {
 		return err
 	}
-	_, err = website.service.RetirePage(websiteCtx, websiteapi.RetirePageRequest{
+	_, err = website.transition(ctx, websiteapi.RetirePageRequest{
 		PageID: payload.PageID, ExpectedRevision: page.Revision,
 		LifecycleState: contracts.RetirementPageStateRetired, RetirementJobID: payload.JobID,
 		IdempotencyKey: contracts.RetirementFinalizeIdempotencyKey(payload),
@@ -233,18 +215,11 @@ func validateRetirementFinalization(payload contracts.RetirementPageFinalizePayl
 
 // markPageRetiring ensures the durable job owns the page before any route work.
 func markPageRetiring(ctx context.Context, component *coreComponent, job retirement.Job) error {
-	if component == nil || component.config.Retirement.WebsiteCredential == "" {
+	if component == nil || component.dispatcher == nil {
 		return retirement.ErrUnavailable
 	}
-	website := component.websiteHandle.Load()
-	if website == nil || website.service == nil {
-		return retirement.ErrUnavailable
-	}
-	websiteCtx, err := website.service.Authenticate(ctx, component.config.Retirement.WebsiteCredential)
-	if err != nil {
-		return retirement.ErrUnavailable
-	}
-	return ensureRetiringPage(websiteCtx, job, website.service.GetPage, website.service.RetirePage)
+	website := retirementWebsite{bus.NewModuleDispatcher(component.dispatcher, retirementCaller)}
+	return ensureRetiringPage(ctx, job, website.page, website.transition)
 }
 
 func ensureRetiringPage(ctx context.Context, job retirement.Job,

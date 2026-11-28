@@ -7,9 +7,9 @@ ledgers. Текущее evidence находится в [QA-отчёте](QA_REPO
 
 ## Открытые задачи
 
-- [ ] Перевести межкомпонентные вызовы publication и retirement на typed DataBus.
-  Фикстуры `WEB-021/022` проверили частичные результаты, новые durable attempts и
-  PostgreSQL CAS в task dispatcher. Остались прямые фасады внутри task handlers.
+- [x] Перевести межкомпонентные вызовы publication и retirement на typed DataBus.
+  `WEB-021/022` подтвердили частичные результаты и повтор через Coordinator,
+  включая Router CAS с отдельной ревизией локали во внутреннем контракте.
 - [ ] Подключить feature lifecycle и hydratable markup к production prerender,
   включая закреплённые Content inputs, artifacts, design tokens и media.
   Проверить реальный ZIP и browser runtime через текущий full profile.
