@@ -32,6 +32,9 @@ type jobRecord struct {
 	IdempotencyKey   string        `json:"idempotency_key"`
 	State            string        `json:"state"`
 	Routes           []routeRecord `json:"routes"`
+	Attempt          uint64        `json:"attempt,omitempty"`
+	AttemptRoutes    []string      `json:"attempt_routes,omitempty"`
+	StartUnconfirmed bool          `json:"start_unconfirmed,omitempty"`
 	CreatedAt        string        `json:"created_at"`
 	UpdatedAt        string        `json:"updated_at"`
 }
@@ -130,6 +133,15 @@ func decodeJob(record contracts.Record, jobID, pageID string) (jobRecord, error)
 			return jobRecord{}, fmt.Errorf("%w: duplicate retirement route", ErrUnavailable)
 		}
 		seen[route.RouteID] = struct{}{}
+	}
+	if job.Attempt == 0 && len(job.AttemptRoutes) > 0 {
+		return jobRecord{}, fmt.Errorf("%w: invalid initial retirement attempt", ErrUnavailable)
+	}
+	for _, routeID := range job.AttemptRoutes {
+		if _, ok := seen[routeID]; !ok {
+			return jobRecord{}, fmt.Errorf("%w: invalid retirement attempt routes", ErrUnavailable)
+		}
+		delete(seen, routeID)
 	}
 	return job, nil
 }

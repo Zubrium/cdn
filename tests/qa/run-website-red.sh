@@ -179,7 +179,7 @@ run_integration_targets() {
 		esac
 		case "$top_level" in
 			TestWebsitePublicationFanoutAcceptance|TestWebsitePageRetirementAcceptance)
-				tags=website_acceptance,website_orchestration_acceptance
+				tags=full,website_acceptance,website_orchestration_acceptance
 				;;
 			*) tags=website_acceptance ;;
 		esac

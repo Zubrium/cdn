@@ -3,6 +3,7 @@ package contracts
 import (
 	"errors"
 	"regexp"
+	"strconv"
 
 	"github.com/google/uuid"
 )
@@ -50,6 +51,8 @@ func ValidateWorkflowLocale(value string) error {
 // PublicationWorkflowTarget is one server-owned (route, snapshot, locale)
 // slot. Router never sees the snapshot; Website never selects the route.
 type PublicationWorkflowTarget struct {
+	SkipBuild      bool   `json:"skip_build,omitempty"`
+	CASAttempt     uint64 `json:"cas_attempt,omitempty"`
 	RouteID        string `json:"route_id"`
 	PageSnapshotID string `json:"page_snapshot_id"`
 	Locale         string `json:"locale"`
@@ -58,6 +61,7 @@ type PublicationWorkflowTarget struct {
 // PublicationWorkflowPayload is the immutable root-task input. It carries no
 // module identity, task class, credential, operation selector or Core handle.
 type PublicationWorkflowPayload struct {
+	Attempt                    uint64                      `json:"attempt,omitempty"`
 	RunID                      string                      `json:"run_id"`
 	Locale                     string                      `json:"locale"`
 	ContentPublicationRevision int64                       `json:"content_publication_revision"`
@@ -67,6 +71,7 @@ type PublicationWorkflowPayload struct {
 }
 
 type PublicationBuildPayload struct {
+	Attempt                    uint64 `json:"attempt,omitempty"`
 	RunID                      string `json:"run_id"`
 	RouteID                    string `json:"route_id"`
 	PageSnapshotID             string `json:"page_snapshot_id"`
@@ -87,6 +92,8 @@ type PublicationBuildResult struct {
 }
 
 type PublicationActivatePayload struct {
+	CASAttempt             uint64 `json:"cas_attempt,omitempty"`
+	Attempt                uint64 `json:"attempt,omitempty"`
 	RunID                  string `json:"run_id"`
 	RouteID                string `json:"route_id"`
 	Locale                 string `json:"locale"`
@@ -104,7 +111,8 @@ type PublicationActivateResult struct {
 }
 
 type PublicationFinalizePayload struct {
-	RunID string `json:"run_id"`
+	Attempt uint64 `json:"attempt,omitempty"`
+	RunID   string `json:"run_id"`
 }
 
 type PublicationFinalizeResult struct {
@@ -129,7 +137,8 @@ func ValidatePublicationWorkflowPayload(payload PublicationWorkflowPayload) erro
 	}
 	seen := make(map[string]struct{}, len(payload.Targets))
 	for _, target := range payload.Targets {
-		if !workflowUUIDPattern.MatchString(target.RouteID) ||
+		if target.CASAttempt > payload.Attempt || (target.SkipBuild && payload.Attempt == 0) ||
+			!workflowUUIDPattern.MatchString(target.RouteID) ||
 			!workflowUUIDPattern.MatchString(target.PageSnapshotID) || target.Locale != payload.Locale {
 			return ErrInvalidPublicationWorkflow
 		}
@@ -153,7 +162,7 @@ func ValidatePublicationBuildPayload(payload PublicationBuildPayload) error {
 }
 
 func ValidatePublicationActivatePayload(payload PublicationActivatePayload) error {
-	if !workflowUUIDPattern.MatchString(payload.RunID) || !workflowUUIDPattern.MatchString(payload.RouteID) ||
+	if payload.CASAttempt > payload.Attempt || !workflowUUIDPattern.MatchString(payload.RunID) || !workflowUUIDPattern.MatchString(payload.RouteID) ||
 		ValidateWorkflowLocale(payload.Locale) != nil || !workflowUUIDPattern.MatchString(payload.ArtifactManifestFileID) ||
 		!workflowKeyPattern.MatchString(payload.IdempotencyKey) {
 		return ErrInvalidPublicationWorkflow
@@ -191,9 +200,16 @@ func PublicationArtifactFileID(runID, routeID, locale string) string {
 }
 
 func PublicationBuildIdempotencyKey(payload PublicationBuildPayload) string {
-	return "pub-build:" + payload.RunID + ":" + payload.RouteID
+	return publicationAttemptKey("pub-build:"+payload.RunID+":"+payload.RouteID, payload.Attempt)
 }
 
 func PublicationActivateIdempotencyKey(payload PublicationActivatePayload) string {
-	return "pub-activate:" + payload.RunID + ":" + payload.RouteID
+	return publicationAttemptKey("pub-activate:"+payload.RunID+":"+payload.RouteID, payload.CASAttempt)
+}
+
+func publicationAttemptKey(base string, attempt uint64) string {
+	if attempt == 0 {
+		return base
+	}
+	return base + ":" + strconv.FormatUint(attempt, 10)
 }

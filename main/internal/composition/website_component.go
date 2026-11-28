@@ -20,7 +20,7 @@ type websiteEngineComponent struct {
 	service            *websiteapp.Service
 	serviceCtx         context.Context
 	projectionProvider *websiteContentProjectionProvider
-	localeCatalog      *websiteLocaleCatalog
+	localeCatalog      websiteapp.LocaleCatalogResolver
 	contentBuildView   *websiteContentBuildProjection
 	inputResolver      websiteapp.BuildInputResolver
 }

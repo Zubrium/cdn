@@ -116,7 +116,7 @@ func TestPublicationLateFailureDoesNotOverwriteSuccessfulTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, errors.New("late failure")); err != nil {
+	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, 0, errors.New("late failure")); err != nil {
 		t.Fatal(err)
 	}
 	after, target, err := service.loadTarget(ctx, key, run.RunID)
@@ -157,7 +157,7 @@ func TestPublicationFailureCASDoesNotOverwriteConcurrentSuccess(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, errors.New("late failure")); !errors.Is(err, ErrConflict) {
+	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, 0, errors.New("late failure")); !errors.Is(err, ErrConflict) {
 		t.Fatalf("want CAS conflict: %v", err)
 	}
 	_, target, err := service.loadTarget(ctx, targetDataKey(run.RunID, testRouteA, testLocale), run.RunID)
@@ -287,7 +287,7 @@ func TestPublishReportsCurrentStateWhenWorkflowCompletesDuringStart(t *testing.T
 					if err := service.updateTarget(ctx, payload.RunID, testRouteA, testLocale, func(target *targetRecord) { target.State = stateSuccess }); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := service.FinalizeRun(ctx, payload.RunID); err != nil {
+					if _, err := service.FinalizeRun(ctx, payload.RunID, 0); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -380,7 +380,7 @@ func TestBuildAndActivationRejectSubstitutedServerOwnedValues(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("FinishActivation: %v", err)
 	}
-	final, err := service.FinalizeRun(context.Background(), result.RunID)
+	final, err := service.FinalizeRun(context.Background(), result.RunID, 0)
 	if err != nil || final.State != stateSuccess {
 		t.Fatalf("FinalizeRun = %+v, %v", final, err)
 	}
@@ -401,10 +401,10 @@ func TestPublishReplayKeepsFinalizedFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, ErrStale); err != nil {
+	if err := service.FailTarget(ctx, run.RunID, testRouteA, testLocale, 0, ErrStale); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.FinalizeRun(ctx, run.RunID); err != nil {
+	if _, err := service.FinalizeRun(ctx, run.RunID, 0); err != nil {
 		t.Fatal(err)
 	}
 	replay, err := service.Publish(ctx, trigger)

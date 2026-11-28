@@ -360,8 +360,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_publication_fanout_acceptance_test.go",
       "test_symbol": "TestWebsitePublicationFanoutAcceptance/WEB-021",
       "coverage_status": "covered",
-      "execution_status": "blocked",
-      "blocker": "Фикстура orchestration использует удалённые поля Config. Требуется проверка действующего DataBus/Coordinator workflow на disposable PostgreSQL/S3."
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-022",
@@ -377,8 +377,8 @@
       "test_file": "tests/go/main/cmd/zubrium/website_page_retirement_acceptance_test.go",
       "test_symbol": "TestWebsitePageRetirementAcceptance/WEB-022",
       "coverage_status": "covered",
-      "execution_status": "blocked",
-      "blocker": "Фикстура orchestration использует удалённые поля Config. Требуется проверка действующего DataBus/Coordinator workflow на disposable PostgreSQL/S3."
+      "execution_status": "pass",
+      "blocker": null
     },
     {
       "id": "WEB-023",

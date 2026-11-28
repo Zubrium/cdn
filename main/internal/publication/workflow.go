@@ -42,30 +42,35 @@ func (handler *PublishStartHandler) WorkerHandler(_ context.Context, task workfl
 	children := make([]workflow.OperationTaskChild, 0, 2*len(payload.Targets)+1)
 	result := workflow.PublicationStartResult{
 		Format: workflow.PublicationWorkflowFormat, RunID: payload.RunID,
-		BuildEmissionKeys: make([]string, 0, len(payload.Targets)),
+		BuildEmissionKeys:    make([]string, 0, len(payload.Targets)),
 		ActivateEmissionKeys: make([]string, 0, len(payload.Targets)),
-		FinalizeEmissionKey: workflow.PublicationFinalizeEmissionKey(payload.RunID),
+		FinalizeEmissionKey:  workflow.PublicationFinalizeEmissionKey(payload.RunID),
 	}
 	for _, target := range payload.Targets {
-		buildPayload, err := json.Marshal(workflow.PublicationBuildPayload{
-			RunID: payload.RunID, RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID,
-			Locale: target.Locale, ContentPublicationRevision: payload.ContentPublicationRevision,
-			SystemModelRevision: payload.SystemModelRevision, IdempotencyKey: payload.IdempotencyKey,
-		})
-		if err != nil {
-			return workflow.OperationOutcome{}, err
+		var dependencies []string
+		if !target.SkipBuild {
+			buildPayload, err := json.Marshal(workflow.PublicationBuildPayload{
+				Attempt: payload.Attempt, RunID: payload.RunID, RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID,
+				Locale: target.Locale, ContentPublicationRevision: payload.ContentPublicationRevision,
+				SystemModelRevision: payload.SystemModelRevision, IdempotencyKey: payload.IdempotencyKey,
+			})
+			if err != nil {
+				return workflow.OperationOutcome{}, err
+			}
+			buildEmission := workflow.PublicationBuildEmissionKey(payload.RunID, target.RouteID)
+			children = append(children, workflow.OperationTaskChild{
+				OperationID: workflow.PublicationBuildOperationID, Version: workflow.PublicationChildContractVersion,
+				EmissionKey: buildEmission, Payload: buildPayload, MaxAttempts: handler.config.MaxAttempts,
+			})
+			result.BuildEmissionKeys = append(result.BuildEmissionKeys, buildEmission)
+
+			dependencies = []string{buildEmission}
 		}
-		buildEmission := workflow.PublicationBuildEmissionKey(payload.RunID, target.RouteID)
-		children = append(children, workflow.OperationTaskChild{
-			OperationID: workflow.PublicationBuildOperationID, Version: workflow.PublicationChildContractVersion,
-			EmissionKey: buildEmission, Payload: buildPayload, MaxAttempts: handler.config.MaxAttempts,
-		})
-		result.BuildEmissionKeys = append(result.BuildEmissionKeys, buildEmission)
 
 		activatePayload, err := json.Marshal(workflow.PublicationActivatePayload{
-			RunID: payload.RunID, RouteID: target.RouteID, Locale: target.Locale,
+			Attempt: payload.Attempt, CASAttempt: target.CASAttempt, RunID: payload.RunID, RouteID: target.RouteID, Locale: target.Locale,
 			ArtifactManifestFileID: workflow.PublicationArtifactFileID(payload.RunID, target.RouteID, target.Locale),
-			IdempotencyKey: payload.IdempotencyKey,
+			IdempotencyKey:         payload.IdempotencyKey,
 		})
 		if err != nil {
 			return workflow.OperationOutcome{}, err
@@ -74,12 +79,12 @@ func (handler *PublishStartHandler) WorkerHandler(_ context.Context, task workfl
 		children = append(children, workflow.OperationTaskChild{
 			OperationID: workflow.PublicationActivateOperationID, Version: workflow.PublicationChildContractVersion,
 			EmissionKey: activateEmission, Payload: activatePayload, MaxAttempts: handler.config.MaxAttempts,
-			DependsOnEmissions: []string{buildEmission},
+			DependsOnEmissions: dependencies,
 		})
 		result.ActivateEmissionKeys = append(result.ActivateEmissionKeys, activateEmission)
 	}
 
-	finalizePayload, err := json.Marshal(workflow.PublicationFinalizePayload{RunID: payload.RunID})
+	finalizePayload, err := json.Marshal(workflow.PublicationFinalizePayload{RunID: payload.RunID, Attempt: payload.Attempt})
 	if err != nil {
 		return workflow.OperationOutcome{}, err
 	}

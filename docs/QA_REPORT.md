@@ -6,7 +6,8 @@
 | --- | --- | --- |
 | Статический sweep | `output/test-report-release-final-f4265fb.json`, base HEAD `f4265fb9`, рабочее дерево с локальными файлами | 89/89 гейтов прошли. Сводка записала 70/84 pass и 14 blocked. Runner переносил статусы из ledger, поэтому 70/84 включает исторические результаты. |
 | Website / Router E2E | `output/e2e/e2e-20261127T231444Z-a5d914/`, base HEAD `f4265fb9`, отдельная копия checkout | `prepare-checkout.log` фиксирует совпадение копии с источником. `playwright.log` содержит 3/3 PASS — `E2E-PUB-001`, `E2E-LOC-001`, `E2E-RET-001`. Проверены публикация, выбор locale и штатный retirement. |
-| Website integration | Реестры и `tests/qa/run-website-red.sh integration` | `WEB-012`, `WEB-018..020` ранее прошли на disposable PostgreSQL/S3. `WEB-021` и `WEB-022` ожидают адаптации fixtures к текущей композиции. |
+| Website и Core integration | `output/readiness-baseline-integration.json` и `output/readiness-orchestration-current.log` | Все 7 сценариев прошли в отдельных запусках на PostgreSQL/MinIO. `WEB-021/022` прошли с настоящими DataBus task pools, Core Coordinator, Router CAS и изолированными отказами. `WEB-021` использует контролируемый prerender result. Chromium отдельно проверяет `WEB-020`. |
+| Подготовка media | `output/readiness-web019-schema-kind.log` | `WEB-019` проверил обе схемы, одинаковый путь и файл, конфликт общего ключа, отдельные immutable derivatives и сохранение значений. |
 | Content delivery после рестарта | `TestContentPublicationDeliveryRestart` на disposable PostgreSQL/MinIO | Ранее подтвердил повтор workflow с теми же ID после потери ответа и рестарта Core, а также повторяемое подтверждение доставки. Автостарта full profile и конкурентной доставки этот тест не измеряет. |
 | Core, concurrency, observability | Реестры и runbooks в `tests/qa/` | Исторически наблюдались scoped results, изоляция task classes и OTLP export. Новому checkout требуется свежий прогон интеграций. |
 
@@ -18,10 +19,9 @@
 
 ## Открытая приёмка
 
-- Website и Content. Publication с частичными отказами, CAS и повтором только
-  неуспешных целей, восстановление при старте и конкурентная доставка, media UI
+- Website и Content. Восстановление publication при старте и конкурентная доставка, media UI
   с реальным manifest в обоих `schema_kind`.
-- Retirement. Частичный withdrawal, рестарт между подготовкой job, изменением
+- Retirement. Рестарт между подготовкой job, изменением
   lifecycle страницы и Coordinator Start. Повтор после потери подтверждения.
 - Forms и Loader. Live sessions, multipart, idempotency, restart, expiry и
   cleanup, CSV export и удаление submissions вместе с вложениями.

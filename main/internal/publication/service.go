@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	workflow "github.com/Zubrium/cdn/pkg/contracts"
@@ -105,21 +106,82 @@ func (s *Service) resumePublishedRun(ctx context.Context, run runRecord, trigger
 	return s.result(ctx, run)
 }
 
-// Retry resumes an existing durable run with the identical workflow start
-// input. Core deduplicates the idempotency key, so a retry cannot start a
-// second workflow for the same run.
+// Retry resumes an unconfirmed start or prepares a new attempt for failed
+// targets. The attempt and target resets are committed as one CAS batch.
 func (s *Service) Retry(ctx context.Context, runID string) (Result, error) {
 	if s == nil || ctx == nil || !runKeyPattern.MatchString(runID) {
 		return Result{}, ErrInvalid
 	}
-	_, _, run, err := s.loadRun(ctx, runID)
+	for retry := 0; retry < 8; retry++ {
+		key, record, run, err := s.loadRun(ctx, runID)
+		if err != nil {
+			return Result{}, err
+		}
+		if run.State == stateSuccess {
+			return s.result(ctx, run)
+		}
+		if run.State != stateFailed || run.ErrorCode == "workflow_start_failed" {
+			return s.restart(ctx, run)
+		}
+		run, err = s.prepareRetry(ctx, key, record.Revision, run)
+		if !errors.Is(err, ErrConflict) {
+			if err != nil {
+				return Result{}, err
+			}
+			return s.restart(ctx, run)
+		}
+	}
+	return Result{}, ErrConflict
+}
+
+func (s *Service) prepareRetry(ctx context.Context, key workflow.RecordKey, revision int64, run runRecord) (runRecord, error) {
+	run.Attempt++
+	run.AttemptTargets = nil
+	run.State, run.ErrorCode = stateStarting, ""
+	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	mutations := make([]workflow.RecordMutation, 0, len(run.TargetKeys)+1)
+	for _, recordKey := range run.TargetKeys {
+		targetKey := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
+		record, target, err := s.loadTarget(ctx, targetKey, run.RunID)
+		if err != nil {
+			return runRecord{}, err
+		}
+		if target.State == stateSuccess {
+			continue
+		}
+		target.Attempt = run.Attempt
+		target.State = statePending
+		if target.ArtifactManifestFileID != "" {
+			target.State = stateBuilt
+		}
+		if target.ErrorCode == "router_cas_conflict" && target.State == stateBuilt {
+			target.CASAttempt = run.Attempt
+			target.ActivationExpectedRevision = 0
+		}
+		target.ErrorCode, target.UpdatedAt = "", run.UpdatedAt
+		target.Revision++
+		run.AttemptTargets = append(run.AttemptTargets, workflow.PublicationWorkflowTarget{
+			RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID, Locale: target.Locale,
+			SkipBuild: target.State == stateBuilt, CASAttempt: target.CASAttempt,
+		})
+		value, err := encodeModuleData(target, targetIndex(target))
+		if err != nil {
+			return runRecord{}, err
+		}
+		mutations = append(mutations, workflow.RecordMutation{Key: targetKey, ExpectedRevision: record.Revision, Value: value})
+	}
+	if len(run.AttemptTargets) == 0 {
+		return runRecord{}, ErrInvalid
+	}
+	value, err := encodeModuleData(run, runIndex(run))
 	if err != nil {
-		return Result{}, err
+		return runRecord{}, err
 	}
-	if run.State == stateSuccess {
-		return s.result(ctx, run)
+	mutations = append(mutations, workflow.RecordMutation{Key: key, ExpectedRevision: revision, Value: value})
+	if err := s.config.Store.Batch(ctx, mutations); err != nil {
+		return runRecord{}, mapStoreError(err)
 	}
-	return s.restart(ctx, run)
+	return run, nil
 }
 
 func (s *Service) restart(ctx context.Context, run runRecord) (Result, error) {
@@ -139,23 +201,39 @@ func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
 	}
 	trigger := Trigger{Locale: run.Locale, ContentPublicationRevision: run.ContentPublicationRevision,
 		SystemModelRevision: run.SystemModelRevision, IdempotencyKey: run.IdempotencyKey}
-	targets := make([]workflow.PublicationWorkflowTarget, 0, len(run.TargetKeys))
-	for _, recordKey := range run.TargetKeys {
-		key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
-		_, target, err := s.loadTarget(ctx, key, run.RunID)
+	targets := run.AttemptTargets
+	if run.Attempt == 0 {
+		targets = make([]workflow.PublicationWorkflowTarget, 0, len(run.TargetKeys))
+		for _, recordKey := range run.TargetKeys {
+			key := workflow.RecordKey{Namespace: namespace, ScopeType: scopeType, ScopeID: scopeID, RecordKey: recordKey}
+			_, target, err := s.loadTarget(ctx, key, run.RunID)
+			if err != nil {
+				return err
+			}
+			targets = append(targets, workflow.PublicationWorkflowTarget{
+				RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID, Locale: target.Locale,
+			})
+		}
+	}
+	input := workflowStartInput(trigger, run.Locale, run.RunID, targets)
+	if run.Attempt > 0 {
+		payload, err := workflow.DecodePayload[workflow.PublicationWorkflowPayload](input.Payload)
 		if err != nil {
 			return err
 		}
-		targets = append(targets, workflow.PublicationWorkflowTarget{
-			RouteID: target.RouteID, PageSnapshotID: target.PageSnapshotID, Locale: target.Locale,
-		})
+		payload.Attempt = run.Attempt
+		input.Payload, err = json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		input.IdempotencyKey += ":attempt:" + strconv.FormatUint(run.Attempt, 10)
 	}
-	input := workflowStartInput(trigger, run.Locale, run.RunID, targets)
+
 	key, record, current, err := s.loadRun(ctx, run.RunID)
 	if err != nil {
 		return err
 	}
-	if current.State == stateSuccess || current.State != run.State {
+	if current.State == stateSuccess || current.State != run.State || current.Attempt != run.Attempt {
 		return nil
 	}
 	if _, err := s.config.Starter.Start(ctx, input); err != nil {
@@ -168,6 +246,9 @@ func (s *Service) startWorkflow(ctx context.Context, run runRecord) error {
 // A worker may finish before Start returns. The start response must not
 // overwrite a state written after the pre-start revision was read.
 func (s *Service) markStartOutcome(ctx context.Context, key workflow.RecordKey, revision int64, run runRecord, state, code string) error {
+	if run.State == state && run.ErrorCode == code {
+		return nil
+	}
 	run.State, run.ErrorCode = state, code
 	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.putRun(ctx, key, revision, run); err != nil {
@@ -194,18 +275,13 @@ func workflowStartInput(trigger Trigger, locale, runID string, targets []workflo
 	}
 }
 
-func (s *Service) markRunState(ctx context.Context, runID, state, errorCode string) error {
-	return s.updateRun(ctx, runID, func(run *runRecord) { run.State, run.ErrorCode = state, errorCode })
-}
-
-func (s *Service) updateRun(ctx context.Context, runID string, mutate func(*runRecord)) error {
-	key, record, run, err := s.loadRun(ctx, runID)
+// ShouldRunTarget fences stale and settled work before a task calls engines.
+func (s *Service) ShouldRunTarget(ctx context.Context, runID, routeID, locale string, attempt uint64) (bool, error) {
+	_, target, err := s.loadTarget(ctx, targetDataKey(runID, routeID, locale), runID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	mutate(&run)
-	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	return s.putRun(ctx, key, record.Revision, run)
+	return target.Attempt == attempt && target.State != stateFailed && target.State != stateSuccess, nil
 }
 
 // BeginBuild reserves one target for an isolated Website build. The child
@@ -219,7 +295,7 @@ func (s *Service) BeginBuild(ctx context.Context, payload workflow.PublicationBu
 	if err != nil {
 		return err
 	}
-	if target.PageSnapshotID != payload.PageSnapshotID || target.Locale != payload.Locale ||
+	if target.Attempt != payload.Attempt || target.PageSnapshotID != payload.PageSnapshotID || target.Locale != payload.Locale ||
 		target.ContentPublicationRevision != payload.ContentPublicationRevision ||
 		target.SystemModelRevision != payload.SystemModelRevision {
 		return fmt.Errorf("%w: build payload does not match durable target", ErrInvalid)
@@ -248,7 +324,7 @@ func (s *Service) FinishBuild(ctx context.Context, payload workflow.PublicationB
 	if err != nil {
 		return err
 	}
-	if target.PageSnapshotID != payload.PageSnapshotID || target.Locale != payload.Locale ||
+	if target.Attempt != payload.Attempt || target.PageSnapshotID != payload.PageSnapshotID || target.Locale != payload.Locale ||
 		target.ContentPublicationRevision != payload.ContentPublicationRevision || target.SystemModelRevision != payload.SystemModelRevision {
 		return fmt.Errorf("%w: build payload does not match durable target", ErrInvalid)
 	}
@@ -350,7 +426,8 @@ func (s *Service) ReserveActivationRevision(ctx context.Context, payload workflo
 	if err != nil {
 		return 0, err
 	}
-	if target.ArtifactManifestFileID != payload.ArtifactManifestFileID ||
+	if target.Attempt != payload.Attempt || target.CASAttempt != payload.CASAttempt ||
+		target.ArtifactManifestFileID != payload.ArtifactManifestFileID ||
 		(target.State != stateBuilt && target.State != stateRunning && target.State != stateFailed && target.State != stateSuccess) {
 		return 0, ErrStale
 	}
@@ -383,7 +460,8 @@ func (s *Service) BeginActivation(ctx context.Context, payload workflow.Publicat
 	if err != nil {
 		return err
 	}
-	if (target.State != stateBuilt && target.State != stateRunning && target.State != stateSuccess && target.State != stateFailed) ||
+	if target.Attempt != payload.Attempt || target.CASAttempt != payload.CASAttempt ||
+		(target.State != stateBuilt && target.State != stateRunning && target.State != stateSuccess && target.State != stateFailed) ||
 		target.ArtifactManifestFileID != artifact.ArtifactManifestFileID {
 		return fmt.Errorf("%w: target is not built for this artifact", ErrStale)
 	}
@@ -413,7 +491,7 @@ func (s *Service) FinishActivation(ctx context.Context, payload workflow.Publica
 }
 
 // FailTarget records a bounded failure code without discarding a ready build.
-func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string, err error) error {
+func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string, attempt uint64, err error) error {
 	if !runKeyPattern.MatchString(runID) || !runKeyPattern.MatchString(routeID) || workflow.ValidateWorkflowLocale(locale) != nil {
 		return ErrInvalid
 	}
@@ -422,7 +500,7 @@ func (s *Service) FailTarget(ctx context.Context, runID, routeID, locale string,
 	if loadErr != nil {
 		return loadErr
 	}
-	if target.State == stateSuccess {
+	if target.Attempt != attempt || target.State == stateSuccess {
 		return nil
 	}
 	target.State = stateFailed
@@ -445,13 +523,16 @@ func (s *Service) updateTarget(ctx context.Context, runID, routeID, locale strin
 
 // FinalizeRun computes the durable run state from per-target outcomes. It is
 // the only task allowed to close a run and never re-runs engine work.
-func (s *Service) FinalizeRun(ctx context.Context, runID string) (Result, error) {
+func (s *Service) FinalizeRun(ctx context.Context, runID string, attempt uint64) (Result, error) {
 	if s == nil || ctx == nil || !runKeyPattern.MatchString(runID) {
 		return Result{}, ErrInvalid
 	}
-	_, _, run, err := s.loadRun(ctx, runID)
+	key, record, run, err := s.loadRun(ctx, runID)
 	if err != nil {
 		return Result{}, err
+	}
+	if run.Attempt != attempt {
+		return s.result(ctx, run)
 	}
 	state := stateSuccess
 	for _, recordKey := range run.TargetKeys {
@@ -464,14 +545,24 @@ func (s *Service) FinalizeRun(ctx context.Context, runID string) (Result, error)
 			state = stateFailed
 		}
 	}
-	if err := s.markRunState(ctx, runID, state, ""); err != nil {
-		return Result{}, err
+	for retry := 0; retry < 8; retry++ {
+		if run.Attempt != attempt || (run.State == state && run.ErrorCode == "") {
+			return s.result(ctx, run)
+		}
+		run.State, run.ErrorCode = state, ""
+		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		if err := s.putRun(ctx, key, record.Revision, run); !errors.Is(err, ErrConflict) {
+			if err != nil {
+				return Result{}, err
+			}
+			return s.result(ctx, run)
+		}
+		key, record, run, err = s.loadRun(ctx, runID)
+		if err != nil {
+			return Result{}, err
+		}
 	}
-	_, _, run, err = s.loadRun(ctx, runID)
-	if err != nil {
-		return Result{}, err
-	}
-	return s.result(ctx, run)
+	return Result{}, ErrConflict
 }
 
 func (s *Service) result(ctx context.Context, run runRecord) (Result, error) {

@@ -12,20 +12,24 @@ import (
 const dataVersion = 1
 
 type runRecord struct {
-	Kind                       string   `json:"kind"`
-	RunID                      string   `json:"run_id"`
-	Locale                     string   `json:"locale"`
-	ContentPublicationRevision int64    `json:"content_publication_revision"`
-	SystemModelRevision        int64    `json:"system_model_revision"`
-	IdempotencyKey             string   `json:"idempotency_key"`
-	State                      string   `json:"state"`
-	ErrorCode                  string   `json:"error_code,omitempty"`
-	TargetKeys                 []string `json:"target_keys"`
-	CreatedAt                  string   `json:"created_at"`
-	UpdatedAt                  string   `json:"updated_at"`
+	Attempt                    uint64                                `json:"attempt,omitempty"`
+	AttemptTargets             []contracts.PublicationWorkflowTarget `json:"attempt_targets,omitempty"`
+	Kind                       string                                `json:"kind"`
+	RunID                      string                                `json:"run_id"`
+	Locale                     string                                `json:"locale"`
+	ContentPublicationRevision int64                                 `json:"content_publication_revision"`
+	SystemModelRevision        int64                                 `json:"system_model_revision"`
+	IdempotencyKey             string                                `json:"idempotency_key"`
+	State                      string                                `json:"state"`
+	ErrorCode                  string                                `json:"error_code,omitempty"`
+	TargetKeys                 []string                              `json:"target_keys"`
+	CreatedAt                  string                                `json:"created_at"`
+	UpdatedAt                  string                                `json:"updated_at"`
 }
 
 type targetRecord struct {
+	Attempt                    uint64 `json:"attempt,omitempty"`
+	CASAttempt                 uint64 `json:"cas_attempt,omitempty"`
 	Kind                       string `json:"kind"`
 	RunID                      string `json:"run_id"`
 	RouteID                    string `json:"route_id"`

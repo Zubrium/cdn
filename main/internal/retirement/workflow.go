@@ -43,12 +43,12 @@ func (handler *RetirementStartHandler) WorkerHandler(_ context.Context, task wor
 	children := make([]workflow.OperationTaskChild, 0, len(payload.Routes)+1)
 	result := workflow.RetirementStartResult{
 		Format: workflow.RetirementWorkflowFormat, JobID: payload.JobID, PageID: payload.PageID,
-		RouteEmissionKeys: make([]string, 0, len(payload.Routes)),
+		RouteEmissionKeys:   make([]string, 0, len(payload.Routes)),
 		FinalizeEmissionKey: workflow.RetirementFinalizeEmissionKey(payload.JobID),
 	}
 	for _, routeID := range payload.Routes {
 		routePayload, err := json.Marshal(workflow.RetirementRouteRemovePayload{
-			JobID: payload.JobID, PageID: payload.PageID, RouteID: routeID, IdempotencyKey: payload.IdempotencyKey,
+			Attempt: payload.Attempt, JobID: payload.JobID, PageID: payload.PageID, RouteID: routeID, IdempotencyKey: payload.IdempotencyKey,
 		})
 		if err != nil {
 			return workflow.OperationOutcome{}, err
@@ -61,7 +61,7 @@ func (handler *RetirementStartHandler) WorkerHandler(_ context.Context, task wor
 		result.RouteEmissionKeys = append(result.RouteEmissionKeys, emission)
 	}
 	finalizePayload, err := json.Marshal(workflow.RetirementPageFinalizePayload{
-		JobID: payload.JobID, PageID: payload.PageID,
+		Attempt: payload.Attempt, JobID: payload.JobID, PageID: payload.PageID,
 		ExpectedRevision: payload.ExpectedRevision, IdempotencyKey: payload.IdempotencyKey,
 	})
 	if err != nil {

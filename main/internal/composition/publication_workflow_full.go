@@ -72,13 +72,23 @@ func (handler publicationBuildHandler) WorkerHandler(ctx context.Context, task c
 	if service == nil {
 		return contracts.OperationOutcome{}, publication.ErrUnavailable
 	}
+	runTarget, err := service.ShouldRunTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, payload.Attempt)
+	if err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	if !runTarget {
+		return contracts.OperationOutcome{Result: json.RawMessage(`{"state":"unchanged"}`)}, nil
+	}
 	if err := service.BeginBuild(ctx, payload); err != nil {
 		return contracts.OperationOutcome{}, err
 	}
 	result, err := handler.build(ctx, payload)
 	if err != nil {
-		_ = service.FailTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, err)
-		return contracts.OperationOutcome{}, err
+		// Store the domain failure so Core can continue sibling tasks.
+		if recordErr := service.FailTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, payload.Attempt, err); recordErr != nil {
+			return contracts.OperationOutcome{}, recordErr
+		}
+		return contracts.OperationOutcome{Result: json.RawMessage(`{"state":"failed"}`)}, nil
 	}
 	if err := service.FinishBuild(ctx, payload, result); err != nil {
 		return contracts.OperationOutcome{}, err
@@ -350,6 +360,13 @@ func (handler publicationActivateHandler) WorkerHandler(ctx context.Context, tas
 	if service == nil {
 		return contracts.OperationOutcome{}, publication.ErrUnavailable
 	}
+	runTarget, err := service.ShouldRunTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, payload.Attempt)
+	if err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	if !runTarget {
+		return contracts.OperationOutcome{Result: json.RawMessage(`{"state":"unchanged"}`)}, nil
+	}
 	payload, err = publicationActivationPayloadWithBuiltArtifact(ctx, service, payload)
 	if err != nil {
 		return contracts.OperationOutcome{}, err
@@ -359,8 +376,11 @@ func (handler publicationActivateHandler) WorkerHandler(ctx context.Context, tas
 	}
 	result, err := handler.activate(ctx, payload, service)
 	if err != nil {
-		_ = service.FailTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, err)
-		return contracts.OperationOutcome{}, err
+		// Store the domain failure so Core can continue sibling tasks.
+		if recordErr := service.FailTarget(ctx, payload.RunID, payload.RouteID, payload.Locale, payload.Attempt, err); recordErr != nil {
+			return contracts.OperationOutcome{}, recordErr
+		}
+		return contracts.OperationOutcome{Result: json.RawMessage(`{"state":"failed"}`)}, nil
 	}
 	if err := service.FinishActivation(ctx, payload, result); err != nil {
 		return contracts.OperationOutcome{}, err
@@ -476,7 +496,7 @@ func (publicationFinalizeHandler) WorkerHandler(ctx context.Context, task contra
 	if service == nil {
 		return contracts.OperationOutcome{}, publication.ErrUnavailable
 	}
-	result, err := service.FinalizeRun(ctx, payload.RunID)
+	result, err := service.FinalizeRun(ctx, payload.RunID, payload.Attempt)
 	if err != nil {
 		return contracts.OperationOutcome{}, err
 	}

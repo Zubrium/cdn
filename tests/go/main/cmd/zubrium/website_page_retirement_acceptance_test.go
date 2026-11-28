@@ -1,4 +1,4 @@
-//go:build website_orchestration_acceptance
+//go:build full && website_orchestration_acceptance
 
 package main
 
@@ -256,7 +256,7 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("authenticate Router facade: %v", err)
 		}
-		router := &web022Router{SettingsAPI: routerAdapter, failDelete: map[string]bool{}}
+		router := &web022Router{Contract: routerAdapter, failDelete: map[string]bool{}}
 		const targetCount = 3
 		routeIDs := make([]string, 0, targetCount)
 		for index := 0; index < targetCount; index++ {
@@ -283,15 +283,14 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		// The injected fault is on one trusted Router CAS withdrawal only.
 		router.failDelete[routeIDs[1]] = true
 
-		service2, err := retirement.NewService(retirement.Config{
-			Store:   retirementData,
-			Routes:  map[string][]string{page.ID: routeIDs},
-			Website: service, WebsiteCredential: credential,
-			Router: router, RouterCredential: credential,
-		})
+		fixture := composition.OrchestrationAcceptance{Runtime: runtime, Website: service, Router: router, Credential: credential}
+		retirePage, service2, bindings, cleanup, err := fixture.Retirement(retirementData, map[string][]string{page.ID: routeIDs})
 		if err != nil {
 			t.Fatalf("construct retirement workflow: %v", err)
 		}
+		t.Cleanup(cleanup)
+		websiteStartOrchestration(t, ctx, runtime, scenarioID, bindings, "composition.retirement")
+
 		page, err = service.GetPage(websiteCtx, page.ID)
 		if err != nil {
 			t.Fatalf("read page before retirement: %v", err)
@@ -300,12 +299,13 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			t.Fatalf("page must start active with a revision: %+v", page)
 		}
 		idempotency := scenarioID + "-retire"
-		job, err := service2.RetirePage(ctx, contracts.RetirePageRequest{
+		job, err := retirePage(ctx, contracts.RetirePageRequest{
 			PageID: page.ID, IfMatch: strconv.Quote(strconv.FormatInt(page.Revision, 10)), IdempotencyKey: idempotency,
 		})
 		if err != nil {
 			t.Fatalf("start retirement: %v", err)
 		}
+		job = web022AwaitRetirement(t, ctx, service2, job)
 		if job.State != "retryable_failed" || len(job.Routes) != targetCount {
 			t.Fatalf("partial retirement result: %+v", job)
 		}
@@ -338,11 +338,13 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 			}
 		}
 
-		delete(router.failDelete, routeIDs[1])
-		retried, err := service2.Retry(ctx, job.ID)
+		retried, err := retirePage(ctx, contracts.RetirePageRequest{
+			PageID: page.ID, IfMatch: strconv.Quote(strconv.FormatInt(page.Revision, 10)), IdempotencyKey: idempotency,
+		})
 		if err != nil {
 			t.Fatalf("retry retirement: %v", err)
 		}
+		retried = web022AwaitRetirement(t, ctx, service2, retried)
 		if retried.ID != job.ID || retried.State != "succeeded" {
 			t.Fatalf("retry result: %+v", retried)
 		}
@@ -359,13 +361,13 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 		if err != nil || polled.State != "succeeded" || polled.ID != job.ID {
 			t.Fatalf("poll retirement: %+v, %v", polled, err)
 		}
-		repeated, err := service2.RetirePage(ctx, contracts.RetirePageRequest{
+		repeated, err := retirePage(ctx, contracts.RetirePageRequest{
 			PageID: page.ID, IfMatch: strconv.Quote(strconv.FormatInt(page.Revision, 10)), IdempotencyKey: idempotency,
 		})
 		if err != nil || repeated.ID != job.ID {
 			t.Fatalf("identical retry must be idempotent: %+v, %v", repeated, err)
 		}
-		if _, err := service2.RetirePage(ctx, contracts.RetirePageRequest{
+		if _, err := retirePage(ctx, contracts.RetirePageRequest{
 			PageID: page.ID, IfMatch: fmt.Sprintf("%d", page.Revision), IdempotencyKey: scenarioID + "-reuse",
 		}); err == nil {
 			t.Fatal("retired page ID was accepted for a new retirement job")
@@ -416,8 +418,32 @@ func TestWebsitePageRetirementAcceptance(t *testing.T) {
 	})
 }
 
+func web022AwaitRetirement(t *testing.T, ctx context.Context, service *retirement.Service, job contracts.PageRetirement) contracts.PageRetirement {
+	t.Helper()
+	deadline := time.NewTimer(45 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		current, err := service.GetPageRetirement(ctx, contracts.PageRetirementQuery{PageID: job.PageID, JobID: job.ID})
+		if err != nil {
+			t.Fatalf("poll retirement: %v", err)
+		}
+		if current.State != contracts.RetirementJobStateRunning {
+			return current
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("retirement did not settle: %+v", current)
+		case <-ticker.C:
+		}
+	}
+}
+
 type web022Router struct {
-	routerapi.SettingsAPI
+	contracts.Contract
 	mu         sync.Mutex
 	failDelete map[string]bool
 }
@@ -430,5 +456,5 @@ func (r *web022Router) DeleteRoute(ctx context.Context, request routerapi.Delete
 	if fail {
 		return routerapi.ErrUnavailable
 	}
-	return r.SettingsAPI.DeleteRoute(ctx, request)
+	return r.Contract.DeleteRoute(ctx, request)
 }

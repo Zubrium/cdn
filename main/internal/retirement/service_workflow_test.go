@@ -25,7 +25,7 @@ func TestRetirementLaunchPreservesCompletionAndRecoversStartFailure(t *testing.T
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err := service.SetJobState(ctx, payload.JobID, stateSucceeded); err != nil {
+					if _, err := service.SetJobState(ctx, payload.JobID, 0, stateSucceeded); err != nil {
 						t.Fatal(err)
 					}
 					return contracts.WorkflowStartReceipt{}, errors.New("ambiguous start error")
@@ -43,8 +43,12 @@ func TestRetirementLaunchPreservesCompletionAndRecoversStartFailure(t *testing.T
 				t.Fatal(err)
 			}
 			if !completed {
-				job, err = service.SetJobState(ctx, job.ID, stateRetryable)
+				key := jobKey(job.ID)
+				record, err := service.config.Store.Get(ctx, key)
 				if err != nil {
+					t.Fatal(err)
+				}
+				if err := service.markLaunchOutcome(ctx, key, record.Revision, job, stateRetryable); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -95,11 +99,11 @@ func TestRetirementRetryDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SetJobState(ctx, job.ID, stateRetryable); err != nil {
+	if _, err := service.SetJobState(ctx, job.ID, 0, stateRetryable); err != nil {
 		t.Fatal(err)
 	}
 	store.afterRead = func() {
-		if _, err := service.SetJobState(ctx, job.ID, stateSucceeded); err != nil {
+		if _, err := service.SetJobState(ctx, job.ID, 0, stateSucceeded); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -121,7 +125,7 @@ func TestRetirementCompletedJobRejectsLateStateRegression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SetJobState(ctx, job.ID, stateSucceeded); err != nil {
+	if _, err := service.SetJobState(ctx, job.ID, 0, stateSucceeded); err != nil {
 		t.Fatal(err)
 	}
 	key := jobKey(job.ID)
@@ -130,7 +134,7 @@ func TestRetirementCompletedJobRejectsLateStateRegression(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, state := range []string{stateRetryable, stateRunning, stateSucceeded} {
-		current, err := service.SetJobState(ctx, job.ID, state)
+		current, err := service.SetJobState(ctx, job.ID, 0, state)
 		if err != nil || current.State != stateSucceeded {
 			t.Fatalf("late %s: job=%+v err=%v", state, current, err)
 		}
@@ -263,23 +267,23 @@ func TestRetirementRouteAndFinalizeStateTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRemoved, 1, ""); err != nil {
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, 0, routeStateRemoved, 1, ""); err != nil {
 		t.Fatalf("RecordRoute: %v", err)
 	}
-	if err := service.RecordRoute(ctx, job.ID, retireRouteB, routeStateRetryable, 0, "unavailable"); err != nil {
+	if err := service.RecordRoute(ctx, job.ID, retireRouteB, 0, routeStateRetryable, 0, "unavailable"); err != nil {
 		t.Fatalf("RecordRoute: %v", err)
 	}
-	if err := service.MarkRetryable(ctx, job.ID); err != nil {
+	if err := service.MarkRetryable(ctx, job.ID, 0); err != nil {
 		t.Fatalf("MarkRetryable: %v", err)
 	}
 	view, err := service.Retry(ctx, job.ID)
 	if err != nil || view.State != stateRunning {
 		t.Fatalf("Retry = %+v, %v", view, err)
 	}
-	if err := service.RecordRoute(ctx, job.ID, retireRouteB, routeStateRemoved, 1, ""); err != nil {
+	if err := service.RecordRoute(ctx, job.ID, retireRouteB, 1, routeStateRemoved, 1, ""); err != nil {
 		t.Fatalf("RecordRoute retry: %v", err)
 	}
-	updated, err := service.SetJobState(ctx, job.ID, stateSucceeded)
+	updated, err := service.SetJobState(ctx, job.ID, 1, stateSucceeded)
 	if err != nil || updated.State != stateSucceeded {
 		t.Fatalf("SetJobState = %+v, %v", updated, err)
 	}
@@ -302,7 +306,7 @@ func TestRetirementRouteSuccessSurvivesLateFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRemoved, 42, ""); err != nil {
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, 0, routeStateRemoved, 42, ""); err != nil {
 		t.Fatal(err)
 	}
 	key := jobKey(job.ID)
@@ -310,10 +314,10 @@ func TestRetirementRouteSuccessSurvivesLateFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRetryable, 0, "late_error"); err != nil {
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, 0, routeStateRetryable, 0, "late_error"); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordRoute(ctx, job.ID, retireRouteA, routeStateRemoved, 0, ""); err != nil {
+	if err := service.RecordRoute(ctx, job.ID, retireRouteA, 0, routeStateRemoved, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	after, err := service.config.Store.Get(ctx, key)
@@ -326,5 +330,61 @@ func TestRetirementRouteSuccessSurvivesLateFailure(t *testing.T) {
 	}
 	if route := current.Routes[0]; route.State != routeStateRemoved || route.Revision != 42 || route.ErrorCode != "" {
 		t.Fatalf("successful route regressed after a late outcome: %+v", route)
+	}
+}
+
+func TestRetirementRetryUsesNewAttemptForOnlyUnwithdrawnRoutes(t *testing.T) {
+	ctx := context.Background()
+	var inputs []contracts.WorkflowStartInput
+	loseReply := false
+	starter := retirementStartFunc(func(_ context.Context, input contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
+		inputs = append(inputs, input)
+		if loseReply {
+			return contracts.WorkflowStartReceipt{}, errors.New("start reply lost")
+		}
+		return contracts.WorkflowStartReceipt{State: "running"}, nil
+	})
+	service, err := NewService(Config{Store: newRetirementMemoryStore(), Starter: starter, MaxAttempts: 3,
+		Routes: map[string][]string{retirePageID: {retireRouteA, retireRouteB}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contracts.RetirePageRequest{PageID: retirePageID, IfMatch: retireIfMatch, IdempotencyKey: retireIdemKey}
+	initial, err := service.RetirePage(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordRoute(ctx, initial.ID, retireRouteA, 0, routeStateRemoved, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordRoute(ctx, initial.ID, retireRouteB, 0, routeStateRetryable, 0, "revision_conflict"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MarkRetryable(ctx, initial.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	loseReply = true
+	if _, err := service.Retry(ctx, initial.ID); err == nil {
+		t.Fatal("expected lost start reply")
+	}
+	loseReply = false
+	recovered, err := service.Retry(ctx, initial.ID)
+	if err != nil || recovered.ID != initial.ID || recovered.State != stateRunning {
+		t.Fatalf("retry recovery: %+v, %v", recovered, err)
+	}
+	if err := service.MarkRetryable(ctx, initial.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.LoadJob(ctx, initial.ID, retirePageID)
+	if err != nil || current.State != stateRunning {
+		t.Fatalf("late result from previous attempt changed the job: %+v, %v", current, err)
+	}
+	if len(inputs) != 3 || inputs[0].IdempotencyKey == inputs[1].IdempotencyKey ||
+		inputs[1].IdempotencyKey != inputs[2].IdempotencyKey || string(inputs[1].Payload) != string(inputs[2].Payload) {
+		t.Fatal("expected a new attempt with stable replay")
+	}
+	retry, err := contracts.DecodePayload[contracts.RetirementWorkflowPayload](inputs[1].Payload)
+	if err != nil || retry.JobID != initial.ID || len(retry.Routes) != 1 || retry.Routes[0] != retireRouteB {
+		t.Fatalf("retry must keep the job identity and target only the failed route: %+v, %v", retry, err)
 	}
 }

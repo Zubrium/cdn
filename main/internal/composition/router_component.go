@@ -31,7 +31,7 @@ type routerEngineComponent struct {
 	selected     map[string]struct{}
 	dispatcher   contracts.Dispatcher
 	observer     *observability.Observer
-	api          *routerenginepresentation.APIAdapter
+	api          routerenginepresentation.Contract
 	registry     *router.PublicOperationRegistry
 	routes       router.RouteResolver
 	delivery     *router.CoreDelivery

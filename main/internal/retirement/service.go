@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/Zubrium/cdn/pkg/contracts"
 )
@@ -113,8 +114,8 @@ func (s *Service) Prepare(ctx context.Context, request contracts.RetirePageReque
 	return job, nil
 }
 
-// Launch starts the class-scoped root task. Its idempotency key is derived
-// from the durable job identity, so a retry cannot create a second workflow.
+// Launch submits the persisted attempt. Replaying an unconfirmed submission
+// uses an identical Coordinator key and route list.
 func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement, error) {
 	if s == nil || ctx == nil {
 		return contracts.PageRetirement{}, ErrUnavailable
@@ -131,15 +132,18 @@ func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement
 	if err != nil {
 		return contracts.PageRetirement{}, ErrUnavailable
 	}
-	if job.State == stateSucceeded {
+	if job.State == stateSucceeded || (job.State == stateRetryable && !job.StartUnconfirmed) {
 		return JobView(job), nil
 	}
-	routes := make([]string, 0, len(job.Routes))
-	for _, route := range job.Routes {
-		routes = append(routes, route.RouteID)
+	routes := job.AttemptRoutes
+	if job.Attempt == 0 {
+		routes = make([]string, 0, len(job.Routes))
+		for _, route := range job.Routes {
+			routes = append(routes, route.RouteID)
+		}
 	}
 	payload := contracts.RetirementWorkflowPayload{
-		JobID: job.ID, PageID: job.PageID, ExpectedRevision: job.ExpectedRevision, IfMatch: job.IfMatch,
+		Attempt: job.Attempt, JobID: job.ID, PageID: job.PageID, ExpectedRevision: job.ExpectedRevision, IfMatch: job.IfMatch,
 		IdempotencyKey: job.IdempotencyKey, Routes: routes,
 	}
 	if err := contracts.ValidateRetirementWorkflowPayload(payload); err != nil {
@@ -162,10 +166,12 @@ func (s *Service) Launch(ctx context.Context, job Job) (contracts.PageRetirement
 // An asynchronous worker may have changed the job before Start returns.
 // Never overwrite a newer outcome with the start response.
 func (s *Service) markLaunchOutcome(ctx context.Context, key contracts.RecordKey, revision int64, job Job, state string) error {
-	if job.State == state {
+	unconfirmed := state == stateRetryable
+	if job.State == state && job.StartUnconfirmed == unconfirmed {
 		return nil
 	}
 	job.State = state
+	job.StartUnconfirmed = unconfirmed
 	job.UpdatedAt = timestamp()
 	value, err := encodeRecord(job, jobIndex(job))
 	if err != nil {
@@ -183,10 +189,14 @@ func (s *Service) markLaunchOutcome(ctx context.Context, key contracts.RecordKey
 
 func retirementWorkflowStartInput(payload contracts.RetirementWorkflowPayload) contracts.WorkflowStartInput {
 	encoded, _ := json.Marshal(payload)
+	key := "retirement:" + payload.JobID + ":" + payload.IdempotencyKey
+	if payload.Attempt > 0 {
+		key += ":attempt:" + strconv.FormatUint(payload.Attempt, 10)
+	}
 	return contracts.WorkflowStartInput{
 		OperationID:     contracts.RetirementStartOperationID,
 		ContractVersion: contracts.RetirementStartContractVersion,
-		IdempotencyKey:  "retirement:" + payload.JobID + ":" + payload.IdempotencyKey,
+		IdempotencyKey:  key,
 		Payload:         encoded,
 	}
 }
@@ -219,8 +229,18 @@ func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetire
 	job, err := s.updateJob(ctx, jobID, func(current *jobRecord) error {
 		switch current.State {
 		case stateSucceeded, stateRunning:
-			return errRetryAlreadySettled
+			return errReuseAttempt
 		case stateRetryable:
+			if current.StartUnconfirmed {
+				return errReuseAttempt
+			}
+			current.Attempt++
+			current.AttemptRoutes = nil
+			for _, route := range current.Routes {
+				if route.State != routeStateRemoved {
+					current.AttemptRoutes = append(current.AttemptRoutes, route.RouteID)
+				}
+			}
 			current.State = stateRunning
 			current.UpdatedAt = timestamp()
 			return nil
@@ -228,12 +248,15 @@ func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetire
 			return fmt.Errorf("%w: job is not retryable", ErrConflict)
 		}
 	})
-	if errors.Is(err, errRetryAlreadySettled) {
+	if errors.Is(err, errReuseAttempt) {
 		current, loadErr := s.LoadJob(ctx, jobID, "")
 		if loadErr != nil {
 			return contracts.PageRetirement{}, loadErr
 		}
-		return JobView(current), nil
+		if current.State == stateSucceeded {
+			return JobView(current), nil
+		}
+		return s.Launch(ctx, current)
 	}
 	if err != nil {
 		return contracts.PageRetirement{}, err
@@ -241,7 +264,7 @@ func (s *Service) Retry(ctx context.Context, jobID string) (contracts.PageRetire
 	return s.Launch(ctx, job)
 }
 
-var errRetryAlreadySettled = errors.New("retirement retry already settled")
+var errReuseAttempt = errors.New("reuse existing retirement attempt")
 
 // LoadJob returns the durable job projection for a composition adapter.
 func (s *Service) LoadJob(ctx context.Context, jobID, pageID string) (Job, error) {
@@ -260,15 +283,17 @@ func (s *Service) LoadJob(ctx context.Context, jobID, pageID string) (Job, error
 }
 
 // SetJobState persists a bounded job state transition with a CAS retry loop.
-func (s *Service) SetJobState(ctx context.Context, jobID, state string) (Job, error) {
+func (s *Service) SetJobState(ctx context.Context, jobID string, attempt uint64, state string) (Job, error) {
 	if state != stateRunning && state != stateSucceeded && state != stateRetryable {
 		return Job{}, ErrInvalid
 	}
 	job, err := s.updateJob(ctx, jobID, func(current *jobRecord) error {
-		if current.State == stateSucceeded || current.State == state {
+		if current.Attempt != attempt || current.State == stateSucceeded ||
+			(current.State == state && !current.StartUnconfirmed) {
 			return errJobStateUnchanged
 		}
 		current.State = state
+		current.StartUnconfirmed = false
 		current.UpdatedAt = timestamp()
 		return nil
 	})
@@ -282,24 +307,27 @@ var errJobStateUnchanged = errors.New("retirement job state unchanged")
 
 // MarkRetryable records a failed Website lifecycle closure without losing the
 // already-withdrawn routes.
-func (s *Service) MarkRetryable(ctx context.Context, jobID string) error {
-	_, err := s.SetJobState(ctx, jobID, stateRetryable)
+func (s *Service) MarkRetryable(ctx context.Context, jobID string, attempt uint64) error {
+	_, err := s.SetJobState(ctx, jobID, attempt, stateRetryable)
 	return err
 }
 
 // RecordRoute persists one route outcome. A retry may record the same removed
 // route again; that is a no-op for the durable projection.
-func (s *Service) RecordRoute(ctx context.Context, jobID, routeID, state string, revision int64, errorCode string) error {
+func (s *Service) RecordRoute(ctx context.Context, jobID, routeID string, attempt uint64, state string, revision int64, errorCode string) error {
 	if state != routeStatePending && state != routeStateRemoved && state != routeStateRetryable {
 		return ErrInvalid
 	}
 	_, err := s.updateJob(ctx, jobID, func(job *jobRecord) error {
+		if job.Attempt != attempt {
+			return errRouteOutcomeUnchanged
+		}
 		for index := range job.Routes {
 			if job.Routes[index].RouteID != routeID {
 				continue
 			}
 			if job.Routes[index].State == routeStateRemoved {
-				return errRouteAlreadyRemoved
+				return errRouteOutcomeUnchanged
 			}
 			job.Routes[index].State = state
 			job.Routes[index].Revision = revision
@@ -309,13 +337,13 @@ func (s *Service) RecordRoute(ctx context.Context, jobID, routeID, state string,
 		}
 		return fmt.Errorf("%w: unknown retirement route", ErrUnavailable)
 	})
-	if errors.Is(err, errRouteAlreadyRemoved) {
+	if errors.Is(err, errRouteOutcomeUnchanged) {
 		return nil
 	}
 	return err
 }
 
-var errRouteAlreadyRemoved = errors.New("retirement route already removed")
+var errRouteOutcomeUnchanged = errors.New("retirement route outcome unchanged")
 
 func (s *Service) updateJob(ctx context.Context, jobID string, mutate func(*jobRecord) error) (Job, error) {
 	key := jobKey(jobID)

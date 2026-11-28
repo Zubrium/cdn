@@ -60,14 +60,23 @@ func (handler retirementRouteRemoveHandler) WorkerHandler(ctx context.Context, t
 	if service == nil {
 		return contracts.OperationOutcome{}, retirement.ErrUnavailable
 	}
-	result, removeErr := handler.removeRoute(ctx, payload)
-	state, revision, code := retirementRouteOutcome(removeErr, result.Revision)
-	if err := service.RecordRoute(ctx, payload.JobID, payload.RouteID, state, revision, code); err != nil {
+	job, err := service.LoadJob(ctx, payload.JobID, payload.PageID)
+	if err != nil {
 		return contracts.OperationOutcome{}, err
 	}
-	if removeErr != nil {
-		return contracts.OperationOutcome{}, removeErr
+	if job.Attempt != payload.Attempt || job.State == contracts.RetirementJobStateSucceeded {
+		return contracts.OperationOutcome{Result: json.RawMessage(`{"state":"unchanged"}`)}, nil
 	}
+	if job.IdempotencyKey != payload.IdempotencyKey {
+		return contracts.OperationOutcome{}, retirement.ErrInvalid
+	}
+	result, removeErr := handler.removeRoute(ctx, payload)
+	result.State, result.Revision, result.ErrorCode = retirementRouteOutcome(removeErr, result.Revision)
+	if err := service.RecordRoute(ctx, payload.JobID, payload.RouteID, payload.Attempt, result.State, result.Revision, result.ErrorCode); err != nil {
+		return contracts.OperationOutcome{}, err
+	}
+	// A route failure is an outcome of this task. Returning it as an executor
+	// error would cancel other routes and prevent the finalizer from running.
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return contracts.OperationOutcome{}, err
@@ -145,27 +154,27 @@ func (handler retirementFinalizeHandler) WorkerHandler(ctx context.Context, task
 	if err != nil {
 		return contracts.OperationOutcome{}, err
 	}
-	if job.PageID != payload.PageID {
-		return contracts.OperationOutcome{}, fmt.Errorf("%w: finalize payload does not match durable job", retirement.ErrInvalid)
+	if job.Attempt != payload.Attempt || job.State == contracts.RetirementJobStateSucceeded {
+		return contracts.OperationOutcome{Result: json.RawMessage(`{"state":"unchanged"}`)}, nil
 	}
+	state := contracts.RetirementJobStateSucceeded
 	for _, route := range job.Routes {
 		if route.State != contracts.RetirementRouteStateRemoved {
-			return contracts.OperationOutcome{}, fmt.Errorf("%w: routes are still active", retirement.ErrConflict)
+			state = contracts.RetirementJobStateRetryable
+			break
 		}
 	}
-	finalizeErr := handler.finalizePage(ctx, payload, job)
-	if finalizeErr != nil {
-		if _, err := service.SetJobState(ctx, payload.JobID, contracts.RetirementJobStateRetryable); err != nil {
-			return contracts.OperationOutcome{}, err
+	if state == contracts.RetirementJobStateSucceeded {
+		if err := handler.finalizePage(ctx, payload, job); err != nil {
+			state = contracts.RetirementJobStateRetryable
 		}
-		return contracts.OperationOutcome{}, finalizeErr
 	}
-	if _, err := service.SetJobState(ctx, payload.JobID, contracts.RetirementJobStateSucceeded); err != nil {
+	if _, err := service.SetJobState(ctx, payload.JobID, payload.Attempt, state); err != nil {
 		return contracts.OperationOutcome{}, err
 	}
 	encoded, err := json.Marshal(contracts.RetirementPageFinalizeResult{
 		Format: contracts.RetirementFinalizeResultFormat, JobID: payload.JobID,
-		PageID: payload.PageID, State: contracts.RetirementJobStateSucceeded,
+		PageID: payload.PageID, State: state,
 	})
 	if err != nil {
 		return contracts.OperationOutcome{}, err

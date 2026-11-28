@@ -297,3 +297,46 @@ func (store *memoryRecordStore) MaxBatchSize() int    { return 100 }
 func (store *memoryRecordStore) MaxPayloadBytes() int { return 1 << 20 }
 func (store *memoryRecordStore) MaxIndexBytes() int   { return 1 << 16 }
 func (store *memoryRecordStore) MaxBatchBytes() int   { return 4 << 20 }
+
+func TestPublicationRetryOnlyFailedTargetsWithStableNewAttempt(t *testing.T) {
+	ctx := context.Background()
+	starter := &recordingWorkflowStarter{}
+	service, err := NewService(Config{Store: newMemoryRecordStore(), Starter: starter, MaxAttempts: 3,
+		Targets: []Target{
+			{RouteID: testRouteA, PageSnapshotID: testSnapshotID, Locale: testLocale},
+			{RouteID: testRouteB, PageSnapshotID: testSnapshotID, Locale: testLocale},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger := Trigger{Locale: testLocale, ContentPublicationRevision: 4, SystemModelRevision: 9, IdempotencyKey: testKey}
+	run, err := service.Publish(ctx, trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.updateTarget(ctx, run.RunID, testRouteA, testLocale, func(target *targetRecord) {
+		target.State = stateSuccess
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FailTarget(ctx, run.RunID, testRouteB, testLocale, 0, ErrConflict); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeRun(ctx, run.RunID, 0); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := service.Retry(ctx, run.RunID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(starter.inputs) != 3 || starter.inputs[0].IdempotencyKey == starter.inputs[1].IdempotencyKey ||
+		starter.inputs[1].IdempotencyKey != starter.inputs[2].IdempotencyKey ||
+		string(starter.inputs[1].Payload) != string(starter.inputs[2].Payload) {
+		t.Fatal("retry must start a new durable attempt and replay that same attempt while running")
+	}
+	retry, err := contracts.DecodePayload[contracts.PublicationWorkflowPayload](starter.inputs[1].Payload)
+	if err != nil || len(retry.Targets) != 1 || retry.Targets[0].RouteID != testRouteB || retry.RunID != run.RunID {
+		t.Fatalf("retry workflow: %+v, %v", retry, err)
+	}
+}

@@ -89,7 +89,7 @@ func (component *retirementComponent) retirePage(ctx context.Context, request co
 		if err := markPageRetiring(ctx, component.core, job); err != nil {
 			return contracts.PageRetirement{}, err
 		}
-		return component.service.Launch(ctx, job)
+		return component.service.Retry(ctx, job.ID)
 	}
 	retired, err := component.service.PageIsRetired(ctx, request.PageID)
 	if err != nil {

@@ -1,4 +1,4 @@
-//go:build website_orchestration_acceptance
+//go:build full && website_orchestration_acceptance
 
 package main
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Zubrium/cdn/pkg/contracts"
 	"io"
 	"strings"
 	"sync"
@@ -32,6 +31,7 @@ import (
 	websiteworkflow "github.com/Zubrium/cdn/engines/website/workflow"
 	"github.com/Zubrium/cdn/main/internal/composition"
 	publication "github.com/Zubrium/cdn/main/internal/publication"
+	"github.com/Zubrium/cdn/pkg/contracts"
 	prerendercontract "github.com/Zubrium/cdn/pkg/contracts/prerender"
 	routerpresent "github.com/Zubrium/cdn/presentation/router"
 	workerprerender "github.com/Zubrium/cdn/workers/prerender"
@@ -124,8 +124,9 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("authenticate bootstrap Website service: %v", err)
 		}
-		if _, err := base.GetContentModel(baseCtx); err != nil {
-			if _, err := base.SaveContentModel(baseCtx, websiteapi.SaveContentModelRequest{
+		model, err := base.GetContentModel(baseCtx)
+		if err != nil {
+			if model, err = base.SaveContentModel(baseCtx, websiteapi.SaveContentModelRequest{
 				ExpectedRevision: 0, DataModel: json.RawMessage(`{"formatVersion":1,"entities":[]}`),
 			}); err != nil {
 				t.Fatalf("seed scoped content model: %v", err)
@@ -202,11 +203,11 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			t.Fatalf("construct trusted build input resolver: %v", err)
 		}
 		workflow := &web021Workflow{
-			writer:         web020CoreArtifactWriter{files: trackedFiles, session: serviceSession},
-			failSnapshots:  map[string]bool{},
-			states:         map[uuid.UUID]*web021WorkflowState{},
-			results:        map[uuid.UUID]json.RawMessage{},
-			buildsByLocale: map[string]int{},
+			writer:           web020CoreArtifactWriter{files: trackedFiles, session: serviceSession},
+			failSnapshots:    map[string]bool{},
+			states:           map[uuid.UUID]*web021WorkflowState{},
+			results:          map[uuid.UUID]json.RawMessage{},
+			buildsBySnapshot: map[string]int{},
 		}
 		websiteService, err := websiteapp.NewService(websiteapp.Config{
 			AccessGroup: "features", CoordinatorAccessGroup: "features",
@@ -217,7 +218,6 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct configured Website service: %v", err)
 		}
-		trackedWebsite := &web021Website{API: websiteService}
 
 		names := make([]string, 0, targetCount)
 		seedManifests := make(map[string]string, targetCount)
@@ -248,7 +248,7 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct Router facade: %v", err)
 		}
-		trackedRouter := &web021Router{SettingsAPI: routerAdapter, casFail: map[string]bool{}}
+		trackedRouter := &web021Router{Contract: routerAdapter, casFail: map[string]bool{}}
 		routerCtx, err := trackedRouter.Authenticate(ctx, credential)
 		if err != nil {
 			t.Fatalf("authenticate Router facade: %v", err)
@@ -274,27 +274,27 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			routerOwned.add(web021IdempotencyKey(idempotency))
 		}
 
-		publicationService, err := publication.NewService(publication.Config{
-			Store: publicationData, Targets: targets,
-			Website: trackedWebsite, WebsiteCredential: credential,
-			Router: trackedRouter, RouterCredential: credential,
-			FileIdentity: identity, Files: trackedFiles, FileCredential: credential,
-			LocaleCatalog: catalog, InputResolver: resolver,
-			BuildTimeout: 30 * time.Second, PollInterval: 10 * time.Millisecond,
-		})
+		fixture := composition.OrchestrationAcceptance{
+			Runtime: runtime, Website: websiteService, Router: trackedRouter,
+			LocaleCatalog: catalog, BuildInputs: resolver,
+			Files: trackedFiles, Session: serviceSession, Credential: credential,
+		}
+		publicationService, bindings, cleanup, err := fixture.Publication(ctx, publicationData, targets)
 		if err != nil {
 			t.Fatalf("construct publication fan-out: %v", err)
 		}
+		t.Cleanup(cleanup)
+		websiteStartOrchestration(t, ctx, runtime, scenarioID, bindings, "engine.publication")
+
 		// Fault injection affects only trusted composition boundaries: one real
 		// build result fails, one real Router CAS is rejected, one target succeeds.
 		workflow.failSnapshots[targets[1].PageSnapshotID] = true
 		trackedRouter.casFail[targets[2].RouteID] = true
-		result, err := publicationService.Publish(ctx, publication.Trigger{
-			Locale: web021Locale, ContentPublicationRevision: 5, IdempotencyKey: scenarioID,
-		})
-		if err != nil {
-			t.Fatalf("publish fan-out: %v", err)
+		trigger := publication.Trigger{
+			Locale: web021Locale, ContentPublicationRevision: 4, SystemModelRevision: model.ModelRevision, IdempotencyKey: scenarioID,
 		}
+		publish := func() (publication.Result, error) { return publicationService.Publish(ctx, trigger) }
+		result := web021AwaitPublication(t, ctx, publish)
 		if result.State != "failed" || len(result.Targets) != targetCount {
 			t.Fatalf("partial publication result: %+v", result)
 		}
@@ -319,19 +319,23 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 				t.Fatalf("failed target %d changed its prior artifact: %+v", index, failedSlot)
 			}
 		}
-		buildsAfterFirst := trackedWebsite.buildCount(snapshots[names[0]])
+		buildsAfterFirst := workflow.buildCount(snapshots[names[0]])
 
+		workflow.mu.Lock()
 		delete(workflow.failSnapshots, targets[1].PageSnapshotID)
+		workflow.mu.Unlock()
+		trackedRouter.mu.Lock()
 		delete(trackedRouter.casFail, targets[2].RouteID)
-		retried, err := publicationService.Retry(ctx, result.RunID)
-		if err != nil {
+		trackedRouter.mu.Unlock()
+		if _, err := publicationService.Retry(ctx, result.RunID); err != nil {
 			t.Fatalf("retry failed targets: %v", err)
 		}
+		retried := web021AwaitPublication(t, ctx, publish)
 		if retried.State != "success" || retried.Targets[0].BuildID != result.Targets[0].BuildID ||
 			retried.Targets[1].State != "success" || retried.Targets[2].State != "success" {
 			t.Fatalf("retry result: %+v", retried)
 		}
-		if trackedWebsite.buildCount(snapshots[names[0]]) != buildsAfterFirst {
+		if workflow.buildCount(snapshots[names[0]]) != buildsAfterFirst {
 			t.Fatal("retry rebuilt a target that had already succeeded")
 		}
 
@@ -342,14 +346,14 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 			t.Fatalf("read route before stale probe: %v", err)
 		}
 		staleSlot, _ := staleBefore.Target.LocaleTarget(web021Locale)
-		trackedRouter.staleRouteID = targets[0].RouteID
-		trackedRouter.staleAdvance = func() { catalog.revision.Add(1) }
-		stale, err := publicationService.Publish(ctx, publication.Trigger{
-			Locale: web021Locale, ContentPublicationRevision: 6, IdempotencyKey: scenarioID + "-stale",
-		})
-		if err != nil {
-			t.Fatalf("publish stale probe: %v", err)
-		}
+		workflow.mu.Lock()
+		workflow.staleSnapshotID = targets[0].PageSnapshotID
+		workflow.staleAdvance = func() { catalog.revision.Add(1) }
+		workflow.mu.Unlock()
+		projection.publicationRevision.Store(5)
+		trigger.ContentPublicationRevision = 5
+		trigger.IdempotencyKey = scenarioID + "-stale"
+		stale := web021AwaitPublication(t, ctx, publish)
 		if stale.Targets[0].State != "failed" {
 			t.Fatalf("stale result was not rejected: %+v", stale.Targets[0])
 		}
@@ -368,6 +372,30 @@ func TestWebsitePublicationFanoutAcceptance(t *testing.T) {
 }
 
 type web021LocaleCatalog struct{ revision atomic.Int64 }
+
+func web021AwaitPublication(t *testing.T, ctx context.Context, read func() (publication.Result, error)) publication.Result {
+	t.Helper()
+	deadline := time.NewTimer(45 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		result, err := read()
+		if err != nil {
+			t.Fatalf("read publication: %v", err)
+		}
+		if result.State == "success" || result.State == "failed" {
+			return result
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("publication did not settle: %+v", result)
+		case <-ticker.C:
+		}
+	}
+}
 
 func (c *web021LocaleCatalog) LocaleCatalogRevision(context.Context, string) (int64, error) {
 	return c.revision.Load(), nil
@@ -395,12 +423,14 @@ type web021WorkflowState struct {
 }
 
 type web021Workflow struct {
-	mu             sync.Mutex
-	writer         web020CoreArtifactWriter
-	failSnapshots  map[string]bool
-	states         map[uuid.UUID]*web021WorkflowState
-	results        map[uuid.UUID]json.RawMessage
-	buildsByLocale map[string]int
+	mu               sync.Mutex
+	writer           web020CoreArtifactWriter
+	failSnapshots    map[string]bool
+	states           map[uuid.UUID]*web021WorkflowState
+	results          map[uuid.UUID]json.RawMessage
+	buildsBySnapshot map[string]int
+	staleSnapshotID  string
+	staleAdvance     func()
 }
 
 func (w *web021Workflow) Start(ctx context.Context, request contracts.WorkflowStartInput) (contracts.WorkflowStartReceipt, error) {
@@ -467,7 +497,11 @@ func (w *web021Workflow) Start(ctx context.Context, request contracts.WorkflowSt
 			ContentType: prerendercontract.ArtifactMediaType, Size: int64(len(manifestBytes))},
 	}
 	w.results[taskID] = workerResult
-	w.buildsByLocale[payload.Input.Locale]++
+	w.buildsBySnapshot[payload.Input.SnapshotID]++
+	if w.staleSnapshotID == payload.Input.SnapshotID {
+		w.staleAdvance()
+		w.staleSnapshotID = ""
+	}
 	w.mu.Unlock()
 	return contracts.WorkflowStartReceipt{WorkflowID: workflowID, RootTaskID: taskID, State: "succeeded"}, nil
 }
@@ -510,53 +544,16 @@ func (w *web021Workflow) ResolveTaskID(_ context.Context, _ uuid.UUID, _ string)
 	return uuid.Nil, contracts.ErrWorkflowTaskMissing
 }
 
-type web021Website struct {
-	websiteapi.API
-	mu          sync.Mutex
-	buildCounts map[string]int
-}
-
-func (w *web021Website) BuildSnapshot(ctx context.Context, request websiteapi.BuildSnapshotRequest) (websiteapi.BuildJob, error) {
-	w.mu.Lock()
-	if w.buildCounts == nil {
-		w.buildCounts = map[string]int{}
-	}
-	w.buildCounts[request.SnapshotID]++
-	w.mu.Unlock()
-	return w.API.BuildSnapshot(ctx, request)
-}
-
-func (w *web021Website) buildCount(snapshotID string) int {
+func (w *web021Workflow) buildCount(snapshotID string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.buildCounts[snapshotID]
+	return w.buildsBySnapshot[snapshotID]
 }
 
 type web021Router struct {
-	routerapi.SettingsAPI
-	mu           sync.Mutex
-	casFail      map[string]bool
-	staleRouteID string
-	staleAdvance func()
-}
-
-func (r *web021Router) GetRoute(ctx context.Context, id string) (routerapi.Route, error) {
-	route, err := r.SettingsAPI.GetRoute(ctx, id)
-	if err != nil {
-		return routerapi.Route{}, err
-	}
-	r.mu.Lock()
-	advance := r.staleAdvance
-	if r.staleRouteID == id {
-		r.staleRouteID = ""
-	} else {
-		advance = nil
-	}
-	r.mu.Unlock()
-	if advance != nil {
-		advance()
-	}
-	return route, nil
+	contracts.Contract
+	mu      sync.Mutex
+	casFail map[string]bool
 }
 
 func (r *web021Router) ReplaceLocaleTarget(ctx context.Context, request routerapi.ReplaceLocaleTargetRequest) (routerapi.Route, error) {
@@ -566,16 +563,7 @@ func (r *web021Router) ReplaceLocaleTarget(ctx context.Context, request routerap
 	if fail {
 		return routerapi.Route{}, routerapi.ErrConflict
 	}
-	return r.SettingsAPI.ReplaceLocaleTarget(ctx, request)
-}
-
-func web021OperationCatalog(t *testing.T) *routerpresent.PublicOperationRegistry {
-	t.Helper()
-	catalog, err := routerpresent.NewPublicOperationRegistry()
-	if err != nil {
-		t.Fatalf("construct empty public operation catalog: %v", err)
-	}
-	return catalog
+	return r.Contract.ReplaceLocaleTarget(ctx, request)
 }
 
 func web021RouteKey(host, path string) contracts.RecordKey {
@@ -586,16 +574,6 @@ func web021RouteKey(host, path string) contracts.RecordKey {
 func web021IdempotencyKey(value string) contracts.RecordKey {
 	digest := sha256.Sum256([]byte(value))
 	return contracts.RecordKey{Namespace: "router/routes", ScopeType: "global", ScopeID: "global", RecordKey: "idem:" + hex.EncodeToString(digest[:])}
-}
-
-func web021RouteCleanup(t *testing.T, ctx context.Context, api routerapi.SettingsAPI, routeID string, revision int64) func() {
-	return func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		if err := api.DeleteRoute(cleanupCtx, routerapi.DeleteRouteRequest{RouteID: routeID, ExpectedRevision: revision}); err != nil {
-			t.Errorf("delete run-owned route %s: %v", routeID, err)
-		}
-	}
 }
 
 type web021TrackedFiles struct {

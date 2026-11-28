@@ -32,6 +32,7 @@ const (
 )
 
 type RetirementWorkflowPayload struct {
+	Attempt          uint64   `json:"attempt,omitempty"`
 	JobID            string   `json:"job_id"`
 	PageID           string   `json:"page_id"`
 	ExpectedRevision int64    `json:"expected_revision"`
@@ -41,6 +42,7 @@ type RetirementWorkflowPayload struct {
 }
 
 type RetirementRouteRemovePayload struct {
+	Attempt        uint64 `json:"attempt,omitempty"`
 	JobID          string `json:"job_id"`
 	PageID         string `json:"page_id"`
 	RouteID        string `json:"route_id"`
@@ -57,6 +59,7 @@ type RetirementRouteRemoveResult struct {
 }
 
 type RetirementPageFinalizePayload struct {
+	Attempt          uint64 `json:"attempt,omitempty"`
 	JobID            string `json:"job_id"`
 	PageID           string `json:"page_id"`
 	ExpectedRevision int64  `json:"expected_revision"`
@@ -81,7 +84,7 @@ type RetirementStartResult struct {
 func ValidateRetirementWorkflowPayload(payload RetirementWorkflowPayload) error {
 	if !retirementPageIDPattern.MatchString(payload.JobID) || !retirementPageIDPattern.MatchString(payload.PageID) ||
 		payload.ExpectedRevision < 1 || !retirementIfMatchPattern.MatchString(payload.IfMatch) ||
-		!retirementKeyPattern.MatchString(payload.IdempotencyKey) || len(payload.Routes) == 0 || len(payload.Routes) > 64 {
+		!retirementKeyPattern.MatchString(payload.IdempotencyKey) || (payload.Attempt == 0 && len(payload.Routes) == 0) || len(payload.Routes) > 64 {
 		return ErrInvalidRetirementRequest
 	}
 	seen := make(map[string]struct{}, len(payload.Routes))
